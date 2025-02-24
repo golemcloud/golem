@@ -1024,13 +1024,13 @@ impl Expr {
         self.infer_worker_function_invokes()
             .map_err(|x| vec![x.to_string()])?;
         self.infer_function_call_types(function_type_registry)
-            .map_err(|x| vec![x])?;
+            .map_err(|x| vec![x.to_string()])?;
 
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x.to_string()])?;
 
         self.check_types(function_type_registry)
-            .map_err(|x| vec![x])?;
+            .map_err(|x| vec![x.to_string()])?;
         self.unify_types()?;
         Ok(())
     }
@@ -1111,8 +1111,9 @@ impl Expr {
     pub fn infer_function_call_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), String> {
-        type_inference::infer_function_call_types(self, function_type_registry)
+    ) -> Result<(), RibCompilationError> {
+        type_inference::infer_function_call_types(self, function_type_registry)?;
+        Ok(())
     }
 
     pub fn push_types_down(&mut self) -> Result<(), RibCompilationError> {
@@ -1138,8 +1139,8 @@ impl Expr {
     pub fn check_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), String> {
-        type_checker::type_check(self, function_type_registry).map_err(|x| x.to_string())
+    ) -> Result<(), RibCompilationError> {
+        type_checker::type_check(self, function_type_registry)
     }
 
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {

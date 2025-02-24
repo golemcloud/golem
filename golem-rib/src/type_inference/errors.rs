@@ -258,29 +258,29 @@ impl Display for UnResolvedTypesError {
 
 pub enum FunctionCallError {
     InvalidFunctionCall {
-        function_call_name: String,
+        function_name: String,
         expr: Expr,
         message: String,
     },
     TypeMisMatch {
-        function_call_name: String,
+        function_name: String,
         argument: Expr,
         error: TypeMismatchError,
     },
     MissingRecordFields {
-        function_call_name: String,
+        function_name: String,
         argument: Expr,
         missing_fields: Vec<Path>,
     },
     UnResolvedTypes {
-        function_call_name: String,
+        function_name: String,
         argument: Expr,
         unresolved_error: UnResolvedTypesError,
         expected_type: AnalysedType,
     },
 
     InvalidResourceMethodCall {
-        function_call_name: String,
+        resource_method_name: String,
         invalid_lhs: Expr,
     },
 
@@ -288,6 +288,13 @@ pub enum FunctionCallError {
         generic_type_parameter: String,
         expr: Expr,
         message: String,
+    },
+
+    ArgumentSizeMisMatch {
+        function_name: String,
+        expr: Expr,
+        expected: usize,
+        provided: usize,
     },
 }
 

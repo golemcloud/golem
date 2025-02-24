@@ -56,7 +56,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                 dynamic_parsed_function_name.as_str(),
                             )
                             .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                function_call_name: dynamic_parsed_function_name,
+                                function_name: dynamic_parsed_function_name,
                                 expr: expr_copied,
                                 message: format!("Invalid function name: {}", err),
                             })?;
@@ -111,7 +111,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                         .find(|(k, _)| k == &resource_method)
                                         .map(|(k, _)| k.clone())
                                         .ok_or(FunctionCallError::InvalidFunctionCall {
-                                            function_call_name: resource_method
+                                            function_name: resource_method
                                                 .method_name()
                                                 .to_string(),
                                             expr: expr_copied.clone(),
@@ -124,7 +124,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                     let dynamic_parsed_function_name = resource_method
                                         .dynamic_parsed_function_name(resource_args.clone())
                                         .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                            function_call_name: resource_method
+                                            function_name: resource_method
                                                 .method_name()
                                                 .to_string(),
                                             expr: expr_copied,
@@ -149,7 +149,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
 
                                 _ => {
                                     return Err(FunctionCallError::InvalidResourceMethodCall {
-                                        function_call_name: resource_method
+                                        resource_method_name: resource_method
                                             .method_name()
                                             .to_string(),
                                         invalid_lhs: *lhs.deref().clone(),
@@ -166,7 +166,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                 InferredType::Unknown => {}
                 _ => {
                     return Err(FunctionCallError::InvalidFunctionCall {
-                        function_call_name: method.to_string(),
+                        function_name: method.to_string(),
                         expr: expr_copied,
                         message: format!(
                             "Invalid worker function invoke. Expected to be an instance type, found {}",

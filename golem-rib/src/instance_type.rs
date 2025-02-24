@@ -208,7 +208,7 @@ impl InstanceType {
 
                     if interfaces.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
-                            function_call_name: method_name.to_string(),
+                            function_name: method_name.to_string(),
                             expr,
                             message: format!("Interface '{}' not found", iface),
                         });
@@ -221,7 +221,7 @@ impl InstanceType {
 
                     if functions.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
-                            function_call_name: method_name.to_string(),
+                            function_name: method_name.to_string(),
                             expr,
                             message: format!(
                                 "Function '{}' not found in interface '{}'",
@@ -241,7 +241,7 @@ impl InstanceType {
                     } else {
                         search_function_in_instance(self, method_name).map_err(|err| {
                             FunctionCallError::InvalidFunctionCall {
-                                function_call_name: method_name.to_string(),
+                                function_name: method_name.to_string(),
                                 expr,
                                 message: err,
                             }
@@ -259,7 +259,7 @@ impl InstanceType {
 
                     if packages.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
-                            function_call_name: method_name.to_string(),
+                            function_name: method_name.to_string(),
                             expr,
                             message: format!("package '{}' not found", pkg),
                         });
@@ -272,7 +272,7 @@ impl InstanceType {
 
                     if functions.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
-                            function_call_name: method_name.to_string(),
+                            function_name: method_name.to_string(),
                             expr,
                             message: format!(
                                 "function '{}' not found in package '{}'",
@@ -290,7 +290,7 @@ impl InstanceType {
                     } else {
                         search_function_in_instance(self, method_name).map_err(|err| {
                             FunctionCallError::InvalidFunctionCall {
-                                function_call_name: method_name.to_string(),
+                                function_name: method_name.to_string(),
                                 expr,
                                 message: err,
                             }
@@ -312,7 +312,7 @@ impl InstanceType {
 
                     if functions.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
-                            function_call_name: method_name.to_string(),
+                            function_name: method_name.to_string(),
                             expr,
                             message: format!(
                                 "function '{}' not found in interface '{}'",
@@ -330,7 +330,7 @@ impl InstanceType {
                     } else {
                         search_function_in_instance(self, method_name).map_err(|err| {
                             FunctionCallError::InvalidFunctionCall {
-                                function_call_name: method_name.to_string(),
+                                function_name: method_name.to_string(),
                                 expr,
                                 message: err,
                             }
@@ -340,7 +340,7 @@ impl InstanceType {
             },
             None => search_function_in_instance(self, method_name).map_err(|err| {
                 FunctionCallError::InvalidFunctionCall {
-                    function_call_name: method_name.to_string(),
+                    function_name: method_name.to_string(),
                     expr,
                     message: err,
                 }
@@ -492,7 +492,7 @@ impl FunctionDictionary {
                     RegistryKey::FunctionName(function_name) => {
                         let function_name = resolve_function_name(None, None, &function_name)
                             .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                function_call_name: function_name.clone(),
+                                function_name: function_name.clone(),
                                 message: err,
                                 expr: expr.clone(),
                             })?;
@@ -526,7 +526,7 @@ impl FunctionDictionary {
                         let function_name =
                             resolve_function_name(package_name, interface_name, &function_name)
                                 .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                    function_call_name: function_name.clone(),
+                                    function_name: function_name.clone(),
                                     message: err,
                                     expr: expr.clone(),
                                 })?;

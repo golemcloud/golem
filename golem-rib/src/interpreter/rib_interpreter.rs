@@ -2332,7 +2332,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compilation_error,
-                "error in the following rib found at line 3, column 30\n`x.bar(\"bar\")`\ncause: invalid function call: `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
+                "error in the following rib found at line 3, column 30\n`x.bar(\"bar\")`\ncause: invalid function call `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
             );
         }
 
@@ -2392,7 +2392,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compilation_error,
-                "error in the following rib found at line 3, column 30\n`worker.bar(\"bar\")`\ncause: invalid function call: `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
+                "error in the following rib found at line 3, column 30\n`worker.bar(\"bar\")`\ncause: invalid function call `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
             );
         }
 
@@ -2490,7 +2490,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compiled,
-                "error in the following rib found at line 3, column 30\n`worker.qux(\"bar\")`\ncause: invalid function call: `qux`\nfunction 'qux' exists in multiple packages. specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)\n".to_string()
+                "error in the following rib found at line 3, column 30\n`worker.qux(\"bar\")`\ncause: invalid function call `qux`\nfunction 'qux' exists in multiple packages. specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)\n".to_string()
             );
         }
 
@@ -2610,7 +2610,7 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", quantity: 1: u32, price: 1: f32})`\ncause: invalid function call: `add-items`\nfunction 'add-items' not found\n".to_string());
+            assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", quantity: 1: u32, price: 1: f32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
         }
 
         #[test]
@@ -2628,7 +2628,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compiled,
-                "error in the following rib found at line 3, column 28\n`worker.carts[golem:it](\"bar\")`\ncause: invalid function call: `carts`\nfunction 'carts' not found in package 'golem:it'\n".to_string()
+                "error in the following rib found at line 3, column 28\n`worker.carts[golem:it](\"bar\")`\ncause: invalid function call `carts`\nfunction 'carts' not found in package 'golem:it'\n".to_string()
             );
         }
 

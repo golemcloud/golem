@@ -1269,7 +1269,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
             let compiler_error = compiler::compile(&expr, &vec![]).unwrap_err();
 
-            assert_eq!(compiler_error, "Unknown function call: `foo`");
+            assert_eq!(compiler_error, "error in the following rib found at line 2, column 16\n`foo(request)`\ncause: invalid function call `foo`\nunknown function\n");
         }
 
         #[test]
@@ -1286,7 +1286,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Unknown resource constructor call: `golem:it/api.{cart0(user_id).add-item}`. Resource `cart0` doesn't exist"
+                "error in the following rib found at line 4, column 16\n`golem:it/api.{cart0(user_id).add-item}(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
             );
         }
 
@@ -1304,7 +1304,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Unknown resource method call `golem:it/api.{cart(user_id).foo}`. `foo` doesn't exist in resource `cart`"
+                "error in the following rib found at line 4, column 16\n`golem:it/api.{cart(user_id).foo}(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
             );
         }
 
@@ -1326,7 +1326,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Incorrect number of arguments for function `foo`. Expected 1, but provided 2"
+                "error in the following rib found at line 3, column 29\n`foo(user_id, user_id)`\ncause: invalid argument size for function `foo`. expected 1 arguments, found 2\n"
             );
         }
 
@@ -1343,7 +1343,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Incorrect number of arguments for resource constructor `cart`. Expected 1, but provided 2"
+                "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id, user_id).add-item}(\"apple\")`\ncause: invalid argument size for function `[constructor]cart`. expected 1 arguments, found 2\n"
             );
         }
 
@@ -1360,7 +1360,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Incorrect number of arguments in resource method `golem:it/api.{cart(user_id).add-item}`. Expected 1, but provided 2"
+                "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id).add-item}(\"apple\", \"samsung\")`\ncause: invalid argument size for function `[method]cart.add-item`. expected 1 arguments, found 2\n"
             );
         }
 
@@ -1378,7 +1378,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid number of arguments in variant `register-user`. Expected 1, but provided 2"
+                "error in the following rib found at line 0, column 0\n`register-user(1, \"foo\")`\ncause: invalid argument size for function `register-user`. expected 1 arguments, found 2\n"
             );
         }
 
@@ -1399,7 +1399,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid type for the argument in function `foo`. Expected type `str`, but provided argument `1: u64` is a `number`"
+                "error in the following rib found at line 2, column 33\n`1: u64`\nfound within:\n`foo(1: u64)`\ncause: type mismatch. expected string. found u64\ninvalid argument to the function `foo`\n"
             );
         }
 
@@ -1416,7 +1416,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid type for the argument in resource method `golem:it/api.{cart(user_id).add-item}`. Expected type `record`, but provided argument `\"apple\"` is a `str`"
+                "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`golem:it/api.{cart(user_id).add-item}(\"apple\")`\ncause: type mismatch. expected record{name: string}. found string\ninvalid argument to the function `[method]cart.add-item`\n"
             );
         }
 
@@ -1432,7 +1432,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid type for the argument in resource constructor `cart`. Expected type `str`, but provided argument `{foo: \"bar\"}` is a `record`"
+                "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`golem:it/api.{cart({foo: \"bar\"}).add-item}(\"apple\")`\ncause: type mismatch. expected string. found record{foo: string}\ninvalid argument to the function `[constructor]cart`\n"
             );
         }
 
@@ -1450,7 +1450,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid type for the argument in variant constructor `register-user`. Expected type `number`, but provided argument `\"foo\"` is a `str`"
+                "error in the following rib found at line 2, column 56\n`\"foo\"`\nfound within:\n`register-user(\"foo\")`\ncause: type mismatch. expected u64. found string\ninvalid argument to the function `register-user`\n"
             );
         }
     }

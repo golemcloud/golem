@@ -126,18 +126,18 @@ impl From<FunctionCallError> for RibCompilationError {
     fn from(value: FunctionCallError) -> Self {
         match value {
             FunctionCallError::InvalidFunctionCall {
-                function_call_name: function_name,
+                function_name,
                 expr,
                 message,
             } => RibCompilationError {
-                cause: format!("invalid function call: `{}`", function_name),
+                cause: format!("invalid function call `{}`", function_name),
                 expr,
                 immediate_parent: None,
                 additional_error_details: vec![message],
                 help_messages: vec![],
             },
             FunctionCallError::TypeMisMatch {
-                function_call_name: call_type,
+                function_name: call_type,
                 error,
                 ..
             } => {
@@ -152,7 +152,7 @@ impl From<FunctionCallError> for RibCompilationError {
                 original_compilation
             }
             FunctionCallError::MissingRecordFields {
-                function_call_name: call_type,
+                function_name: call_type,
                 missing_fields,
                 argument,
             } => {
@@ -175,7 +175,7 @@ impl From<FunctionCallError> for RibCompilationError {
             }
 
             FunctionCallError::UnResolvedTypes {
-                function_call_name: call_type,
+                function_name: call_type,
                 unresolved_error,
                 expected_type,
                 ..
@@ -194,7 +194,7 @@ impl From<FunctionCallError> for RibCompilationError {
             }
             FunctionCallError::InvalidResourceMethodCall {
                 invalid_lhs,
-                function_call_name,
+                resource_method_name: function_call_name,
             } => RibCompilationError {
                 cause: format!("invalid resource method call: `{}`", function_call_name),
                 expr: invalid_lhs,
@@ -211,6 +211,22 @@ impl From<FunctionCallError> for RibCompilationError {
                 expr,
                 immediate_parent: None,
                 additional_error_details: vec![message],
+                help_messages: vec![],
+            },
+
+            FunctionCallError::ArgumentSizeMisMatch {
+                function_name,
+                expr,
+                expected,
+                provided,
+            } => RibCompilationError {
+                cause: format!(
+                    "invalid argument size for function `{}`. expected {} arguments, found {}",
+                    function_name, expected, provided
+                ),
+                expr,
+                immediate_parent: None,
+                additional_error_details: vec![],
                 help_messages: vec![],
             },
         }

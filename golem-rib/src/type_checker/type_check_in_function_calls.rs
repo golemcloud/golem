@@ -50,7 +50,7 @@ mod internal {
     ) -> Result<(), FunctionCallError> {
         let registry_key = RegistryKey::from_call_type(call_type).ok_or(
             FunctionCallError::InvalidFunctionCall {
-                function_call_name: call_type.to_string(),
+                function_name: call_type.to_string(),
                 expr: function_call_expr.clone(),
                 message: "invalid function call type".to_string(),
             },
@@ -58,7 +58,7 @@ mod internal {
 
         let registry_value = type_registry.types.get(&registry_key).ok_or(
             FunctionCallError::InvalidFunctionCall {
-                function_call_name: call_type.to_string(),
+                function_name: call_type.to_string(),
                 expr: function_call_expr.clone(),
                 message: "missing function in component metadata".to_string(),
             },
@@ -84,7 +84,7 @@ mod internal {
 
             if let Err(unresolved_error) = unresolved_type {
                 return Err(FunctionCallError::UnResolvedTypes {
-                    function_call_name: call_type.to_string(),
+                    function_name: call_type.to_string(),
                     argument: actual_arg.clone(),
                     unresolved_error,
                     expected_type: expected_arg_type.clone(),
@@ -97,7 +97,7 @@ mod internal {
 
             if !missing_fields.is_empty() {
                 return Err(FunctionCallError::MissingRecordFields {
-                    function_call_name: call_type.to_string(),
+                    function_name: call_type.to_string(),
                     argument: actual_arg.clone(),
                     missing_fields,
                 });
@@ -110,7 +110,7 @@ mod internal {
                 actual_arg_type,
             )
             .map_err(|e| FunctionCallError::TypeMisMatch {
-                function_call_name: call_type.to_string(),
+                function_name: call_type.to_string(),
                 argument: actual_arg.clone(),
                 error: e,
             })?;
