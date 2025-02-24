@@ -1014,9 +1014,6 @@ impl Expr {
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
-        self.infer_worker_function_invokes()?;
-        self.bind_instance_types();
-        self.infer_worker_function_invokes()?;
         self.infer_function_call_types(function_type_registry)?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
         self.check_types(function_type_registry)?;
@@ -1031,7 +1028,6 @@ impl Expr {
     ) -> Result<(), RibCompilationError> {
         self.identify_instance_creation(function_type_registry)?;
         *self = self.bind_global_variable_types(type_spec)?;
-
         self.bind_type_annotations();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
