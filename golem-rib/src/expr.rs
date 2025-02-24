@@ -1115,7 +1115,7 @@ impl Expr {
     }
 
     pub fn push_types_down(&mut self) -> Result<(), String> {
-        type_inference::push_types_down(self).map_err(|x| RibCompilationError::from(x).to_string())
+        type_inference::push_types_down(self).map_err(|x|x.to_string())
         // TODO
     }
 

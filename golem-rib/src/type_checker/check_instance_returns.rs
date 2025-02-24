@@ -5,7 +5,6 @@ use crate::{Expr, InferredType};
 pub fn check_invalid_program_return(rib_program: &Expr) -> Result<(), InvalidProgramReturn> {
     let inferred_type = rib_program.inferred_type();
 
-    dbg!(rib_program.to_string());
     if let InferredType::Instance { instance_type, .. } = inferred_type {
         let expr = match rib_program {
             Expr::ExprBlock { exprs, .. } if !exprs.is_empty() => exprs.last().unwrap(),

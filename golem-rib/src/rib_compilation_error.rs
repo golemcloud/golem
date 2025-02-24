@@ -1,17 +1,26 @@
-use crate::type_checker::{
-    ExhaustivePatternMatchError, FunctionCallTypeError, InvalidExpr, InvalidMathExprError,
-    InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError,
+use crate::type_checker::{ActualType, ExhaustivePatternMatchError, ExpectedType, FunctionCallTypeError, InvalidExpr, InvalidMathExprError, InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError};
+use crate::{
+    AmbiguousTypeError, Expr, InvalidPatternMatchError, TypeName,
 };
-use crate::{AmbiguousTypeError, Expr, InvalidPatternMatchError, TypeName, TypePushDownError};
 use std::fmt;
-use std::fmt::Display;
+use std::fmt::{Display};
+use crate::type_inference::kind::GetTypeKind;
 
+#[derive(Clone)]
 pub struct RibCompilationError {
     pub cause: String,
     pub expr: Expr,
     pub immediate_parent: Option<Expr>,
     pub additional_error_details: Vec<String>,
     pub help_messages: Vec<String>,
+}
+
+impl RibCompilationError {
+    pub fn with_additional_error_detail(&self, detail: &str) -> RibCompilationError {
+        let mut error = self.clone();
+        error.additional_error_details.push(detail.to_string());
+        error
+    }
 }
 
 impl Display for RibCompilationError {
@@ -72,13 +81,23 @@ impl From<UnResolvedTypesError> for RibCompilationError {
 
 impl From<TypeMismatchError> for RibCompilationError {
     fn from(value: TypeMismatchError) -> Self {
-        let expected = TypeName::try_from(value.expected_type)
-            .map(|x| format!("expected {}", x))
-            .ok();
+        let expected = match value.expected_type {
+            ExpectedType::AnalysedType(anaysed_type) => {
+                TypeName::try_from(anaysed_type)
+                    .map(|x| format!("expected {}", x))
+                    .ok()
+            }
+            ExpectedType::Kind(kind) => {
+                Some(format!("expected {}", kind))
+            }
+        };
 
-        let actual = TypeName::try_from(value.actual_type)
-            .map(|x| format!("found {}", x))
-            .ok();
+        let actual = match value.actual_type {
+            ActualType::Kind(type_kind) => Some(format!("found {}", type_kind)),
+            ActualType::Inferred(inferred_type) => TypeName::try_from(inferred_type)
+                .map(|x| format!("found {}", x))
+                .ok(),
+        };
 
         let cause_suffix = match (expected, actual) {
             (Some(expected), Some(actual)) => format!("{}. {}", expected, actual),
@@ -279,9 +298,9 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
 
 impl From<AmbiguousTypeError> for RibCompilationError {
     fn from(value: AmbiguousTypeError) -> Self {
-        dbg!(value.clone());
         let cause = format!(
-            "cannot determine the type due to ambiguous types: {}",
+            "type of `{}` is invalid here. inferred to be: {}",
+            value.expr,
             value
                 .ambiguous_types
                 .iter()
@@ -291,8 +310,7 @@ impl From<AmbiguousTypeError> for RibCompilationError {
         );
 
         let help_messages = vec![
-            "this happens when the same rib is used as two or more different types".to_string(),
-            "example: `let x: tuple<1, 2> = foo` results in type ambiguity for `foo` if `foo` was used as a list elsewhere".to_string(),
+            "make sure there is no type mismatch".to_string(),
         ];
 
         RibCompilationError {
@@ -349,17 +367,6 @@ impl From<InvalidPatternMatchError> for RibCompilationError {
             immediate_parent: immediate_parent.cloned(),
             additional_error_details: vec![],
             help_messages: vec![],
-        }
-    }
-}
-
-impl From<TypePushDownError> for RibCompilationError {
-    fn from(value: TypePushDownError) -> Self {
-        match value {
-            TypePushDownError::AmbiguousType(ambiguous_type_error) => ambiguous_type_error.into(),
-            TypePushDownError::InvalidPatternMatch(invalid_pattern_match) => {
-                invalid_pattern_match.into()
-            }
         }
     }
 }

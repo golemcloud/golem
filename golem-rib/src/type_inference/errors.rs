@@ -1,10 +1,6 @@
 use crate::type_inference::kind::{GetTypeKind, TypeKind};
 use crate::{Expr, InferredType};
 
-// Ambiguous type error occurs when we are unable to push down an inferred type
-// to the inner expression since there is an ambiguity between what the expression is
-// and what is being pushed down
-
 #[derive(Debug, Clone)]
 pub struct AmbiguousTypeError {
     pub expr: Expr,
@@ -19,7 +15,6 @@ impl AmbiguousTypeError {
         expected: &TypeKind,
     ) -> AmbiguousTypeError {
         let actual_kind = inferred_expr.get_type_kind();
-
         match actual_kind {
             TypeKind::Ambiguous { possibilities } => {
                 let possibilities = possibilities.into_iter().collect::<Vec<_>>();

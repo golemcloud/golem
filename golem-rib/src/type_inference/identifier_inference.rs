@@ -57,6 +57,7 @@ mod internal {
                     identifier_lookup.update(variable_id.clone(), expr.inferred_type());
                     queue.push_back(expr)
                 }
+
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
             }
         }
