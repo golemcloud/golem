@@ -58,14 +58,14 @@ jobs:
           args: ${{ matrix.args }}
           projectPath: "./app/desktop/"
 
-      - name: upload artifact
+      - name: upload artifact ${{ matrix.platform }}
         if: matrix.platform != 'macos-latest' # This must match the platform value defined above.
         uses: actions/upload-artifact@v4
         with:
           name: golem-app-${{ matrix.platform }}
           path: ./target/release/bundle/
 
-      - name: upload artifact
+      - name: upload artifact ${{ matrix.platform }}
         if: matrix.platform == 'macos-latest' # This must match the platform value defined above.
         uses: actions/upload-artifact@v4
         with:
