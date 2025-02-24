@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cargo::generate_cargo_toml;
+use crate::cargo::generate_client_cargo_toml;
 use crate::compilation::compile;
 use crate::fs;
 use crate::log::{log_action, LogColorize, LogIndent};
@@ -26,9 +26,9 @@ use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;
 use std::path::{Path, PathBuf};
 
-pub fn generate(stub_def: &StubDefinition) -> anyhow::Result<()> {
+pub fn generate_client(stub_def: &StubDefinition) -> anyhow::Result<()> {
     let _ = generate_client_wit_dir(stub_def)?;
-    generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
+    generate_client_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the client Rust source")?;
     Ok(())
 }
@@ -74,7 +74,7 @@ pub async fn generate_and_build_client(
     offline: bool,
 ) -> anyhow::Result<PathBuf> {
     let _ = generate_client_wit_dir(stub_def)?;
-    generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
+    generate_client_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the client Rust source")?;
 
     compile(

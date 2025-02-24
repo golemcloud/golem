@@ -4321,6 +4321,7 @@ dependencies = [
  "test-r",
  "tokio",
  "toml",
+ "toml_edit",
  "wac-graph",
  "walkdir",
  "wax",

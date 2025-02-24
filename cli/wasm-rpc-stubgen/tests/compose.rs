@@ -16,7 +16,7 @@
 
 // TODO: test compose with multiple stubs
 
-use crate::{test_data_path, wasm_rpc_override};
+use crate::{cargo_component_build, test_data_path, wasm_rpc_override};
 use fs_extra::dir::CopyOptions;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::DefaultAst;
@@ -40,7 +40,7 @@ async fn compose_with_single_stub() {
     )
     .unwrap();
 
-    compile_rust(caller_dir.path());
+    cargo_component_build(caller_dir.path());
 
     let component_wasm = caller_dir
         .path()
@@ -98,16 +98,6 @@ fn init_caller(name: &str) -> TempDir {
     .unwrap();
 
     temp_dir
-}
-
-fn compile_rust(path: &Path) {
-    let status = std::process::Command::new("cargo")
-        .arg("component")
-        .arg("build")
-        .current_dir(path)
-        .status()
-        .unwrap();
-    assert!(status.success());
 }
 
 fn assert_is_component(wasm_path: &Path) {

@@ -234,7 +234,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         }
     )
         .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
-    commands::generate::generate(&stub_def)
+    commands::generate::generate_client(&stub_def)
 }
 
 pub async fn build(args: BuildArgs) -> anyhow::Result<()> {

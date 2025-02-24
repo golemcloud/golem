@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Value;
+use toml_edit::{DocumentMut, InlineTable};
 use wit_parser::PackageName;
 
 #[derive(Serialize, Deserialize, Default)]
@@ -68,7 +69,7 @@ struct WitDependency {
     path: String,
 }
 
-pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
+pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     let mut manifest = Manifest::default();
 
     if def.config.seal_cargo_workspace {
@@ -343,55 +344,78 @@ pub fn regenerate_cargo_package_component(
             cargo_toml_path.log_color_highlight()
         )
     })?;
-    let mut manifest: Manifest<MetadataRoot> =
-        Manifest::from_slice_with_metadata(raw_manifest.as_bytes()).with_context(|| {
-            anyhow!(
-                "Failed to parse Cargo.toml at {}",
-                cargo_toml_path.log_color_highlight()
-            )
-        })?;
-    let package = manifest.package.as_mut().ok_or_else(|| {
+
+    let mut manifest = raw_manifest.parse::<DocumentMut>().with_context(|| {
         anyhow!(
-            "No package found in {}",
-            cargo_toml_path.log_color_highlight()
+            "Failed to parse cargo project file: {}",
+            cargo_toml_path.display()
         )
     })?;
 
+    let component = manifest["package"] //
+        .or_insert(toml_edit::table())["metadata"]
+        .or_insert(toml_edit::table())["component"]
+        .or_insert(toml_edit::table())
+        .as_table_mut()
+        .ok_or_else(|| {
+            anyhow!(
+                "Expected table for package.metadata.component in {}",
+                cargo_toml_path.display()
+            )
+        })?;
+
+    let target = component["target"]
+        .or_insert(toml_edit::table())
+        .as_table_mut()
+        .ok_or_else(|| {
+            anyhow!(
+                "Expected table for package.metadata.component.target in {}",
+                cargo_toml_path.display()
+            )
+        })?;
+    target["path"] = toml_edit::value(relative_wit_path.to_string_lossy().to_string());
+    match world {
+        Some(world) => {
+            target["world"] = toml_edit::value(world);
+        }
+        None => {
+            target.remove("world");
+        }
+    }
+
+    let dependencies = target
+        .entry("dependencies")
+        .or_insert(toml_edit::table())
+        .as_table_mut()
+        .ok_or_else(|| {
+            anyhow!(
+                "Expected table for package.metadata.component.dependencies in {}",
+                cargo_toml_path.display()
+            )
+        })?;
+
+    dependencies.clear();
+
     let wit_dir = ResolvedWitDir::new(wit_path)?;
+    for (package_id, package_sources) in &wit_dir.package_sources {
+        if *package_id == wit_dir.package_id {
+            continue;
+        }
 
-    package.metadata = Some(MetadataRoot {
-        component: Some(ComponentMetadata {
-            package: None,
-            target: Some(ComponentTarget {
-                world,
-                path: relative_wit_path.to_string_lossy().to_string(),
-                dependencies: wit_dir
-                    .package_sources
-                    .iter()
-                    .filter(|(&package_id, _)| package_id != wit_dir.package_id)
-                    .map(|(package_id, package_sources)| {
-                        (
-                            format_package_name_without_version(
-                                &wit_dir.package(*package_id).unwrap().name,
-                            ),
-                            WitDependency {
-                                path: PathExtra::new(
-                                    PathExtra::new(&package_sources.dir)
-                                        .strip_prefix(project_root)
-                                        .unwrap(),
-                                )
-                                .to_string()
-                                .unwrap(),
-                            },
-                        )
-                    })
-                    .collect(),
-            }),
-        }),
-    });
+        let dep_name = format_package_name_without_version(&wit_dir.package(*package_id)?.name);
 
-    let cargo_toml = toml::to_string(&manifest)?;
-    fs::write(cargo_toml_path, cargo_toml)?;
+        let mut dep = InlineTable::new();
+        dep.insert(
+            "path",
+            PathExtra::new(PathExtra::new(&package_sources.dir).strip_prefix(project_root)?)
+                .to_string()?
+                .into(),
+        );
+
+        dependencies[&dep_name] = toml_edit::value(dep);
+    }
+
+    fs::write(cargo_toml_path, manifest.to_string())?;
 
     Ok(())
 }

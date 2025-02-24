@@ -22,6 +22,8 @@ env:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest-xlarge
+    env:
+      CARGO_BUILD_JOBS: 6
     steps:
     - name: Checkout
       uses: actions/checkout@v4

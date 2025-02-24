@@ -54,6 +54,7 @@ syn = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
