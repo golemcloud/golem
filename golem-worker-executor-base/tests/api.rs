@@ -222,6 +222,8 @@ async fn shopping_cart_example(
         .await;
 
     save_recovery_golden_file(&executor, &context, "shopping_cart_example", &worker_id).await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(
@@ -513,6 +515,7 @@ async fn promise(
         .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(result == Ok(vec![Value::List(vec![Value::U8(42)])]));
@@ -549,6 +552,7 @@ async fn get_self_uri(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(
@@ -656,6 +660,8 @@ async fn get_workers_from_worker(
     )
     .await;
 
+    executor.check_oplog_is_queryable(&worker_id1).await;
+    executor.check_oplog_is_queryable(&worker_id2).await;
     drop(executor);
 }
 
@@ -764,6 +770,8 @@ async fn get_metadata_from_worker(
     get_check(&worker_id1, &worker_id2, &mut executor).await;
     get_check(&worker_id2, &worker_id1, &mut executor).await;
 
+    executor.check_oplog_is_queryable(&worker_id1).await;
+    executor.check_oplog_is_queryable(&worker_id2).await;
     drop(executor);
 }
 
@@ -819,6 +827,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(
@@ -887,6 +896,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(
@@ -1261,6 +1271,8 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     let failure = executor
         .invoke_and_await(&worker_id, "golem:it/api.{echo}", vec![])
         .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
     check!(failure.is_err());
 }
@@ -1289,6 +1301,8 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
             ],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(failure.is_err());
@@ -1310,7 +1324,6 @@ async fn get_worker_metadata(
         .component_service
         .get_component_size(&component_id, 0)
         .await
-        .unwrap()
         .unwrap();
 
     let worker_id = executor
@@ -1343,6 +1356,7 @@ async fn get_worker_metadata(
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(
@@ -1411,6 +1425,7 @@ async fn create_invoke_delete_create_invoke(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(r1.is_ok());
@@ -1481,6 +1496,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(r1 == vec![]);
@@ -1556,6 +1572,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(r1 == vec![]);
@@ -1611,7 +1628,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let cwd = env::current_dir().expect("Failed to get current directory");
     debug!("Current directory: {cwd:?}");
     let target_dir = cwd.join(Path::new("data/components"));
-    let component_path = target_dir.join(Path::new(&format!("{component_id}-0.wasm")));
+    let component_path = target_dir.join(format!("wasms/{component_id}-0.wasm"));
 
     {
         let mut file = std::fs::File::options()
@@ -1659,8 +1676,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     // corrupting the uploaded WASM
     let cwd = env::current_dir().expect("Failed to get current directory");
     debug!("Current directory: {cwd:?}");
-    let target_dir = cwd.join(Path::new("data/components"));
-    let component_path = target_dir.join(Path::new(&format!("{component_id}-0.wasm")));
+    let component_path = cwd.join(format!("data/components/wasms/{component_id}-0.wasm"));
     let compiled_component_path = cwd.join(Path::new(&format!(
         "data/blobs/compilation_cache/{component_id}/0.cwasm"
     )));
@@ -1693,6 +1709,8 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
             reason: "failed to parse WebAssembly module".to_string()
         })
     ));
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 #[test]
@@ -1760,6 +1778,7 @@ async fn long_running_poll_loop_works_as_expected(
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
     http_server.abort();
 }
@@ -1882,6 +1901,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
     http_server.abort();
 
@@ -1968,6 +1988,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
 
     let _ = drain_connection(rx).await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
     http_server.abort();
 }
@@ -2036,6 +2057,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     sleep(Duration::from_secs(2)).await;
     let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
     http_server.abort();
 
@@ -2142,6 +2164,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     let (status4, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
     http_server.abort();
 
@@ -2208,6 +2231,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
 
     let _ = drain_connection(rx).await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     executor.delete_worker(&worker_id).await;
     let metadata = executor.get_worker_metadata(&worker_id).await;
 
@@ -2338,8 +2362,6 @@ async fn shopping_cart_resource_example(
         )
         .await;
 
-    drop(executor);
-
     assert_eq!(
         contents,
         Ok(vec![Value::List(vec![
@@ -2362,7 +2384,9 @@ async fn shopping_cart_resource_example(
                 Value::U32(20),
             ]),
         ])])
-    )
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 #[test]
@@ -2435,8 +2459,6 @@ async fn counter_resource_test_1(
 
     let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
-    drop(executor);
-
     check!(result1 == Ok(vec![Value::U64(5)]));
 
     check!(
@@ -2489,6 +2511,8 @@ async fn counter_resource_test_1(
         })
         .collect::<Vec<_>>();
     check!(resources2 == vec![]);
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 #[test]
@@ -2691,10 +2715,11 @@ async fn reconstruct_interrupted_state(
         .last_known_status
         .status;
 
-    drop(executor);
     check!(result.is_err());
     check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
     check!(status == WorkerStatus::Interrupted);
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 #[test]
@@ -2798,10 +2823,11 @@ async fn invocation_queue_is_persistent(
         .await
         .unwrap();
 
-    drop(executor);
     http_server.abort();
 
     check!(result == vec![Value::U64(4)]);
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 #[test]
@@ -2830,8 +2856,6 @@ async fn invoke_with_non_existing_function(
         )
         .await;
 
-    drop(executor);
-
     check!(failure.is_err());
     check!(
         success
@@ -2839,6 +2863,8 @@ async fn invoke_with_non_existing_function(
                 "Hello".to_string()
             ))))])
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 #[test]
@@ -2881,8 +2907,6 @@ async fn stderr_returned_for_failed_component(
         .get_workers_metadata(&component_id, None, ScanCursor::default(), 100, true)
         .await;
 
-    drop(executor);
-
     info!(
         "result2: {:?}",
         worker_error_message(&result2.clone().err().unwrap())
@@ -2909,6 +2933,8 @@ async fn stderr_returned_for_failed_component(
     check!(all.len() == 1);
     check!(all[0].1.is_some());
     check!(all[0].1.clone().unwrap().ends_with(&expected_stderr));
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 #[test]
@@ -3024,10 +3050,183 @@ async fn cancelling_pending_invocations(
         .await
         .unwrap();
 
-    drop(executor);
-
     check!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
     check!(cancel2.is_ok() && cancel2.unwrap());
     check!(cancel4.is_err()); // cannot cancel a non-existing invocation
     check!(final_result == vec![Value::U64(12)]);
+
+    // FIXME: This is currently failing due to a value / type mismatch when parsing an external invocation:
+    // ValueAndType { value: Record([Record([Record([Record([U64(3560302769035693415), U64(13755298306296285132)])]), String("cancel-pending-invocations")]), U64(12)]), typ: Handle(TypeHandle { resource_id: AnalysedResourceId(0), mode: Borrowed }) }
+    //
+    // executor.check_oplog_is_queryable(&worker_id).await;
+}
+
+/// Test scheduling an invocation for the worker itself.
+#[test_r::timeout(5000)]
+#[test]
+#[tracing::instrument]
+async fn scheduled_invocation_self(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.component("scheduled-invocation").store().await;
+
+    let worker_id = executor
+        .start_worker(&component_id, "scheduled-invocation-1")
+        .await;
+
+    executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/scheduled-invocation-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let mut done = false;
+    while !done {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:it/scheduled-invocation-api.{get}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        if result.len() == 1 && result[0] == Value::U64(1) {
+            done = true;
+        } else {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+}
+
+/// Test scheduling an invocation for a different worker.
+#[test_r::timeout(5000)]
+#[test]
+#[tracing::instrument]
+async fn scheduled_invocation_other(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.component("scheduled-invocation").store().await;
+
+    let worker_id_1 = executor
+        .start_worker(&component_id, "scheduled-invocation-2")
+        .await;
+
+    let mut worker_2_env = HashMap::new();
+    worker_2_env.insert("COMPONENT_ID".to_string(), component_id.to_string());
+    worker_2_env.insert("WORKER_NAME".to_string(), worker_id_1.worker_name.clone());
+
+    let worker_id_2 = executor
+        .start_worker_with(
+            &component_id,
+            "scheduled-invocation-3",
+            vec![],
+            worker_2_env,
+        )
+        .await;
+
+    executor
+        .invoke_and_await(
+            &worker_id_2,
+            "golem:it/scheduled-invocation-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let mut done = false;
+    while !done {
+        let result = executor
+            .invoke_and_await(
+                &worker_id_1,
+                "golem:it/scheduled-invocation-api.{get}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        if result.len() == 1 && result[0] == Value::U64(1) {
+            done = true;
+        } else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    executor.check_oplog_is_queryable(&worker_id_2).await;
+}
+
+/// Test resolving a component_id from the name.
+#[test]
+#[tracing::instrument]
+async fn resolve_components_from_name(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    // Make sure the name is unique
+    let counter_component_id = executor
+        .component("counters")
+        .name("component-resolve-target")
+        .store()
+        .await;
+    let resolver_component_id = executor.component("component-resolve").store().await;
+
+    executor
+        .start_worker(&counter_component_id, "counter-1")
+        .await;
+
+    let resolve_worker = executor
+        .start_worker(&resolver_component_id, "resolver-1")
+        .await;
+
+    let result = executor
+        .invoke_and_await(
+            &resolve_worker,
+            "golem:it/component-resolve-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    check!(result.len() == 1);
+
+    let (high_bits, low_bits) = counter_component_id.0.as_u64_pair();
+    let component_id_value = Value::Record(vec![Value::Record(vec![
+        Value::U64(high_bits),
+        Value::U64(low_bits),
+    ])]);
+
+    let worker_id_value = Value::Record(vec![
+        component_id_value.clone(),
+        Value::String("counter-1".to_string()),
+    ]);
+
+    check!(
+        result[0]
+            == Value::Tuple(vec![
+                Value::Option(Some(Box::new(component_id_value))),
+                Value::Option(Some(Box::new(worker_id_value))),
+                Value::Option(None),
+            ])
+    );
+
+    executor.check_oplog_is_queryable(&resolve_worker).await;
 }

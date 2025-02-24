@@ -1979,15 +1979,15 @@ mod protobuf {
                         entry: Some(oplog_entry::Entry::ImportedFunctionInvoked(
                             golem_api_grpc::proto::golem::worker::ImportedFunctionInvokedParameters {
                                 timestamp: Some(imported_function_invoked.timestamp.into()),
-                                function_name: imported_function_invoked.function_name,
+                                function_name: imported_function_invoked.function_name.clone(),
                                 request: Some(imported_function_invoked.request.try_into().map_err(
                                     |errors: Vec<String>| {
-                                        format!("Failed to convert request: {}", errors.join(", "))
+                                        format!("Failed to convert request for imported function {}: {}", imported_function_invoked.function_name, errors.join(", "))
                                     },
                                 )?),
                                 response: Some(imported_function_invoked.response.try_into().map_err(
                                     |errors: Vec<String>| {
-                                        format!("Failed to convert response: {}", errors.join(", "))
+                                        format!("Failed to convert response for imported function {}: {}", imported_function_invoked.function_name, errors.join(", "))
                                     },
                                 )?),
                                 wrapped_function_type: Some(
@@ -2002,13 +2002,13 @@ mod protobuf {
                         entry: Some(oplog_entry::Entry::ExportedFunctionInvoked(
                             golem_api_grpc::proto::golem::worker::ExportedFunctionInvokedParameters {
                                 timestamp: Some(exported_function_invoked.timestamp.into()),
-                                function_name: exported_function_invoked.function_name,
+                                function_name: exported_function_invoked.function_name.clone(),
                                 request: exported_function_invoked
                                     .request
                                     .into_iter()
                                     .map(|value| {
                                         value.try_into().map_err(|errors: Vec<String>| {
-                                            format!("Failed to convert request: {}", errors.join(", "))
+                                            format!("Failed to convert request for exported function {}: {}", exported_function_invoked.function_name, errors.join(", "))
                                         })
                                     })
                                     .collect::<Result<Vec<_>, _>>()?,
@@ -2025,7 +2025,7 @@ mod protobuf {
                                 response: Some(
                                     exported_function_completed.response.try_into().map_err(
                                         |errors: Vec<String>| {
-                                            format!("Failed to convert response: {}", errors.join(", "))
+                                            format!("Failed to convert response for completed exported function: {}", errors.join(", "))
                                         },
                                     )?,
                                 ),

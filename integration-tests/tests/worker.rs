@@ -1856,3 +1856,54 @@ async fn worker_initial_files_after_automatic_worker_update(
     check!(result2 == "hello world");
     check!(result3 == "baz\n");
 }
+
+/// Test resolving a component_id from the name.
+#[test]
+#[tracing::instrument]
+async fn resolve_components_from_name(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    // Make sure the name is unique
+    let counter_component_id = deps
+        .component("counters")
+        .name("component-resolve-target")
+        .store()
+        .await;
+
+    let resolver_component_id = deps.component("component-resolve").store().await;
+
+    deps.start_worker(&counter_component_id, "counter-1").await;
+
+    let resolve_worker = deps
+        .start_worker(&resolver_component_id, "resolver-1")
+        .await;
+
+    let result = deps
+        .invoke_and_await(
+            &resolve_worker,
+            "golem:it/component-resolve-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    check!(result.len() == 1);
+
+    let (high_bits, low_bits) = counter_component_id.0.as_u64_pair();
+    let component_id_value = Value::Record(vec![Value::Record(vec![
+        Value::U64(high_bits),
+        Value::U64(low_bits),
+    ])]);
+
+    let worker_id_value = Value::Record(vec![
+        component_id_value.clone(),
+        Value::String("counter-1".to_string()),
+    ]);
+
+    check!(
+        result[0]
+            == Value::Tuple(vec![
+                Value::Option(Some(Box::new(component_id_value))),
+                Value::Option(Some(Box::new(worker_id_value))),
+                Value::Option(None),
+            ])
+    );
+}

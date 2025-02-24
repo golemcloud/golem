@@ -67,6 +67,8 @@ pub mod uri;
 
 pub mod virtual_exports;
 
+pub mod testing;
+
 #[cfg(test)]
 test_r::enable!();
 

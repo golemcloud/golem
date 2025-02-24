@@ -62,7 +62,7 @@ impl ApiDeploymentApi {
 
             let data = self
                 .deployment_service
-                .get_by_site(&namespace, &ApiSiteString::from(&payload.site))
+                .get_by_site(&ApiSiteString::from(&payload.site))
                 .instrument(record.span.clone())
                 .await?;
 
@@ -118,7 +118,7 @@ impl ApiDeploymentApi {
 
             let value = self
                 .deployment_service
-                .get_by_site(&DefaultNamespace::default(), &ApiSiteString(site))
+                .get_by_site(&ApiSiteString(site))
                 .await?
                 .ok_or(ApiEndpointError::not_found(safe(
                     "Api deployment not found".to_string(),

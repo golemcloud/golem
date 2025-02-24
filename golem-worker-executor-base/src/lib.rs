@@ -54,7 +54,7 @@ use crate::services::worker_enumeration::{
     RunningWorkerEnumerationServiceDefault, WorkerEnumerationService,
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use crate::services::{component, shard_manager, All, HasConfig};
+use crate::services::{shard_manager, All, HasConfig};
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -67,7 +67,10 @@ use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::golem_version;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginOwner, PluginScope,
+};
 use golem_common::redis::RedisPool;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -163,14 +166,14 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (
-        Arc<
-            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-                + Send
-                + Sync,
-        >,
-        Arc<dyn PluginsObservations + Send + Sync>,
-    );
+    ) -> (Arc<dyn Plugins<Ctx::Types>>, Arc<dyn PluginsObservations>);
+
+    fn create_component_service(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        plugin_observations: Arc<dyn PluginsObservations>,
+    ) -> Arc<dyn ComponentService<Ctx::Types>>;
 
     /// Allows customizing the `All` service.
     /// This is the place to initialize additional services and store them in `All`'s `extra_deps`
@@ -182,7 +185,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<Ctx::Types>>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -198,11 +201,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<Ctx::Types>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
@@ -401,14 +400,11 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
     let (plugins, plugins_observations) = bootstrap.create_plugins(&golem_config);
 
-    let component_service = component::configured(
-        &golem_config.component_service,
-        &golem_config.component_cache,
-        &golem_config.compiled_component_service,
+    let component_service = bootstrap.create_component_service(
+        &golem_config,
         blob_storage.clone(),
         plugins_observations,
-    )
-    .await;
+    );
 
     let golem_config = Arc::new(golem_config.clone());
     let promise_service: Arc<dyn PromiseService + Send + Sync> =
@@ -561,4 +557,53 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         .await?;
 
     Ok((all, epoch_thread))
+}
+
+/// Trait to encapsulate different types that are used throughout the codebase (oss, cloud, testing, ...).
+/// Implementating types should be fieldless structs.
+///
+/// Note: that deriving clauses put constraints on the type parameters. i.e.
+///
+/// ```
+/// #[derive(Clone)]
+/// struct Foo<T: GolemTypes> { owner: T::PluginOwner }
+/// ```
+///
+/// becomes
+/// ```
+/// struct Foo<T: GolemTypes> { owner: T::PluginOwner }
+///
+/// impl <T: GolemTypes + Clone> Clone for Foo<T> { ... }
+/// ```
+///
+/// To make this work better for deriving use the following structure for structs:
+/// ```
+/// #[derive(Clone)]
+/// struct FooPoly<PluginOwner> { owner: PluginOwner }
+/// type Foo<T: GolemTypes> = FooPoly<T::PluginOwner>
+/// ```
+pub trait GolemTypes: 'static {
+    // TODO:
+    // Optimally we would like to have a constraint on the associated type here:
+    //
+    // `type ComponentOwner: ComponentOwner<PluginOwner = Self::PluginOwner>;`
+    //
+    // This does currently now work nicely for two reasons:
+    // * PluginOwner / PluginScope bring a lot of baggage. Especially the AuthCtx can make it difficult to move implementations to a central location
+    // * cloud-worker-executor currently mixes Oss and Cloud types here. Optimally it would fully use cloud types.
+    //
+    // Once these two issues are addressed, introduce the contraint here.
+    type ComponentOwner: ComponentOwner;
+
+    type PluginOwner: PluginOwner;
+    type PluginScope: PluginScope;
+}
+
+pub struct DefaultGolemTypes;
+
+impl GolemTypes for DefaultGolemTypes {
+    type ComponentOwner = DefaultComponentOwner;
+
+    type PluginOwner = DefaultPluginOwner;
+    type PluginScope = DefaultPluginScope;
 }
