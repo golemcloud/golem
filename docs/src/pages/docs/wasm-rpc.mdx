@@ -1,0 +1,86 @@
+import { Callout } from "nextra/components"
+
+# WASM-RPC
+
+<Callout type="warning">
+  Prefer the typed approaches to worker-invocation explained in the
+  [introduction](/docs/worker-to-worker-communication). This section describes the underlying
+  interfaces that are used by golem itself to implement the typed approaches to RPC.
+</Callout>
+
+The low-level interface to invoke other workers from within a component is the [WASM-RPC](https://github.com/golemcloud/golem-wit/blob/main/wit/deps/wasm-rpc/wasm-rpc.wit) wit package.
+The basic workflow of using this package is to construct an instance of the `wasm-rpc` resource (which represents a remote worker) and call the appropriate method on it.
+
+## Constructing an instance
+
+The only argument required to construct an wasm-rpc resource is the URI of the worker you wish to invoke. The structure of this URI is `urn:worker:{component_id}/{worker_name}`.
+Both `component_id` and `worker_name` are given to you by golem when you create a component and worker respectively.
+
+## WIT-Value
+
+As the wasm-rpc package is not statically typed, it is required to be able to pass as arguments and return arbitrary WIT values. This is done using the WIT-Value datatype which is a reified
+version of the regular WIT types. There is one constructor of the related WIT-Node type for each type in the WIT typesystem, i.e. a `list<u64>` with value `[1, 2, 4]` might be represented like this in a rust component using wasm-rpc:
+
+```rust
+WitValue {
+      nodes: vec![WitNode::ListValue(vec![1, 2, 3]), WitNode::PrimU64(1), WitNode::PrimU64(2), WitNode::PrimU64(4)]
+}
+```
+
+<Callout type="info">
+  The value that will end up becoming the root of the resulting WIT Value needs to be placed in
+  index 0 of the nodes array!
+</Callout>
+
+All functions in the wasm-rpc package use wit-value instead of the equivalent wit type. Invoking a function with incorrect wit-values with lead to an error.
+
+## Invocation
+
+After you have constructed an instance of wasm-rpc there are a number of different functions you can choose from, depending on the invocation semantics you need.
+
+- invoke: Non-blockingly call the desired function. Errors during invocation are returned, but the actual result of the invocation cannot be accessed.
+- invoke-and-await: Blockingly call the desired function. The result of the invocation will be returned to you.
+- async-invoke-and-await: Non-blockingly call the desired function. A resource will be returned to you that you can use to poll the result.
+- schedule-invocation: Schedule an invocation for a point in time in the future.
+- schedule-cancelable-invocation: Schedule an invocation for a point in time in the future. A resource will be returned to you that you can cancel the invocation as long as it hasn't been executed yet.
+
+## Example
+
+Given the following WIT world implemented by a component:
+
+```wit
+package golem:example;
+
+interface invocation-example-api {
+  add: func(value: u64);
+}
+
+world invocation-example {
+  export invocation-example-api;
+}
+```
+
+A rust component could use the wasm-rpc package to schedule an invocation of 'add' 2 seconds in the future like this:
+
+```rust
+let uri = Uri { value: format!("urn:worker:{}/{}", component_id, worker_name) }
+
+let wasi_rpc = WasmRpc::new(&uri);
+
+let now = OffsetDateTime::now_utc();
+
+let scheduled_time = now.saturating_add(Duration::seconds(2));
+
+let scheduled_wasi_time = WasiDatetime {
+   seconds: scheduled_time.unix_timestamp() as u64,
+   nanoseconds: scheduled_time.nanosecond()
+};
+
+let value: WitValue = {
+   use self::bindings::golem::rpc::types::*;
+   WitValue {
+         nodes: vec![WitNode::PrimU64(1)]
+   }
+};
+wasi_rpc.schedule_invocation(scheduled_wasi_time, "golem:example/invocation-example-api.{add}()", &vec![value]);
+```

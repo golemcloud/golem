@@ -45,5 +45,6 @@
   "rib": "Rib",
   "golem-host-functions": "Golem Host Functions",
   "function-names": "Function names",
-  "json-wave-mapping": "JSON-WAVE Mapping"
+  "json-wave-mapping": "JSON-WAVE Mapping",
+  "wasm-rpc": "WASM RPC"
 }
