@@ -18,8 +18,7 @@ members = [
     "golem-worker-service",
     "integration-tests",
     "wasm-ast",
-    "wasm-rpc",
-    "app/desktop/src-tauri"
+    "wasm-rpc"
 ]
 
 exclude = [
@@ -68,6 +67,7 @@ exclude = [
     "test-components/wasi-http-incoming-request-handler-state",
     "test-components/write-stderr",
     "test-components/write-stdout",
+    "app/desktop/src-tauri"
 ]
 
 [workspace.dependencies]
