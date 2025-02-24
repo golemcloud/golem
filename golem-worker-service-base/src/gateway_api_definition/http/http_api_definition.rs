@@ -31,6 +31,7 @@ use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
+use rib::RibError;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -39,7 +40,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
-use rib::RibError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {

@@ -35,6 +35,7 @@ use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
+use rib::RibError;
 use tracing::{error, info};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
@@ -55,6 +56,8 @@ pub enum ApiDefinitionError {
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
+    #[error("Rib internal error: {0}")]
+    RibInternal(String),
     #[error("Security Scheme Error: {0}")]
     SecuritySchemeError(SecuritySchemeServiceError),
     #[error("Identity Provider Error: {0}")]
@@ -95,6 +98,7 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDefinitionError::Internal(_) => self.to_string(),
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
+            ApiDefinitionError::RibInternal(_) => self.to_string(),
         }
     }
 }
@@ -102,9 +106,12 @@ impl SafeDisplay for ApiDefinitionError {
 impl From<RouteCompilationErrors> for ApiDefinitionError {
     fn from(error: RouteCompilationErrors) -> Self {
         match error {
-            RouteCompilationErrors::RibError(e) => {
-                ApiDefinitionError::RibCompilationErrors(e)
-            }
+            RouteCompilationErrors::RibError(e) => match e {
+                RibError::RibCompilationError(e) => {
+                    ApiDefinitionError::RibCompilationErrors(e.to_string())
+                }
+                RibError::InternalError(e) => ApiDefinitionError::RibInternal(e),
+            },
             RouteCompilationErrors::MetadataNotFoundError(e) => {
                 ApiDefinitionError::RibCompilationErrors(format!(
                     "Failed to find the metadata of the component {}",

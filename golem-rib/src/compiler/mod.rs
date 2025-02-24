@@ -56,8 +56,7 @@ pub fn compile_with_restricted_global_variables(
             return Err(RibError::InternalError(format!(
                 "variable {} in the type spec is not a global variable",
                 info.variable_id
-            ))
-            .into());
+            )));
         }
     }
 
