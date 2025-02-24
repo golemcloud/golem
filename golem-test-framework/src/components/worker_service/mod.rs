@@ -1749,6 +1749,9 @@ fn grpc_api_definition_request_to_http(
                                 }),
                                 worker_name: binding.worker_name.map(to_http_rib_expr),
                                 idempotency_key: binding.idempotency_key.map(to_http_rib_expr),
+                                invocation_context: binding
+                                    .invocation_context
+                                    .map(to_http_rib_expr),
                                 response: binding.response.map(to_http_rib_expr),
                                 allow_origin: cors_preflight
                                     .as_ref()
