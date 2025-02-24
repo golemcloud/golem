@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::rib_compilation_error::RibCompilationError;
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
 use crate::{AmbiguousTypeError, Expr, InferredType, InvalidPatternMatchError, MatchArm};
 use std::collections::VecDeque;
-use crate::rib_compilation_error::RibCompilationError;
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
     let mut queue = VecDeque::new();
@@ -203,17 +203,16 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
 
 mod internal {
     use crate::call_type::CallType;
+    use crate::rib_compilation_error::RibCompilationError;
+    use crate::type_checker::{ActualType, ExpectedType, TypeMismatchError};
     use crate::type_inference::kind::{GetTypeKind, TypeKind};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        AmbiguousTypeError, ArmPattern, Expr, InferredType, InvalidPatternMatchError,
-        VariableId,
+        AmbiguousTypeError, ArmPattern, Expr, InferredType, InvalidPatternMatchError, VariableId,
     };
-    use std::collections::VecDeque;
     use golem_wasm_ast::analysis::AnalysedType;
-    use crate::rib_compilation_error::RibCompilationError;
-    use crate::type_checker::{ActualType, ExpectedType, TypeMismatchError};
+    use std::collections::VecDeque;
 
     pub(crate) fn handle_list_comprehension(
         variable_id: &mut VariableId,
@@ -224,10 +223,12 @@ mod internal {
         update_yield_expr_in_list_comprehension(variable_id, &iterable_expr, yield_expr)?;
 
         let refined_list_type = ListType::refine(comprehension_result_type).ok_or(
-            get_compilation_error_for_ambiguity(comprehension_result_type, yield_expr, &TypeKind::List)
-                .with_additional_error_detail(
-                    "the result of a comprehension should be of type list",
-                ),
+            get_compilation_error_for_ambiguity(
+                comprehension_result_type,
+                yield_expr,
+                &TypeKind::List,
+            )
+            .with_additional_error_detail("the result of a comprehension should be of type list"),
         )?;
 
         let inner_type = refined_list_type.inner_type();
@@ -311,10 +312,14 @@ mod internal {
 
         if !iterable_expr.inferred_type().is_unknown() {
             let refined_iterable = ListType::refine(&iterable_inferred_type).ok_or(
-               get_compilation_error_for_ambiguity(&iterable_inferred_type, iterable_expr, &TypeKind::List)
-                    .with_additional_error_detail(
-                        "the iterable expression in list reduction should be of type list",
-                    ),
+                get_compilation_error_for_ambiguity(
+                    &iterable_inferred_type,
+                    iterable_expr,
+                    &TypeKind::List,
+                )
+                .with_additional_error_detail(
+                    "the iterable expression in list reduction should be of type list",
+                ),
             )?;
 
             let iterable_variable_type = refined_iterable.inner_type();
@@ -354,7 +359,11 @@ mod internal {
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or(
-           get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Option),
+            get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeKind::Option,
+            ),
         )?;
 
         let inner_type = refined_optional_type.inner_type();
@@ -368,9 +377,12 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_ok_type = OkType::refine(outer_inferred_type).ok_or(
-           get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Result),
-        )?;
+        let refined_ok_type =
+            OkType::refine(outer_inferred_type).ok_or(get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeKind::Result,
+            ))?;
 
         let inner_type = refined_ok_type.inner_type();
 
@@ -384,9 +396,12 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_err_type = ErrType::refine(outer_inferred_type).ok_or(
-           get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Result),
-        )?;
+        let refined_err_type =
+            ErrType::refine(outer_inferred_type).ok_or(get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeKind::Result,
+            ))?;
         let inner_type = refined_err_type.inner_type();
 
         inner_expr.add_infer_type_mut(inner_type.clone());
@@ -401,7 +416,7 @@ mod internal {
         push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), RibCompilationError> {
         let refined_list_type = ListType::refine(outer_inferred_type).ok_or(
-           get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::List),
+            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::List),
         )?;
         let inner_type = refined_list_type.inner_type();
 
@@ -420,7 +435,7 @@ mod internal {
         push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), RibCompilationError> {
         let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or(
-           get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Tuple),
+            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Tuple),
         )?;
         let inner_types = refined_tuple_type.inner_types();
 
@@ -438,9 +453,12 @@ mod internal {
         outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), RibCompilationError> {
-        let refined_record_type = RecordType::refine(outer_inferred_type).ok_or(
-           get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Record),
-        )?;
+        let refined_record_type =
+            RecordType::refine(outer_inferred_type).ok_or(get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeKind::Record,
+            ))?;
 
         for (field, expr) in inner_expressions {
             let inner_type = refined_record_type.inner_type_by_name(field);
@@ -687,7 +705,6 @@ mod internal {
         Ok(())
     }
 
-
     // actual_inferred_type: InferredType found in the outer structure
     // expr: The expr corresponding to the outer inferred type. Example: yield expr in a list comprehension
     // push_down_kind: The expected kind of the outer expression before pushing down
@@ -701,12 +718,7 @@ mod internal {
         // in compiler's best effort to create precise error message
         match AnalysedType::try_from(actual_inferred_type.clone()) {
             Ok(wit_tpe) => {
-                TypeMismatchError::with_actual_type_kind(
-                    expr,
-                    None,
-                    wit_tpe,
-                    push_down_kind
-                ).into()
+                TypeMismatchError::with_actual_type_kind(expr, None, wit_tpe, push_down_kind).into()
             }
 
             Err(_) => {
@@ -721,21 +733,15 @@ mod internal {
                             expected_type: ExpectedType::Kind(actual_kind.clone()),
                             actual_type: ActualType::Kind(push_down_kind.clone()),
                             field_path: Default::default(),
-                        }.into()
+                        }
+                        .into()
                     }
 
-                    _ => {
-                        AmbiguousTypeError::new(
-                            actual_inferred_type,
-                            expr,
-                            push_down_kind
-                        ).into()
-                    }
+                    _ => AmbiguousTypeError::new(actual_inferred_type, expr, push_down_kind).into(),
                 }
             }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -816,9 +822,7 @@ mod type_push_down_tests {
         let expected = r#"
         error in the following rib found at line 2, column 36
         `[1, 2]`
-        cause: cannot determine the type due to ambiguous types: `list`, `tuple`
-        help: this happens when the same rib isused as two or more different types
-        help: example: `let x: tuple<1, 2> = foo` results in type ambiguity for `foo` if `foo` was used as a list elsewhere
+        cause: type mismatch. expected tuple<u32, u16>. found list
         "#;
 
         assert_eq!(error_message, strip_spaces(expected));

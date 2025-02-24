@@ -18,10 +18,10 @@ mod unification;
 use crate::instance_type::InstanceType;
 use crate::type_inference::kind::GetTypeKind;
 use crate::TypeName;
+use golem_wasm_ast::analysis::analysed_type::*;
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use golem_wasm_ast::analysis::analysed_type::*;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum InferredType {
@@ -460,12 +460,8 @@ impl TryFrom<InferredType> for AnalysedType {
                 }
                 Ok(record(field_pairs))
             }
-            InferredType::Flags(names) => {
-                Ok(AnalysedType::Flags(TypeFlags { names }))
-            }
-            InferredType::Enum(cases) => {
-                Ok(AnalysedType::Enum(TypeEnum { cases }))
-            }
+            InferredType::Flags(names) => Ok(AnalysedType::Flags(TypeFlags { names })),
+            InferredType::Enum(cases) => Ok(AnalysedType::Enum(TypeEnum { cases })),
             InferredType::Option(typ) => {
                 let typ: AnalysedType = (*typ).try_into()?;
                 Ok(option(typ))
@@ -473,7 +469,8 @@ impl TryFrom<InferredType> for AnalysedType {
             InferredType::Result { ok, error } => {
                 let ok_option: Option<AnalysedType> = ok.map(|t| (*t).try_into()).transpose()?;
                 let ok = ok_option.ok_or("Expected ok type in result".to_string())?;
-                let error_option: Option<AnalysedType> = error.map(|t| (*t).try_into()).transpose()?;
+                let error_option: Option<AnalysedType> =
+                    error.map(|t| (*t).try_into()).transpose()?;
                 let error = error_option.ok_or("Expected error type in result".to_string())?;
                 Ok(result(ok, error))
             }
@@ -485,13 +482,17 @@ impl TryFrom<InferredType> for AnalysedType {
                 }
                 Ok(variant(cases))
             }
-            InferredType::Resource { resource_id, resource_mode } => {
-                Ok(handle(AnalysedResourceId(resource_id), match resource_mode {
+            InferredType::Resource {
+                resource_id,
+                resource_mode,
+            } => Ok(handle(
+                AnalysedResourceId(resource_id),
+                match resource_mode {
                     0 => AnalysedResourceMode::Owned,
                     1 => AnalysedResourceMode::Borrowed,
                     _ => return Err("Invalid resource mode".to_string()),
-                }))
-            }
+                },
+            )),
             InferredType::Instance { .. } => {
                 Err("Cannot convert instance type to analysed type".to_string())
             }

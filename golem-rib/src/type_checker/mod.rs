@@ -165,10 +165,14 @@ mod type_check_tests {
             assert_eq!(error_msg, strip_spaces(expected));
         }
 
+        // Here the difference is, the shape itself is different losing the preciseness of the error.
+        // The best precise error
+        // is type-mismatch, however, here we get an ambiguity error. This can be improved,
+        // by not allowing accumulation of conflicting types into Exprs that are part of a function call
         #[test]
         fn test_type_mismatch_in_record_in_function_call4() {
             let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: some(3), ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: 1}});
+          let result = foo({a: {aa: 1, ab: 2, ac: (1, 2), ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: 1}});
           result
         "#;
 
@@ -179,12 +183,34 @@ mod type_check_tests {
             let error_msg = compile(&expr, &metadata).unwrap_err();
 
             let expected = r#"
-            error in the following rib found at line 2, column 28
-            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}}`
-            found within:
-            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}})`
-            cause: type mismatch at path: `d.da`. expected s32
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 51
+            `(1, 2)`
+            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `tuple`
+            help: ensure this expression is only used in contexts that align with its actual type
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        fn test_type_mismatch_in_record_in_function_call5() {
+            let expr = r#"
+            let x = {a: "foo"};
+          let result = foo({a: {aa: 1, ab: 2, ac: x, ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: 1}});
+          result
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(&expr, &metadata).unwrap_err();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 21
+            `{a: "foo"}`
+            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `record`
+            help: ensure this expression is only used in contexts that align with its actual type
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

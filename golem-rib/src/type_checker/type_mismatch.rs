@@ -1,9 +1,9 @@
+use crate::type_inference::kind::TypeKind;
 use crate::type_refinement::precise_types::*;
 use crate::type_refinement::TypeRefinement;
 use crate::{Expr, InferredType, Path, PathElem};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::ops::Deref;
-use crate::type_inference::kind::TypeKind;
 
 pub fn check_type_mismatch(
     expr: &Expr,
@@ -53,27 +53,23 @@ pub fn check_type_mismatch(
         | AnalysedType::U32(_)
         | AnalysedType::U64(_)
         | AnalysedType::F32(_)
-        | AnalysedType::F64(_) => {
-            NumberType::refine(actual_type)
-                .map(|_| ())
-                .ok_or(TypeMismatchError::with_actual_inferred_type(
-                    expr,
-                    parent_expr,
-                    expected_type.clone(),
-                    actual_type.clone(),
-                ))
-        }
+        | AnalysedType::F64(_) => NumberType::refine(actual_type).map(|_| ()).ok_or(
+            TypeMismatchError::with_actual_inferred_type(
+                expr,
+                parent_expr,
+                expected_type.clone(),
+                actual_type.clone(),
+            ),
+        ),
 
-        AnalysedType::Chr(_) => {
-            CharType::refine(actual_type)
-                .map(|_| ())
-                .ok_or(TypeMismatchError::with_actual_inferred_type(
-                    expr,
-                    parent_expr,
-                    expected_type.clone(),
-                    actual_type.clone(),
-                ))
-        }
+        AnalysedType::Chr(_) => CharType::refine(actual_type).map(|_| ()).ok_or(
+            TypeMismatchError::with_actual_inferred_type(
+                expr,
+                parent_expr,
+                expected_type.clone(),
+                actual_type.clone(),
+            ),
+        ),
 
         AnalysedType::Variant(expected_variant) => {
             let actual_variant_type = VariantType::refine(actual_type);
@@ -167,16 +163,14 @@ pub fn check_type_mismatch(
                 ))
             }
         }
-        AnalysedType::Flags(_) => {
-            FlagsType::refine(actual_type)
-                .map(|_| ())
-                .ok_or(TypeMismatchError::with_actual_inferred_type(
-                    expr,
-                    parent_expr,
-                    expected_type.clone(),
-                    actual_type.clone(),
-                ))
-        }
+        AnalysedType::Flags(_) => FlagsType::refine(actual_type).map(|_| ()).ok_or(
+            TypeMismatchError::with_actual_inferred_type(
+                expr,
+                parent_expr,
+                expected_type.clone(),
+                actual_type.clone(),
+            ),
+        ),
         AnalysedType::Tuple(tuple) => {
             let actual_tuple = TupleType::refine(actual_type);
 
@@ -186,12 +180,14 @@ pub fn check_type_mismatch(
 
                     let actual_types_vec = actual_types.into_iter().collect::<Vec<_>>();
 
-                    let actual_type = actual_types_vec.get(index).ok_or(TypeMismatchError::with_actual_inferred_type(
-                        expr,
-                        parent_expr,
-                        expected_type.clone(),
-                        actual_type.clone(),
-                    ))?;
+                    let actual_type = actual_types_vec.get(index).ok_or(
+                        TypeMismatchError::with_actual_inferred_type(
+                            expr,
+                            parent_expr,
+                            expected_type.clone(),
+                            actual_type.clone(),
+                        ),
+                    )?;
 
                     check_type_mismatch(expr, parent_expr, expected_type, actual_type)?;
                 }
@@ -223,26 +219,22 @@ pub fn check_type_mismatch(
                 ))
             }
         }
-        AnalysedType::Str(_) => {
-            StringType::refine(actual_type)
-                .map(|_| ())
-                .ok_or(TypeMismatchError::with_actual_inferred_type(
-                    expr,
-                    parent_expr,
-                    expected_type.clone(),
-                    actual_type.clone(),
-                ))
-        }
-        AnalysedType::Bool(_) => {
-            BoolType::refine(actual_type)
-                .map(|_| ())
-                .ok_or(TypeMismatchError::with_actual_inferred_type(
-                    expr,
-                    parent_expr,
-                    expected_type.clone(),
-                    actual_type.clone(),
-                ))
-        }
+        AnalysedType::Str(_) => StringType::refine(actual_type).map(|_| ()).ok_or(
+            TypeMismatchError::with_actual_inferred_type(
+                expr,
+                parent_expr,
+                expected_type.clone(),
+                actual_type.clone(),
+            ),
+        ),
+        AnalysedType::Bool(_) => BoolType::refine(actual_type).map(|_| ()).ok_or(
+            TypeMismatchError::with_actual_inferred_type(
+                expr,
+                parent_expr,
+                expected_type.clone(),
+                actual_type.clone(),
+            ),
+        ),
         AnalysedType::Handle(_) => Ok(()),
     }
 }
@@ -256,18 +248,17 @@ pub struct TypeMismatchError {
     pub field_path: Path,
 }
 
-
 #[derive(Clone, Debug)]
 pub enum ExpectedType {
     AnalysedType(AnalysedType),
-    Kind(TypeKind)
+    Kind(TypeKind),
 }
 
 // If the actual type is not fully known but only a hint through TypeKind
 #[derive(Clone, Debug)]
 pub enum ActualType {
     Inferred(InferredType),
-    Kind(TypeKind)
+    Kind(TypeKind),
 }
 
 impl TypeMismatchError {

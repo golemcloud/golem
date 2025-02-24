@@ -31,7 +31,7 @@ mod internal {
     use std::collections::{HashMap, VecDeque};
 
     pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) -> Result<(), String> {
-        let mut identifier_lookup = internal::IdentifierTypeState::new();
+        let mut identifier_lookup = IdentifierTypeState::new();
         let mut queue = VecDeque::new();
         queue.push_back(expr);
 
