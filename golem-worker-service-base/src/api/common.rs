@@ -241,6 +241,7 @@ mod conversion {
                     ApiEndpointError::from(error)
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
+                ApiDefinitionServiceError::RibInternal(_) => ApiEndpointError::internal(error),
             }
         }
     }
@@ -308,6 +309,13 @@ mod conversion {
                         error: error.to_safe_string(),
                     })),
                 },
+
+                ApiDefinitionServiceError::RibInternal(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+
                 ApiDefinitionServiceError::ApiDefinitionNotFound(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
                         error: error.to_safe_string(),

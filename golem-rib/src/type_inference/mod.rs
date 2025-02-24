@@ -14,6 +14,7 @@
 
 pub use call_arguments_inference::*;
 pub use enum_resolution::*;
+pub use errors::*;
 pub use expr_visitor::*;
 pub use global_input_inference::*;
 pub use global_variable_type_binding::*;
@@ -38,6 +39,7 @@ pub use worker_function_invocation::*;
 
 mod call_arguments_inference;
 mod enum_resolution;
+mod errors;
 mod expr_visitor;
 mod global_input_inference;
 mod global_variable_type_binding;

@@ -2259,6 +2259,7 @@ mod interpreter_tests {
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal::strip_spaces;
         use crate::{compiler, Expr, RibInput};
         use golem_wasm_ast::analysis::analysed_type::{field, option, record, str};
         use golem_wasm_rpc::{parse_value_and_type, IntoValueAndType, Value, ValueAndType};
@@ -2295,9 +2296,11 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
-            assert_eq!(compiled, "`instance` is a reserved keyword.\n note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n note: For a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name".to_string());
+            assert_eq!(compiled, "error in the following rib found at line 2, column 37\n`instance`\ncause: `instance` is a reserved keyword\nhelp: use `instance()` instead of `instance` to create an ephemeral worker instance.\nhelp: for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name\n".to_string());
         }
 
         #[test]
@@ -2309,11 +2312,13 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compiled,
-                "`instance` is a reserved keyword and cannot be used as a variable.".to_string()
+                "error in the following rib found at line 2, column 15\n`let instance = instance.foo(\"bar\")`\ncause: `instance` is a reserved keyword and cannot be used as a variable.\n".to_string()
             );
         }
 
@@ -2327,11 +2332,13 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compilation_error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compilation_error,
-                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+                "error in the following rib found at line 3, column 30\n`x.bar(\"bar\")`\ncause: invalid function call `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
             );
         }
 
@@ -2387,11 +2394,13 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compilation_error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compilation_error,
-                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+                "error in the following rib found at line 3, column 30\n`worker.bar(\"bar\")`\ncause: invalid function call `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
             );
         }
 
@@ -2485,11 +2494,13 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compiled,
-                "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
+                "error in the following rib found at line 3, column 30\n`worker.qux(\"bar\")`\ncause: invalid function call `qux`\nfunction 'qux' exists in multiple packages. specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)\n".to_string()
             );
         }
 
@@ -2542,12 +2553,17 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
-            assert_eq!(
-                compiled,
-                "Resource constructor instance cannot be returned".to_string()
-            );
+            let expected = r#"
+            error in the following rib found at line 3, column 17
+            `cart("bar")`
+            cause: program is invalid as it returns a resource constructor
+            "#;
+
+            assert_eq!(compiled, strip_spaces(expected));
         }
 
         // This resource construction is a Noop, and compiler can give warnings
@@ -2604,9 +2620,11 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
-            assert_eq!(compiled, "Function 'add-items' not found".to_string());
+            assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", quantity: 1: u32, price: 1: f32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
         }
 
         #[test]
@@ -2620,11 +2638,13 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compiled,
-                "Function 'carts' not found in package golem:it".to_string()
+                "error in the following rib found at line 3, column 28\n`worker.carts[golem:it](\"bar\")`\ncause: invalid function call `carts`\nfunction 'carts' not found in package 'golem:it'\n".to_string()
             );
         }
 
@@ -2662,9 +2682,20 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let error_message = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
-            assert_eq!(compiled, "Invalid argument in `golem:it/api.{cart(\"bar\").add-item}`: `{product-id: \"mac\", name: 1, quantity: 1, price: 1}`. Type mismatch for `name`. Expected `string`".to_string());
+            let expected = r#"
+            error in the following rib found at line 4, column 31
+            `{product-id: "mac", name: 1, quantity: 1, price: 1}`
+            found within:
+            `golem:it/api.{cart("bar").add-item}({product-id: "mac", name: 1, quantity: 1, price: 1})`
+            cause: type mismatch at path: `name`. expected string
+            invalid argument to the function `golem:it/api.{cart("bar").add-item}`
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
         }
 
         #[test]
@@ -2855,9 +2886,11 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
-            assert_eq!(error, "Invalid method invocation `worker.qux`. Make sure `worker` is defined and is a valid instance type (i.e, resource or worker)");
+            assert_eq!(error, "error in the following rib found at line 3, column 30\n`worker.qux[amazon:shopping-cart](\"bar\")`\ncause: invalid method invocation `worker.qux`. make sure `worker` is defined and is a valid instance type (i.e, resource or worker)\n");
         }
 
         #[test]
@@ -2870,9 +2903,17 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
-            assert_eq!(error, "Worker name expression `1u32` is invalid. Worker name must be of the type string. Obtained u32");
+            let expected = r#"
+            error in the following rib found at line 2, column 39
+            `1: u32`
+            cause: expected string, found u32
+            "#;
+
+            assert_eq!(error, strip_spaces(expected));
         }
 
         #[test]
@@ -2931,6 +2972,29 @@ mod interpreter_tests {
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
+
+        pub(crate) fn strip_spaces(input: &str) -> String {
+            let lines = input.lines();
+
+            let first_line = lines
+                .clone()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
+            let margin_width = first_line.chars().take_while(|c| c.is_whitespace()).count();
+
+            let result = lines
+                .map(|line| {
+                    if line.trim().is_empty() {
+                        String::new()
+                    } else {
+                        line[margin_width..].to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            result.strip_prefix("\n").unwrap_or(&result).to_string()
+        }
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
             variant(vec![

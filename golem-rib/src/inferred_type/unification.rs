@@ -142,10 +142,13 @@ pub fn unify_with_alternative(
     } else if other.is_unknown() || interred_type == other {
         Ok(interred_type.clone())
     } else {
+        let inferred_type_printable = interred_type.printable();
+        let other_printable = other.printable();
+
         match (interred_type, other) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 if a_fields.len() != b_fields.len() {
-                    return Err("Record fields do not match".to_string());
+                    return Err(format!("conflicting record types inferred  {}, {}. the size of the members in the records don't match", inferred_type_printable, other_printable));
                 }
 
                 let mut fields = a_fields.clone();
@@ -158,10 +161,16 @@ pub fn unify_with_alternative(
                         if unified_a_type == unified_b_type {
                             *typ = unified_a_type
                         } else {
-                            return Err("Record fields do not match".to_string());
+                            return Err(format!(
+                                "conflicting record types inferred: {}, {}",
+                                inferred_type_printable, other_printable
+                            ));
                         }
                     } else {
-                        return Err("Record fields do not match".to_string());
+                        return Err(format!(
+                            "conflicting record types inferred: {}, {}",
+                            inferred_type_printable, other_printable
+                        ));
                     }
                 }
 
@@ -169,7 +178,10 @@ pub fn unify_with_alternative(
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
-                    return Err("Tuple lengths do not match".to_string());
+                    return Err(format!(
+                        "conflicting tuple types inferred: {}, {}. lengths don't match",
+                        inferred_type_printable, other_printable
+                    ));
                 }
 
                 let mut types = a_types.clone();
@@ -180,7 +192,10 @@ pub fn unify_with_alternative(
                     if unified_a_type == unified_b_type {
                         *a_type = unified_a_type
                     } else {
-                        return Err("Record fields do not match".to_string());
+                        return Err(format!(
+                            "conflicting tuple types inferred: {}, {}",
+                            inferred_type_printable, other_printable
+                        ));
                     }
                 }
 
@@ -193,7 +208,10 @@ pub fn unify_with_alternative(
                 if unified_a_type == unified_b_type {
                     Ok(InferredType::List(Box::new(unified_a_type)))
                 } else {
-                    Err("Record fields do not match".to_string())
+                    return Err(format!(
+                        "conflicting list types inferred: {}, {}",
+                        inferred_type_printable, other_printable
+                    ));
                 }
             }
 
@@ -214,7 +232,10 @@ pub fn unify_with_alternative(
                 if a_variants == b_variants {
                     Ok(InferredType::Enum(a_variants.clone()))
                 } else {
-                    Err("Enum variants do not match".to_string())
+                    Err(format!(
+                        "conflicting enum types inferred: {}, {}",
+                        inferred_type_printable, other_printable
+                    ))
                 }
             }
 
@@ -242,7 +263,10 @@ pub fn unify_with_alternative(
                         if unified_a_inner == unified_b_inner {
                             Some(Box::new(unified_a_inner))
                         } else {
-                            return Err("Record fields do not match".to_string());
+                            return Err(format!(
+                                "conflicting result types inferred: {}, {}",
+                                inferred_type_printable, other_printable
+                            ));
                         }
                     }
                     (None, None) => None,
@@ -257,7 +281,10 @@ pub fn unify_with_alternative(
                         if unified_a_inner == unified_b_inner {
                             Some(Box::new(unified_a_inner))
                         } else {
-                            return Err("Record fields do not match".to_string());
+                            return Err(format!(
+                                "conflicting result types inferred: {}, {}",
+                                inferred_type_printable, other_printable
+                            ));
                         }
                     }
                     (None, None) => None,
@@ -275,7 +302,7 @@ pub fn unify_with_alternative(
             // the only way to merge them is to make sure all the variants types are matching
             (InferredType::Variant(a_variants), InferredType::Variant(b_variants)) => {
                 if a_variants.len() != b_variants.len() {
-                    return Err("Variant fields do not match".to_string());
+                    return Err(format!("conflicting variant types inferred: {}, {}. size of variant fields don't match", inferred_type_printable, other_printable));
                 }
 
                 let mut variants = a_variants.clone();
@@ -297,10 +324,16 @@ pub fn unify_with_alternative(
                         if x == y {
                             *a_type = x
                         } else {
-                            return Err("Variant fields do not match".to_string());
+                            return Err(format!(
+                                "conflicting result types inferred: {}, {}",
+                                inferred_type_printable, other_printable
+                            ));
                         }
                     } else {
-                        return Err("Variant fields do not match".to_string());
+                        return Err(format!(
+                            "conflicting result types inferred: {}, {}",
+                            inferred_type_printable, other_printable
+                        ));
                     }
                 }
 
@@ -325,7 +358,10 @@ pub fn unify_with_alternative(
                         resource_mode: *a_mode,
                     })
                 } else {
-                    Err("Resource id or mode do not match".to_string())
+                    Err(format!(
+                        "conflicting resource types inferred: {}, {}",
+                        inferred_type_printable, other_printable
+                    ))
                 }
             }
 
@@ -336,7 +372,11 @@ pub fn unify_with_alternative(
                 if unified_all_types == alternative_type {
                     Ok(unified_all_types)
                 } else {
-                    Err("AllOf types do not match".to_string())
+                    Err(format!(
+                        "ambiguous types inferred: {}, {}",
+                        unified_all_types.printable(),
+                        alternative_type.printable()
+                    ))
                 }
             }
 
@@ -347,7 +387,11 @@ pub fn unify_with_alternative(
                 if unified_all_types == alternative_type {
                     Ok(unified_all_types)
                 } else {
-                    Err("AllOf types do not match".to_string())
+                    Err(format!(
+                        "ambiguous types inferred: {}, {}",
+                        unified_all_types.printable(),
+                        alternative_type.printable()
+                    ))
                 }
             }
 
@@ -356,8 +400,8 @@ pub fn unify_with_alternative(
                     Ok(a.clone())
                 } else {
                     Err(format!(
-                        "Types do not match. Inferred to be both {:?} and {:?}",
-                        a, b
+                        "ambiguous types inferred: {}, {}",
+                        inferred_type_printable, other_printable
                     ))
                 }
             }
@@ -376,6 +420,9 @@ pub fn unify_with_required(
     } else if inferred_type == other {
         inferred_type.try_unify()
     } else {
+        let inferred_type_printable = inferred_type.printable();
+        let other_printable = other.printable();
+
         match (inferred_type, other) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 let mut fields: HashMap<String, InferredType> = HashMap::new();
@@ -399,7 +446,10 @@ pub fn unify_with_required(
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
-                    return Err("Tuple lengths do not match".to_string());
+                    return Err(format!(
+                        "conflicting tuple types inferred. {}, {}",
+                        inferred_type_printable, other_printable
+                    ));
                 }
                 let mut types = Vec::new();
                 for (a_type, b_type) in a_types.iter().zip(b_types) {
@@ -415,17 +465,26 @@ pub fn unify_with_required(
                     if b_flags.iter().all(|b| a_flags.contains(b)) {
                         Ok(InferredType::Flags(a_flags.clone()))
                     } else {
-                        Err("Flags do not match".to_string())
+                        Err(format!(
+                            "conflicting flag types inferred. {}, {}",
+                            inferred_type_printable, other_printable
+                        ))
                     }
                 } else if a_flags.iter().all(|a| b_flags.contains(a)) {
                     Ok(InferredType::Flags(b_flags.clone()))
                 } else {
-                    Err("Flags do not match".to_string())
+                    Err(format!(
+                        "conflicting tuple types inferred. {}, {}",
+                        inferred_type_printable, other_printable
+                    ))
                 }
             }
             (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
                 if a_variants != b_variants {
-                    return Err("Enum variants do not match".to_string());
+                    return Err(format!(
+                        "conflicting enum types inferred. {}, {}",
+                        inferred_type_printable, other_printable
+                    ));
                 }
                 Ok(InferredType::Enum(a_variants.clone()))
             }
@@ -510,7 +569,10 @@ pub fn unify_with_required(
                 },
             ) => {
                 if a_id != b_id || a_mode != b_mode {
-                    return Err("Resource id or mode do not match".to_string());
+                    return Err(format!(
+                        "conflicting resource types inferred. {}, {}",
+                        inferred_type_printable, other_printable
+                    ));
                 }
                 Ok(InferredType::Resource {
                     resource_id: *a_id,
@@ -521,7 +583,16 @@ pub fn unify_with_required(
             (InferredType::AllOf(types), InferredType::OneOf(one_of_types)) => {
                 for typ in types {
                     if !one_of_types.contains(typ) {
-                        return Err("AllOf types are not part of OneOf types".to_string());
+                        let ambiguous_one_of = one_of_types
+                            .iter()
+                            .map(|x| x.printable())
+                            .collect::<Vec<_>>();
+
+                        return Err(format!(
+                            "conflicting types inferred. {}, {}",
+                            typ.printable(),
+                            ambiguous_one_of.join(", ")
+                        ));
                     }
                 }
                 unify_all_required_types(types)
@@ -530,7 +601,15 @@ pub fn unify_with_required(
             (InferredType::OneOf(one_of_types), InferredType::AllOf(all_of_types)) => {
                 for required_type in all_of_types {
                     if !one_of_types.contains(required_type) {
-                        return Err("OneOf types are not part of AllOf types".to_string());
+                        let ambiguous_one_of = one_of_types
+                            .iter()
+                            .map(|x| x.printable())
+                            .collect::<Vec<_>>();
+                        return Err(format!(
+                            "conflicting types inferred. {}, {}",
+                            required_type.printable(),
+                            ambiguous_one_of.join(", ")
+                        ));
                     }
                 }
                 unify_all_required_types(all_of_types)
@@ -552,7 +631,15 @@ pub fn unify_with_required(
                     Ok(unified)
                 } else {
                     let type_set: HashSet<_> = types.iter().collect::<HashSet<_>>();
-                    Err(format!("Types do not match. Inferred to be any of {:?}, but found (or used as) {:?} ",  type_set, inferred_type))
+                    Err(format!(
+                        "conflicting types inferred. {}, {}",
+                        type_set
+                            .iter()
+                            .map(|x| x.printable())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        inferred_type.printable()
+                    ))
                 }
             }
 
@@ -561,7 +648,15 @@ pub fn unify_with_required(
                     Ok(inferred_type.clone())
                 } else {
                     let type_set: HashSet<_> = types.iter().collect::<HashSet<_>>();
-                    Err(format!("Types do not match. Inferred to be any of {:?}, but found (or used as) {:?} ",  type_set, inferred_type))
+                    Err(format!(
+                        "conflicting types inferred. {}, {}",
+                        type_set
+                            .iter()
+                            .map(|x| x.printable())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        inferred_type.printable()
+                    ))
                 }
             }
 
@@ -595,8 +690,9 @@ pub fn unify_with_required(
                     Ok(inferred_type_left.clone())
                 } else {
                     Err(format!(
-                        "Types do not match. Inferred to be both {:?} and {:?}",
-                        inferred_type_left, inferred_type_right
+                        "conflicting types inferred. {}, {}",
+                        inferred_type_left.printable(),
+                        inferred_type_right.printable()
                     ))
                 }
             }
@@ -606,7 +702,7 @@ pub fn unify_with_required(
 
 mod internal {
     use crate::inferred_type::unification::Unified;
-    use crate::{InferredType, TypeName};
+    use crate::InferredType;
     use std::collections::HashMap;
 
     pub(crate) fn sort_and_convert(
@@ -652,7 +748,7 @@ mod internal {
                 for (field, typ) in field {
                     if let Err(unresolved) = validate_unified_type(typ) {
                         return Err(format!(
-                            "Un-inferred type for field {} in record: {}",
+                            "cannot determine the type of field {} in record: {}",
                             field, unresolved
                         ));
                     }
@@ -716,15 +812,15 @@ mod internal {
             instance @ InferredType::Instance { .. } => Ok(Unified(instance.clone())),
             resource @ InferredType::Resource { .. } => Ok(Unified(resource.clone())),
             InferredType::OneOf(possibilities) => Err(format!(
-                "Conflicting types: {}",
+                "conflicting types inferred: {}",
                 display_multiple_types(possibilities)
             )),
             InferredType::AllOf(possibilities) => Err(format!(
-                "Conflicting types: {}",
+                "conflicting types inferred:  {}",
                 display_multiple_types(possibilities)
             )),
 
-            InferredType::Unknown => Err("Unresolved types".to_string()),
+            InferredType::Unknown => Err("cannot determine the type".to_string()),
             inferred_type @ InferredType::Sequence(inferred_types) => {
                 for typ in inferred_types {
                     validate_unified_type(typ)?;
@@ -736,14 +832,7 @@ mod internal {
     }
 
     fn display_multiple_types(types: &[InferredType]) -> String {
-        let types = types
-            .iter()
-            .map(|x| {
-                TypeName::try_from(x.clone())
-                    .map(|x| x.to_string())
-                    .unwrap_or(format!("{:?}", x))
-            })
-            .collect::<Vec<_>>();
+        let types = types.iter().map(|x| x.printable()).collect::<Vec<_>>();
 
         types.join(", ")
     }

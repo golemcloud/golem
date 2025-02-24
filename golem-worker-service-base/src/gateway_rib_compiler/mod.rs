@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, VariableId};
+use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibError, VariableId};
 
 // A wrapper service over original Rib Compiler concerning
 // the details of the worker bridge.
 pub trait WorkerServiceRibCompiler {
-    fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, String>;
+    fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, RibError>;
 }
 
 pub struct DefaultWorkerServiceRibCompiler;
 
 impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
-    fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, String> {
+    fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, RibError> {
         rib::compile_with_restricted_global_variables(
             rib,
             &export_metadata.to_vec(),

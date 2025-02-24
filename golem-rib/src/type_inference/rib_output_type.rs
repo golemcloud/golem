@@ -1,4 +1,4 @@
-use crate::InferredExpr;
+use crate::{InferredExpr, RibError};
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 
@@ -9,9 +9,14 @@ pub struct RibOutputTypeInfo {
 }
 
 impl RibOutputTypeInfo {
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibOutputTypeInfo, String> {
+    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibOutputTypeInfo, RibError> {
         let inferred_type = inferred_expr.get_expr().inferred_type();
-        let analysed_type = AnalysedType::try_from(&inferred_type)?;
+        let analysed_type = AnalysedType::try_from(&inferred_type).map_err(|e| {
+            RibError::InternalError(format!(
+                "failed to convert inferred type to analysed type: {}",
+                e
+            ))
+        })?;
 
         Ok(RibOutputTypeInfo { analysed_type })
     }

@@ -108,14 +108,14 @@ impl Display for TypeName {
                 }
             },
             TypeName::Record(fields) => {
-                write!(f, "record<")?;
+                write!(f, "record{{")?;
                 for (i, (field, typ)) in fields.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}: {}", field, typ)?;
                 }
-                write!(f, ">")
+                write!(f, "}}")
             }
             TypeName::Flags(flags) => {
                 write!(f, "flags<")?;
