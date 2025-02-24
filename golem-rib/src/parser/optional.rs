@@ -25,6 +25,7 @@ use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::type_name::parse_type_name;
+use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::char as char_;
 
 pub fn option<Input>() -> impl Parser<Input, Output = Expr>
@@ -33,6 +34,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     (
         choice((
@@ -55,7 +57,7 @@ where
         ),
     )
         .and_then(|(expr, type_name)| match expr {
-            Expr::Option(expr, _, _) => {
+            Expr::Option { expr, .. } => {
                 if let Some(type_name) = type_name {
                     Ok(Expr::option_with_type_annotation(
                         expr.map(|x| x.deref().clone()),
@@ -76,15 +78,14 @@ mod tests {
 
     use super::*;
     use crate::TypeName;
-    use combine::EasyParser;
 
     #[test]
     fn test_some() {
         let input = "some(foo)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::option(Some(Expr::identifier("foo", None))), ""))
+            Ok(Expr::option(Some(Expr::identifier_global("foo", None))))
         );
     }
 
@@ -95,7 +96,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::option_with_type_annotation(
-                Some(Expr::identifier("foo", None)),
+                Some(Expr::identifier_global("foo", None)),
                 TypeName::Option(Box::new(TypeName::Str))
             ))
         );
@@ -104,8 +105,8 @@ mod tests {
     #[test]
     fn test_none() {
         let input = "none";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::option(None), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::option(None)));
     }
 
     #[test]
@@ -124,13 +125,12 @@ mod tests {
     #[test]
     fn test_nested_some() {
         let input = "some(some(foo))";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::option(Some(Expr::option(Some(Expr::identifier("foo", None))))),
-                ""
-            ))
+            Ok(Expr::option(Some(Expr::option(Some(
+                Expr::identifier_global("foo", None)
+            )))))
         );
     }
 
@@ -142,7 +142,7 @@ mod tests {
             result,
             Ok(Expr::option_with_type_annotation(
                 Some(Expr::option_with_type_annotation(
-                    Some(Expr::identifier("foo", None)),
+                    Some(Expr::identifier_global("foo", None)),
                     TypeName::Option(Box::new(TypeName::Str))
                 )),
                 TypeName::Option(Box::new(TypeName::Option(Box::new(TypeName::Str))))
@@ -153,23 +153,23 @@ mod tests {
     #[test]
     fn test_some_of_sequence() {
         let input = "some([foo, bar])";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::option(Some(Expr::sequence(
-                    vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
-                    None
-                ))),
-                ""
-            ))
+            Ok(Expr::option(Some(Expr::sequence(
+                vec![
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
+                ],
+                None
+            ))))
         );
     }
 
     #[test]
     fn test_some_of_literal() {
         let input = "some(\"foo\")";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::option(Some(Expr::literal("foo"))), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::option(Some(Expr::literal("foo")))));
     }
 }

@@ -33,6 +33,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 dashmap = { workspace = true }
+figment = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }

@@ -58,13 +58,11 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
-use golem_common::model::component::ComponentOwner;
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription,
     WorkerError, WorkerResourceId,
 };
-use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{exports, PluginInstallationId};
 use golem_common::model::{
@@ -128,10 +126,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi_http: WasiHttpCtx,
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
-    state: PrivateDurableWorkerState<
-        <Ctx::ComponentOwner as ComponentOwner>::PluginOwner,
-        Ctx::PluginScope,
-    >,
+    state: PrivateDurableWorkerState<Ctx>,
     _temp_dir: Arc<TempDir>,
     _used_files: Vec<FileUseToken>,
     read_only_paths: Arc<RwLock<HashSet<PathBuf>>>,
@@ -141,7 +136,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata,
+        component_metadata: ComponentMetadata<Ctx::Types>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
@@ -156,16 +151,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<Ctx::Types>>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<Ctx::Types>>,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -294,7 +285,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.owned_worker_id
     }
 
-    pub fn component_metadata(&self) -> &ComponentMetadata {
+    pub fn component_metadata(&self) -> &ComponentMetadata<Ctx::Types> {
         &self.state.component_metadata
     }
 
@@ -1855,7 +1846,7 @@ struct HttpRequestState {
     pub request: SerializableHttpRequest,
 }
 
-pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
+struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     oplog: Arc<dyn Oplog + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
@@ -1864,8 +1855,8 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-    component_service: Arc<dyn ComponentService + Send + Sync>,
-    plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+    component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
+    plugins: Arc<dyn Plugins<Ctx::Types>>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
@@ -1885,7 +1876,7 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     snapshotting_mode: Option<PersistenceLevel>,
 
     indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
-    component_metadata: ComponentMetadata,
+    component_metadata: ComponentMetadata<Ctx::Types>,
 
     total_linear_memory_size: u64,
 
@@ -1893,7 +1884,7 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     current_span_id: SpanId,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Scope> {
+impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn new(
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
@@ -1905,15 +1896,15 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
-        plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
+        plugins: Arc<dyn Plugins<Ctx::Types>>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: ComponentMetadata,
+        component_metadata: ComponentMetadata<Ctx::Types>,
         total_linear_memory_size: u64,
     ) -> Self {
         let replay_state = ReplayState::new(
@@ -2140,9 +2131,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope> ResourceStore
-    for PrivateDurableWorkerState<Owner, Scope>
-{
+impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
     fn self_uri(&self) -> Uri {
         Uri::golem_urn(&self.owned_worker_id.worker_id, None)
     }
@@ -2164,30 +2153,26 @@ impl<Owner: PluginOwner, Scope: PluginScope> ResourceStore
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> HasOplogService
-    for PrivateDurableWorkerState<Owner, Scope>
-{
+impl<Ctx: WorkerCtx> HasOplogService for PrivateDurableWorkerState<Ctx> {
     fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
         self.oplog_service.clone()
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> HasOplog for PrivateDurableWorkerState<Owner, Scope> {
+impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
     fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
         self.oplog.clone()
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> HasConfig for PrivateDurableWorkerState<Owner, Scope> {
+impl<Ctx: WorkerCtx> HasConfig for PrivateDurableWorkerState<Ctx> {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> HasPlugins<Owner, Scope>
-    for PrivateDurableWorkerState<Owner, Scope>
-{
-    fn plugins(&self) -> Arc<dyn Plugins<Owner, Scope> + Send + Sync> {
+impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for PrivateDurableWorkerState<Ctx> {
+    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
         self.plugins.clone()
     }
 }

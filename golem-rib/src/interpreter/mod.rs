@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use env::RibFunctionInvoke;
 pub use interpreter_input::*;
 pub use interpreter_result::*;
 pub use literal::*;
+pub use rib_function_invoke::*;
+use std::sync::Arc;
 
 use crate::interpreter::rib_interpreter::Interpreter;
 use crate::RibByteCode;
@@ -26,6 +27,7 @@ mod interpreter_input;
 mod interpreter_result;
 mod interpreter_stack_value;
 mod literal;
+mod rib_function_invoke;
 mod rib_interpreter;
 mod stack;
 mod tests;
@@ -33,7 +35,7 @@ mod tests;
 pub async fn interpret(
     rib: &RibByteCode,
     rib_input: &RibInput,
-    function_invoke: RibFunctionInvoke,
+    function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
 ) -> Result<RibResult, String> {
     let mut interpreter = Interpreter::new(rib_input, function_invoke);
     interpreter.run(rib.clone()).await

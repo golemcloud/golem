@@ -36,7 +36,6 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_common::model::component::ComponentOwner;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -280,7 +279,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
@@ -297,11 +296,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<
-        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-            + Send
-            + Sync,
-    >,
+    plugins: Arc<dyn Plugins<Ctx::Types>>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
@@ -349,8 +344,8 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasComponentService for DirectWorkerInvocationRpc<Ctx> {
-    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+impl<Ctx: WorkerCtx> HasComponentService<Ctx::Types> for DirectWorkerInvocationRpc<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService<Ctx::Types>> {
         self.component_service.clone()
     }
 }
@@ -475,17 +470,8 @@ impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx>
-    HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-    for DirectWorkerInvocationRpc<Ctx>
-{
-    fn plugins(
-        &self,
-    ) -> Arc<
-        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-            + Send
-            + Sync,
-    > {
+impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for DirectWorkerInvocationRpc<Ctx> {
+    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
         self.plugins.clone()
     }
 }
@@ -504,7 +490,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
@@ -524,11 +510,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<Ctx::Types>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {

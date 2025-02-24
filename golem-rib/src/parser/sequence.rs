@@ -20,6 +20,7 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
 use crate::parser::type_name::parse_type_name;
+use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::char as char_;
 
 pub fn sequence<Input>() -> impl Parser<Input, Output = Expr>
@@ -28,6 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     spaces()
         .with(
@@ -53,26 +55,24 @@ where
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-
     use super::*;
 
     #[test]
     fn test_empty_sequence() {
         let input = "[]";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::sequence(vec![], None), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::sequence(vec![], None)));
     }
 
     #[test]
     fn test_singleton_sequence() {
         let input = "[foo]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(vec![Expr::identifier("foo", None)], None),
-                ""
+            Ok(Expr::sequence(
+                vec![Expr::identifier_global("foo", None)],
+                None
             ))
         );
     }
@@ -80,15 +80,15 @@ mod tests {
     #[test]
     fn test_sequence() {
         let input = "[foo, bar]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
-                    vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
-                    None
-                ),
-                ""
+            Ok(Expr::sequence(
+                vec![
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
+                ],
+                None
             ))
         );
     }
@@ -96,18 +96,15 @@ mod tests {
     #[test]
     fn test_sequence_of_not() {
         let input = "[!foo, !bar]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
-                    vec![
-                        Expr::not(Expr::identifier("foo", None)),
-                        Expr::not(Expr::identifier("bar", None))
-                    ],
-                    None
-                ),
-                ""
+            Ok(Expr::sequence(
+                vec![
+                    Expr::not(Expr::identifier_global("foo", None)),
+                    Expr::not(Expr::identifier_global("bar", None))
+                ],
+                None
             ))
         );
     }
@@ -115,12 +112,12 @@ mod tests {
     #[test]
     fn test_sequence_of_literal() {
         let input = "[\"foo\", \"bar\"]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None),
-                ""
+            Ok(Expr::sequence(
+                vec![Expr::literal("foo"), Expr::literal("bar")],
+                None
             ))
         );
     }
@@ -128,24 +125,27 @@ mod tests {
     #[test]
     fn test_sequence_of_sequence() {
         let input = "[[foo, bar], [bar, bar]]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
-                    vec![
-                        Expr::sequence(
-                            vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
-                            None
-                        ),
-                        Expr::sequence(
-                            vec![Expr::identifier("bar", None), Expr::identifier("bar", None)],
-                            None
-                        )
-                    ],
-                    None
-                ),
-                ""
+            Ok(Expr::sequence(
+                vec![
+                    Expr::sequence(
+                        vec![
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
+                        ],
+                        None
+                    ),
+                    Expr::sequence(
+                        vec![
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("bar", None)
+                        ],
+                        None
+                    )
+                ],
+                None
             ))
         );
     }
@@ -153,20 +153,17 @@ mod tests {
     #[test]
     fn test_sequence_of_option() {
         let input = "[some(x), some(y), some(z)]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
 
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
-                    vec![
-                        Expr::option(Some(Expr::identifier("x", None))),
-                        Expr::option(Some(Expr::identifier("y", None))),
-                        Expr::option(Some(Expr::identifier("z", None)))
-                    ],
-                    None
-                ),
-                ""
+            Ok(Expr::sequence(
+                vec![
+                    Expr::option(Some(Expr::identifier_global("x", None))),
+                    Expr::option(Some(Expr::identifier_global("y", None))),
+                    Expr::option(Some(Expr::identifier_global("z", None)))
+                ],
+                None
             ))
         );
     }
@@ -174,20 +171,17 @@ mod tests {
     #[test]
     fn test_sequence_of_result() {
         let input = "[ok(x), ok(y), ok(z)]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
 
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
-                    vec![
-                        Expr::ok(Expr::identifier("x", None), None),
-                        Expr::ok(Expr::identifier("y", None), None),
-                        Expr::ok(Expr::identifier("z", None), None)
-                    ],
-                    None
-                ),
-                ""
+            Ok(Expr::sequence(
+                vec![
+                    Expr::ok(Expr::identifier_global("x", None), None),
+                    Expr::ok(Expr::identifier_global("y", None), None),
+                    Expr::ok(Expr::identifier_global("z", None), None)
+                ],
+                None
             ))
         );
     }
@@ -195,27 +189,24 @@ mod tests {
     #[test]
     fn test_sequence_of_cond() {
         let input = "[if foo then bar else baz, if qux then quux else quuz]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
 
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
-                    vec![
-                        Expr::cond(
-                            Expr::identifier("foo", None),
-                            Expr::identifier("bar", None),
-                            Expr::identifier("baz", None)
-                        ),
-                        Expr::cond(
-                            Expr::identifier("qux", None),
-                            Expr::identifier("quux", None),
-                            Expr::identifier("quuz", None)
-                        )
-                    ],
-                    None
-                ),
-                ""
+            Ok(Expr::sequence(
+                vec![
+                    Expr::cond(
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    ),
+                    Expr::cond(
+                        Expr::identifier_global("qux", None),
+                        Expr::identifier_global("quux", None),
+                        Expr::identifier_global("quuz", None)
+                    )
+                ],
+                None
             ))
         );
     }
@@ -223,25 +214,22 @@ mod tests {
     #[test]
     fn test_sequence_of_tuple() {
         let input = "[(foo, bar), (baz, qux)]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
 
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
-                    vec![
-                        Expr::tuple(vec![
-                            Expr::identifier("foo", None),
-                            Expr::identifier("bar", None)
-                        ]),
-                        Expr::tuple(vec![
-                            Expr::identifier("baz", None),
-                            Expr::identifier("qux", None)
-                        ])
-                    ],
-                    None
-                ),
-                ""
+            Ok(Expr::sequence(
+                vec![
+                    Expr::tuple(vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ]),
+                    Expr::tuple(vec![
+                        Expr::identifier_global("baz", None),
+                        Expr::identifier_global("qux", None)
+                    ])
+                ],
+                None
             ))
         );
     }

@@ -12,27 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::interpreter::env::{InterpreterEnv, RibFunctionInvoke};
+use crate::interpreter::env::InterpreterEnv;
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
 use crate::interpreter::stack::InterpreterStack;
-use crate::{RibByteCode, RibIR, RibInput, RibResult};
+use crate::{RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
+use std::sync::Arc;
 
 pub struct Interpreter {
     pub input: RibInput,
-    pub invoke: RibFunctionInvoke,
+    pub invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
 }
 
 impl Default for Interpreter {
     fn default() -> Self {
         Interpreter {
             input: RibInput::default(),
-            invoke: internal::default_worker_invoke_async(),
+            invoke: Arc::new(internal::NoopRibFunctionInvoke),
         }
     }
 }
 
 impl Interpreter {
-    pub fn new(input: &RibInput, invoke: RibFunctionInvoke) -> Self {
+    pub fn new(input: &RibInput, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>) -> Self {
         Interpreter {
             input: input.clone(),
             invoke,
@@ -44,7 +45,7 @@ impl Interpreter {
     pub fn pure(input: &RibInput) -> Self {
         Interpreter {
             input: input.clone(),
-            invoke: internal::default_worker_invoke_async(),
+            invoke: Arc::new(internal::NoopRibFunctionInvoke),
         }
     }
 
@@ -167,9 +168,14 @@ impl Interpreter {
                     )?;
                 }
 
-                RibIR::InvokeFunction(arg_size, _) => {
-                    internal::run_call_instruction(arg_size, &mut stack, &mut interpreter_env)
-                        .await?;
+                RibIR::InvokeFunction(worker_type, arg_size, _) => {
+                    internal::run_call_instruction(
+                        arg_size,
+                        worker_type,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )
+                    .await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
@@ -270,27 +276,34 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        CoercedNumericValue, FunctionReferenceType, InstructionId, ParsedFunctionName,
-        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, VariableId,
+        CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
+        FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
+        ParsedFunctionSite, RibFunctionInvoke, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
+    use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::{str, tuple};
     use std::ops::Deref;
-    use std::sync::Arc;
 
-    pub(crate) fn default_worker_invoke_async() -> RibFunctionInvoke {
-        Arc::new(|_, _| {
-            Box::pin(async {
-                Ok(ValueAndType {
-                    value: Value::Tuple(vec![]),
-                    typ: tuple(vec![]),
-                })
+    pub(crate) struct NoopRibFunctionInvoke;
+
+    #[async_trait]
+    impl RibFunctionInvoke for NoopRibFunctionInvoke {
+        async fn invoke(
+            &self,
+            _worker_name: Option<EvaluatedWorkerName>,
+            _function_name: EvaluatedFqFn,
+            _args: EvaluatedFnArgs,
+        ) -> Result<ValueAndType, String> {
+            Ok(ValueAndType {
+                value: Value::Tuple(vec![]),
+                typ: tuple(vec![]),
             })
-        })
+        }
     }
 
     pub(crate) fn run_is_empty_instruction(
@@ -478,7 +491,7 @@ mod internal {
     ) -> Result<(), String> {
         let env_key = EnvironmentKey::from(variable_id.clone());
         let value = interpreter_env.lookup(&env_key).ok_or(format!(
-            "Variable `{}` not found during evaluation of expression",
+            "`{}` not found. If this is a global input, pass it to the rib interpreter",
             variable_id
         ))?;
 
@@ -680,10 +693,14 @@ mod internal {
                 interpreter_stack.push_val(ValueAndType::new(value, field.1.typ));
                 Ok(())
             }
-            result => Err(format!(
-                "Expected a record value to select a field. Obtained {:?}",
-                result
-            )),
+            result => {
+                let stack_value_as_string = String::try_from(result)?;
+
+                Err(format!(
+                    "Unable to select field `{}` as the input `{}` is not a `record` type",
+                    field_name, stack_value_as_string
+                ))
+            }
         }
     }
 
@@ -959,12 +976,24 @@ mod internal {
 
     pub(crate) async fn run_call_instruction(
         arg_size: usize,
+        worker_type: WorkerNamePresence,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
     ) -> Result<(), String> {
         let function_name = interpreter_stack
             .pop_str()
             .ok_or("Internal Error: Failed to get a function name".to_string())?;
+
+        let worker_name = match worker_type {
+            WorkerNamePresence::Present => None,
+            WorkerNamePresence::Absent => {
+                let worker_name = interpreter_stack
+                    .pop_str()
+                    .ok_or("Internal Error: Failed to get the worker name".to_string())?;
+
+                Some(worker_name.clone())
+            }
+        };
 
         let last_n_elements = interpreter_stack
             .pop_n(arg_size)
@@ -981,7 +1010,7 @@ mod internal {
             .collect::<Result<Vec<ValueAndType>, String>>()?;
 
         let result = interpreter_env
-            .invoke_worker_function_async(function_name, parameter_values)
+            .invoke_worker_function_async(worker_name, function_name, parameter_values)
             .await?;
 
         let interpreter_result = match result {
@@ -1973,8 +2002,7 @@ mod interpreter_tests {
            "success"
         "#;
             let expr = Expr::from_text(expr).unwrap();
-            let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2006,8 +2034,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2040,8 +2067,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2061,8 +2087,7 @@ mod interpreter_tests {
         "#;
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2088,8 +2113,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2115,7 +2139,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2152,7 +2176,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2171,7 +2195,7 @@ mod interpreter_tests {
         "#;
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2206,7 +2230,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2222,7 +2246,7 @@ mod interpreter_tests {
            "success"
         "#;
             let expr = Expr::from_text(expr).unwrap();
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2233,18 +2257,679 @@ mod interpreter_tests {
         }
     }
 
+    mod first_class_worker_tests {
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::{compiler, Expr, RibInput};
+        use golem_wasm_ast::analysis::analysed_type::{field, option, record, str};
+        use golem_wasm_rpc::{parse_value_and_type, IntoValueAndType, Value, ValueAndType};
+        use std::collections::HashMap;
+        use test_r::test;
+
+        #[test]
+        async fn test_first_class_worker_0() {
+            let expr = r#"
+              let x = instance();
+              let result = x.foo("bar");
+              result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_error_ambiguous_instance1() {
+            let expr = r#"
+              let result = instance.foo("bar");
+              result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(compiled, "`instance` is a reserved keyword.\n note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n note: For a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name".to_string());
+        }
+
+        #[test]
+        async fn test_first_class_worker_error_ambiguous_instance2() {
+            let expr = r#"
+              let instance = instance.foo("bar");
+              instance
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compiled,
+                "`instance` is a reserved keyword and cannot be used as a variable.".to_string()
+            );
+        }
+
+        #[test]
+        async fn test_first_class_ephemeral_worker_ambiguous_interface() {
+            let expr = r#"
+                let x = instance();
+                let result = x.bar("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compilation_error,
+                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+            );
+        }
+
+        /// Durable worker
+        #[test]
+        async fn test_first_class_durable_worker_simple() {
+            let expr = r#"
+                let xxxxx = "my-worker";
+                let worker = instance(xxxxx);
+                let result = worker.foo("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_durable_worker_type_parameterised() {
+            let expr = r#"
+                let my_worker = instance("my-worker");
+                let result = my_worker.foo[api1]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_durable_worker_ambiguous_interface() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.bar("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compilation_error,
+                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+            );
+        }
+
+        #[test]
+        async fn test_first_class_durable_worker_unambiguous_type_parameter() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.bar[api1]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_7() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.bar[api2]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_8() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.bar[api2]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_9() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.baz("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_10() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.qux("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compiled,
+                "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
+            );
+        }
+
+        #[test]
+        async fn test_first_class_worker_11() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_12() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.qux[wasi:clocks]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_cannot_return_resource_constructor() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                worker.cart[golem:it]("bar")
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compiled,
+                "Resource constructor instance cannot be returned".to_string()
+            );
+        }
+
+        // This resource construction is a Noop, and compiler can give warnings
+        // once we support warnings in the compiler
+        #[test]
+        async fn test_first_class_worker_13() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                worker.cart[golem:it]("bar");
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_14() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.cart[golem:it]("bar");
+                cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_15() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.cart[golem:it]("bar");
+                cart.add-items({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(compiled, "Function 'add-items' not found".to_string());
+        }
+
+        #[test]
+        async fn test_first_class_worker_16() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.carts[golem:it]("bar");
+                cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compiled,
+                "Function 'carts' not found in package golem:it".to_string()
+            );
+        }
+
+        #[test]
+        async fn test_first_class_worker_17() {
+            // Ephemeral
+            let expr = r#"
+                let worker = instance();
+                let cart = worker.cart[golem:it]("bar");
+                cart.add-item({product-id: "mac", name: "macbook", quantity: 1, price: 1});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_18() {
+            // Ephemeral
+            let expr = r#"
+                let worker = instance();
+                let cart = worker.cart[golem:it]("bar");
+                cart.add-item({product-id: "mac", name: 1, quantity: 1, price: 1});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(compiled, "Invalid argument in `golem:it/api.{cart(\"bar\").add-item}`: `{product-id: \"mac\", name: 1, quantity: 1, price: 1}`. Type mismatch for `name`. Expected `string`".to_string());
+        }
+
+        #[test]
+        async fn test_first_class_worker_19() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: "mac", name: "apple", quantity: 1, price: 1});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_20() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let a = "mac";
+                let b = "apple";
+                let c = 1;
+                let d = 1;
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_21() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let a = "mac";
+                let b = "apple";
+                let c = 1;
+                let d = 1;
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                cart.remove-item(a);
+                cart.update-item-quantity(a, 2);
+                let result = cart.get-cart-contents();
+                cart.drop();
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_22() {
+            let expr = r#"
+                let my_worker = "my-worker";
+                let worker = instance(my_worker);
+                let a = "mac";
+                let b = "apple";
+                let c = 1;
+                let d = 1;
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                cart.remove-item(a);
+                cart.update-item-quantity(a, 2);
+                let result = cart.get-cart-contents();
+                cart.drop();
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_23() {
+            let expr = r#"
+                let worker = instance(request.path.user-id: string);
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut input = HashMap::new();
+
+            // Passing request data as input to interpreter
+            let rib_input_key = "request";
+            let rib_input_value = ValueAndType::new(
+                Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
+                record(vec![field("path", record(vec![field("user-id", str())]))]),
+            );
+
+            input.insert(rib_input_key.to_string(), rib_input_value);
+
+            let rib_input = RibInput::new(input);
+
+            let mut rib_interpreter = internal::static_test_interpreter(
+                &"success".into_value_and_type(),
+                Some(rib_input),
+            );
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_24() {
+            let expr = r#"
+                let user_id1: string = request.path.user-id;
+                let user_id2: string = request.path.user-id;
+                let worker1 = instance(user_id1);
+                let result1 = worker1.qux[amazon:shopping-cart]("bar");
+                let worker2 = instance(user_id2);
+                let result2 = worker2.qux[amazon:shopping-cart]("bar");
+                user_id2
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut input = HashMap::new();
+
+            let rib_input_key = "request";
+            let rib_input_value = ValueAndType::new(
+                Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
+                record(vec![field("path", record(vec![field("user-id", str())]))]),
+            );
+
+            input.insert(rib_input_key.to_string(), rib_input_value);
+
+            let rib_input = RibInput::new(input);
+
+            let mut rib_interpreter = internal::static_test_interpreter(
+                &"success".into_value_and_type(),
+                Some(rib_input),
+            );
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "user".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_25() {
+            let expr = r#"
+                let worker1 = instance("foo");
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(error, "Invalid method invocation `worker.qux`. Make sure `worker` is defined and is a valid instance type (i.e, resource or worker)");
+        }
+
+        #[test]
+        async fn test_first_class_worker_26() {
+            let expr = r#"
+                let worker = instance(1:u32);
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(error, "Worker name expression `1u32` is invalid. Worker name must be of the type string. Obtained u32");
+        }
+
+        #[test]
+        async fn test_first_class_worker_27() {
+            let expr = r#"
+                let worker = instance("my-worker-name");
+                let result = worker.qux[amazon:shopping-cart]("param1");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter = internal::dynamic_test_interpreter(None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            let result_val = result.get_val().unwrap();
+
+            let expected_analysed_type = record(vec![
+                field("worker-name", option(str())),
+                field("function-name", str()),
+                field("args0", str()),
+            ]);
+
+            let expected_val = parse_value_and_type(
+                &expected_analysed_type,
+                r#"
+              {
+                 worker-name: some("my-worker-name"),
+                 function-name: "amazon:shopping-cart/api1.{qux}",
+                 args0: "param1"
+              }
+            "#,
+            )
+            .unwrap();
+
+            assert_eq!(result_val, expected_val);
+        }
+    }
+
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{RibFunctionInvoke, RibInput};
+        use crate::{
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke, RibInput,
+        };
+        use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
-            case, f32, field, handle, list, r#enum, record, result, str, tuple, u32, u64,
+            case, f32, field, handle, list, option, r#enum, record, result, str, tuple, u32, u64,
             unit_case, variant,
         };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
         };
-        use golem_wasm_rpc::{Value, ValueAndType};
+        use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
@@ -2327,27 +3012,104 @@ mod interpreter_tests {
             })]
         }
 
-        pub(crate) fn get_shopping_cart_metadata_with_cart_resource_with_parameters(
-        ) -> Vec<AnalysedExport> {
-            get_shopping_cart_metadata_with_cart_resource(vec![AnalysedFunctionParameter {
+        pub(crate) fn get_metadata_with_resource_with_params() -> Vec<AnalysedExport> {
+            get_metadata_with_resource(vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
                 typ: str(),
             }])
         }
 
-        pub(crate) fn get_shopping_cart_metadata_with_cart_raw_resource() -> Vec<AnalysedExport> {
-            get_shopping_cart_metadata_with_cart_resource(vec![])
+        pub(crate) fn get_metadata_with_resource_without_params() -> Vec<AnalysedExport> {
+            get_metadata_with_resource(vec![])
         }
 
-        fn get_shopping_cart_metadata_with_cart_resource(
-            constructor_parameters: Vec<AnalysedFunctionParameter>,
+        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+            // Exist in only amazon:shopping-cart/api1
+            let analysed_function_in_api1 = AnalysedFunction {
+                name: "foo".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
+            // Exist in both amazon:shopping-cart/api1 and amazon:shopping-cart/api2
+            let analysed_function_in_api1_and_api2 = AnalysedFunction {
+                name: "bar".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
+            // Exist in only wasi:clocks/monotonic-clock
+            let analysed_function_in_wasi = AnalysedFunction {
+                name: "baz".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
+            // Exist in wasi:clocks/monotonic-clock and amazon:shopping-cart/api1
+            let analysed_function_in_wasi_and_api1 = AnalysedFunction {
+                name: "qux".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
+            let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+                name: "amazon:shopping-cart/api1".to_string(),
+                functions: vec![
+                    analysed_function_in_api1,
+                    analysed_function_in_api1_and_api2.clone(),
+                    analysed_function_in_wasi_and_api1.clone(),
+                ],
+            });
+
+            let analysed_export2 = AnalysedExport::Instance(AnalysedInstance {
+                name: "amazon:shopping-cart/api2".to_string(),
+                functions: vec![analysed_function_in_api1_and_api2],
+            });
+
+            let analysed_export3 = AnalysedExport::Instance(AnalysedInstance {
+                name: "wasi:clocks/monotonic-clock".to_string(),
+                functions: vec![
+                    analysed_function_in_wasi,
+                    analysed_function_in_wasi_and_api1,
+                ],
+            });
+
+            vec![analysed_export1, analysed_export2, analysed_export3]
+        }
+
+        fn get_metadata_with_resource(
+            resource_constructor_params: Vec<AnalysedFunctionParameter>,
         ) -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
                     AnalysedFunction {
                         name: "[constructor]cart".to_string(),
-                        parameters: constructor_parameters,
+                        parameters: resource_constructor_params,
                         results: vec![AnalysedFunctionResult {
                             name: None,
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
@@ -2469,32 +3231,97 @@ mod interpreter_tests {
             golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
+        // A simple interpreter that always return result_value regardless
+        // of the function name, args, or worker name
         pub(crate) fn static_test_interpreter(
             result_value: &ValueAndType,
             input: Option<RibInput>,
         ) -> Interpreter {
+            let value = result_value.clone();
+
+            let invoke = Arc::new(StaticWorkerFnInvoke { value });
+
             Interpreter {
                 input: input.unwrap_or_default(),
-                invoke: static_worker_invoke(result_value),
+                invoke,
             }
         }
 
-        fn static_worker_invoke(value: &ValueAndType) -> RibFunctionInvoke {
-            let value = value.clone();
+        struct StaticWorkerFnInvoke {
+            value: ValueAndType,
+        }
 
-            Arc::new(move |_, _| {
-                Box::pin({
-                    let value = value.clone();
+        #[async_trait]
+        impl RibFunctionInvoke for StaticWorkerFnInvoke {
+            async fn invoke(
+                &self,
+                _worker_name: Option<EvaluatedWorkerName>,
+                _fqn: EvaluatedFqFn,
+                _args: EvaluatedFnArgs,
+            ) -> Result<ValueAndType, String> {
+                let value = self.value.clone();
+                Ok(ValueAndType::new(
+                    Value::Tuple(vec![value.value]),
+                    tuple(vec![value.typ]),
+                ))
+            }
+        }
 
-                    async move {
-                        let value = value.clone();
-                        Ok(ValueAndType::new(
-                            Value::Tuple(vec![value.value]),
-                            tuple(vec![value.typ]),
-                        ))
-                    }
-                })
-            })
+        struct DynamicWorkerFnInvoke;
+
+        #[async_trait]
+        impl RibFunctionInvoke for DynamicWorkerFnInvoke {
+            async fn invoke(
+                &self,
+                worker_name: Option<EvaluatedWorkerName>,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+            ) -> Result<ValueAndType, String> {
+                let worker_name = worker_name.map(|x| x.0);
+
+                let function_name = function_name.0.into_value_and_type();
+
+                let args = args.0;
+
+                let mut arg_types = vec![];
+
+                for (index, value_and_type) in args.iter().enumerate() {
+                    let name = format!("args{}", index);
+                    let value = value_and_type.typ.clone();
+                    arg_types.push(field(name.as_str(), value));
+                }
+
+                let mut analysed_type_pairs = vec![];
+                analysed_type_pairs.push(field("worker-name", option(str())));
+                analysed_type_pairs.push(field("function-name", str()));
+                analysed_type_pairs.extend(arg_types);
+
+                let mut values = vec![];
+
+                values.push(Value::Option(
+                    worker_name.map(|x| Box::new(Value::String(x))),
+                ));
+                values.push(function_name.value);
+
+                for arg_value in args {
+                    values.push(arg_value.value);
+                }
+
+                let value = ValueAndType::new(
+                    Value::Tuple(vec![Value::Record(values)]),
+                    tuple(vec![record(analysed_type_pairs)]),
+                );
+                Ok(value)
+            }
+        }
+
+        pub(crate) fn dynamic_test_interpreter(rib_input: Option<RibInput>) -> Interpreter {
+            let invoke: Arc<dyn RibFunctionInvoke + Send + Sync> = Arc::new(DynamicWorkerFnInvoke);
+
+            Interpreter {
+                input: rib_input.unwrap_or_default(),
+                invoke,
+            }
         }
     }
 }

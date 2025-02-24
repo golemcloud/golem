@@ -14,7 +14,7 @@
 
 pub mod serialized;
 
-use self::serialized::SerializableScheduleInvocationRequest;
+use self::serialized::{SerializableScheduleId, SerializableScheduleInvocationRequest};
 use crate::durable_host::serialized::SerializableDateTime;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
@@ -34,8 +34,8 @@ use chrono::{DateTime, Utc};
 use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction,
-    TargetWorkerId, WorkerId,
+    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
+    WorkerId,
 };
 use golem_common::serialization::try_deserialize;
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
@@ -143,7 +143,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: try_get_typed_parameters(
+                function_params: try_get_typed_parameters::<Ctx>(
                     self.state.component_service.clone(),
                     &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
@@ -281,7 +281,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: try_get_typed_parameters(
+                function_params: try_get_typed_parameters::<Ctx>(
                     self.state.component_service.clone(),
                     &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
@@ -373,7 +373,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
             function_name: function_name.clone(),
-            function_params: try_get_typed_parameters(
+            function_params: try_get_typed_parameters::<Ctx>(
                 self.state.component_service.clone(),
                 &remote_worker_id.account_id,
                 &remote_worker_id.worker_id.component_id,
@@ -460,7 +460,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
-        let durability = Durability::<ScheduleId, GolemError>::new(
+        let durability = Durability::<SerializableScheduleId, GolemError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "schedule_invocation",
@@ -489,7 +489,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: try_get_typed_parameters(
+                function_params: try_get_typed_parameters::<Ctx>(
                     self.state.component_service.clone(),
                     &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
@@ -518,19 +518,25 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .schedule(datetime.into(), action)
                 .await;
 
+            let serializable_schedule_id = SerializableScheduleId::from_domain(&result);
+
             durability
-                .persist_serializable(self, serializable_input, Ok(result.clone()))
+                .persist_serializable(
+                    self,
+                    serializable_input,
+                    Ok(serializable_schedule_id.clone()),
+                )
                 .await?;
 
-            result
+            serializable_schedule_id
         } else {
-            durability.replay::<ScheduleId, GolemError>(self).await?
+            durability
+                .replay::<SerializableScheduleId, GolemError>(self)
+                .await?
         };
 
         let cancellation_token = CancellationTokenEntry {
-            schedule_id: golem_common::serialization::serialize(&schedule_id)
-                .unwrap()
-                .to_vec(),
+            schedule_id: schedule_id.data,
         };
 
         let resource = self.table().push(cancellation_token)?;
@@ -744,7 +750,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         remote_worker_id: remote_worker_id.worker_id(),
                         idempotency_key: idempotency_key.clone(),
                         function_name: function_name.clone(),
-                        function_params: try_get_typed_parameters(
+                        function_params: try_get_typed_parameters::<Ctx>(
                             component_service,
                             &remote_worker_id.account_id,
                             &remote_worker_id.worker_id.component_id,
@@ -900,11 +906,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
-        let (schedule_id, serialized_schedule_id) = {
-            let entry = self.table().get(&this)?;
-            let payload: ScheduleId = golem_common::serialization::deserialize(&entry.schedule_id)
-                .expect("not a valid cancellation token");
-            (payload, entry.schedule_id.clone())
+        let entry = self.table().get(&this)?;
+        let schedule_id = SerializableScheduleId {
+            data: entry.schedule_id.clone(),
         };
 
         let durability = Durability::<(), GolemError>::new(
@@ -916,10 +920,12 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         .await?;
 
         if durability.is_live() {
-            self.scheduler_service().cancel(schedule_id).await;
+            self.scheduler_service()
+                .cancel(schedule_id.as_domain().map_err(|e| anyhow!(e))?)
+                .await;
 
             durability
-                .persist_serializable(self, serialized_schedule_id, Ok(()))
+                .persist_serializable(self, schedule_id, Ok(()))
                 .await?;
         } else {
             durability.replay::<(), GolemError>(self).await?;
@@ -960,8 +966,8 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
 /// empty vector.
 ///
 /// This should only be used for generating "debug information" for the stored oplog entries.
-async fn try_get_typed_parameters(
-    components: Arc<dyn ComponentService + Send + Sync>,
+async fn try_get_typed_parameters<Ctx: WorkerCtx>(
+    components: Arc<dyn ComponentService<Ctx::Types>>,
     account_id: &AccountId,
     component_id: &ComponentId,
     function_name: &str,

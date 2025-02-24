@@ -48,7 +48,7 @@ pub enum RibIR {
     Label(InstructionId),
     Deconstruct,
     CreateFunctionName(ParsedFunctionSite, FunctionReferenceType),
-    InvokeFunction(usize, AnalysedTypeWithUnit),
+    InvokeFunction(WorkerNamePresence, usize, AnalysedTypeWithUnit),
     PushVariant(String, AnalysedType), // There is no arg size since the type of each variant case is only 1 from beginning
     PushEnum(String, AnalysedType),
     Throw(String),
@@ -64,6 +64,38 @@ pub enum RibIR {
     AdvanceIterator,
     PushToSink,
     SinkToList,
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum WorkerNamePresence {
+    Present,
+    Absent,
+}
+
+impl From<golem_api_grpc::proto::golem::rib::WorkerNamePresence> for WorkerNamePresence {
+    fn from(value: golem_api_grpc::proto::golem::rib::WorkerNamePresence) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present => {
+                WorkerNamePresence::Present
+            }
+            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent => {
+                WorkerNamePresence::Absent
+            }
+        }
+    }
+}
+
+impl From<WorkerNamePresence> for golem_api_grpc::proto::golem::rib::WorkerNamePresence {
+    fn from(value: WorkerNamePresence) -> Self {
+        match value {
+            WorkerNamePresence::Present => {
+                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present
+            }
+            WorkerNamePresence::Absent => {
+                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent
+            }
+        }
+    }
 }
 
 impl RibIR {
@@ -149,6 +181,7 @@ impl InstructionId {
 mod protobuf {
     use crate::{
         AnalysedTypeWithUnit, FunctionReferenceType, InstructionId, ParsedFunctionSite, RibIR,
+        WorkerNamePresence,
     };
     use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
     use golem_api_grpc::proto::golem::rib::{
@@ -390,7 +423,21 @@ mod protobuf {
                         None => AnalysedTypeWithUnit::Unit,
                     };
 
+                    let worker_name_presence = call_instruction
+                        .worker_name_presence
+                        .map(|x| {
+                            golem_api_grpc::proto::golem::rib::WorkerNamePresence::try_from(x)
+                                .map_err(|err| err.to_string())
+                        })
+                        .transpose()?;
+
+                    // Default is absent because old rib scripts don't have worker name in it
+                    let worker_name_presence = worker_name_presence
+                        .map(|x| x.into())
+                        .unwrap_or(WorkerNamePresence::Absent);
+
                     Ok(RibIR::InvokeFunction(
+                        worker_name_presence,
                         call_instruction.argument_count as usize,
                         return_type,
                     ))
@@ -541,7 +588,7 @@ mod protobuf {
                 RibIR::Deconstruct => {
                     Instruction::Deconstruct((&AnalysedType::Str(TypeStr)).into())
                 } //TODO; remove type in deconstruct from protobuf
-                RibIR::InvokeFunction(arg_count, return_type) => {
+                RibIR::InvokeFunction(worker_name_presence, arg_count, return_type) => {
                     let typ = match return_type {
                         AnalysedTypeWithUnit::Unit => None,
                         AnalysedTypeWithUnit::Type(analysed_type) => {
@@ -551,9 +598,13 @@ mod protobuf {
                         }
                     };
 
+                    let worker_name_presence: golem_api_grpc::proto::golem::rib::WorkerNamePresence =
+                        worker_name_presence.into();
+
                     Instruction::Call(CallInstruction {
                         argument_count: arg_count as u64,
                         return_type: typ,
+                        worker_name_presence: Some(worker_name_presence.into()),
                     })
                 }
                 RibIR::PushVariant(name, return_type) => {

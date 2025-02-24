@@ -65,6 +65,7 @@ use uuid::Uuid;
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
     name: String,
+    wasm_name: String,
     component_type: ComponentType,
     unique: bool,
     unverified: bool,
@@ -77,12 +78,19 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
         Self {
             dsl,
             name: name.as_ref().to_string(),
+            wasm_name: name.as_ref().to_string(),
             component_type: ComponentType::Durable,
             unique: false,
             unverified: false,
             files: vec![],
             dynamic_linking: vec![],
         }
+    }
+
+    /// Set the name of the component.
+    pub fn name(mut self, name: &str) -> Self {
+        self.name = name.to_string();
+        self
     }
 
     /// Set the component type to ephemeral.
@@ -162,6 +170,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
     pub async fn store_and_get_name(self) -> (ComponentId, ComponentName) {
         self.dsl
             .store_component_with(
+                &self.wasm_name,
                 &self.name,
                 self.component_type,
                 self.unique,
@@ -179,6 +188,7 @@ pub trait TestDsl {
 
     async fn store_component_with(
         &self,
+        wasm_name: &str,
         name: &str,
         component_type: ComponentType,
         unique: bool,
@@ -358,6 +368,8 @@ pub trait TestDsl {
         query: &str,
     ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
 
+    async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()>;
+
     async fn list_directory(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -407,6 +419,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn store_component_with(
         &self,
+        wasm_name: &str,
         name: &str,
         component_type: ComponentType,
         unique: bool,
@@ -414,7 +427,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
     ) -> (ComponentId, ComponentName) {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let source_path = self.component_directory().join(format!("{wasm_name}.wasm"));
         let component_name = if unique {
             let uuid = Uuid::new_v4();
             format!("{name}-{uuid}")
@@ -472,7 +485,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .add_component_with_id(&source_path, component_id, ComponentType::Durable)
+            .add_component_with_id(&source_path, component_id, name, ComponentType::Durable)
             .await
             .expect("Failed to store component");
     }
@@ -1158,6 +1171,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         Ok(result)
     }
 
+    async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
+        TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
+        Ok(())
+    }
+
     async fn list_directory(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -1787,6 +1805,8 @@ pub trait TestDslUnsafe {
         query: &str,
     ) -> Vec<PublicOplogEntryWithIndex>;
 
+    async fn check_oplog_is_queryable(&self, worker_id: &WorkerId);
+
     async fn list_directory(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -1847,6 +1867,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
     ) -> (ComponentId, ComponentName) {
         <T as TestDsl>::store_component_with(
             self,
+            name,
             name,
             component_type,
             unique,
@@ -2087,6 +2108,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::search_oplog(self, worker_id, query)
             .await
             .expect("Failed to search oplog")
+    }
+
+    async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> () {
+        <T as TestDsl>::check_oplog_is_queryable(self, worker_id)
+            .await
+            .expect("Oplog check failed")
     }
 
     async fn list_directory(

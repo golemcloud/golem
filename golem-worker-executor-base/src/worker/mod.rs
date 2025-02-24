@@ -1234,7 +1234,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn get_or_create_worker_metadata<
-        T: HasWorkerService + HasComponentService + HasConfig + HasOplogService + Sync,
+        T: HasWorkerService + HasComponentService<Ctx::Types> + HasConfig + HasOplogService + Sync,
     >(
         this: &T,
         owned_worker_id: &OwnedWorkerId,

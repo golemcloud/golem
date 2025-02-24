@@ -45,16 +45,16 @@ mod internal {
     use crate::{Expr, VariableId};
     use std::collections::VecDeque;
 
-    pub(crate) fn process_yield_expr(variable_id: &mut VariableId, yield_expr: &mut Expr) {
+    pub(crate) fn process_yield_expr(variable: &mut VariableId, yield_expr: &mut Expr) {
         let mut queue = VecDeque::new();
 
         queue.push_front(yield_expr);
 
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Identifier(variable_in_yield, _, _) => {
-                    if variable_id.name() == variable_in_yield.name() {
-                        *variable_in_yield = variable_id.clone();
+                Expr::Identifier { variable_id, .. } => {
+                    if variable.name() == variable_id.name() {
+                        *variable_id = variable.clone();
                     }
                 }
                 _ => expr.visit_children_mut_top_down(&mut queue),

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use futures_util::FutureExt;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -22,7 +21,10 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::ValueAndType;
-use rib::{RibByteCode, RibFunctionInvoke, RibInput, RibResult};
+use rib::{
+    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode, RibFunctionInvoke, RibInput,
+    RibResult,
+};
 
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 
@@ -69,13 +71,31 @@ pub struct DefaultRibInterpreter<Namespace> {
     worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
 }
 
-impl<Namespace> DefaultRibInterpreter<Namespace> {
+impl<Namespace: Clone + Send + Sync + 'static> DefaultRibInterpreter<Namespace> {
     pub fn from_worker_request_executor(
         worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
     ) -> Self {
         DefaultRibInterpreter {
             worker_request_executor,
         }
+    }
+
+    pub fn rib_invoke(
+        &self,
+        global_worker_name: Option<String>,
+        component_id: ComponentId,
+        idempotency_key: Option<IdempotencyKey>,
+        invocation_context: InvocationContextStack,
+        namespace: Namespace,
+    ) -> Arc<dyn RibFunctionInvoke + Sync + Send> {
+        Arc::new(WorkerServiceRibInvoke {
+            global_worker_name,
+            component_id,
+            idempotency_key,
+            invocation_context,
+            executor: self.worker_request_executor.clone(),
+            namespace,
+        })
     }
 }
 
@@ -93,53 +113,77 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
         rib_input: &RibInput,
         namespace: Namespace,
     ) -> Result<RibResult, EvaluationError> {
-        let executor = self.worker_request_executor.clone();
+        let worker_invoke_function = self.rib_invoke(
+            worker_name.map(|x| x.to_string()),
+            component_id.clone(),
+            idempotency_key.clone(),
+            invocation_context,
+            namespace.clone(),
+        );
 
-        let worker_invoke_function: RibFunctionInvoke = Arc::new({
-            let component_id = component_id.clone();
-            let idempotency_key = idempotency_key.clone();
-            let worker_name = worker_name.map(|s| s.to_string()).clone();
-
-            move |function_name: String, parameters: Vec<ValueAndType>| {
-                let component_id = component_id.clone();
-                let worker_name = worker_name.clone();
-                let idempotency_key = idempotency_key.clone();
-                let invocation_context = invocation_context.clone();
-                let executor = executor.clone();
-                let namespace = namespace.clone();
-
-                async move {
-                    // input ValueAndType => TypeAnnotatedValue
-                    let function_params: Vec<TypeAnnotatedValue> = parameters
-                        .into_iter()
-                        .map(TypeAnnotatedValue::try_from)
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|errs: Vec<String>| errs.join(", "))?;
-
-                    let worker_request = GatewayResolvedWorkerRequest {
-                        component_id,
-                        worker_name,
-                        function_name,
-                        function_params,
-                        idempotency_key,
-                        invocation_context,
-                        namespace,
-                    };
-
-                    let tav = executor
-                        .execute(worker_request)
-                        .await
-                        .map(|v| v.result)
-                        .map_err(|e| e.to_string())?;
-
-                    tav.try_into()
-                }
-                .boxed()
-            }
-        });
         let result = rib::interpret(expr, rib_input, worker_invoke_function)
             .await
             .map_err(EvaluationError)?;
         Ok(result)
+    }
+}
+
+struct WorkerServiceRibInvoke<Namespace> {
+    // For backward compatibility.
+    // If there is no worker-name in the Rib (which is EvaluatedWorkerName),
+    // then it tries to fall back to this global_worker_name that came in as
+    // part of the API definition.
+    global_worker_name: Option<String>,
+    component_id: ComponentId,
+    idempotency_key: Option<IdempotencyKey>,
+    invocation_context: InvocationContextStack,
+    executor: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
+    namespace: Namespace,
+}
+
+#[async_trait]
+impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
+    for WorkerServiceRibInvoke<Namespace>
+{
+    async fn invoke(
+        &self,
+        worker_name: Option<EvaluatedWorkerName>,
+        function_name: EvaluatedFqFn,
+        parameters: EvaluatedFnArgs,
+    ) -> Result<ValueAndType, String> {
+        let component_id = self.component_id.clone();
+        let worker_name: Option<String> =
+            worker_name.map(|x| x.0).or(self.global_worker_name.clone());
+        let idempotency_key = self.idempotency_key.clone();
+        let invocation_context = self.invocation_context.clone();
+        let executor = self.executor.clone();
+        let namespace = self.namespace.clone();
+
+        let function_name = function_name.0;
+
+        let function_params: Vec<TypeAnnotatedValue> = parameters
+            .0
+            .into_iter()
+            .map(TypeAnnotatedValue::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|errs: Vec<String>| errs.join(", "))?;
+
+        let worker_request = GatewayResolvedWorkerRequest {
+            component_id,
+            worker_name,
+            function_name,
+            function_params,
+            idempotency_key,
+            invocation_context,
+            namespace,
+        };
+
+        let tav = executor
+            .execute(worker_request)
+            .await
+            .map(|v| v.result)
+            .map_err(|e| e.to_string())?;
+
+        tav.try_into()
     }
 }

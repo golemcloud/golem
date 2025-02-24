@@ -7,7 +7,7 @@ pub fn check_number_types(expr: &Expr) -> Result<(), String> {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Number(_, _, inferred_type) => match inferred_type.as_number() {
+            Expr::Number { inferred_type, .. } => match inferred_type.as_number() {
                 Ok(_) => {}
                 Err(msg) => {
                     let type_name = TypeName::try_from(inferred_type.clone())?;

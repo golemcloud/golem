@@ -14,9 +14,11 @@
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::error::GolemError;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
+use crate::preview2::golem::rpc::types::Uri;
 use crate::preview2::golem_api_0_2_x;
 use crate::preview2::golem_api_0_2_x::host::GetWorkers;
 use crate::preview2::golem_api_1_x;
@@ -278,6 +280,114 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }?;
 
         Ok(())
+    }
+
+    async fn resolve_component_id(
+        &mut self,
+        component_slug: String,
+    ) -> anyhow::Result<Option<ComponentId>> {
+        let durability =
+            Durability::<Option<golem_common::model::ComponentId>, SerializableError>::new(
+                self,
+                "golem::api",
+                "resolve_component_id",
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
+
+        let result = if durability.is_live() {
+            let result = self
+                .state
+                .component_service
+                .resolve_component(
+                    component_slug.clone(),
+                    self.state.component_metadata.component_owner.clone(),
+                )
+                .await;
+            durability.persist(self, component_slug, result).await
+        } else {
+            durability.replay(self).await
+        }?;
+
+        Ok(result.map(ComponentId::from))
+    }
+
+    async fn resolve_worker_id(
+        &mut self,
+        component_slug: String,
+        worker_name: String,
+    ) -> anyhow::Result<Option<WorkerId>> {
+        let component_id = self.resolve_component_id(component_slug).await?;
+        Ok(component_id.map(|component_id| WorkerId {
+            component_id,
+            worker_name,
+        }))
+    }
+
+    async fn resolve_worker_id_strict(
+        &mut self,
+        component_slug: String,
+        worker_name: String,
+    ) -> anyhow::Result<Option<WorkerId>> {
+        let durability =
+            Durability::<Option<golem_common::model::WorkerId>, SerializableError>::new(
+                self,
+                "golem::api",
+                "resolve_worker_id_strict",
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
+
+        let result = if durability.is_live() {
+            let worker_id: Result<_, GolemError> = async {
+                let component_id = self
+                    .state
+                    .component_service
+                    .resolve_component(
+                        component_slug.clone(),
+                        self.state.component_metadata.component_owner.clone(),
+                    )
+                    .await?;
+                let worker_id = component_id.map(|component_id| golem_common::model::WorkerId {
+                    component_id,
+                    worker_name: worker_name.clone(),
+                });
+
+                if let Some(worker_id) = worker_id.clone() {
+                    let owned_id = OwnedWorkerId {
+                        account_id: self.state.owned_worker_id.account_id(),
+                        worker_id,
+                    };
+
+                    let metadata = self.state.worker_service.get(&owned_id).await;
+
+                    if metadata.is_none() {
+                        return Ok(None);
+                    };
+                };
+                Ok(worker_id)
+            }
+            .await;
+
+            durability
+                .persist(self, (component_slug, worker_name), worker_id)
+                .await
+        } else {
+            durability.replay(self).await
+        }?;
+
+        Ok(result.map(|w| w.into()))
+    }
+
+    async fn worker_uri(&mut self, worker_id: WorkerId) -> anyhow::Result<Uri> {
+        let Uuid {
+            high_bits,
+            low_bits,
+        } = worker_id.component_id.uuid;
+        let component_id = uuid::Uuid::from_u64_pair(high_bits, low_bits);
+        Ok(Uri {
+            value: format!("urn:worker:{}/{}", component_id, worker_id.worker_name),
+        })
     }
 }
 

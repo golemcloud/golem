@@ -15,13 +15,13 @@
 pub(crate) use flatten::*;
 mod flatten;
 mod unification;
+use crate::instance_type::InstanceType;
 use crate::TypeName;
-use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum InferredType {
     Bool,
     S8,
@@ -50,6 +50,9 @@ pub enum InferredType {
     Resource {
         resource_id: u64,
         resource_mode: u8,
+    },
+    Instance {
+        instance_type: Box<InstanceType>,
     },
     OneOf(Vec<InferredType>),
     AllOf(Vec<InferredType>),
@@ -188,6 +191,7 @@ impl InferredType {
                 InferredType::Resource { .. } => {
                     Err(format!("Expected a number type. Found {}", "resource"))
                 }
+                _ => Err(format!("Expected a number type. Found {}", "instance type")),
             }
         }
 

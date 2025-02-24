@@ -38,11 +38,10 @@ use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
 };
 use crate::worker::{RetryDecision, Worker};
+use crate::GolemTypes;
 use async_trait::async_trait;
-use golem_common::model::component::ComponentOwner;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::plugin::PluginScope;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
@@ -76,13 +75,16 @@ pub trait WorkerCtx:
     + Sized
     + 'static
 {
+    /// Types that this particular WorkerCtx can work with
+    ///
+    /// Note: Both Types and Self are used below when defining types. The rule here is that Types should be used where possible.
+    /// Only use Self in nested types when it really needs to refer to the whole, wired WorkerCtx instance.
+    type Types: GolemTypes;
+
     /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
-
-    type ComponentOwner: ComponentOwner;
-    type PluginScope: PluginScope;
 
     /// Creates a new worker context
     ///
@@ -108,7 +110,7 @@ pub trait WorkerCtx:
     #[allow(clippy::too_many_arguments)]
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata,
+        component_metadata: ComponentMetadata<Self::Types>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
@@ -124,17 +126,13 @@ pub trait WorkerCtx:
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<Self::Types>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<Self::Types>>,
     ) -> Result<Self, GolemError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -155,7 +153,7 @@ pub trait WorkerCtx:
     /// Get the owned worker ID associated with this worker context
     fn owned_worker_id(&self) -> &OwnedWorkerId;
 
-    fn component_metadata(&self) -> &ComponentMetadata;
+    fn component_metadata(&self) -> &ComponentMetadata<Self::Types>;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -441,6 +439,6 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &ComponentMetadata<Ctx::Types>,
     ) -> anyhow::Result<()>;
 }

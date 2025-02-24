@@ -20,6 +20,7 @@ use combine::{
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn multi_line_block<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -27,6 +28,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     spaces().with(between(
         char_('{').skip(spaces()),
@@ -41,6 +43,7 @@ mod internal {
 
     use crate::parser::errors::RibParseError;
     use crate::parser::rib_expr::rib_expr;
+    use crate::rib_source_span::GetSourcePosition;
     use crate::Expr;
 
     // A block is different to a complete rib-program that the it may not be the end of the stream
@@ -50,6 +53,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         spaces().with(
             sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(
@@ -89,13 +93,17 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
             Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
-                vec![Expr::identifier("x", None)],
+                None,
+                None,
+                vec![Expr::identifier_global("x", None)],
             ),
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
-                vec![Expr::identifier("y", None)],
+                None,
+                None,
+                vec![Expr::identifier_global("y", None)],
             ),
         ]);
 
@@ -120,13 +128,17 @@ mod tests {
             Expr::expr_block(vec![
                 Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
                 Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
-                    vec![Expr::identifier("x", None)],
+                    None,
+                    None,
+                    vec![Expr::identifier_global("x", None)],
                 ),
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
-                    vec![Expr::identifier("y", None)],
+                    None,
+                    None,
+                    vec![Expr::identifier_global("y", None)],
                 ),
             ]),
             Expr::untyped_number(BigDecimal::from(1)),
@@ -151,22 +163,28 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::pattern_match(
-            Expr::identifier("foo", None),
+            Expr::identifier_global("foo", None),
             vec![MatchArm::new(
                 ArmPattern::Constructor(
                     "some".to_string(),
-                    vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                    vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                        "x", None,
+                    )))],
                 ),
                 Expr::expr_block(vec![
                     Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
                     Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-                    Expr::call(
+                    Expr::call_worker_function(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
-                        vec![Expr::identifier("x", None)],
+                        None,
+                        None,
+                        vec![Expr::identifier_global("x", None)],
                     ),
-                    Expr::call(
+                    Expr::call_worker_function(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
-                        vec![Expr::identifier("y", None)],
+                        None,
+                        None,
+                        vec![Expr::identifier_global("y", None)],
                     ),
                 ]),
             )],
@@ -198,22 +216,28 @@ mod tests {
                 None,
             ),
             Expr::pattern_match(
-                Expr::identifier("foo", None),
+                Expr::identifier_global("foo", None),
                 vec![MatchArm::new(
                     ArmPattern::Constructor(
                         "some".to_string(),
-                        vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                        vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                            "x", None,
+                        )))],
                     ),
                     Expr::expr_block(vec![
                         Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
                         Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-                        Expr::call(
+                        Expr::call_worker_function(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
-                            vec![Expr::identifier("x", None)],
+                            None,
+                            None,
+                            vec![Expr::identifier_global("x", None)],
                         ),
-                        Expr::call(
+                        Expr::call_worker_function(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
-                            vec![Expr::identifier("y", None)],
+                            None,
+                            None,
+                            vec![Expr::identifier_global("y", None)],
                         ),
                     ]),
                 )],

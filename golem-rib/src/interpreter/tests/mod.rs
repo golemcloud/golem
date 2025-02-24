@@ -2044,7 +2044,10 @@ mod comprehensive_test {
     mod mock_interpreter {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
-        use crate::{RibFunctionInvoke, RibInput};
+        use crate::{
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke, RibInput,
+        };
+        use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::tuple;
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
         use golem_wasm_rpc::{Value, ValueAndType};
@@ -2237,34 +2240,42 @@ mod comprehensive_test {
             functions_and_result: HashMap<FunctionName, Option<ValueAndType>>,
             interpreter_env_input: HashMap<String, ValueAndType>,
         ) -> Interpreter {
-            Interpreter::new(
-                &RibInput::new(interpreter_env_input),
-                dynamic_worker_invoke(functions_and_result),
-            )
+            let dynamic_worker_invoke = Arc::new(DynamicRibFunctionInvoke {
+                functions_and_result,
+            });
+
+            Interpreter::new(&RibInput::new(interpreter_env_input), dynamic_worker_invoke)
         }
 
-        fn dynamic_worker_invoke(
+        struct DynamicRibFunctionInvoke {
             functions_and_result: HashMap<FunctionName, Option<ValueAndType>>,
-        ) -> RibFunctionInvoke {
-            let value = functions_and_result.clone();
+        }
 
-            Arc::new(move |a, _| {
-                Box::pin({
-                    let value = value.get(&FunctionName(a)).cloned().flatten();
+        #[async_trait]
+        impl RibFunctionInvoke for DynamicRibFunctionInvoke {
+            async fn invoke(
+                &self,
+                _worker_name: Option<EvaluatedWorkerName>,
+                function_name: EvaluatedFqFn,
+                _args: EvaluatedFnArgs,
+            ) -> Result<ValueAndType, String> {
+                let function_name = FunctionName(function_name.0);
+                let value = self
+                    .functions_and_result
+                    .get(&function_name)
+                    .cloned()
+                    .flatten();
 
-                    async move {
-                        if let Some(value) = value {
-                            Ok(ValueAndType::new(
-                                Value::Tuple(vec![value.value]),
-                                tuple(vec![value.typ]),
-                            ))
-                        } else {
-                            // Representing Unit
-                            Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
-                        }
-                    }
-                })
-            })
+                if let Some(value) = value {
+                    Ok(ValueAndType::new(
+                        Value::Tuple(vec![value.value]),
+                        tuple(vec![value.typ]),
+                    ))
+                } else {
+                    // Representing Unit
+                    Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
+                }
+            }
         }
     }
 
