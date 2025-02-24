@@ -13,12 +13,16 @@ jobs:
       matrix:
         include:
           - platform: "macos-latest" # for Arm based macs (M1 and above).
+            arch: "aarch64-apple-darwin"
             args: "--target aarch64-apple-darwin"
           - platform: "macos-latest" # for Intel based macs.
+            arch: "x86_64-apple-darwin"
             args: "--target x86_64-apple-darwin"
           - platform: "ubuntu-22.04" # for Tauri v1 you could replace this with ubuntu-20.04.
+            arch: ""
             args: ""
           - platform: "windows-latest"
+            arch: ""
             args: ""
 
     runs-on: ${{ matrix.platform }}
@@ -44,7 +48,7 @@ jobs:
 
       - name: install frontend dependencies
         run: npm install --force # change this to npm, pnpm or bun depending on which one you use.
-        working-directory: ./crates/app/
+        working-directory: ./app/desktop/
 
       - name: build tauri app
         uses: tauri-apps/tauri-action@v0
@@ -52,10 +56,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: ${{ matrix.args }}
-          projectPath: "./crates/app/"
+          projectPath: "./app/desktop/"
 
       - name: upload artifact
+        if: matrix.platform != 'macos-latest' # This must match the platform value defined above.
         uses: actions/upload-artifact@v4
         with:
           name: golem-app-${{ matrix.platform }}
           path: ./target/release/bundle/
+
+      - name: upload artifact
+        if: matrix.platform == 'macos-latest' # This must match the platform value defined above.
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-app-${{ matrix.platform }}
+          path: ./target/${{ matrix.arch }}/release/bundle/
