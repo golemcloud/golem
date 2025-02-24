@@ -733,6 +733,7 @@ mod internal {
                             expected_type: ExpectedType::Kind(actual_kind.clone()),
                             actual_type: ActualType::Kind(push_down_kind.clone()),
                             field_path: Default::default(),
+                            additional_error_detail: vec![],
                         }
                         .into()
                     }

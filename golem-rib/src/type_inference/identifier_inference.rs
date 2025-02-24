@@ -14,15 +14,13 @@
 
 use crate::Expr;
 
-pub fn infer_all_identifiers(expr: &mut Expr) -> Result<(), String> {
+pub fn infer_all_identifiers(expr: &mut Expr) {
     // We scan top-down and bottom-up to inform the type between the identifiers
     // It doesn't matter which order we do it in (i.e, which identifier expression has the right type isn't a problem),
     // as we accumulate all the types in both directions
-    internal::infer_all_identifiers_bottom_up(expr)?;
-    internal::infer_all_identifiers_top_down(expr)?;
+    internal::infer_all_identifiers_bottom_up(expr);
+    internal::infer_all_identifiers_top_down(expr);
     internal::infer_match_binding_variables(expr);
-
-    Ok(())
 }
 
 mod internal {
@@ -30,7 +28,7 @@ mod internal {
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
     use std::collections::{HashMap, VecDeque};
 
-    pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) -> Result<(), String> {
+    pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();
         let mut queue = VecDeque::new();
         queue.push_back(expr);
@@ -61,11 +59,9 @@ mod internal {
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
             }
         }
-
-        Ok(())
     }
 
-    pub(crate) fn infer_all_identifiers_top_down(expr: &mut Expr) -> Result<(), String> {
+    pub(crate) fn infer_all_identifiers_top_down(expr: &mut Expr) {
         let mut identifier_lookup = internal::IdentifierTypeState::new();
         let mut queue = VecDeque::new();
         queue.push_back(expr);
@@ -97,8 +93,6 @@ mod internal {
                 _ => expr.visit_children_mut_top_down(&mut queue),
             }
         }
-
-        Ok(())
     }
 
     pub(crate) fn infer_match_binding_variables(expr: &mut Expr) {

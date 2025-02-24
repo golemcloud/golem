@@ -2628,7 +2628,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compiled,
-                "error in the following rib found at line 3, column 28\n`worker.carts[golem:it](\"bar\")`\ncause: invalid function call: `carts`\nFunction 'carts' not found in package 'golem:it'\n".to_string()
+                "error in the following rib found at line 3, column 28\n`worker.carts[golem:it](\"bar\")`\ncause: invalid function call: `carts`\nfunction 'carts' not found in package 'golem:it'\n".to_string()
             );
         }
 
@@ -2870,7 +2870,7 @@ mod interpreter_tests {
 
             let error = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(error, "invalid method invocation `worker.qux`. Make sure `worker` is defined and is a valid instance type (i.e, resource or worker)");
+            assert_eq!(error, "error in the following rib found at line 3, column 30\n`worker.qux[amazon:shopping-cart](\"bar\")`\ncause: invalid method invocation `worker.qux`. make sure `worker` is defined and is a valid instance type (i.e, resource or worker)\n");
         }
 
         #[test]

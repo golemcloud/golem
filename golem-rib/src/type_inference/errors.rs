@@ -95,6 +95,7 @@ pub struct TypeMismatchError {
     pub expected_type: ExpectedType,
     pub actual_type: ActualType,
     pub field_path: Path,
+    pub additional_error_detail: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +138,7 @@ impl TypeMismatchError {
             expected_type: ExpectedType::AnalysedType(expected_type),
             actual_type: ActualType::Inferred(actual_type),
             field_path: Path::default(),
+            additional_error_detail: Vec::new(),
         }
     }
 
@@ -152,6 +154,7 @@ impl TypeMismatchError {
             expected_type: ExpectedType::AnalysedType(expected_type),
             actual_type: ActualType::Kind(actual_type.clone()),
             field_path: Path::default(),
+            additional_error_detail: Vec::new(),
         }
     }
 }

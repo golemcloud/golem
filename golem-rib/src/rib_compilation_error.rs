@@ -8,7 +8,7 @@ use crate::{
 use std::fmt;
 use std::fmt::Display;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RibCompilationError {
     pub cause: String,
     pub expr: Expr,
@@ -116,7 +116,7 @@ impl From<TypeMismatchError> for RibCompilationError {
             cause,
             expr: value.expr_with_wrong_type,
             immediate_parent: value.parent_expr,
-            additional_error_details: vec![],
+            additional_error_details: value.additional_error_detail,
             help_messages: vec![],
         }
     }

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredType};
+use crate::rib_compilation_error::RibCompilationError;
+use crate::{CustomError, Expr, InferredType};
 use std::collections::VecDeque;
 
 // Initialize a queue with all expr in the tree, with the root node first:
@@ -47,7 +48,7 @@ use std::collections::VecDeque;
 //
 // At the end of this process, each expression has an assigned
 // inferred type, created by traversing in a queue and stack order.
-pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
+pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
@@ -73,7 +74,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
 
             Expr::InvokeMethodLazy { lhs, method, .. } => {
                 let lhs = lhs.to_string();
-                return Err(format!("invalid method invocation `{}.{}`. Make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs));
+                return Err(CustomError {
+                    expr: expr.clone(),
+                    help_message: vec![],
+                    message: format!("invalid method invocation `{}.{}`. make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs),
+                }.into());
             }
 
             Expr::SelectField {
@@ -575,19 +580,29 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
         }
     }
 
-    inferred_type_stack
-        .pop_front()
-        .ok_or("Failed type inference during pull up".to_string())
+    inferred_type_stack.pop_front().ok_or(
+        CustomError {
+            expr: expr.clone(),
+            message: "could not infer type".to_string(),
+            help_message: vec![],
+        }
+        .into(),
+    )
 }
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
+    use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
+    use crate::type_inference::kind::TypeKind;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
-    use crate::{Expr, InferredType, MatchArm, TypeName, VariableId};
+    use crate::{
+        ActualType, ExpectedType, Expr, InferredType, MatchArm, TypeMismatchError, TypeName,
+        VariableId,
+    };
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -699,13 +714,16 @@ mod internal {
         current_field_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
-    ) -> Result<(), String> {
+    ) -> Result<(), RibCompilationError> {
         let expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
         let select_from_expr_type = expr.inferred_type();
-        let selection_field_type =
-            get_inferred_type_of_selected_field(field, &select_from_expr_type)?;
+        let selection_field_type = get_inferred_type_of_selected_field(
+            original_selection_expr,
+            field,
+            &select_from_expr_type,
+        )?;
 
         let new_select_field = Expr::select_field(expr.clone(), field, None)
             .with_inferred_type(current_field_type.merge(selection_field_type))
@@ -722,13 +740,16 @@ mod internal {
         current_index_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
-    ) -> Result<(), String> {
+    ) -> Result<(), RibCompilationError> {
         let expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
         let inferred_type_of_selection_expr = expr.inferred_type();
-        let list_type =
-            get_inferred_type_of_selection_index(*index, &inferred_type_of_selection_expr)?;
+        let list_type = get_inferred_type_of_selection_index(
+            original_selection_expr,
+            *index,
+            &inferred_type_of_selection_expr,
+        )?;
         let new_select_index = Expr::select_index(expr.clone(), *index)
             .with_inferred_type(current_index_type.merge(list_type))
             .with_source_span(source_span.clone());
@@ -1296,25 +1317,45 @@ mod internal {
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
+        original_selection_expr: &Expr,
         select_field: &str,
         select_from_type: &InferredType,
-    ) -> Result<InferredType, String> {
-        let refined_record = RecordType::refine(select_from_type).ok_or(format!(
-            "Cannot select {} since it is not a record type. Found: {:?}",
-            select_field, select_from_type
-        ))?;
+    ) -> Result<InferredType, RibCompilationError> {
+        let refined_record = RecordType::refine(select_from_type).ok_or({
+            TypeMismatchError {
+                expr_with_wrong_type: original_selection_expr.clone(),
+                parent_expr: None,
+                expected_type: ExpectedType::Kind(TypeKind::Record),
+                actual_type: ActualType::Inferred(select_from_type.clone()),
+                field_path: Default::default(),
+                additional_error_detail: vec![format!(
+                    "Cannot select {} since it is not a record type. Found: {:?}",
+                    select_field, select_from_type
+                )],
+            }
+        })?;
 
         Ok(refined_record.inner_type_by_name(select_field))
     }
 
     pub(crate) fn get_inferred_type_of_selection_index(
+        original_selection_expr: &Expr,
         selected_index: usize,
         select_from_type: &InferredType,
-    ) -> Result<InferredType, String> {
-        let refined_list = ListType::refine(select_from_type).ok_or(format!(
-            "Cannot get index {} since it is not a list type. Found: {:?}",
-            selected_index, select_from_type
-        ))?;
+    ) -> Result<InferredType, RibCompilationError> {
+        let refined_list = ListType::refine(select_from_type).ok_or({
+            TypeMismatchError {
+                expr_with_wrong_type: original_selection_expr.clone(),
+                parent_expr: None,
+                expected_type: ExpectedType::Kind(TypeKind::List),
+                actual_type: ActualType::Inferred(select_from_type.clone()),
+                field_path: Default::default(),
+                additional_error_detail: vec![format!(
+                    "Cannot get index {} since it is not a list type. Found: {:?}",
+                    selected_index, select_from_type
+                )],
+            }
+        })?;
 
         Ok(refined_list.inner_type())
     }
@@ -1622,7 +1663,7 @@ mod type_pull_up_tests {
         let function_registry = FunctionTypeRegistry::empty();
         expr.infer_types_initial_phase(&function_registry, &vec![])
             .unwrap();
-        expr.infer_all_identifiers().unwrap();
+        expr.infer_all_identifiers();
         let new_expr = expr.pull_types_up().unwrap();
 
         let expected = Expr::expr_block(vec![
