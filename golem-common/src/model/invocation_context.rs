@@ -22,8 +22,7 @@ use serde::de::Error;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -154,14 +153,14 @@ impl InvocationContextSpan {
         Self::new(span_id)
     }
 
-    pub async fn get_attribute(&self, key: &str, inherit: bool) -> Option<AttributeValue> {
+    pub fn get_attribute(&self, key: &str, inherit: bool) -> Option<AttributeValue> {
         let mut current = self;
         loop {
             match &current {
                 Self::Local {
                     attributes, parent, ..
                 } => {
-                    let attributes = attributes.read().await;
+                    let attributes = attributes.read().unwrap();
                     match attributes.get(key) {
                         Some(value) => break Some(value.clone()),
                         None => {
@@ -183,7 +182,7 @@ impl InvocationContextSpan {
         }
     }
 
-    pub async fn get_attribute_chain(&self, key: &str) -> Option<Vec<AttributeValue>> {
+    pub fn get_attribute_chain(&self, key: &str) -> Option<Vec<AttributeValue>> {
         let mut current = self;
         let mut result = Vec::new();
         loop {
@@ -191,7 +190,7 @@ impl InvocationContextSpan {
                 Self::Local {
                     attributes, parent, ..
                 } => {
-                    let attributes = attributes.read().await;
+                    let attributes = attributes.read().unwrap();
                     match attributes.get(key) {
                         Some(value) => result.push(value.clone()),
                         None => match parent.as_ref() {
@@ -219,7 +218,7 @@ impl InvocationContextSpan {
         }
     }
 
-    pub async fn get_attributes(&self, inherit: bool) -> HashMap<String, Vec<AttributeValue>> {
+    pub fn get_attributes(&self, inherit: bool) -> HashMap<String, Vec<AttributeValue>> {
         let mut current = self;
         let mut result = HashMap::new();
         loop {
@@ -227,7 +226,7 @@ impl InvocationContextSpan {
                 Self::Local {
                     attributes, parent, ..
                 } => {
-                    let attributes = attributes.read().await;
+                    let attributes = attributes.read().unwrap();
                     for (key, value) in attributes.iter() {
                         result
                             .entry(key.clone())
@@ -250,10 +249,10 @@ impl InvocationContextSpan {
         }
     }
 
-    pub async fn set_attribute(&self, key: String, value: AttributeValue) {
+    pub fn set_attribute(&self, key: String, value: AttributeValue) {
         match self {
             Self::Local { attributes, .. } => {
-                attributes.write().await.insert(key, value);
+                attributes.write().unwrap().insert(key, value);
             }
             _ => {
                 panic!("Cannot set attribute on external parent span")
@@ -282,7 +281,7 @@ impl PartialEq for InvocationContextSpan {
                 span_id1 == span_id2
                     && start1 == start2
                     && parent1 == parent2
-                    && *attributes1.blocking_read() == *attributes2.blocking_read()
+                    && *attributes1.read().unwrap() == *attributes2.read().unwrap()
             }
             (
                 Self::ExternalParent { span_id: span_id1 },
@@ -306,7 +305,7 @@ impl Encode for InvocationContextSpan {
                 span_id.encode(encoder)?;
                 start.encode(encoder)?;
                 parent.encode(encoder)?;
-                attributes.blocking_read().encode(encoder)
+                attributes.read().unwrap().encode(encoder)
             }
             Self::ExternalParent { span_id } => {
                 1u8.encode(encoder)?;
@@ -451,7 +450,7 @@ mod protobuf {
     use std::collections::HashMap;
     use std::num::NonZeroU64;
     use std::sync::Arc;
-    use tokio::sync::RwLock;
+    use std::sync::RwLock;
 
     impl From<AttributeValue> for golem_api_grpc::proto::golem::worker::AttributeValue {
         fn from(value: AttributeValue) -> Self {
@@ -493,7 +492,7 @@ mod protobuf {
                     start,
                     ..
                 } => {
-                    let value_attributes = attributes.blocking_read();
+                    let value_attributes = attributes.read().unwrap();
                     let mut attributes = HashMap::new();
                     for (key, value) in &*value_attributes {
                         attributes.insert(key.clone(), value.clone().into());

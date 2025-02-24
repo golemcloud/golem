@@ -498,8 +498,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &mut invocation_context,
             &idempotency_key,
             full_function_name,
-        )
-        .await;
+        );
 
         self.store
             .data_mut()
@@ -846,30 +845,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Extends the invocation context with a new span containing information about the invocation
-    async fn extend_invocation_context(
+    fn extend_invocation_context(
         invocation_context: &mut InvocationContextStack,
         idempotency_key: &IdempotencyKey,
         full_function_name: &str,
     ) {
         let invocation_span = InvocationContextSpan::new(None);
-        invocation_span
-            .set_attribute(
-                "name".to_string(),
-                AttributeValue::String("invoke-exported-function".to_string()),
-            )
-            .await;
-        invocation_span
-            .set_attribute(
-                "idempotency_key".to_string(),
-                AttributeValue::String(idempotency_key.to_string()),
-            )
-            .await;
-        invocation_span
-            .set_attribute(
-                "function_name".to_string(),
-                AttributeValue::String(full_function_name.to_string()),
-            )
-            .await;
+        invocation_span.set_attribute(
+            "name".to_string(),
+            AttributeValue::String("invoke-exported-function".to_string()),
+        );
+        invocation_span.set_attribute(
+            "idempotency_key".to_string(),
+            AttributeValue::String(idempotency_key.to_string()),
+        );
+        invocation_span.set_attribute(
+            "function_name".to_string(),
+            AttributeValue::String(full_function_name.to_string()),
+        );
         invocation_context.push(invocation_span);
     }
 }

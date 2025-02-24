@@ -423,42 +423,42 @@ impl InvocationContext {
         Ok(parent_id)
     }
 
-    pub async fn get_attribute(
+    pub fn get_attribute(
         &self,
         span_id: &SpanId,
         key: &str,
         inherit: bool,
     ) -> Result<Option<AttributeValue>, String> {
         let span = self.span(span_id)?;
-        Ok(span.get_attribute(key, inherit).await)
+        Ok(span.get_attribute(key, inherit))
     }
 
-    pub async fn get_attribute_chain(
+    pub fn get_attribute_chain(
         &self,
         span_id: &SpanId,
         key: &str,
     ) -> Result<Option<Vec<AttributeValue>>, String> {
         let span = self.span(span_id)?;
-        Ok(span.get_attribute_chain(key).await)
+        Ok(span.get_attribute_chain(key))
     }
 
-    pub async fn get_attributes(
+    pub fn get_attributes(
         &self,
         span_id: &SpanId,
         inherit: bool,
     ) -> Result<HashMap<String, Vec<AttributeValue>>, String> {
         let span = self.span(span_id)?;
-        Ok(span.get_attributes(inherit).await)
+        Ok(span.get_attributes(inherit))
     }
 
-    pub async fn set_attribute(
+    pub fn set_attribute(
         &self,
         span_id: &SpanId,
         key: String,
         value: AttributeValue,
     ) -> Result<(), String> {
         let span = self.span(span_id)?;
-        span.set_attribute(key, value).await;
+        span.set_attribute(key, value);
         Ok(())
     }
 

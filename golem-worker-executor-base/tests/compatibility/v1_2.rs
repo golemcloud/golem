@@ -51,12 +51,10 @@ pub fn oplog_entry() {
 #[test]
 pub async fn timestamped_worker_invocation() {
     let root_span = InvocationContextSpan::new(Some(SpanId(NonZeroU64::new(4567).unwrap())));
-    root_span
-        .set_attribute(
-            "key".to_string(),
-            AttributeValue::String("value".to_string()),
-        )
-        .await;
+    root_span.set_attribute(
+        "key".to_string(),
+        AttributeValue::String("value".to_string()),
+    );
     let invocation_context = InvocationContextStack::new(
         TraceId(NonZeroU128::new(1234).unwrap()),
         root_span,
