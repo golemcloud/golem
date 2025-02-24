@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_compilation_error::RibCompilationError;
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibError};
 use golem_wasm_ast::analysis::AnalysedType;
 

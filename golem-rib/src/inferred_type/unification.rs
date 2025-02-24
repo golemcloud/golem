@@ -702,7 +702,7 @@ pub fn unify_with_required(
 
 mod internal {
     use crate::inferred_type::unification::Unified;
-    use crate::{InferredType, TypeName};
+    use crate::InferredType;
     use std::collections::HashMap;
 
     pub(crate) fn sort_and_convert(

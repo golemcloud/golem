@@ -323,8 +323,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                                 errors.push(
                                     UnResolvedTypesError::from(&expr_copied, None)
                                         .with_additional_error_detail(&format!(
-                                            "cannot determine the type of function return: {}",
-                                            e
+                                            "cannot determine the return type of function {}: {}",
+                                            function_name, e
                                         )),
                                 );
                             }

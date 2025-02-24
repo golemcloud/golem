@@ -22,9 +22,7 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_compilation_error::RibCompilationError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{
-    CustomError, Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo,
-};
+use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
 
 mod byte_code;
 mod compiler_output;
