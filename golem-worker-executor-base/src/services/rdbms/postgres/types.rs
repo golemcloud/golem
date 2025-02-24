@@ -807,7 +807,7 @@ impl AnalysedTypeMerger for Range {
                     if fc.name == "value" {
                         let f = get_value_type(fc.typ.clone());
                         let s = get_value_type(sc.typ);
-                        let t = DbColumnType::merge_types_opt(f, s);
+                        let t = DbValue::merge_types_opt(f, s);
 
                         if let Some(t) = t {
                             fields.push(analysed_type::field(
@@ -1140,7 +1140,7 @@ impl AnalysedTypeMerger for DbColumnType {
                         let t = DomainType::merge_types_opt(fc.typ, sc.typ);
                         cases.push(analysed_type::opt_case(fc.name.as_str(), t));
                     } else if fc.name == "array" {
-                        let t = <Vec<DbColumnType>>::merge_types_opt(fc.typ, sc.typ);
+                        let t = DbColumnType::merge_types_opt(fc.typ, sc.typ);
                         cases.push(analysed_type::opt_case(fc.name.as_str(), t));
                     } else {
                         cases.push(fc);
@@ -1651,7 +1651,7 @@ impl AnalysedTypeMerger for DbColumn {
 #[cfg(test)]
 pub mod tests {
     use crate::services::rdbms::postgres::{types as postgres_types, PostgresType};
-    use crate::services::rdbms::{DbResult, DbRow, RdbmsIntoValueAndType};
+    use crate::services::rdbms::{AnalysedTypeMerger, DbResult, DbRow, RdbmsIntoValueAndType};
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bincode::{Decode, Encode};
@@ -1660,27 +1660,48 @@ pub mod tests {
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
-    use std::fmt::Debug;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use test_r::test;
     use uuid::Uuid;
 
-    fn check_value<T: RdbmsIntoValueAndType + Encode + Decode + Clone + PartialEq + Debug>(
-        value: T,
-    ) {
+    fn check_bincode<T: Encode + Decode + PartialEq>(value: T) {
         let bin_value = serialize(&value).unwrap().to_vec();
         let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
         check!(value2.unwrap() == value);
+    }
 
-        let value_and_type = value.clone().into_value_and_type();
+    fn check_type_and_value<T: RdbmsIntoValueAndType>(value: T) {
+        let value_and_type = value.into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
-
-        if value_and_type_json.is_err() {
-            println!("VALUE:  {:?}", value);
-        }
         check!(value_and_type_json.is_ok());
+    }
 
-        // println!("{}", value_and_type_json.unwrap());
+    fn check_type_merge<T: RdbmsIntoValueAndType + AnalysedTypeMerger>(
+        value1: T,
+        value2: T,
+        expected: T,
+    ) {
+        let vt1 = value1.into_value_and_type();
+        let vt2 = value2.into_value_and_type();
+
+        let vt_merged = T::merge_types(vt1.typ, vt2.typ);
+        let vt_merged_json = serde_json::to_string(&vt_merged);
+
+        let vt_expected = expected.into_value_and_type();
+        let vt_expected_json = serde_json::to_string(&vt_expected);
+
+        check!(vt_merged == vt_expected.typ);
+        check!(vt_merged_json.is_ok());
+        check!(vt_expected_json.is_ok());
+    }
+
+    #[test]
+    fn test_db_value_analysed_type_merge() {
+        for (value1, value2, value) in get_test_db_values_values() {
+            check_type_merge(value1.clone(), value2.clone(), value.clone());
+            check_type_merge(value2.clone(), value1.clone(), value.clone());
+            check_type_merge(value1.clone(), value1.clone(), value1.clone());
+        }
     }
 
     #[test]
@@ -1688,7 +1709,8 @@ pub mod tests {
         let values = get_test_db_values();
 
         for value in values {
-            check_value(value);
+            check_bincode(value.clone());
+            check_type_and_value(value);
         }
     }
 
@@ -1697,7 +1719,8 @@ pub mod tests {
         let values = get_test_db_column_types();
 
         for value in values {
-            check_value(value);
+            check_bincode(value.clone());
+            check_type_and_value(value);
         }
     }
 
@@ -1710,7 +1733,182 @@ pub mod tests {
             }],
         );
 
-        check_value(value);
+        check_bincode(value.clone());
+        check_type_and_value(value);
+    }
+
+    #[test]
+    fn test_db_column_type_analysed_type_merge() {
+        for (value1, value2, value) in get_test_db_column_types_values() {
+            check_type_merge(value1.clone(), value2.clone(), value.clone());
+            check_type_merge(value2.clone(), value1.clone(), value.clone());
+            check_type_merge(value1.clone(), value1.clone(), value1.clone());
+        }
+    }
+
+    fn get_test_db_values_values() -> Vec<(
+        postgres_types::DbValue,
+        postgres_types::DbValue,
+        postgres_types::DbValue,
+    )> {
+        let mut values: Vec<(
+            postgres_types::DbValue,
+            postgres_types::DbValue,
+            postgres_types::DbValue,
+        )> = vec![];
+
+        let value1 = postgres_types::DbValue::Composite(postgres_types::Composite::new(
+            "ccc1".to_string(),
+            vec![
+                postgres_types::DbValue::Int2(3),
+                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    "ddd".to_string(),
+                    postgres_types::DbValue::Varchar("v31".to_string()),
+                )),
+                postgres_types::DbValue::Range(postgres_types::Range::new(
+                    "a_custom_type_range".to_string(),
+                    postgres_types::ValuesRange::new(
+                        Bound::Included(postgres_types::DbValue::Composite(
+                            postgres_types::Composite::new(
+                                "a_custom_type".to_string(),
+                                vec![postgres_types::DbValue::Int4(22)],
+                            ),
+                        )),
+                        Bound::Unbounded,
+                    ),
+                )),
+            ],
+        ));
+
+        let value2 = postgres_types::DbValue::Composite(postgres_types::Composite::new(
+            "ccc2".to_string(),
+            vec![
+                postgres_types::DbValue::Varchar("v3".to_string()),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
+                    postgres_types::Domain::new(
+                        "ddd".to_string(),
+                        postgres_types::DbValue::Varchar("v31".to_string()),
+                    ),
+                )]),
+            ],
+        ));
+
+        let value = postgres_types::DbValue::Composite(postgres_types::Composite::new(
+            "ccc1".to_string(),
+            vec![
+                postgres_types::DbValue::Varchar("v3".to_string()),
+                postgres_types::DbValue::Int2(3),
+                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    "ddd".to_string(),
+                    postgres_types::DbValue::Varchar("v31".to_string()),
+                )),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
+                    postgres_types::Domain::new(
+                        "ddd".to_string(),
+                        postgres_types::DbValue::Varchar("v31".to_string()),
+                    ),
+                )]),
+                postgres_types::DbValue::Range(postgres_types::Range::new(
+                    "a_custom_type_range".to_string(),
+                    postgres_types::ValuesRange::new(
+                        Bound::Included(postgres_types::DbValue::Composite(
+                            postgres_types::Composite::new(
+                                "a_custom_type".to_string(),
+                                vec![postgres_types::DbValue::Int4(22)],
+                            ),
+                        )),
+                        Bound::Unbounded,
+                    ),
+                )),
+            ],
+        ));
+
+        values.push((value1.clone(), value2.clone(), value.clone()));
+
+        let value1 = postgres_types::DbValue::Array(vec![value1]);
+        let value2 = postgres_types::DbValue::Array(vec![value2]);
+        let value = postgres_types::DbValue::Array(vec![value]);
+
+        values.push((value1.clone(), value2.clone(), value.clone()));
+
+        values
+    }
+
+    fn get_test_db_column_types_values() -> Vec<(
+        postgres_types::DbColumnType,
+        postgres_types::DbColumnType,
+        postgres_types::DbColumnType,
+    )> {
+        let mut values: Vec<(
+            postgres_types::DbColumnType,
+            postgres_types::DbColumnType,
+            postgres_types::DbColumnType,
+        )> = vec![];
+
+        let value1 = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+            "item1".to_string(),
+            vec![
+                ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
+                ("name".to_string(), postgres_types::DbColumnType::Text),
+                (
+                    "tags".to_string(),
+                    postgres_types::DbColumnType::Text.into_array(),
+                ),
+                (
+                    "supplier_id".to_string(),
+                    postgres_types::DbColumnType::Int4,
+                ),
+            ],
+        ));
+
+        let value2 = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+            "item2".to_string(),
+            vec![
+                ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
+                ("name".to_string(), postgres_types::DbColumnType::Text),
+                (
+                    "interval".to_string(),
+                    postgres_types::DbColumnType::Range(postgres_types::RangeType::new(
+                        "float4range".to_string(),
+                        postgres_types::DbColumnType::Float4,
+                    )),
+                ),
+            ],
+        ));
+
+        let expected = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+            "item3".to_string(),
+            vec![
+                ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
+                ("name".to_string(), postgres_types::DbColumnType::Text),
+                (
+                    "supplier_id".to_string(),
+                    postgres_types::DbColumnType::Int4,
+                ),
+                ("price".to_string(), postgres_types::DbColumnType::Numeric),
+                (
+                    "tags".to_string(),
+                    postgres_types::DbColumnType::Text.into_array(),
+                ),
+                (
+                    "interval".to_string(),
+                    postgres_types::DbColumnType::Range(postgres_types::RangeType::new(
+                        "float4range".to_string(),
+                        postgres_types::DbColumnType::Float4,
+                    )),
+                ),
+            ],
+        ));
+
+        values.push((value1.clone(), value2.clone(), expected.clone()));
+
+        values.push((
+            value1.into_array(),
+            value2.into_array(),
+            expected.into_array(),
+        ));
+
+        values
     }
 
     pub(crate) fn get_test_db_columns() -> Vec<postgres_types::DbColumn> {

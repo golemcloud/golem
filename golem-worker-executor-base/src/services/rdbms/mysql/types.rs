@@ -655,39 +655,35 @@ pub mod tests {
     use bit_vec::BitVec;
     use golem_common::serialization::{serialize, try_deserialize};
     use serde_json::json;
-    use std::fmt::Debug;
     use std::str::FromStr;
     use test_r::test;
     use uuid::Uuid;
 
-    fn check_value<T: RdbmsIntoValueAndType + Encode + Decode + Clone + PartialEq + Debug>(
-        value: T,
-    ) {
+    fn check_bincode<T: Encode + Decode + PartialEq>(value: T) {
         let bin_value = serialize(&value).unwrap().to_vec();
         let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
         check!(value2.unwrap() == value);
+    }
 
-        let value_and_type = value.clone().into_value_and_type();
+    fn check_type_and_value<T: RdbmsIntoValueAndType>(value: T) {
+        let value_and_type = value.into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
-
-        if value_and_type_json.is_err() {
-            println!("VALUE:  {:?}", value);
-        }
         check!(value_and_type_json.is_ok());
-        // println!("{}", value_and_type_json.unwrap());
     }
 
     #[test]
     fn test_db_values_conversions() {
         for value in get_test_db_values() {
-            check_value(value);
+            check_bincode(value.clone());
+            check_type_and_value(value);
         }
     }
 
     #[test]
     fn test_db_column_types_conversions() {
         for value in get_test_db_column_types() {
-            check_value(value);
+            check_bincode(value.clone());
+            check_type_and_value(value);
         }
     }
 
@@ -700,7 +696,8 @@ pub mod tests {
             }],
         );
 
-        check_value(value);
+        check_bincode(value.clone());
+        check_type_and_value(value);
     }
 
     pub(crate) fn get_test_db_columns() -> Vec<mysql_types::DbColumn> {
