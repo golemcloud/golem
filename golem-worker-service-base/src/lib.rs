@@ -30,6 +30,7 @@ pub mod gateway_security;
 pub mod getter;
 pub mod grpcapi;
 mod headers;
+pub mod http_invocation_context;
 pub mod metrics;
 pub mod path;
 pub mod repo;

@@ -373,7 +373,7 @@ impl InvocationContext {
         let trace_id = trace_id.unwrap_or(TraceId::generate());
         let root = InvocationContextSpan::new(None);
         let mut spans = HashMap::new();
-        spans.insert(root.span_id.clone(), root.clone());
+        spans.insert(root.span_id().clone(), root.clone());
         Self {
             trace_id,
             spans,
@@ -384,11 +384,11 @@ impl InvocationContext {
 
     pub fn from_stack(value: InvocationContextStack) -> Result<(Self, SpanId), String> {
         let root = value.spans.last().clone();
-        let current_span_id = value.spans.first().span_id.clone();
+        let current_span_id = value.spans.first().span_id().clone();
 
         let mut spans = HashMap::new();
         for span in value.spans {
-            spans.insert(span.span_id.clone(), span);
+            spans.insert(span.span_id().clone(), span);
         }
 
         Ok((
@@ -409,13 +409,16 @@ impl InvocationContext {
     ) -> Result<Arc<InvocationContextSpan>, String> {
         let current_span = self.span(current_span_id)?;
         let span = current_span.start_span(new_span_id);
-        self.spans.insert(span.span_id.clone(), span.clone());
+        self.spans.insert(span.span_id().clone(), span.clone());
         Ok(span)
     }
 
     pub fn finish_span(&mut self, span_id: &SpanId) -> Result<Option<SpanId>, String> {
         let span = self.span(span_id)?;
-        let parent_id = span.parent.as_ref().map(|parent| parent.span_id.clone());
+        let parent_id = span
+            .parent()
+            .as_ref()
+            .map(|parent| parent.span_id().clone());
         self.spans.remove(span_id);
         Ok(parent_id)
     }
@@ -464,7 +467,7 @@ impl InvocationContext {
         let mut current = self.span(current_span_id).unwrap();
         loop {
             result.push(current.clone());
-            match current.parent.as_ref() {
+            match current.parent().as_ref() {
                 Some(parent) => {
                     current = parent;
                 }

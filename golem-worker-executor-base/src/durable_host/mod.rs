@@ -1288,7 +1288,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 match oplog_entry {
                     Err(error) => break Err(error),
                     Ok(None) => break Ok(RetryDecision::None),
-                    Ok(Some((function_name, function_input, idempotency_key))) => {
+                    Ok(Some((
+                        function_name,
+                        function_input,
+                        idempotency_key,
+                        invocation_context,
+                    ))) => {
                         debug!("Replaying function {function_name}");
                         let span = span!(Level::INFO, "replaying", function = function_name);
                         store
@@ -1296,7 +1301,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .data_mut()
                             .set_current_idempotency_key(idempotency_key)
                             .await;
-                        // TODO: set current invocation context (stored one)
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .set_current_invocation_context(invocation_context)
+                            .await?;
 
                         let full_function_name = function_name.to_string();
                         let invoke_result = invoke_worker(
@@ -1916,7 +1925,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         )
         .await;
         let invocation_context = InvocationContext::new(None);
-        let current_span_id = invocation_context.root.span_id.clone();
+        let current_span_id = invocation_context.root.span_id().clone();
         Self {
             oplog_service,
             oplog: oplog.clone(),

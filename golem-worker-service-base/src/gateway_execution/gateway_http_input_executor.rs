@@ -35,6 +35,7 @@ use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay
 use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
+use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -368,39 +369,48 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 .map(|value| IdempotencyKey::new(value.to_string()))
         };
 
-        let trace_context_headers = TraceContextHeaders::parse(request.underlying.headers());
-        let (trace_id_from_headers, span_id_from_headers, trace_states) =
-            match trace_context_headers {
-                Some(ctx) => (Some(ctx.trace_id), Some(ctx.parent_id), ctx.trace_states),
-                None => (None, None, Vec::new()),
-            };
+        let invocation_context = if let Some(invocation_context_compiled) =
+            invocation_context_compiled
+        {
+            let request_attributes = extract_request_attributes(&request.underlying);
 
-        let request_attributes = extract_request_attributes(&request.underlying);
+            let (user_defined_trace_id, user_defined_span) = self
+                .evaluate_invocation_context_rib_script(
+                    invocation_context_compiled,
+                    request_value,
+                    request_attributes,
+                )
+                .await?;
 
-        // TODO: We should not create a new span with the span id from the headers. Instead, introduce a new kind of span which can be in the root and is read-only and does not have 'start'? Or just introduce an optional parent span field?
+            let trace_context_headers = TraceContextHeaders::parse(request.underlying.headers());
 
-        let invocation_context =
-            if let Some(invocation_context_compiled) = invocation_context_compiled {
-                let (user_defined_trace_id, user_defined_span) = self
-                    .evaluate_invocation_context_rib_script(
-                        invocation_context_compiled,
-                        request_value,
-                        request_attributes,
+            match (trace_context_headers, &user_defined_trace_id) {
+                (Some(ctx), None) => {
+                    // Trace context found in headers and not overridden, starting a new span in it
+                    let mut ctx = InvocationContextStack::new(
+                        ctx.trace_id,
+                        InvocationContextSpan::external_parent(ctx.parent_id),
+                        ctx.trace_states,
+                    );
+                    ctx.push(user_defined_span);
+                    ctx
+                }
+                (_, Some(trace_id)) => {
+                    // Forced a new trace, ignoring the trace context in the headers
+                    InvocationContextStack::new(trace_id.clone(), user_defined_span, Vec::new())
+                }
+                (None, _) => {
+                    // No trace context in headers, starting a new trace
+                    InvocationContextStack::new(
+                        user_defined_trace_id.unwrap_or_else(TraceId::generate),
+                        user_defined_span,
+                        Vec::new(),
                     )
-                    .await?;
-                InvocationContextStack::new(
-                    user_defined_trace_id
-                        .unwrap_or(trace_id_from_headers.unwrap_or(TraceId::generate())),
-                    user_defined_span,
-                    trace_states,
-                )
-            } else {
-                InvocationContextStack::new(
-                    trace_id_from_headers.unwrap_or(TraceId::generate()),
-                    InvocationContextSpan::new(span_id_from_headers),
-                    trace_states,
-                )
-            };
+                }
+            }
+        } else {
+            invocation_context_from_request(&request.underlying)
+        };
 
         Ok(WorkerDetail {
             component_id: component_id.clone(),
@@ -667,23 +677,4 @@ fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue>
             "Invocation context values must be string".to_string(),
         )),
     }
-}
-
-fn extract_request_attributes(request: &poem::Request) -> HashMap<String, AttributeValue> {
-    let mut result = HashMap::new();
-
-    result.insert(
-        "request.method".to_string(),
-        AttributeValue::String(request.method().to_string()),
-    );
-    result.insert(
-        "request.uri".to_string(),
-        AttributeValue::String(request.uri().to_string()),
-    );
-    result.insert(
-        "request.remote_addr".to_string(),
-        AttributeValue::String(request.remote_addr().to_string()),
-    );
-
-    result
 }

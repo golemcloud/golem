@@ -26,7 +26,9 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack,
+};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -482,20 +484,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// invocation.
     async fn invoke_exported_function_with_context(
         &mut self,
-        invocation_context: InvocationContextStack,
+        mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
         full_function_name: &str,
         function_input: &[Value],
     ) -> Result<InvokeResult, GolemError> {
         self.store
             .data_mut()
-            .set_current_idempotency_key(idempotency_key)
+            .set_current_idempotency_key(idempotency_key.clone())
             .await;
+
+        Self::extend_invocation_context(
+            &mut invocation_context,
+            &idempotency_key,
+            full_function_name,
+        )
+        .await;
+
         self.store
             .data_mut()
             .set_current_invocation_context(invocation_context)
             .await?;
-        // TODO: create new span for the invocation
 
         if let Some(idempotency_key) = self.store.data().get_current_idempotency_key().await {
             self.store
@@ -834,6 +843,34 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         } else {
             None
         }
+    }
+
+    /// Extends the invocation context with a new span containing information about the invocation
+    async fn extend_invocation_context(
+        invocation_context: &mut InvocationContextStack,
+        idempotency_key: &IdempotencyKey,
+        full_function_name: &str,
+    ) {
+        let invocation_span = InvocationContextSpan::new(None);
+        invocation_span
+            .set_attribute(
+                "name".to_string(),
+                AttributeValue::String("invoke-exported-function".to_string()),
+            )
+            .await;
+        invocation_span
+            .set_attribute(
+                "idempotency_key".to_string(),
+                AttributeValue::String(idempotency_key.to_string()),
+            )
+            .await;
+        invocation_span
+            .set_attribute(
+                "function_name".to_string(),
+                AttributeValue::String(full_function_name.to_string()),
+            )
+            .await;
+        invocation_context.push(invocation_span);
     }
 }
 

@@ -82,7 +82,7 @@ impl TraceContextHeaders {
         Self {
             version: 0,
             trace_id: invocation_context.trace_id,
-            parent_id: invocation_context.spans.first().span_id.clone(),
+            parent_id: invocation_context.spans.first().span_id().clone(),
             trace_flags: TraceFlags::empty(),
             trace_states: invocation_context.trace_states,
         }

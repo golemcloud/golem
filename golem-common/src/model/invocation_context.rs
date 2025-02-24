@@ -96,17 +96,22 @@ pub enum AttributeValue {
 }
 
 #[derive(Debug)]
-pub struct InvocationContextSpan {
-    pub span_id: SpanId,
-    pub parent: Option<Arc<InvocationContextSpan>>,
-    pub start: Timestamp,
-    attributes: RwLock<HashMap<String, AttributeValue>>,
+pub enum InvocationContextSpan {
+    Local {
+        span_id: SpanId,
+        parent: Option<Arc<InvocationContextSpan>>,
+        start: Timestamp,
+        attributes: RwLock<HashMap<String, AttributeValue>>,
+    },
+    ExternalParent {
+        span_id: SpanId,
+    },
 }
 
 impl InvocationContextSpan {
     pub fn new(span_id: Option<SpanId>) -> Arc<Self> {
         let span_id = span_id.unwrap_or(SpanId::generate());
-        Arc::new(Self {
+        Arc::new(Self::Local {
             span_id,
             parent: None,
             start: Timestamp::now_utc(),
@@ -114,17 +119,35 @@ impl InvocationContextSpan {
         })
     }
 
+    pub fn external_parent(span_id: SpanId) -> Arc<Self> {
+        Arc::new(Self::ExternalParent { span_id })
+    }
+
     pub fn new_with_attributes(
         span_id: Option<SpanId>,
         attributes: HashMap<String, AttributeValue>,
     ) -> Arc<Self> {
         let span_id = span_id.unwrap_or(SpanId::generate());
-        Arc::new(Self {
+        Arc::new(Self::Local {
             span_id,
             parent: None,
             start: Timestamp::now_utc(),
             attributes: RwLock::new(attributes),
         })
+    }
+
+    pub fn span_id(&self) -> &SpanId {
+        match self {
+            Self::Local { span_id, .. } => span_id,
+            Self::ExternalParent { span_id } => span_id,
+        }
+    }
+
+    pub fn parent(&self) -> Option<&Arc<Self>> {
+        match self {
+            Self::Local { parent, .. } => parent.as_ref(),
+            Self::ExternalParent { .. } => None,
+        }
     }
 
     pub fn start_span(self: &Arc<Self>, span_id: Option<SpanId>) -> Arc<Self> {
@@ -134,21 +157,28 @@ impl InvocationContextSpan {
     pub async fn get_attribute(&self, key: &str, inherit: bool) -> Option<AttributeValue> {
         let mut current = self;
         loop {
-            let attributes = current.attributes.read().await;
-            match attributes.get(key) {
-                Some(value) => break Some(value.clone()),
-                None => {
-                    if inherit {
-                        match current.parent.as_ref() {
-                            Some(parent) => {
-                                current = parent;
+            match &current {
+                Self::Local {
+                    attributes, parent, ..
+                } => {
+                    let attributes = attributes.read().await;
+                    match attributes.get(key) {
+                        Some(value) => break Some(value.clone()),
+                        None => {
+                            if inherit {
+                                match parent.as_ref() {
+                                    Some(parent) => {
+                                        current = parent;
+                                    }
+                                    None => break None,
+                                }
+                            } else {
+                                break None;
                             }
-                            None => break None,
                         }
-                    } else {
-                        break None;
                     }
                 }
+                _ => break None,
             }
         }
     }
@@ -157,21 +187,34 @@ impl InvocationContextSpan {
         let mut current = self;
         let mut result = Vec::new();
         loop {
-            let attributes = current.attributes.read().await;
-            match attributes.get(key) {
-                Some(value) => result.push(value.clone()),
-                None => match current.parent.as_ref() {
-                    Some(parent) => {
-                        current = parent;
+            match &current {
+                Self::Local {
+                    attributes, parent, ..
+                } => {
+                    let attributes = attributes.read().await;
+                    match attributes.get(key) {
+                        Some(value) => result.push(value.clone()),
+                        None => match parent.as_ref() {
+                            Some(parent) => {
+                                current = parent;
+                            }
+                            None => {
+                                if result.is_empty() {
+                                    break None;
+                                } else {
+                                    break Some(result);
+                                }
+                            }
+                        },
                     }
-                    None => {
-                        if result.is_empty() {
-                            break None;
-                        } else {
-                            break Some(result);
-                        }
+                }
+                _ => {
+                    if result.is_empty() {
+                        break None;
+                    } else {
+                        break Some(result);
                     }
-                },
+                }
             }
         }
     }
@@ -180,76 +223,150 @@ impl InvocationContextSpan {
         let mut current = self;
         let mut result = HashMap::new();
         loop {
-            let attributes = current.attributes.read().await;
-            for (key, value) in attributes.iter() {
-                result
-                    .entry(key.clone())
-                    .or_insert_with(Vec::new)
-                    .push(value.clone());
-            }
-            if inherit {
-                match current.parent.as_ref() {
-                    Some(parent) => {
-                        current = parent;
+            match &current {
+                Self::Local {
+                    attributes, parent, ..
+                } => {
+                    let attributes = attributes.read().await;
+                    for (key, value) in attributes.iter() {
+                        result
+                            .entry(key.clone())
+                            .or_insert_with(Vec::new)
+                            .push(value.clone());
                     }
-                    None => break result,
+                    if inherit {
+                        match parent.as_ref() {
+                            Some(parent) => {
+                                current = parent;
+                            }
+                            None => break result,
+                        }
+                    } else {
+                        break result;
+                    }
                 }
-            } else {
-                break result;
+                _ => break result,
             }
         }
     }
 
     pub async fn set_attribute(&self, key: String, value: AttributeValue) {
-        self.attributes.write().await.insert(key, value);
+        match self {
+            Self::Local { attributes, .. } => {
+                attributes.write().await.insert(key, value);
+            }
+            _ => {
+                panic!("Cannot set attribute on external parent span")
+            }
+        }
     }
 }
 
 impl PartialEq for InvocationContextSpan {
     fn eq(&self, other: &Self) -> bool {
-        self.span_id == other.span_id
-            && self.start == other.start
-            && self.parent == other.parent
-            && *self.attributes.blocking_read() == *other.attributes.blocking_read()
+        match (self, other) {
+            (
+                Self::Local {
+                    span_id: span_id1,
+                    start: start1,
+                    parent: parent1,
+                    attributes: attributes1,
+                },
+                Self::Local {
+                    span_id: span_id2,
+                    start: start2,
+                    parent: parent2,
+                    attributes: attributes2,
+                },
+            ) => {
+                span_id1 == span_id2
+                    && start1 == start2
+                    && parent1 == parent2
+                    && *attributes1.blocking_read() == *attributes2.blocking_read()
+            }
+            (
+                Self::ExternalParent { span_id: span_id1 },
+                Self::ExternalParent { span_id: span_id2 },
+            ) => span_id1 == span_id2,
+            _ => false,
+        }
     }
 }
 
 impl Encode for InvocationContextSpan {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        self.span_id.encode(encoder)?;
-        self.start.encode(encoder)?;
-        self.parent.encode(encoder)?;
-        self.attributes.blocking_read().encode(encoder)
+        match self {
+            Self::Local {
+                span_id,
+                start,
+                parent,
+                attributes,
+            } => {
+                0u8.encode(encoder)?;
+                span_id.encode(encoder)?;
+                start.encode(encoder)?;
+                parent.encode(encoder)?;
+                attributes.blocking_read().encode(encoder)
+            }
+            Self::ExternalParent { span_id } => {
+                1u8.encode(encoder)?;
+                span_id.encode(encoder)
+            }
+        }
     }
 }
 
 impl Decode for InvocationContextSpan {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let span_id = SpanId::decode(decoder)?;
-        let start = Timestamp::decode(decoder)?;
-        let parent = Option::<Arc<InvocationContextSpan>>::decode(decoder)?;
-        let attributes = RwLock::new(HashMap::decode(decoder)?);
-        Ok(Self {
-            span_id,
-            start,
-            parent,
-            attributes,
-        })
+        let tag = u8::decode(decoder)?;
+        match tag {
+            0 => {
+                let span_id = SpanId::decode(decoder)?;
+                let start = Timestamp::decode(decoder)?;
+                let parent = Option::<Arc<InvocationContextSpan>>::decode(decoder)?;
+                let attributes = RwLock::new(HashMap::decode(decoder)?);
+                Ok(Self::Local {
+                    span_id,
+                    start,
+                    parent,
+                    attributes,
+                })
+            }
+            1 => {
+                let span_id = SpanId::decode(decoder)?;
+                Ok(Self::ExternalParent { span_id })
+            }
+            _ => Err(DecodeError::custom(format!(
+                "Invalid tag for InvocationContextSpan: {tag}"
+            ))),
+        }
     }
 }
 
 impl<'de> BorrowDecode<'de> for InvocationContextSpan {
     fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let span_id = SpanId::borrow_decode(decoder)?;
-        let start = Timestamp::borrow_decode(decoder)?;
-        let parent = Option::<Arc<InvocationContextSpan>>::borrow_decode(decoder)?;
-        let attributes = RwLock::new(HashMap::borrow_decode(decoder)?);
-        Ok(Self {
-            span_id,
-            start,
-            parent,
-            attributes,
-        })
+        let tag = u8::borrow_decode(decoder)?;
+        match tag {
+            0 => {
+                let span_id = SpanId::borrow_decode(decoder)?;
+                let start = Timestamp::borrow_decode(decoder)?;
+                let parent = Option::<Arc<InvocationContextSpan>>::borrow_decode(decoder)?;
+                let attributes = RwLock::new(HashMap::borrow_decode(decoder)?);
+                Ok(Self::Local {
+                    span_id,
+                    start,
+                    parent,
+                    attributes,
+                })
+            }
+            1 => {
+                let span_id = SpanId::borrow_decode(decoder)?;
+                Ok(Self::ExternalParent { span_id })
+            }
+            _ => Err(DecodeError::custom(format!(
+                "Invalid tag for InvocationContextSpan: {tag}"
+            ))),
+        }
     }
 }
 
@@ -281,6 +398,10 @@ impl InvocationContextStack {
             spans: NEVec::new(root_span),
             trace_states,
         }
+    }
+
+    pub fn push(&mut self, span: Arc<InvocationContextSpan>) {
+        self.spans.push(span);
     }
 }
 
@@ -365,15 +486,39 @@ mod protobuf {
 
     impl From<&InvocationContextSpan> for golem_api_grpc::proto::golem::worker::InvocationSpan {
         fn from(value: &InvocationContextSpan) -> Self {
-            let value_attributes = value.attributes.blocking_read();
-            let mut attributes = HashMap::new();
-            for (key, value) in &*value_attributes {
-                attributes.insert(key.clone(), value.clone().into());
-            }
-            Self {
-                span_id: value.span_id.0.get(),
-                start: Some(value.start.into()),
-                attributes,
+            match value {
+                InvocationContextSpan::Local {
+                    attributes,
+                    span_id,
+                    start,
+                    ..
+                } => {
+                    let value_attributes = attributes.blocking_read();
+                    let mut attributes = HashMap::new();
+                    for (key, value) in &*value_attributes {
+                        attributes.insert(key.clone(), value.clone().into());
+                    }
+                    Self {
+                        span: Some(
+                            golem_api_grpc::proto::golem::worker::invocation_span::Span::Local(
+                                golem_api_grpc::proto::golem::worker::LocalInvocationSpan {
+                                    span_id: span_id.0.get(),
+                                    start: Some((*start).into()),
+                                    attributes,
+                                },
+                            ),
+                        ),
+                    }
+                }
+                InvocationContextSpan::ExternalParent { span_id } => Self {
+                    span: Some(
+                        golem_api_grpc::proto::golem::worker::invocation_span::Span::ExternalParent(
+                            golem_api_grpc::proto::golem::worker::ExternalParentSpan {
+                                span_id: span_id.0.get(),
+                            },
+                        ),
+                    ),
+                },
             }
         }
     }
@@ -384,22 +529,39 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::worker::InvocationSpan,
         ) -> Result<Self, Self::Error> {
-            let mut attributes = HashMap::new();
-            for (key, value) in value.attributes {
-                attributes.insert(key, value.try_into()?);
+            match value.span {
+                Some(golem_api_grpc::proto::golem::worker::invocation_span::Span::Local(value)) => {
+                    let span_id = SpanId(
+                        NonZeroU64::new(value.span_id)
+                            .ok_or_else(|| "Span ID cannot be 0".to_string())?,
+                    );
+                    let start = value
+                        .start
+                        .ok_or_else(|| "Missing timestamp".to_string())?
+                        .into();
+                    let mut attributes = HashMap::new();
+                    for (key, value) in value.attributes {
+                        attributes.insert(key, value.try_into()?);
+                    }
+                    Ok(Self::Local {
+                        span_id,
+                        parent: None,
+                        start,
+                        attributes: RwLock::new(attributes),
+                    })
+                }
+                Some(
+                    golem_api_grpc::proto::golem::worker::invocation_span::Span::ExternalParent(
+                        value,
+                    ),
+                ) => Ok(Self::ExternalParent {
+                    span_id: SpanId(
+                        NonZeroU64::new(value.span_id)
+                            .ok_or_else(|| "Span ID cannot be 0".to_string())?,
+                    ),
+                }),
+                None => Err("Missing span".to_string()),
             }
-            Ok(Self {
-                span_id: SpanId(
-                    NonZeroU64::new(value.span_id)
-                        .ok_or_else(|| "Span ID cannot be 0".to_string())?,
-                ),
-                start: value
-                    .start
-                    .ok_or_else(|| "Missing timestamp".to_string())?
-                    .into(),
-                attributes: RwLock::new(attributes),
-                parent: None,
-            })
         }
     }
 

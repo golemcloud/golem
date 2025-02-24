@@ -475,7 +475,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                 timestamp,
                 invocation,
             } => {
-                let invocation_context = invocation.invocation_context();
+                let _invocation_context = invocation.invocation_context();
                 let invocation = match invocation {
                     WorkerInvocation::ExportedFunction {
                         idempotency_key,
