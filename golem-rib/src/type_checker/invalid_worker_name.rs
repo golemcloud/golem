@@ -1,5 +1,5 @@
 use crate::call_type::{CallType, InstanceCreationType};
-use crate::Expr;
+use crate::{Expr, InvalidWorkerName};
 use std::collections::VecDeque;
 
 // Capture all worker name and see if they are resolved to a string type
@@ -32,10 +32,9 @@ pub fn check_invalid_worker_name(expr: &Expr) -> Result<(), InvalidWorkerName> {
 }
 
 mod internal {
-    use crate::type_checker::InvalidWorkerName;
     use crate::type_refinement::precise_types::StringType;
     use crate::type_refinement::TypeRefinement;
-    use crate::{Expr, TypeName};
+    use crate::{Expr, InvalidWorkerName, TypeName};
     use std::ops::Deref;
 
     pub(crate) fn check_worker_name(
@@ -64,9 +63,4 @@ mod internal {
 
         Ok(())
     }
-}
-
-pub struct InvalidWorkerName {
-    pub worker_name_expr: Expr,
-    pub message: String,
 }

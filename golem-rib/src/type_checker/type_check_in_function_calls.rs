@@ -1,7 +1,5 @@
 use crate::call_type::CallType;
-use crate::type_checker::{Path, TypeMismatchError, UnResolvedTypesError};
-use crate::{Expr, FunctionTypeRegistry, RegistryKey};
-use golem_wasm_ast::analysis::AnalysedType;
+use crate::{Expr, FunctionCallTypeError, FunctionTypeRegistry, RegistryKey};
 use std::collections::VecDeque;
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,
@@ -36,28 +34,6 @@ pub fn check_type_error_in_function_calls(
     }
 
     Ok(())
-}
-
-pub enum FunctionCallTypeError {
-    InvalidFunctionCall {
-        function_call_name: String,
-    },
-    TypeMisMatch {
-        function_call_name: String,
-        argument: Expr,
-        error: TypeMismatchError,
-    },
-    MissingRecordFields {
-        function_call_name: String,
-        argument: Expr,
-        missing_fields: Vec<Path>,
-    },
-    UnResolvedTypes {
-        function_call_name: String,
-        argument: Expr,
-        unresolved_error: UnResolvedTypesError,
-        expected_type: AnalysedType,
-    },
 }
 
 mod internal {

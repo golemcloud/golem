@@ -16,7 +16,7 @@ use crate::rib_compilation_error::RibCompilationError;
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
-use crate::{AmbiguousTypeError, Expr, InferredType, InvalidPatternMatchError, MatchArm};
+use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
@@ -204,12 +204,12 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
 mod internal {
     use crate::call_type::CallType;
     use crate::rib_compilation_error::RibCompilationError;
-    use crate::type_checker::{ActualType, ExpectedType, TypeMismatchError};
     use crate::type_inference::kind::{GetTypeKind, TypeKind};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        AmbiguousTypeError, ArmPattern, Expr, InferredType, InvalidPatternMatchError, VariableId,
+        ActualType, AmbiguousTypeError, ArmPattern, ExpectedType, Expr, InferredType,
+        InvalidPatternMatchError, TypeMismatchError, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
@@ -220,7 +220,7 @@ mod internal {
         yield_expr: &mut Expr,
         comprehension_result_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        update_yield_expr_in_list_comprehension(variable_id, &iterable_expr, yield_expr)?;
+        update_yield_expr_in_list_comprehension(variable_id, iterable_expr, yield_expr)?;
 
         let refined_list_type = ListType::refine(comprehension_result_type).ok_or(
             get_compilation_error_for_ambiguity(

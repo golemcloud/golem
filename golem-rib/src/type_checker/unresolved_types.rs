@@ -1,6 +1,5 @@
 use crate::call_type::{CallType, InstanceCreationType};
-use crate::type_checker::UnResolvedTypesError;
-use crate::Expr;
+use crate::{Expr, UnResolvedTypesError};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
@@ -426,8 +425,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 
 mod internal {
     use crate::type_checker::unresolved_types::check_unresolved_types;
-    use crate::type_checker::UnResolvedTypesError;
-    use crate::{Expr, MatchArm};
+    use crate::{Expr, MatchArm, UnResolvedTypesError};
     use std::ops::Deref;
 
     pub fn unresolved_types_in_record(

@@ -2,12 +2,9 @@ pub(crate) use check_instance_returns::*;
 pub(crate) use exhaustive_pattern_match::*;
 pub(crate) use invalid_expr::*;
 pub(crate) use invalid_math_expr::*;
-pub(crate) use invalid_worker_name::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
-pub(crate) use type_check_in_function_calls::*;
 pub(crate) use type_mismatch::*;
-pub(crate) use unresolved_type_error::*;
 pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
@@ -19,7 +16,6 @@ mod missing_fields;
 mod path;
 mod type_check_in_function_calls;
 mod type_mismatch;
-mod unresolved_type_error;
 mod unresolved_types;
 
 use crate::rib_compilation_error::RibCompilationError;

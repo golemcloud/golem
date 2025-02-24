@@ -1,10 +1,10 @@
 use crate::type_checker::{
-    ActualType, ExhaustivePatternMatchError, ExpectedType, FunctionCallTypeError, InvalidExpr,
-    InvalidMathExprError, InvalidProgramReturn, InvalidWorkerName, TypeMismatchError,
-    UnResolvedTypesError,
+    ExhaustivePatternMatchError, InvalidExpr, InvalidMathExprError, InvalidProgramReturn,
 };
-use crate::type_inference::kind::{GetTypeKind, TypeKind};
-use crate::{AmbiguousTypeError, Expr, InvalidPatternMatchError, TypeName};
+use crate::{
+    ActualType, AmbiguousTypeError, ExpectedType, Expr, FunctionCallTypeError,
+    InvalidPatternMatchError, InvalidWorkerName, TypeMismatchError, TypeName, UnResolvedTypesError,
+};
 use std::fmt;
 use std::fmt::Display;
 

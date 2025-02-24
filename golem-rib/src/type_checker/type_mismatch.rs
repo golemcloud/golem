@@ -1,7 +1,6 @@
-use crate::type_inference::kind::TypeKind;
 use crate::type_refinement::precise_types::*;
 use crate::type_refinement::TypeRefinement;
-use crate::{Expr, InferredType, Path, PathElem};
+use crate::{Expr, InferredType, TypeMismatchError};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::ops::Deref;
 
@@ -236,73 +235,5 @@ pub fn check_type_mismatch(
             ),
         ),
         AnalysedType::Handle(_) => Ok(()),
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TypeMismatchError {
-    pub expr_with_wrong_type: Expr,
-    pub parent_expr: Option<Expr>,
-    pub expected_type: ExpectedType,
-    pub actual_type: ActualType,
-    pub field_path: Path,
-}
-
-#[derive(Clone, Debug)]
-pub enum ExpectedType {
-    AnalysedType(AnalysedType),
-    Kind(TypeKind),
-}
-
-// If the actual type is not fully known but only a hint through TypeKind
-#[derive(Clone, Debug)]
-pub enum ActualType {
-    Inferred(InferredType),
-    Kind(TypeKind),
-}
-
-impl TypeMismatchError {
-    pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
-        let mut mismatch_error: TypeMismatchError = self.clone();
-        mismatch_error.expected_type = ExpectedType::AnalysedType(expected_type.clone());
-        mismatch_error
-    }
-
-    pub fn at_field(&self, field_name: String) -> TypeMismatchError {
-        let mut mismatch_error: TypeMismatchError = self.clone();
-        mismatch_error
-            .field_path
-            .push_front(PathElem::Field(field_name));
-        mismatch_error
-    }
-
-    pub fn with_actual_inferred_type(
-        expr: &Expr,
-        parent_expr: Option<&Expr>,
-        expected_type: AnalysedType,
-        actual_type: InferredType,
-    ) -> Self {
-        TypeMismatchError {
-            expr_with_wrong_type: expr.clone(),
-            parent_expr: parent_expr.cloned(),
-            expected_type: ExpectedType::AnalysedType(expected_type),
-            actual_type: ActualType::Inferred(actual_type),
-            field_path: Path::default(),
-        }
-    }
-
-    pub fn with_actual_type_kind(
-        expr: &Expr,
-        parent_expr: Option<&Expr>,
-        expected_type: AnalysedType,
-        actual_type: &TypeKind,
-    ) -> Self {
-        TypeMismatchError {
-            expr_with_wrong_type: expr.clone(),
-            parent_expr: parent_expr.cloned(),
-            expected_type: ExpectedType::AnalysedType(expected_type),
-            actual_type: ActualType::Kind(actual_type.clone()),
-            field_path: Path::default(),
-        }
     }
 }
