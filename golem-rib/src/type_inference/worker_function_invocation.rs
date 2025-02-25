@@ -169,7 +169,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                         function_name: method.to_string(),
                         expr: expr_copied,
                         message: format!(
-                            "Invalid worker function invoke. Expected to be an instance type, found {}",
+                            "invalid worker function invoke. Expected to be an instance type, found {}",
                             TypeName::try_from(inferred_type)
                                 .map(|x| x.to_string())
                                 .unwrap_or("Unknown".to_string())

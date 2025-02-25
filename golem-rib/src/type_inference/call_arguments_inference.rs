@@ -49,7 +49,7 @@ pub fn infer_function_call_types(
 }
 
 mod internal {
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::kind::GetTypeKind;
     use crate::{
         ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
@@ -68,7 +68,17 @@ mod internal {
         let cloned = call_type.clone();
 
         match call_type {
-            CallType::InstanceCreation(_) => Ok(()),
+            CallType::InstanceCreation(instance) => match instance {
+                InstanceCreationType::Worker { .. } => {
+                    for arg in args.iter_mut() {
+                        arg.add_infer_type_mut(InferredType::Str);
+                    }
+
+                    Ok(())
+                }
+
+                _ => Ok(()),
+            },
             CallType::Function { function_name, .. } => {
                 let resource_constructor_registry_key =
                     RegistryKey::resource_constructor_registry_key(function_name);

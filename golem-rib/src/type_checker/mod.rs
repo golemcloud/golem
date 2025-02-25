@@ -32,9 +32,9 @@ pub fn type_check(
 ) -> Result<(), RibCompilationError> {
     check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
+    check_invalid_worker_name(expr)?;
     check_invalid_expr(expr)?;
     check_invalid_program_return(expr)?;
-    check_invalid_worker_name(expr)?;
     check_invalid_math_expr(expr)?;
     check_exhaustive_pattern_match(expr, function_type_registry)?;
     Ok(())
