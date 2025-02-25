@@ -443,7 +443,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn schedule_invocation(
         &mut self,
         this: Resource<WasmRpcEntry>,
-        datetime: golem_wasm_rpc::WasiDatetime,
+        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         full_function_name: String,
         function_input: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
     ) -> anyhow::Result<()> {
@@ -456,7 +456,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn schedule_cancelable_invocation(
         &mut self,
         this: Resource<WasmRpcEntry>,
-        datetime: golem_wasm_rpc::WasiDatetime,
+        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
