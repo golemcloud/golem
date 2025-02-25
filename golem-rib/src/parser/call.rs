@@ -73,7 +73,6 @@ where
             let mut current_param = String::new();
             let mut result = Vec::new();
             let mut result_committed: Option<Commit<()>> = None;
-            let mut error: Option<RibParseError> = None;
 
             while nesting > 0 {
                 let (next_char, committed) = any().parse_stream(input).into_result()?;
@@ -97,11 +96,13 @@ where
                             current_param.clear();
                         }
                         Err(err) => {
-                            error = Some(RibParseError::Message(format!(
-                                "Failed to parse resource parameter {current_param}: {err}"
-                            )));
-
-                            break;
+                            return ParseResult::CommitErr(ParseError::from_error(
+                                input.position(),
+                                StreamError::message_format(format!(
+                                    "Failed to parse resource parameter {current_param}: {err}"
+                                )),
+                            ))
+                            .into_result();
                         }
                     }
                 } else {
@@ -114,17 +115,6 @@ where
                 };
             }
 
-            if let Some(err) = error {
-                return ParseResult::CommitErr(ParseError::from_error(
-                    input.position(),
-                    StreamError::message_format(format!(
-                        "Failed to parse resource parameter {}",
-                        err
-                    )),
-                ))
-                .into_result();
-            }
-
             if !current_param.is_empty() {
                 let expr = Expr::from_text(current_param.trim());
                 match expr {
@@ -132,10 +122,12 @@ where
                         result.push(expr);
                     }
                     Err(err) => {
-                        let error_msg = format!("Failed to parse resource parameter {}", err);
                         return ParseResult::CommitErr(ParseError::from_error(
                             input.position(),
-                            StreamError::message_format(error_msg),
+                            StreamError::message_format(format!(
+                                "Failed to parse resource parameter {}",
+                                err
+                            )),
                         ))
                         .into_result();
                     }
