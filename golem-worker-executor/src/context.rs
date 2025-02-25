@@ -15,6 +15,7 @@
 use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
@@ -170,6 +171,19 @@ impl InvocationManagement for Context {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_idempotency_key().await
+    }
+
+    async fn set_current_invocation_context(
+        &mut self,
+        invocation_context: InvocationContextStack,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx
+            .set_current_invocation_context(invocation_context)
+            .await
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.durable_ctx.get_current_invocation_context().await
     }
 
     fn is_live(&self) -> bool {
@@ -515,7 +529,7 @@ impl HostWasmRpc for Context {
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm_rpc::WasiDatetime,
+        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<()> {
@@ -527,7 +541,7 @@ impl HostWasmRpc for Context {
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm_rpc::WasiDatetime,
+        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_1_x::types::CancellationToken>> {

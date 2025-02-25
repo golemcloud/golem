@@ -14,6 +14,7 @@
 
 use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{IdempotencyKey, OwnedWorkerId};
@@ -235,7 +236,8 @@ impl ReplayState {
 
     pub async fn get_oplog_entry_exported_function_invoked(
         &mut self,
-    ) -> Result<Option<(String, Vec<Value>, IdempotencyKey)>, GolemError> {
+    ) -> Result<Option<(String, Vec<Value>, IdempotencyKey, InvocationContextStack)>, GolemError>
+    {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
@@ -262,6 +264,7 @@ impl ReplayState {
                             function_name.to_string(),
                             request,
                             idempotency_key.clone(),
+                            InvocationContextStack::fresh(), // TODO: read from oplog
                         )));
                     }
                     entry if entry.is_hint() => {}

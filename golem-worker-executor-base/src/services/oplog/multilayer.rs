@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use nonempty_collections::{NEVec, NonEmptyIterator};
+use nonempty_collections::NEVec;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
 use tracing::{debug, error, info, warn, Instrument};
@@ -503,7 +503,7 @@ impl MultiLayerOplog {
                 lower.push(layer.open(&owned_worker_id).await);
             }
         }
-        let lower = NEVec::from_vec(lower).expect("At least one lower layer is required");
+        let lower = NEVec::try_from_vec(lower).expect("At least one lower layer is required");
 
         let initial_primary_length = primary.length().await;
         let result = Arc::new(Self {
@@ -910,7 +910,7 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
     }
 
     async fn append_target(&self, entries: Vec<(OplogIndex, OplogEntry)>) {
-        self.lower.head.append(entries).await
+        self.lower.first().append(entries).await
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {

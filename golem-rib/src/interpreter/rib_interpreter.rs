@@ -2896,7 +2896,7 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_26() {
             let expr = r#"
-                let worker = instance(1:u32);
+                let worker = instance(1: u32);
                 let result = worker.qux[amazon:shopping-cart]("bar");
                 "success"
             "#;
@@ -2953,6 +2953,65 @@ mod interpreter_tests {
             .unwrap();
 
             assert_eq!(result_val, expected_val);
+        }
+
+        #[test]
+        async fn test_first_class_worker_28() {
+            let expr = r#"
+                let x = request.path.user-id;
+                let worker = instance(x);
+                let a = "mac";
+                let b = "apple";
+                let c = 1;
+                let d = 1;
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                cart.remove-item(a);
+                cart.update-item-quantity(a, 2);
+                let result = cart.get-cart-contents();
+                cart.drop();
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut input = HashMap::new();
+
+            let rib_input_key = "request";
+            let rib_input_value = ValueAndType::new(
+                Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
+                record(vec![field("path", record(vec![field("user-id", str())]))]),
+            );
+
+            input.insert(rib_input_key.to_string(), rib_input_value);
+
+            let rib_input = RibInput::new(input);
+
+            let mut rib_interpreter = internal::dynamic_test_interpreter(Some(rib_input));
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            let result_val = result.get_val().unwrap();
+
+            let expected_analysed_type = record(vec![
+                field("worker-name", option(str())),
+                field("function-name", str()),
+            ]);
+
+            let expected_val = parse_value_and_type(
+                &expected_analysed_type,
+                r#"
+              {
+                 worker-name: some("user"),
+                 function-name: "golem:it/api.{cart(\"bar\").get-cart-contents}",
+              }
+            "#,
+            )
+            .unwrap();
+
+            assert_eq!(result_val, expected_val)
         }
     }
 

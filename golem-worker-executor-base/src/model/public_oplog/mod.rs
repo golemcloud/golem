@@ -486,6 +486,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         idempotency_key,
                         full_function_name,
                         function_input,
+                        invocation_context: _invocation_context,
                     } => {
                         let metadata = components
                             .get_metadata(
@@ -519,6 +520,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                             }
                         }
 
+                        // TODO: store invocation context
                         PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
                             idempotency_key,
                             full_function_name,

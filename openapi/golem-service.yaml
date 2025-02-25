@@ -4188,6 +4188,8 @@ components:
           type: string
         response:
           type: string
+        invocationContext:
+          type: string
         allowOrigin:
           type: string
         allowMethods:

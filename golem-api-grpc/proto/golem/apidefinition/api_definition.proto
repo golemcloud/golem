@@ -87,6 +87,7 @@ message GatewayBinding {
   // type discriminator to keep backward compatibility
   optional GatewayBindingType binding_type = 5;
   optional StaticBinding static_binding = 6;
+  optional golem.rib.Expr invocation_context = 7;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -107,6 +108,9 @@ message CompiledGatewayBinding {
     optional GatewayBindingType binding_type = 12;
     optional StaticBinding static_binding = 13;
     optional golem.rib.RibOutputType response_rib_output = 14;
+    optional golem.rib.Expr invocation_context = 15;
+    optional golem.rib.RibByteCode compiled_invocation_context_expr = 16;
+    optional golem.rib.RibInputType invocation_context_rib_input = 17;
 }
 
 message SecuritySchemaReference {

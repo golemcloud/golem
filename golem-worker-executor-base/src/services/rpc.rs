@@ -16,13 +16,6 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::WitValue;
-use tokio::runtime::Handle;
-use tracing::debug;
-
 use super::file_loader::FileLoader;
 use crate::error::GolemError;
 use crate::services::events::Events;
@@ -42,7 +35,14 @@ use crate::services::{
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use async_trait::async_trait;
+use bincode::{Decode, Encode};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::WitValue;
+use tokio::runtime::Handle;
+use tracing::debug;
 
 #[async_trait]
 pub trait Rpc {
@@ -57,6 +57,7 @@ pub trait Rpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
     ) -> Result<TypeAnnotatedValue, RpcError>;
 
     async fn invoke(
@@ -68,6 +69,7 @@ pub trait Rpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
     ) -> Result<(), RpcError>;
 
     async fn generate_unique_local_worker_id(
@@ -217,6 +219,7 @@ impl Rpc for RemoteInvocationRpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
     ) -> Result<TypeAnnotatedValue, RpcError> {
         Ok(self
             .worker_proxy
@@ -228,6 +231,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                self_stack,
             )
             .await?)
     }
@@ -241,6 +245,7 @@ impl Rpc for RemoteInvocationRpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         Ok(self
             .worker_proxy
@@ -252,6 +257,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                self_stack,
             )
             .await?)
     }
@@ -565,6 +571,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
     ) -> Result<TypeAnnotatedValue, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
@@ -591,7 +598,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
 
             let result_values = worker
-                .invoke_and_await(idempotency_key, function_name, input_values)
+                .invoke_and_await(idempotency_key, function_name, input_values, self_stack)
                 .await?;
 
             Ok(result_values)
@@ -605,6 +612,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_worker_id,
                     self_args,
                     self_env,
+                    self_stack,
                 )
                 .await
         }
@@ -619,8 +627,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
-        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh()); // TODO
+        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
         if self
             .shard_service()
@@ -645,7 +654,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
 
             worker
-                .invoke(idempotency_key, function_name, input_values)
+                .invoke(idempotency_key, function_name, input_values, self_stack)
                 .await?;
             Ok(())
         } else {
@@ -658,6 +667,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_worker_id,
                     self_args,
                     self_env,
+                    self_stack,
                 )
                 .await
         }

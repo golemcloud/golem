@@ -43,7 +43,7 @@ impl Display for TypeKind {
             TypeKind::Variant => write!(f, "variant"),
             TypeKind::Unknown => write!(f, "unknown"),
             TypeKind::Ambiguous { possibilities } => {
-                write!(f, "ambiguous: ")?;
+                write!(f, "conflicting types: ")?;
                 for (i, kind) in possibilities.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

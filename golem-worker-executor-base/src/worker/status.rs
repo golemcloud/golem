@@ -693,6 +693,7 @@ mod test {
     use bincode::Encode;
     use bytes::Bytes;
     use golem_common::base_model::OplogIndex;
+    use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::{
         DurableFunctionType, OplogEntry, OplogPayload, TimestampedUpdateDescription,
         UpdateDescription,
@@ -954,6 +955,7 @@ mod test {
                 idempotency_key: k2.clone(),
                 full_function_name: "b".to_string(),
                 function_input: vec![Value::Bool(true)],
+                invocation_context: InvocationContextStack::fresh(),
             })
             .exported_function_completed(&'x', k1.clone())
             .exported_function_invoked("b", &1, k2.clone())
@@ -978,11 +980,13 @@ mod test {
                 idempotency_key: k1.clone(),
                 full_function_name: "a".to_string(),
                 function_input: vec![Value::Bool(true)],
+                invocation_context: InvocationContextStack::fresh(),
             })
             .pending_invocation(WorkerInvocation::ExportedFunction {
                 idempotency_key: k2.clone(),
                 full_function_name: "b".to_string(),
                 function_input: vec![],
+                invocation_context: InvocationContextStack::fresh(),
             })
             .cancel_pending_invocation(k1)
             .build();
@@ -1242,11 +1246,11 @@ mod test {
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
             self.add(
-                OplogEntry::successful_update(
+                rounded(OplogEntry::successful_update(
                     *update_description.target_version(),
                     new_component_size,
                     new_active_plugins.clone(),
-                ),
+                )),
                 move |mut status| {
                     let pending = status.pending_updates.pop_front();
                     status.successful_updates.push(SuccessfulUpdateRecord {
