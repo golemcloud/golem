@@ -53,6 +53,13 @@ impl InstanceCreationType {
 }
 
 impl CallType {
+    pub fn worker_expr(&self) -> Option<&Expr> {
+        match self {
+            CallType::Function { worker, .. } => worker.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn worker_expr_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
             CallType::Function { worker, .. } => worker.as_mut(),
@@ -83,9 +90,14 @@ impl Display for CallType {
             CallType::Function { function_name, .. } => write!(f, "{}", function_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
-            CallType::InstanceCreation(_) => {
-                write!(f, "InstanceCreation")
-            }
+            CallType::InstanceCreation(instance_creation_type) => match instance_creation_type {
+                InstanceCreationType::Worker { .. } => {
+                    write!(f, "instance")
+                }
+                InstanceCreationType::Resource { resource_name, .. } => {
+                    write!(f, "{}", resource_name.resource_name)
+                }
+            },
         }
     }
 }

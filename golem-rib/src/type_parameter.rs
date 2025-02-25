@@ -38,7 +38,7 @@ impl TypeParameter {
         type_parameter()
             .easy_parse(position::Stream::new(input))
             .map(|t| t.0)
-            .map_err(|err| format!("Invalid instance type {}", err))
+            .map_err(|err| format!("Invalid type parameter type {}", err))
     }
 }
 

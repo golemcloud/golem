@@ -21,15 +21,21 @@ where
                 call_type: CallType::Function { function_name, .. },
                 generic_type_parameter,
                 args,
+                source_span,
                 ..
             } => {
                 let function_name = function_name.to_string();
+
+                let worker_variable_with_source_span =
+                    worker_variable.with_source_span(source_span.clone());
+
                 Ok(Expr::invoke_worker_function(
-                    worker_variable,
+                    worker_variable_with_source_span,
                     function_name,
                     generic_type_parameter,
                     args,
-                ))
+                )
+                .with_source_span(source_span))
             }
             _ => Err(RibParseError::Message("Invalid function call".to_string())),
         })
