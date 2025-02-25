@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_rpc::ValueAndType;
-use std::mem;
-
 wasmtime::component::bindgen!({
     path: r"../wit",
     world: "golem:api/golem",
@@ -24,7 +21,6 @@ wasmtime::component::bindgen!({
     with: {
         "wasi:io/streams/input-stream": InputStream,
         "wasi:io/streams/output-stream": OutputStream,
-        "wasi:io/poll/pollable": Pollable,
         "wasi:blobstore/container/container": super::durable_host::blobstore::types::ContainerEntry,
         "wasi:blobstore/container/stream-object-names": super::durable_host::blobstore::types::StreamObjectNamesEntry,
         "wasi:blobstore/types/incoming-value": super::durable_host::blobstore::types::IncomingValueEntry,
@@ -36,46 +32,16 @@ wasmtime::component::bindgen!({
         "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
+        "golem:rpc": golem_wasm_rpc::golem_rpc_0_1_x,
+        // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
+        "wasi:io/poll/pollable": golem_wasm_rpc::wasi::io::poll::Pollable,
     },
 });
 
 pub type InputStream = wasmtime_wasi::InputStream;
 pub type OutputStream = wasmtime_wasi::OutputStream;
 
-pub type Pollable = wasmtime_wasi::Pollable;
-
-impl From<golem_wasm_rpc::WitValue> for golem::rpc::types::WitValue {
-    fn from(value: golem_wasm_rpc::WitValue) -> Self {
-        unsafe { mem::transmute(value) }
-    }
-}
-
-impl From<golem::rpc::types::WitValue> for golem_wasm_rpc::WitValue {
-    fn from(value: golem::rpc::types::WitValue) -> Self {
-        unsafe { mem::transmute(value) }
-    }
-}
-
-impl From<golem_wasm_rpc::Value> for golem::rpc::types::WitValue {
-    fn from(value: golem_wasm_rpc::Value) -> Self {
-        let wit_value: golem_wasm_rpc::WitValue = value.into();
-        wit_value.into()
-    }
-}
-
-impl From<golem::rpc::types::WitValue> for golem_wasm_rpc::Value {
-    fn from(value: golem::rpc::types::WitValue) -> Self {
-        let wit_value: golem_wasm_rpc::WitValue = value.into();
-        wit_value.into()
-    }
-}
-
-impl From<ValueAndType> for golem::rpc::types::WitValue {
-    fn from(value: ValueAndType) -> Self {
-        let wit_value: golem_wasm_rpc::WitValue = value.into();
-        wit_value.into()
-    }
-}
+pub type Pollable = golem_wasm_rpc::wasi::io::poll::Pollable;
 
 // reexports so that we don't have to change version numbers everywhere
 pub use self::golem::api0_2_2 as golem_api_0_2_x;

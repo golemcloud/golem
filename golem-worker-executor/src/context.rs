@@ -526,7 +526,7 @@ impl HostWasmRpc for Context {
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm_rpc::WasiDatetime,
+        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<()> {
@@ -538,7 +538,7 @@ impl HostWasmRpc for Context {
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm_rpc::WasiDatetime,
+        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_1_x::types::CancellationToken>> {
