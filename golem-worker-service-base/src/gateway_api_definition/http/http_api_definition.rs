@@ -31,6 +31,7 @@ use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
+use rib::RibError;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -550,7 +551,7 @@ pub struct CompiledRoute {
 #[derive(Debug)]
 pub enum RouteCompilationErrors {
     MetadataNotFoundError(VersionedComponentId),
-    RibCompilationError(String),
+    RibError(RibError),
 }
 
 #[derive(Clone, Debug)]
@@ -594,7 +595,7 @@ impl CompiledRoute {
 
                 let binding =
                     WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibCompilationError)?;
+                        .map_err(RouteCompilationErrors::RibError)?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),
@@ -614,7 +615,7 @@ impl CompiledRoute {
 
                 let binding =
                     WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibCompilationError)?;
+                        .map_err(RouteCompilationErrors::RibError)?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),
@@ -636,7 +637,7 @@ impl CompiledRoute {
                     http_handler_binding,
                     metadata,
                 )
-                .map_err(RouteCompilationErrors::RibCompilationError)?;
+                .map_err(RouteCompilationErrors::RibError)?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),

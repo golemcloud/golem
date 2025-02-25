@@ -1,3 +1,4 @@
+use crate::rib_compilation_error::RibCompilationError;
 use crate::type_checker::Path;
 use crate::{Expr, InferredType, VariableId};
 
@@ -55,7 +56,7 @@ pub struct GlobalVariableTypeSpec {
 pub fn bind_global_variable_types(
     expr: &Expr,
     type_pecs: &Vec<GlobalVariableTypeSpec>,
-) -> Result<Expr, String> {
+) -> Result<Expr, RibCompilationError> {
     let mut result_expr = expr.clone();
 
     for spec in type_pecs {
@@ -69,16 +70,19 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
+    use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
     use crate::type_checker::{Path, PathElem};
-    use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
+    use crate::{
+        CustomError, Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId,
+    };
     use std::collections::VecDeque;
     use std::ops::Deref;
 
     pub(crate) fn bind_global_variable_types(
         expr: &Expr,
         type_spec: &GlobalVariableTypeSpec,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr, RibCompilationError> {
         let mut path = type_spec.path.clone();
 
         let mut expr_queue = VecDeque::new();
@@ -609,7 +613,7 @@ mod internal {
         temp_stack
             .pop_front()
             .map(|x| x.0)
-            .ok_or("Failed type inference during pull up".to_string())
+            .ok_or(CustomError::new(expr, "failed to bind global variable types").into())
     }
 
     pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
@@ -727,7 +731,7 @@ mod internal {
         override_type: &InferredType,
         type_name: &Option<TypeName>,
         source_span: &SourceSpan,
-    ) -> Result<(), String> {
+    ) -> Result<(), RibCompilationError> {
         let (expr, part_of_path) = temp_stack
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
@@ -780,7 +784,7 @@ mod internal {
         temp_stack: &mut VecDeque<(Expr, bool)>,
         type_name: &Option<TypeName>,
         source_span: &SourceSpan,
-    ) -> Result<(), String> {
+    ) -> Result<(), RibCompilationError> {
         let expr = temp_stack
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));

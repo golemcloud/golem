@@ -16,7 +16,9 @@ pub(crate) use flatten::*;
 mod flatten;
 mod unification;
 use crate::instance_type::InstanceType;
+use crate::type_inference::kind::GetTypeKind;
 use crate::TypeName;
+use golem_wasm_ast::analysis::analysed_type::*;
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -83,6 +85,14 @@ impl Display for InferredNumber {
 }
 
 impl InferredType {
+    pub fn printable(&self) -> String {
+        // Try a fully blown type name or if it fails,
+        // get the `kind` of inferred type
+        TypeName::try_from(self.clone())
+            .map(|tn| tn.to_string())
+            .unwrap_or(self.get_type_kind().to_string())
+    }
+
     pub fn as_number(&self) -> Result<InferredNumber, String> {
         fn go(inferred_type: &InferredType, found: &mut Vec<InferredNumber>) -> Result<(), String> {
             match inferred_type {
@@ -140,7 +150,7 @@ impl InferredType {
                                 Some(previous) => {
                                     if previous != current {
                                         return Err(format!(
-                                            "Expected the same type of number. But found {}, {}",
+                                            "expected the same type of number. But found {}, {}",
                                             current, previous
                                         ));
                                     }
@@ -149,32 +159,30 @@ impl InferredType {
                                 }
                             }
                         } else {
-                            return Err("Failed to get a number".to_string());
+                            return Err("failed to get a number".to_string());
                         }
                     }
 
                     Ok(())
                 }
-                InferredType::Bool => Err(format!("Expected a number type. Found {}", "bool")),
-                InferredType::Chr => Err(format!("Expected a number type. Found {}", "char")),
-                InferredType::Str => Err(format!("Expected a number type. Found {}", "string")),
-                InferredType::List(_) => Err(format!("Expected a number type. Found {}", "tuple")),
-                InferredType::Tuple(_) => {
-                    Err(format!("Expected a number type. Found {}", "record"))
-                }
+                InferredType::Bool => Err(format!("expected a number type, found {}", "bool")),
+                InferredType::Chr => Err(format!("expected a number type, found {}", "char")),
+                InferredType::Str => Err(format!("expected a number type, found {}", "string")),
+                InferredType::List(_) => Err(format!("expected a number type, found {}", "list")),
+                InferredType::Tuple(_) => Err(format!("expected a number type, found {}", "tuple")),
                 InferredType::Record(_) => {
-                    Err(format!("Expected a number type. Found {}", "flags"))
+                    Err(format!("expected a number type, found {}", "record"))
                 }
-                InferredType::Flags(_) => Err(format!("Expected a number type. Found {}", "enum")),
-                InferredType::Enum(_) => Err(format!("Expected a number type. Found {}", "option")),
+                InferredType::Flags(_) => Err(format!("expected a number type, found {}", "flags")),
+                InferredType::Enum(_) => Err(format!("expected a number type, found {}", "enum")),
                 InferredType::Option(_) => {
-                    Err(format!("Expected a number type. Found {}", "result"))
+                    Err(format!("expected a number type, found {}", "option"))
                 }
                 InferredType::Result { .. } => {
-                    Err(format!("Expected a number type. Found {}", "result"))
+                    Err(format!("expected a number type, found {}", "result"))
                 }
                 InferredType::Variant(_) => {
-                    Err(format!("Expected a number type. Found {}", "variant"))
+                    Err(format!("expected a number type, found {}", "variant"))
                 }
 
                 InferredType::OneOf(_) => {
@@ -184,14 +192,18 @@ impl InferredType {
                         Ok(())
                     }
                 }
-                InferredType::Unknown => Err("Expected Number. Type Unknown".to_string()),
-                InferredType::Sequence(_) => {
-                    Err(format!("Expected a number type. Found {}", "sequence"))
-                }
+                InferredType::Unknown => Err("expected a number type, found unknown".to_string()),
+
+                InferredType::Sequence(_) => Err(format!(
+                    "expected a number type, found {}",
+                    "function-multi-parameter-return"
+                )),
                 InferredType::Resource { .. } => {
-                    Err(format!("Expected a number type. Found {}", "resource"))
+                    Err(format!("expected a number type, found {}", "resource"))
                 }
-                _ => Err(format!("Expected a number type. Found {}", "instance type")),
+                InferredType::Instance { .. } => {
+                    Err(format!("expected a number type, found {}", "instance"))
+                }
             }
         }
 
@@ -272,6 +284,10 @@ impl InferredType {
 
     pub fn is_one_of(&self) -> bool {
         matches!(self, InferredType::OneOf(_))
+    }
+
+    pub fn is_valid_wit_type(&self) -> bool {
+        AnalysedType::try_from(self.clone()).is_ok()
     }
 
     pub fn is_all_of(&self) -> bool {
@@ -404,6 +420,95 @@ impl InferredType {
 
     pub fn from_enum_cases(type_enum: &TypeEnum) -> InferredType {
         InferredType::Enum(type_enum.cases.clone())
+    }
+}
+
+impl TryFrom<InferredType> for AnalysedType {
+    type Error = String;
+
+    fn try_from(value: InferredType) -> Result<Self, Self::Error> {
+        match value {
+            InferredType::Bool => Ok(bool()),
+            InferredType::S8 => Ok(s8()),
+            InferredType::U8 => Ok(u8()),
+            InferredType::S16 => Ok(s16()),
+            InferredType::U16 => Ok(u16()),
+            InferredType::S32 => Ok(s32()),
+            InferredType::U32 => Ok(u32()),
+            InferredType::S64 => Ok(s64()),
+            InferredType::U64 => Ok(u64()),
+            InferredType::F32 => Ok(f32()),
+            InferredType::F64 => Ok(f64()),
+            InferredType::Chr => Ok(chr()),
+            InferredType::Str => Ok(str()),
+            InferredType::List(typ) => {
+                let typ: AnalysedType = (*typ).try_into()?;
+                Ok(list(typ))
+            }
+            InferredType::Tuple(types) => {
+                let types: Vec<AnalysedType> = types
+                    .into_iter()
+                    .map(|t| t.try_into())
+                    .collect::<Result<Vec<AnalysedType>, _>>()?;
+                Ok(tuple(types))
+            }
+            InferredType::Record(field_and_types) => {
+                let mut field_pairs: Vec<NameTypePair> = vec![];
+                for (name, typ) in field_and_types {
+                    let typ: AnalysedType = typ.try_into()?;
+                    field_pairs.push(NameTypePair { name, typ });
+                }
+                Ok(record(field_pairs))
+            }
+            InferredType::Flags(names) => Ok(AnalysedType::Flags(TypeFlags { names })),
+            InferredType::Enum(cases) => Ok(AnalysedType::Enum(TypeEnum { cases })),
+            InferredType::Option(typ) => {
+                let typ: AnalysedType = (*typ).try_into()?;
+                Ok(option(typ))
+            }
+            InferredType::Result { ok, error } => {
+                let ok_option: Option<AnalysedType> = ok.map(|t| (*t).try_into()).transpose()?;
+                let ok = ok_option.ok_or("Expected ok type in result".to_string())?;
+                let error_option: Option<AnalysedType> =
+                    error.map(|t| (*t).try_into()).transpose()?;
+                let error = error_option.ok_or("Expected error type in result".to_string())?;
+                Ok(result(ok, error))
+            }
+            InferredType::Variant(name_and_optiona_inferred_types) => {
+                let mut cases: Vec<NameOptionTypePair> = vec![];
+                for (name, typ) in name_and_optiona_inferred_types {
+                    let typ: Option<AnalysedType> = typ.map(|t| t.try_into()).transpose()?;
+                    cases.push(NameOptionTypePair { name, typ });
+                }
+                Ok(variant(cases))
+            }
+            InferredType::Resource {
+                resource_id,
+                resource_mode,
+            } => Ok(handle(
+                AnalysedResourceId(resource_id),
+                match resource_mode {
+                    0 => AnalysedResourceMode::Owned,
+                    1 => AnalysedResourceMode::Borrowed,
+                    _ => return Err("Invalid resource mode".to_string()),
+                },
+            )),
+            InferredType::Instance { .. } => {
+                Err("Cannot convert instance type to analysed type".to_string())
+            }
+            InferredType::OneOf(_) => {
+                Err("Cannot convert one of type to analysed type".to_string())
+            }
+            InferredType::AllOf(_) => {
+                Err("Cannot convert all of type to analysed type".to_string())
+            }
+            InferredType::Unknown => {
+                Err("Cannot convert unknown type to analysed type".to_string())
+            }
+            InferredType::Sequence(_) => {
+                Err("Cannot convert function return sequence type to analysed type".to_string())
+            }
+        }
     }
 }
 

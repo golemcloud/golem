@@ -1,18 +1,33 @@
 use crate::instance_type::InstanceType;
 use crate::{Expr, InferredType};
 
-pub fn check_instance_returns(expr: &Expr) -> Result<(), String> {
-    let inferred_type = expr.inferred_type();
+// Note that this takes an entire rib program and not any invalid expression
+pub fn check_invalid_program_return(rib_program: &Expr) -> Result<(), InvalidProgramReturn> {
+    let inferred_type = rib_program.inferred_type();
 
     if let InferredType::Instance { instance_type, .. } = inferred_type {
-        return match *instance_type {
-            InstanceType::Resource { .. } => {
-                Err("Resource constructor instance cannot be returned".to_string())
-            }
+        let expr = match rib_program {
+            Expr::ExprBlock { exprs, .. } if !exprs.is_empty() => exprs.last().unwrap(),
+            expr => expr,
+        };
 
-            _ => Err("Worker instance cannot be returned".to_string()),
+        return match *instance_type {
+            InstanceType::Resource { .. } => Err(InvalidProgramReturn {
+                return_expr: expr.clone(),
+                message: "program is invalid as it returns a resource constructor".to_string(),
+            }),
+
+            _ => Err(InvalidProgramReturn {
+                return_expr: expr.clone(),
+                message: "program is invalid as it returns a worker instance".to_string(),
+            }),
         };
     }
 
     Ok(())
+}
+
+pub struct InvalidProgramReturn {
+    pub return_expr: Expr,
+    pub message: String,
 }
