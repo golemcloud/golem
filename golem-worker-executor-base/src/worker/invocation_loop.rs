@@ -389,20 +389,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// or a manual update request (which involves invoking the exported save-snapshot functions, so
     /// it is a special case of the exported function invocation).
     async fn external_invocation(&mut self, inner: TimestampedWorkerInvocation) -> CommandOutcome {
-        let invocation_context = inner.invocation.invocation_context();
-
         match inner.invocation {
             WorkerInvocation::ExportedFunction {
                 idempotency_key,
                 full_function_name,
                 function_input,
-                ..
-            }
-            | WorkerInvocation::ExportedFunctionV1 {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                ..
+                invocation_context,
             } => {
                 self.invoke_exported_function(
                     invocation_context,
