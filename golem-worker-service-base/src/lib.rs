@@ -24,7 +24,7 @@ pub mod gateway_binding;
 pub mod gateway_execution;
 pub mod gateway_middleware;
 pub mod gateway_request;
-mod gateway_rib_compiler;
+pub mod gateway_rib_compiler;
 pub mod gateway_rib_interpreter;
 pub mod gateway_security;
 pub mod getter;

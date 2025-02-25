@@ -165,45 +165,32 @@ impl InferredType {
 
                     Ok(())
                 }
-                InferredType::Bool => Err(format!("expected a number type, found {}", "bool")),
-                InferredType::Chr => Err(format!("expected a number type, found {}", "char")),
-                InferredType::Str => Err(format!("expected a number type, found {}", "string")),
-                InferredType::List(_) => Err(format!("expected a number type, found {}", "list")),
-                InferredType::Tuple(_) => Err(format!("expected a number type, found {}", "tuple")),
-                InferredType::Record(_) => {
-                    Err(format!("expected a number type, found {}", "record"))
-                }
-                InferredType::Flags(_) => Err(format!("expected a number type, found {}", "flags")),
-                InferredType::Enum(_) => Err(format!("expected a number type, found {}", "enum")),
-                InferredType::Option(_) => {
-                    Err(format!("expected a number type, found {}", "option"))
-                }
-                InferredType::Result { .. } => {
-                    Err(format!("expected a number type, found {}", "result"))
-                }
-                InferredType::Variant(_) => {
-                    Err(format!("expected a number type, found {}", "variant"))
-                }
+                InferredType::Bool => Err(format!("used as {}", "bool")),
+                InferredType::Chr => Err(format!("used as {}", "char")),
+                InferredType::Str => Err(format!("used as {}", "string")),
+                InferredType::List(_) => Err(format!("used as {}", "list")),
+                InferredType::Tuple(_) => Err(format!("used as {}", "tuple")),
+                InferredType::Record(_) => Err(format!("used as {}", "record")),
+                InferredType::Flags(_) => Err(format!("used as {}", "flags")),
+                InferredType::Enum(_) => Err(format!("used as {}", "enum")),
+                InferredType::Option(_) => Err(format!("used as {}", "option")),
+                InferredType::Result { .. } => Err(format!("used as {}", "result")),
+                InferredType::Variant(_) => Err(format!("used as {}", "variant")),
 
                 InferredType::OneOf(_) => {
                     if found.is_empty() {
-                        Err("Not a number.".to_string())
+                        Err("not a number.".to_string())
                     } else {
                         Ok(())
                     }
                 }
-                InferredType::Unknown => Err("expected a number type, found unknown".to_string()),
+                InferredType::Unknown => Err("found unknown".to_string()),
 
-                InferredType::Sequence(_) => Err(format!(
-                    "expected a number type, found {}",
-                    "function-multi-parameter-return"
-                )),
-                InferredType::Resource { .. } => {
-                    Err(format!("expected a number type, found {}", "resource"))
+                InferredType::Sequence(_) => {
+                    Err(format!("used as {}", "function-multi-parameter-return"))
                 }
-                InferredType::Instance { .. } => {
-                    Err(format!("expected a number type, found {}", "instance"))
-                }
+                InferredType::Resource { .. } => Err(format!("used as {}", "resource")),
+                InferredType::Instance { .. } => Err(format!("used as {}", "instance")),
             }
         }
 
