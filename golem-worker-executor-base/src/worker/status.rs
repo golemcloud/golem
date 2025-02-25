@@ -1246,11 +1246,11 @@ mod test {
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
             self.add(
-                OplogEntry::successful_update(
+                rounded(OplogEntry::successful_update(
                     *update_description.target_version(),
                     new_component_size,
                     new_active_plugins.clone(),
-                ),
+                )),
                 move |mut status| {
                     let pending = status.pending_updates.pop_front();
                     status.successful_updates.push(SuccessfulUpdateRecord {
