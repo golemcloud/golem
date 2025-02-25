@@ -1041,7 +1041,6 @@ impl Expr {
 
     pub fn resolve_method_calls(&mut self) -> Result<(), RibCompilationError> {
         self.bind_instance_types();
-        //dbg!(self.to_string());
         self.infer_worker_function_invokes()
     }
 
