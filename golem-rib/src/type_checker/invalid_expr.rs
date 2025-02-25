@@ -11,12 +11,12 @@ pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
         match expr {
             Expr::Number { inferred_type, .. } => match inferred_type.as_number() {
                 Ok(_) => {}
-                Err(msg) => {
+                Err(message) => {
                     return Err(InvalidExpr {
                         expr: expr.clone(),
                         expected_type: TypeKind::Number,
                         found: inferred_type.clone(),
-                        message: msg,
+                        message,
                     });
                 }
             },
@@ -56,8 +56,8 @@ mod tests {
         let expected = r#"
         error in the following rib found at line 2, column 30
         `1`
-        cause: inferred a number to be `list<u32>` which is invalid
-        expected a number type, found list
+        cause: expected to be of the type `number`, but inferred as `list<u32>`
+        used as list
         "#;
 
         assert_eq!(error_message, strip_spaces(expected));

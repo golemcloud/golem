@@ -7,15 +7,21 @@ use crate::{
     TypeName, UnResolvedTypesError,
 };
 use std::fmt;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RibCompilationError {
     pub cause: String,
     pub expr: Expr,
     pub immediate_parent: Option<Expr>,
     pub additional_error_details: Vec<String>,
     pub help_messages: Vec<String>,
+}
+
+impl Debug for RibCompilationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
 }
 
 impl RibCompilationError {
@@ -239,7 +245,7 @@ impl From<InvalidExpr> for RibCompilationError {
         let expr_inferred_type = value.found.printable();
 
         let cause = format!(
-            "inferred a {} to be `{}` which is invalid",
+            "expected to be of the type `{}`, but inferred as `{}`",
             value.expected_type, expr_inferred_type
         );
 
