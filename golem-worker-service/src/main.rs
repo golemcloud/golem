@@ -21,23 +21,35 @@ use golem_worker_service_base::metrics;
 use opentelemetry::global;
 use prometheus::Registry;
 use tokio::task::JoinSet;
-use golem_worker_service_base::gateway_rib_compiler::{DefaultWorkerServiceRibCompiler, WorkerServiceRibCompiler};
-use rib::{compile, Expr};
 
 fn main() -> Result<(), anyhow::Error> {
-    let expr = r#"
-                let x = request.body.user-id;
-                let worker = instance(x);
-                let cart1 = worker.cart("bar");
-                cart1.add-item("foo");
-                "success"
-            "#;
-    let expr = Expr::from_text(expr).unwrap();
-    let component_metadata = internal::get_metadata_with_resource_with_params();
+    if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(dump_openapi_yaml())
+    } else if let Some(config) = make_config_loader().load_or_dump_config() {
+        init_tracing_with_default_env_filter(&config.tracing);
 
-    let compiled = rib::compile(&expr, &component_metadata).unwrap();
+        let prometheus = metrics::register_all();
 
-    Ok(())
+        let exporter = opentelemetry_prometheus::exporter()
+            .with_registry(prometheus.clone())
+            .build()?;
+
+        global::set_meter_provider(
+            opentelemetry_sdk::metrics::MeterProviderBuilder::default()
+                .with_reader(exporter)
+                .build(),
+        );
+
+        Ok(tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(async_main(config, prometheus))?)
+    } else {
+        Ok(())
+    }
 }
 
 async fn async_main(
@@ -73,59 +85,4 @@ async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {
     let yaml = service.http_service().spec_yaml();
     println!("{yaml}");
     Ok(())
-}
-
-mod internal {
-
-    use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{
-        case, f32, field, handle, list, option, r#enum, record, result, str, tuple, u32, u64,
-        unit_case, variant,
-    };
-    use golem_wasm_ast::analysis::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
-    };
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
-    use std::sync::Arc;
-    pub(crate) fn get_metadata_with_resource_with_params() -> Vec<AnalysedExport> {
-        get_metadata_with_resource(vec![AnalysedFunctionParameter {
-            name: "user-id".to_string(),
-            typ: str(),
-        }])
-    }
-
-    fn get_metadata_with_resource(
-        resource_constructor_params: Vec<AnalysedFunctionParameter>,
-    ) -> Vec<AnalysedExport> {
-        let instance = AnalysedExport::Instance(AnalysedInstance {
-            name: "golem:it/api".to_string(),
-            functions: vec![
-                AnalysedFunction {
-                    name: "[constructor]cart".to_string(),
-                    parameters: resource_constructor_params,
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-                    }],
-                },
-                AnalysedFunction {
-                    name: "[method]cart.add-item".to_string(),
-                    parameters: vec![
-                        AnalysedFunctionParameter {
-                            name: "self".to_string(),
-                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
-                        },
-                        AnalysedFunctionParameter {
-                            name: "item".to_string(),
-                            typ: str(),
-                        },
-                    ],
-                    results: vec![],
-                }
-            ],
-        });
-
-        vec![instance]
-    }
 }
