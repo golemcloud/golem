@@ -118,6 +118,16 @@ impl InvocationContextSpan {
         })
     }
 
+    pub fn new_at(span_id: Option<SpanId>, start: Timestamp) -> Arc<Self> {
+        let span_id = span_id.unwrap_or(SpanId::generate());
+        Arc::new(Self::Local {
+            span_id,
+            parent: None,
+            start,
+            attributes: RwLock::new(HashMap::new()),
+        })
+    }
+
     pub fn external_parent(span_id: SpanId) -> Arc<Self> {
         Arc::new(Self::ExternalParent { span_id })
     }
