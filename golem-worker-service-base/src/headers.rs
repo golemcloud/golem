@@ -72,11 +72,14 @@ impl ResolvedResponseHeaders {
 
 #[cfg(test)]
 mod test {
+    use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::{
         type_annotated_value::TypeAnnotatedValue, NameTypePair, NameValuePair, Type, TypedRecord,
     };
+    use golem_wasm_rpc::ValueAndType;
+    use http::{HeaderMap, HeaderValue};
+    use test_r::test;
 
-    #[allow(dead_code)]
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
@@ -104,22 +107,22 @@ mod test {
 
     #[test]
     fn test_get_response_headers_from_typed_value() {
-        let header_map = create_record(vec![
+        let header_map: ValueAndType = create_record(vec![
             (
                 "header1".to_string(),
                 TypeAnnotatedValue::Str("value1".to_string()),
             ),
             ("header2".to_string(), TypeAnnotatedValue::F32(1.0)),
-        ]);
+        ])
+        .try_into()
+        .unwrap();
 
-        let resolved_headers = ResolvedResponseHeaders::from_typed_value(&header_map).unwrap();
+        let resolved_headers = ResolvedResponseHeaders::from_typed_value(header_map).unwrap();
 
-        let mut map = HashMap::new();
+        let mut header_map = HeaderMap::new();
 
-        map.insert("header1".to_string(), "value1".to_string());
-        map.insert("header2".to_string(), "1".to_string());
-
-        let header_map: HeaderMap = map.try_into().unwrap();
+        header_map.insert("header1", HeaderValue::from_str("value1").unwrap());
+        header_map.insert("header2", HeaderValue::from_str("1").unwrap());
 
         let expected = ResolvedResponseHeaders {
             headers: header_map,

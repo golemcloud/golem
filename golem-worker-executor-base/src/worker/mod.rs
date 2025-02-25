@@ -14,11 +14,11 @@
 
 pub mod function_result_interpreter;
 pub mod invocation;
+mod invocation_loop;
 pub mod status;
 
 use std::collections::{HashMap, VecDeque};
 use std::mem;
-use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,29 +35,27 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
-    HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
-    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::function_result_interpreter::interpret_function_results;
-use crate::worker::invocation::{find_first_available_function, invoke_worker, InvokeResult};
+use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use drop_stream::DropStream;
 use futures::channel::oneshot;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    exports, ComponentFilePath, ComponentType, PluginInstallationId, WorkerStatusRecordExtensions,
+    ComponentFilePath, ComponentType, PluginInstallationId, WorkerStatusRecordExtensions,
 };
 use golem_common::model::{
     ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
     WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
-use golem_common::retries::get_delay;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
@@ -66,9 +64,9 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, span, warn, Instrument, Level};
+use tracing::{debug, info, span, Instrument, Level};
 use wasmtime::component::Instance;
-use wasmtime::{AsContext, Store, UpdateDeadline};
+use wasmtime::{Store, UpdateDeadline};
 
 /// Represents worker that may be running or suspended.
 ///
@@ -507,6 +505,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
@@ -516,8 +515,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
                 // Invoke the function in the background
-                self.enqueue(idempotency_key, full_function_name, function_input)
-                    .await;
+                self.enqueue(
+                    idempotency_key,
+                    full_function_name,
+                    function_input,
+                    invocation_context,
+                )
+                .await;
                 Ok(None)
             }
         }
@@ -531,9 +535,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     ) -> Result<TypeAnnotatedValue, GolemError> {
         match self
-            .invoke(idempotency_key.clone(), full_function_name, function_input)
+            .invoke(
+                idempotency_key.clone(),
+                full_function_name,
+                function_input,
+                invocation_context,
+            )
             .await?
         {
             Some(Ok(output)) => Ok(output),
@@ -812,11 +822,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     ) {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 running
-                    .enqueue(idempotency_key, full_function_name, function_input)
+                    .enqueue(
+                        idempotency_key,
+                        full_function_name,
+                        function_input,
+                        invocation_context,
+                    )
                     .await;
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
@@ -825,6 +841,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     idempotency_key,
                     full_function_name,
                     function_input,
+                    invocation_context,
                 };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
                 let timestamped_invocation = TimestampedWorkerInvocation {
@@ -1432,11 +1449,13 @@ impl RunningWorker {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     ) {
         let invocation = WorkerInvocation::ExportedFunction {
             idempotency_key,
             full_function_name,
             function_input,
+            invocation_context,
         };
         self.enqueue_worker_invocation(invocation).await;
     }
@@ -1594,541 +1613,22 @@ impl RunningWorker {
     }
 
     async fn invocation_loop<Ctx: WorkerCtx>(
-        mut receiver: UnboundedReceiver<WorkerCommand>,
+        receiver: UnboundedReceiver<WorkerCommand>,
         active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         owned_worker_id: OwnedWorkerId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
         waiting_for_command: Arc<AtomicBool>,
         oom_retry_count: u64,
     ) {
-        loop {
-            debug!("Invocation queue loop creating the instance");
-
-            let (instance, store) = match Self::create_instance(parent.clone()).await {
-                Ok((instance, store)) => {
-                    parent.events().publish(Event::WorkerLoaded {
-                        worker_id: owned_worker_id.worker_id(),
-                        result: Ok(()),
-                    });
-                    (instance, store)
-                }
-                Err(err) => {
-                    warn!("Failed to start the worker: {err}");
-                    parent.events().publish(Event::WorkerLoaded {
-                        worker_id: owned_worker_id.worker_id(),
-                        result: Err(err.clone()),
-                    });
-                    parent.stop_internal(true, Some(err)).await;
-                    break; // early return, we can't retry this
-                }
-            };
-
-            debug!("Invocation queue loop preparing the instance");
-
-            let mut final_decision = {
-                let mut store = store.lock().await;
-
-                store
-                    .data_mut()
-                    .set_suspended()
-                    .await
-                    .expect("Initial set_suspended should never fail");
-                let span = span!(
-                    Level::INFO,
-                    "invocation",
-                    worker_id = owned_worker_id.worker_id.to_string(),
-                );
-                let prepare_result =
-                    Ctx::prepare_instance(&owned_worker_id.worker_id, &instance, &mut *store)
-                        .instrument(span)
-                        .await;
-
-                match prepare_result {
-                    Ok(decision) => {
-                        debug!("Recovery decision from prepare_instance: {decision:?}");
-                        decision
-                    }
-                    Err(err) => {
-                        warn!("Failed to start the worker: {err}");
-                        if let Err(err2) = store.data_mut().set_suspended().await {
-                            warn!("Additional error during startup of the worker: {err2}");
-                        }
-
-                        parent.stop_internal(true, Some(err)).await;
-                        break; // early return, we can't retry this
-                    }
-                }
-            };
-
-            if final_decision == RetryDecision::None {
-                debug!("Invocation queue loop started");
-
-                // Exits when RunningWorker is dropped
-                waiting_for_command.store(true, Ordering::Release);
-                while let Some(cmd) = receiver.recv().await {
-                    waiting_for_command.store(false, Ordering::Release);
-                    match cmd {
-                        WorkerCommand::ResumeReplay => {
-                            let mut store = store.lock().await;
-
-                            let resume_replay_result =
-                                Ctx::resume_replay(&mut *store, &instance).await;
-
-                            match resume_replay_result {
-                                Ok(decision) => {
-                                    final_decision = decision;
-                                }
-
-                                Err(err) => {
-                                    warn!("Failed to resume replay: {err}");
-                                    if let Err(err2) = store.data_mut().set_suspended().await {
-                                        warn!("Additional error during resume of replay of worker: {err2}");
-                                    }
-
-                                    parent.stop_internal(true, Some(err)).await;
-                                    break;
-                                }
-                            }
-                        }
-                        WorkerCommand::Invocation => {
-                            let message = active
-                                .write()
-                                .await
-                                .pop_front()
-                                .expect("Message should be present");
-
-                            let mut store_mutex = store.lock().await;
-                            let store = store_mutex.deref_mut();
-
-                            match message {
-                                QueuedWorkerInvocation::ListDirectory { path, sender } => {
-                                    let result = store.data_mut().list_directory(&path).await;
-                                    let _ = sender.send(result);
-                                }
-                                QueuedWorkerInvocation::ReadFile { path, sender } => {
-                                    let result = store.data_mut().read_file(&path).await;
-                                    match result {
-                                        Ok(ReadFileResult::Ok(stream)) => {
-                                            // special case. We need to wait until the stream is consumed to avoid corruption
-                                            //
-                                            // This will delay processing of the next invocation and is quite unfortunate.
-                                            // A possible improvement would be to check whether we are on a copy-on-write filesystem
-                                            // if yes, we can make a cheap copy of the file here and serve the read from that copy.
-
-                                            let (latch, latch_receiver) = oneshot::channel();
-                                            let drop_stream =
-                                                DropStream::new(stream, || latch.send(()).unwrap());
-                                            let _ = sender.send(Ok(ReadFileResult::Ok(Box::pin(
-                                                drop_stream,
-                                            ))));
-                                            latch_receiver.await.unwrap();
-                                        }
-                                        other => {
-                                            let _ = sender.send(other);
-                                        }
-                                    };
-                                }
-                                QueuedWorkerInvocation::External {
-                                    invocation: inner,
-                                    canceled,
-                                } => {
-                                    if !canceled {
-                                        match inner.invocation {
-                                            WorkerInvocation::ExportedFunction {
-                                                idempotency_key: invocation_key,
-                                                full_function_name,
-                                                function_input,
-                                            } => {
-                                                let span = span!(
-                                                    Level::INFO,
-                                                    "invocation",
-                                                    worker_id =
-                                                        owned_worker_id.worker_id.to_string(),
-                                                    idempotency_key = invocation_key.to_string(),
-                                                    function = full_function_name
-                                                );
-                                                let do_break = async {
-                                                    store
-                                                        .data_mut()
-                                                        .set_current_idempotency_key(invocation_key)
-                                                        .await;
-
-                                                    if let Some(idempotency_key) =
-                                                        &store.data().get_current_idempotency_key().await
-                                                    {
-                                                        store
-                                                            .data_mut()
-                                                            .get_public_state()
-                                                            .worker()
-                                                            .store_invocation_resuming(idempotency_key)
-                                                            .await;
-                                                    }
-
-                                                    // Make sure to update the pending invocation queue in the status record before
-                                                    // the invocation writes the invocation start oplog entry
-                                                    store.data_mut().update_pending_invocations().await;
-
-                                                    let result = invoke_worker(
-                                                        full_function_name.clone(),
-                                                        function_input.clone(),
-                                                        store,
-                                                        &instance,
-                                                    )
-                                                        .await;
-
-                                                    match result {
-                                                        Ok(InvokeResult::Succeeded {
-                                                               output,
-                                                               consumed_fuel,
-                                                           }) => {
-                                                            let component_metadata =
-                                                                store.as_context().data().component_metadata();
-
-                                                            let function_results = exports::function_by_name(
-                                                                &component_metadata.exports,
-                                                                &full_function_name,
-                                                            );
-
-                                                            match function_results {
-                                                                Ok(Some(export_function)) => {
-                                                                    let function_results = export_function
-                                                                        .results
-                                                                        .into_iter()
-                                                                        .collect();
-
-                                                                    let result = interpret_function_results(
-                                                                        output,
-                                                                        function_results,
-                                                                    )
-                                                                        .map_err(|e| GolemError::ValueMismatch {
-                                                                            details: e.join(", "),
-                                                                        });
-
-                                                                    match result {
-                                                                        Ok(result) => {
-                                                                            store
-                                                                                .data_mut()
-                                                                                .on_invocation_success(
-                                                                                    &full_function_name,
-                                                                                    &function_input,
-                                                                                    consumed_fuel,
-                                                                                    result,
-                                                                                )
-                                                                                .await
-                                                                                .unwrap(); // TODO: handle this error
-
-                                                                            if store
-                                                                                .data_mut()
-                                                                                .component_metadata()
-                                                                                .component_type
-                                                                                == ComponentType::Ephemeral
-                                                                            {
-                                                                                final_decision =
-                                                                                    RetryDecision::None;
-                                                                                true // stop after the invocation
-                                                                            } else {
-                                                                                false // continue processing the queue
-                                                                            }
-                                                                        }
-                                                                        Err(error) => {
-                                                                            let trap_type =
-                                                                                TrapType::from_error::<Ctx>(
-                                                                                    &anyhow!(error),
-                                                                                );
-
-                                                                            store
-                                                                                .data_mut()
-                                                                                .on_invocation_failure(
-                                                                                    &trap_type,
-                                                                                )
-                                                                                .await;
-
-                                                                            final_decision =
-                                                                                RetryDecision::None;
-                                                                            true // break
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                                Ok(None) => {
-                                                                    store
-                                                                        .data_mut()
-                                                                        .on_invocation_failure(
-                                                                            &TrapType::Error(
-                                                                                WorkerError::InvalidRequest(
-                                                                                    "Function not found"
-                                                                                        .to_string(),
-                                                                                ),
-                                                                            ),
-                                                                        )
-                                                                        .await;
-
-                                                                    final_decision = RetryDecision::None;
-                                                                    true // break
-                                                                }
-
-                                                                Err(result) => {
-                                                                    store
-                                                                        .data_mut()
-                                                                        .on_invocation_failure(
-                                                                            &TrapType::Error(
-                                                                                WorkerError::Unknown(result),
-                                                                            ),
-                                                                        )
-                                                                        .await;
-
-                                                                    final_decision = RetryDecision::None;
-                                                                    true // break
-                                                                }
-                                                            }
-                                                        }
-                                                        _ => {
-                                                            let trap_type = match result {
-                                                                Ok(invoke_result) => {
-                                                                    invoke_result.as_trap_type::<Ctx>()
-                                                                }
-                                                                Err(error) => {
-                                                                    Some(TrapType::from_error::<Ctx>(&anyhow!(
-                                                                        error
-                                                                    )))
-                                                                }
-                                                            };
-                                                            let decision = match trap_type {
-                                                                Some(trap_type) => {
-                                                                    store
-                                                                        .data_mut()
-                                                                        .on_invocation_failure(&trap_type)
-                                                                        .await
-                                                                }
-                                                                None => RetryDecision::None,
-                                                            };
-
-                                                            final_decision = decision;
-                                                            true // break
-                                                        }
-                                                    }
-                                                }
-                                                    .instrument(span)
-                                                    .await;
-                                                if do_break {
-                                                    break;
-                                                }
-                                            }
-                                            WorkerInvocation::ManualUpdate { target_version } => {
-                                                let span = span!(
-                                                    Level::INFO,
-                                                    "manual_update",
-                                                    worker_id =
-                                                        owned_worker_id.worker_id.to_string(),
-                                                    target_version = target_version.to_string()
-                                                );
-                                                let do_break = async {
-                                                    let _idempotency_key = {
-                                                        let ctx = store.data_mut();
-                                                        let idempotency_key = IdempotencyKey::fresh();
-                                                        ctx.set_current_idempotency_key(idempotency_key.clone())
-                                                            .await;
-                                                        idempotency_key
-                                                    };
-
-                                                    if let Some(save_snapshot) = find_first_available_function(
-                                                        store,
-                                                        &instance,
-                                                        vec![
-                                                            "golem:api/save-snapshot@1.1.0.{save}".to_string(),
-                                                            "golem:api/save-snapshot@0.2.0.{save}".to_string(),
-                                                        ],
-                                                    ) {
-                                                        store.data_mut().begin_call_snapshotting_function();
-
-                                                        let result = invoke_worker(
-                                                            save_snapshot,
-                                                            vec![],
-                                                            store,
-                                                            &instance,
-                                                        )
-                                                            .await;
-                                                        store.data_mut().end_call_snapshotting_function();
-
-                                                        match result {
-                                                            Ok(InvokeResult::Succeeded { output, .. }) =>
-                                                                if let Some(bytes) = Self::decode_snapshot_result(output) {
-                                                                    match store
-                                                                        .data_mut()
-                                                                        .get_public_state()
-                                                                        .oplog()
-                                                                        .create_snapshot_based_update_description(
-                                                                            target_version,
-                                                                            &bytes,
-                                                                        )
-                                                                        .await
-                                                                    {
-                                                                        Ok(update_description) => {
-                                                                            // Enqueue the update
-                                                                            parent.enqueue_update(update_description).await;
-
-                                                                            // Make sure to update the pending updates queue
-                                                                            store.data_mut().update_pending_updates().await;
-
-                                                                            // Reactivate the worker
-                                                                            final_decision = RetryDecision::Immediate;
-
-                                                                            // Stop processing the queue to avoid race conditions
-                                                                            true
-                                                                        }
-                                                                        Err(error) => {
-                                                                            Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
-                                                                            false
-                                                                        }
-                                                                    }
-                                                                } else {
-                                                                    Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
-                                                                    false
-                                                                },
-                                                            Ok(InvokeResult::Failed { error, .. }) => {
-                                                                let stderr = store.data().get_public_state().event_service().get_last_invocation_errors();
-                                                                let error = error.to_string(&stderr);
-                                                                Self::fail_update(
-                                                                    target_version,
-                                                                    format!("failed to get a snapshot for manual update: {error}"),
-                                                                    store,
-                                                                ).await;
-                                                                false
-                                                            }
-                                                            Ok(InvokeResult::Exited { .. }) => {
-                                                                Self::fail_update(
-                                                                    target_version,
-                                                                    "failed to get a snapshot for manual update: it called exit".to_string(),
-                                                                    store,
-                                                                ).await;
-                                                                false
-                                                            }
-                                                            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                                                                Self::fail_update(
-                                                                    target_version,
-                                                                    format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
-                                                                    store,
-                                                                ).await;
-                                                                false
-                                                            }
-                                                            Err(error) => {
-                                                                Self::fail_update(
-                                                                    target_version,
-                                                                    format!("failed to get a snapshot for manual update: {error:?}"),
-                                                                    store,
-                                                                ).await;
-                                                                false
-                                                            }
-                                                        }
-                                                    } else {
-                                                        Self::fail_update(
-                                                            target_version,
-                                                            "failed to get a snapshot for manual update: save-snapshot is not exported".to_string(),
-                                                            store,
-                                                        ).await;
-                                                        false
-                                                    }
-                                                }.instrument(span).await;
-                                                if do_break {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        WorkerCommand::Interrupt(kind) => {
-                            match kind {
-                                InterruptKind::Restart | InterruptKind::Jump => {
-                                    final_decision = RetryDecision::Immediate;
-                                }
-                                _ => {
-                                    final_decision = RetryDecision::None;
-                                }
-                            }
-                            break;
-                        }
-                    }
-                    waiting_for_command.store(true, Ordering::Release);
-                }
-                waiting_for_command.store(false, Ordering::Release);
-
-                debug!("Invocation queue loop finished");
-            }
-
-            {
-                if let Err(err) = store.lock().await.data_mut().set_suspended().await {
-                    error!("Failed to set the worker to suspended state at the end of the invocation loop: {err}");
-                }
-            }
-
-            // Make sure all pending commits are done
-            store
-                .lock()
-                .await
-                .data_mut()
-                .get_public_state()
-                .oplog()
-                .commit(CommitLevel::Immediate)
-                .await;
-
-            match final_decision {
-                RetryDecision::Immediate => {
-                    debug!("Invocation queue loop triggering restart immediately");
-                    continue;
-                }
-                RetryDecision::Delayed(delay) => {
-                    debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
-                    tokio::time::sleep(delay).await;
-                    debug!("Invocation queue loop restarting after delay");
-                    continue;
-                }
-                RetryDecision::None => {
-                    debug!("Invocation queue loop notifying parent about being stopped");
-                    parent.stop_internal(true, None).await;
-                    break;
-                }
-                RetryDecision::ReacquirePermits => {
-                    let delay = get_delay(parent.oom_retry_config(), oom_retry_count);
-                    debug!("Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}");
-                    let _ = Worker::restart_on_oom(parent, true, delay, oom_retry_count + 1).await;
-                    break;
-                }
-            }
-        }
-    }
-
-    async fn fail_update<Ctx: WorkerCtx>(
-        target_version: ComponentVersion,
-        error: String,
-        store: &mut Store<Ctx>,
-    ) {
-        store
-            .data_mut()
-            .on_worker_update_failed(target_version, Some(error))
-            .await;
-    }
-
-    /// Attempts to interpret the save snapshot result as a byte vector
-    fn decode_snapshot_result(values: Vec<Value>) -> Option<Vec<u8>> {
-        if values.len() == 1 {
-            if let Value::List(bytes) = &values[0] {
-                let mut result = Vec::new();
-                for value in bytes {
-                    if let Value::U8(byte) = value {
-                        result.push(*byte);
-                    } else {
-                        return None;
-                    }
-                }
-                Some(result)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        let mut invocation_loop = InvocationLoop {
+            receiver,
+            active,
+            owned_worker_id,
+            parent,
+            waiting_for_command,
+            oom_retry_count,
+        };
+        invocation_loop.run().await;
     }
 }
 

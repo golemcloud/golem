@@ -93,6 +93,7 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
                 function_name: virtual_exports::http_incoming_handler::FUNCTION_NAME.to_string(),
                 function_params: vec![type_annotated_param],
                 idempotency_key: worker_detail.idempotency_key.clone(),
+                invocation_context: worker_detail.invocation_context.clone(),
                 namespace: namespace.clone(),
             };
 

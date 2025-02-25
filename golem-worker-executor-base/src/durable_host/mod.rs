@@ -23,8 +23,8 @@ use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    PersistenceLevel, ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError,
+    ListDirectoryResult, PersistenceLevel, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
@@ -58,6 +58,7 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription,
     WorkerError, WorkerResourceId,
@@ -737,6 +738,25 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         self.state.get_current_idempotency_key()
     }
 
+    async fn set_current_invocation_context(
+        &mut self,
+        invocation_context: InvocationContextStack,
+    ) -> Result<(), GolemError> {
+        let (invocation_context, current_span_id) =
+            InvocationContext::from_stack(invocation_context).map_err(GolemError::runtime)?;
+
+        self.state.invocation_context = invocation_context;
+        self.state.current_span_id = current_span_id;
+
+        Ok(())
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.state
+            .invocation_context
+            .get_stack(&self.state.current_span_id)
+    }
+
     fn is_live(&self) -> bool {
         self.state.is_live()
     }
@@ -1259,7 +1279,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 match oplog_entry {
                     Err(error) => break Err(error),
                     Ok(None) => break Ok(RetryDecision::None),
-                    Ok(Some((function_name, function_input, idempotency_key))) => {
+                    Ok(Some((
+                        function_name,
+                        function_input,
+                        idempotency_key,
+                        invocation_context,
+                    ))) => {
                         debug!("Replaying function {function_name}");
                         let span = span!(Level::INFO, "replaying", function = function_name);
                         store
@@ -1267,6 +1292,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .data_mut()
                             .set_current_idempotency_key(idempotency_key)
                             .await;
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .set_current_invocation_context(invocation_context)
+                            .await?;
 
                         let full_function_name = function_name.to_string();
                         let invoke_result = invoke_worker(
@@ -1849,6 +1879,9 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     component_metadata: ComponentMetadata<Ctx::Types>,
 
     total_linear_memory_size: u64,
+
+    invocation_context: InvocationContext,
+    current_span_id: SpanId,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1882,6 +1915,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             last_oplog_index,
         )
         .await;
+        let invocation_context = InvocationContext::new(None);
+        let current_span_id = invocation_context.root.span_id().clone();
         Self {
             oplog_service,
             oplog: oplog.clone(),
@@ -1910,6 +1945,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             component_metadata,
             total_linear_memory_size,
             replay_state,
+            invocation_context,
+            current_span_id,
         }
     }
 

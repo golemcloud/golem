@@ -143,6 +143,7 @@ mod tests {
                     worker_name: Some(Expr::identifier_global("request", None)),
                     idempotency_key: None,
                     response_mapping: ResponseMapping(Expr::literal("sample")),
+                    invocation_context: None,
                 }),
                 middlewares: None,
             }

@@ -38,11 +38,13 @@ use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
 pub use crate::base_model::*;
+use crate::model::invocation_context::InvocationContextStack;
 
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
+pub mod invocation_context;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
@@ -254,6 +256,7 @@ pub enum ScheduledAction {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     },
 }
 
@@ -856,15 +859,88 @@ impl IntoValue for WorkerStatus {
     }
 }
 
+/// Internal representation of `WorkerInvocation` to support backward compatibility
+/// in its binary format.
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub enum WorkerInvocation {
-    ExportedFunction {
+enum SerializedWorkerInvocation {
+    ExportedFunctionV1 {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
-        function_input: Vec<golem_wasm_rpc::Value>,
+        function_input: Vec<Value>,
     },
     ManualUpdate {
         target_version: ComponentVersion,
+    },
+    ExportedFunction {
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
+    },
+}
+
+impl From<WorkerInvocation> for SerializedWorkerInvocation {
+    fn from(value: WorkerInvocation) -> Self {
+        match value {
+            WorkerInvocation::ManualUpdate { target_version } => {
+                Self::ManualUpdate { target_version }
+            }
+            WorkerInvocation::ExportedFunction {
+                idempotency_key,
+                full_function_name,
+                function_input,
+                invocation_context,
+            } => Self::ExportedFunction {
+                idempotency_key,
+                full_function_name,
+                function_input,
+                invocation_context,
+            },
+        }
+    }
+}
+
+impl From<SerializedWorkerInvocation> for WorkerInvocation {
+    fn from(value: SerializedWorkerInvocation) -> Self {
+        match value {
+            SerializedWorkerInvocation::ExportedFunctionV1 {
+                idempotency_key,
+                full_function_name,
+                function_input,
+            } => Self::ExportedFunction {
+                idempotency_key,
+                full_function_name,
+                function_input,
+                invocation_context: InvocationContextStack::fresh(),
+            },
+            SerializedWorkerInvocation::ManualUpdate { target_version } => {
+                Self::ManualUpdate { target_version }
+            }
+            SerializedWorkerInvocation::ExportedFunction {
+                idempotency_key,
+                full_function_name,
+                function_input,
+                invocation_context,
+            } => Self::ExportedFunction {
+                idempotency_key,
+                full_function_name,
+                function_input,
+                invocation_context,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum WorkerInvocation {
+    ManualUpdate {
+        target_version: ComponentVersion,
+    },
+    ExportedFunction {
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     },
 }
 
@@ -885,6 +961,36 @@ impl WorkerInvocation {
             } => Some(idempotency_key),
             _ => None,
         }
+    }
+
+    pub fn invocation_context(&self) -> InvocationContextStack {
+        match self {
+            Self::ExportedFunction {
+                invocation_context, ..
+            } => invocation_context.clone(),
+            _ => InvocationContextStack::fresh(),
+        }
+    }
+}
+
+impl Encode for WorkerInvocation {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        let serialized: SerializedWorkerInvocation = self.clone().into();
+        serialized.encode(encoder)
+    }
+}
+
+impl Decode for WorkerInvocation {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let serialized: SerializedWorkerInvocation = Decode::decode(decoder)?;
+        Ok(serialized.into())
+    }
+}
+
+impl<'de> BorrowDecode<'de> for WorkerInvocation {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let serialized: SerializedWorkerInvocation = BorrowDecode::borrow_decode(decoder)?;
+        Ok(serialized.into())
     }
 }
 
