@@ -19,12 +19,12 @@ use crate::parser::generic_type_parameter::generic_type_parameter;
 use crate::parser::rib_expr::rib_expr;
 use crate::rib_source_span::GetSourcePosition;
 use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
-use combine::error::Commit;
+use combine::error::{Commit, StreamError};
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
+use combine::{sep_by, ParseResult, Positioned};
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>
@@ -73,8 +73,11 @@ where
             let mut current_param = String::new();
             let mut result = Vec::new();
             let mut result_committed: Option<Commit<()>> = None;
+            let mut error: Option<RibParseError> = None;
+
             while nesting > 0 {
                 let (next_char, committed) = any().parse_stream(input).into_result()?;
+
                 if next_char == ')' {
                     nesting -= 1;
                     if nesting > 0 {
@@ -94,8 +97,11 @@ where
                             current_param.clear();
                         }
                         Err(err) => {
-                            // TODO: THIS SHOULD FAIL THE PARSER ONLY
-                            panic!("Failed to parse resource parameter {current_param}: {err}");
+                            error = Some(RibParseError::Message(format!(
+                                "Failed to parse resource parameter {current_param}: {err}"
+                            )));
+
+                            break;
                         }
                     }
                 } else {
@@ -108,6 +114,17 @@ where
                 };
             }
 
+            if let Some(err) = error {
+                return ParseResult::CommitErr(ParseError::from_error(
+                    input.position(),
+                    StreamError::message_format(format!(
+                        "Failed to parse resource parameter {}",
+                        err
+                    )),
+                ))
+                .into_result();
+            }
+
             if !current_param.is_empty() {
                 let expr = Expr::from_text(current_param.trim());
                 match expr {
@@ -115,8 +132,12 @@ where
                         result.push(expr);
                     }
                     Err(err) => {
-                        // TODO: THIS SHOULD FAIL THE PARSER ONLY
-                        panic!("Failed to parse resource parameter {current_param}: {err}");
+                        let error_msg = format!("Failed to parse resource parameter {}", err);
+                        return ParseResult::CommitErr(ParseError::from_error(
+                            input.position(),
+                            StreamError::message_format(error_msg),
+                        ))
+                        .into_result();
                     }
                 }
             }
