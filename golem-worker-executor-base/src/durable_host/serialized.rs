@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::error::GolemError;
+use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
@@ -99,6 +100,7 @@ pub enum SerializableError {
     SocketError { code: u8 },
     Rpc { error: RpcError },
     WorkerProxy { error: WorkerProxyError },
+    Rdbms { error: RdbmsError },
 }
 
 fn get_fs_error_code(value: &filesystem::types::ErrorCode) -> u8 {
@@ -288,6 +290,7 @@ impl From<SerializableError> for anyhow::Error {
             }
             SerializableError::Rpc { error } => anyhow!(error),
             SerializableError::WorkerProxy { error } => anyhow!(error),
+            SerializableError::Rdbms { error } => anyhow!(error),
         }
     }
 }
@@ -313,6 +316,7 @@ impl From<SerializableError> for FsError {
             }
             SerializableError::Rpc { error } => FsError::trap(anyhow!(error)),
             SerializableError::WorkerProxy { error } => FsError::trap(anyhow!(error)),
+            SerializableError::Rdbms { error } => FsError::trap(anyhow!(error)),
         }
     }
 }
@@ -346,6 +350,7 @@ impl From<SerializableError> for GolemError {
             }
             SerializableError::Rpc { error } => GolemError::unknown(error.to_string()),
             SerializableError::WorkerProxy { error } => GolemError::unknown(error.to_string()),
+            SerializableError::Rdbms { error } => GolemError::unknown(error.to_string()),
         }
     }
 }
@@ -387,6 +392,7 @@ impl From<SerializableError> for SocketError {
             }
             SerializableError::Rpc { error } => SocketError::trap(anyhow!(error)),
             SerializableError::WorkerProxy { error } => SocketError::trap(anyhow!(error)),
+            SerializableError::Rdbms { error } => SocketError::trap(anyhow!(error)),
         }
     }
 }
@@ -422,6 +428,9 @@ impl From<SerializableError> for RpcError {
             SerializableError::WorkerProxy { error } => RpcError::ProtocolError {
                 details: error.to_string(),
             },
+            SerializableError::Rdbms { error } => RpcError::ProtocolError {
+                details: error.to_string(),
+            },
         }
     }
 }
@@ -454,6 +463,10 @@ impl From<SerializableError> for WorkerProxyError {
                 WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
             }
             SerializableError::WorkerProxy { error } => error,
+            SerializableError::Rdbms { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+            }
         }
     }
 }
@@ -488,6 +501,34 @@ impl From<SerializableStreamError> for StreamError {
 impl From<GolemError> for SerializableStreamError {
     fn from(value: GolemError) -> Self {
         Self::Trap(value.into())
+    }
+}
+
+impl From<&RdbmsError> for SerializableError {
+    fn from(value: &RdbmsError) -> Self {
+        SerializableError::Rdbms {
+            error: value.clone(),
+        }
+    }
+}
+
+impl From<SerializableError> for RdbmsError {
+    fn from(value: SerializableError) -> Self {
+        match value {
+            SerializableError::Generic { message } => RdbmsError::other_response_failure(message),
+            SerializableError::FsError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                RdbmsError::other_response_failure(anyhow)
+            }
+            SerializableError::Golem { error } => RdbmsError::other_response_failure(error),
+            SerializableError::SocketError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                RdbmsError::other_response_failure(anyhow)
+            }
+            SerializableError::Rpc { error } => RdbmsError::other_response_failure(error),
+            SerializableError::WorkerProxy { error } => RdbmsError::other_response_failure(error),
+            SerializableError::Rdbms { error } => error,
+        }
     }
 }
 

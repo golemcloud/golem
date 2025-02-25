@@ -51,7 +51,9 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{plugins, All, HasAll, HasConfig, HasOplogService};
+use golem_worker_executor_base::services::{
+    plugins, rdbms, All, HasAll, HasConfig, HasOplogService,
+};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
@@ -668,6 +670,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
@@ -692,6 +695,7 @@ impl WorkerCtx for TestWorkerCtx {
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             event_service,
             oplog_service,
             oplog,
@@ -967,6 +971,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator<TestWorkerCtx> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -996,6 +1001,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             shard_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -1026,6 +1032,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             shard_manager_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -1051,6 +1058,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             oplog_service,
             rpc,
             scheduler_service,

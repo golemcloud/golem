@@ -29,15 +29,16 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
     GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse,
+    InvokeJsonRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{
-    IdempotencyKey, InvocationContext, InvokeResult, LogEvent, TargetWorkerId, WorkerId,
+    IdempotencyKey, InvocationContext, InvokeResult, InvokeResultTyped, LogEvent, TargetWorkerId,
+    WorkerId,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
@@ -423,6 +424,79 @@ impl WorkerService for ForwardingWorkerService {
                     )),
                 })
             }
+        }
+    }
+
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        invoke_parameters: Vec<ValueAndType>,
+        context: Option<InvocationContext>,
+    ) -> crate::Result<InvokeAndAwaitTypedResponse> {
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .invoke_and_await_worker_typed(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
+                    worker_id: Some(worker_id.clone()),
+                    idempotency_key: idempotency_key.clone(),
+                    name: function.clone(),
+                    input: invoke_parameters
+                        .clone()
+                        .into_iter()
+                        .map(|param| param.value.into())
+                        .collect(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                    account_limits: Some(ResourceLimits {
+                        available_fuel: i64::MAX,
+                        max_memory_per_worker: i64::MAX,
+                    }),
+                    context: context.clone(),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor invoke call"
+            )),
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
+                result,
+            )) => Ok(InvokeAndAwaitTypedResponse {
+                result: Some(
+                    worker::v1::invoke_and_await_typed_response::Result::Success(
+                        InvokeResultTyped {
+                            result: result.output,
+                        },
+                    ),
+                ),
+            }),
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
+                error,
+            )) => Ok(InvokeAndAwaitTypedResponse {
+                result: Some(worker::v1::invoke_and_await_typed_response::Result::Error(
+                    WorkerError {
+                        error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                    },
+                )),
+            }),
         }
     }
 
