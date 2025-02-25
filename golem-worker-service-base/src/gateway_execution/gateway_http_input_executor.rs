@@ -327,7 +327,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         for (key, value) in record {
             if key != "span_id" && key != "span-id" && key != "trace_id" && key != "trace-id" {
-                span.set_attribute(key, to_attribute_value(&value)?).await;
+                span.set_attribute(key, to_attribute_value(&value)?);
             }
         }
 

@@ -290,7 +290,7 @@ impl InvocationContextCompiled {
     pub fn from_invocation_context(
         invocation_context: &Expr,
         exports: &[AnalysedExport],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RibError> {
         let invocation_context_compiled =
             DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;
 
