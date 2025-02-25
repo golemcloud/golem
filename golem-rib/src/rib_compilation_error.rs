@@ -18,12 +18,6 @@ pub struct RibCompilationError {
     pub help_messages: Vec<String>,
 }
 
-impl Debug for RibCompilationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
-}
-
 impl RibCompilationError {
     pub fn with_additional_error_detail(&self, detail: &str) -> RibCompilationError {
         let mut error = self.clone();
