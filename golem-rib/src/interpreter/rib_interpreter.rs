@@ -241,8 +241,8 @@ impl Interpreter {
                 RibIR::Or => {
                     internal::run_or_instruction(&mut stack)?;
                 }
-                RibIR::ListToIterator => {
-                    internal::run_list_to_iterator_instruction(&mut stack)?;
+                RibIR::ToIterator => {
+                    internal::run_to_iterator(&mut stack)?;
                 }
                 RibIR::CreateSink(analysed_type) => {
                     internal::run_create_sink_instruction(&mut stack, &analysed_type)?
@@ -283,10 +283,11 @@ mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
+    use std::fmt::format;
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{str, tuple};
+    use golem_wasm_ast::analysis::analysed_type::{bool, str, tuple, u64};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -370,21 +371,131 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn run_list_to_iterator_instruction(
-        interpreter_stack: &mut InterpreterStack,
-    ) -> Result<(), String> {
-        if let Some(items) = interpreter_stack
+    pub(crate) fn run_to_iterator(interpreter_stack: &mut InterpreterStack) -> Result<(), String> {
+        let popped_up = interpreter_stack
             .pop()
-            .and_then(|v| v.get_val())
-            .and_then(|v| v.into_list_items())
-        {
-            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                items.into_iter(),
-            )));
+            .ok_or("Internal Error: Failed to get a value from the stack".to_string())?;
 
-            Ok(())
-        } else {
-            Err("Internal Error: Expected a List on the stack for ListToIterator".to_string())
+        let value_and_type = popped_up
+            .get_val()
+            .ok_or("Internal Error: Failed to get a value from the stack".to_string())?;
+
+        match (value_and_type.value, value_and_type.typ) {
+            (Value::List(items), AnalysedType::List(item_type)) => {
+                let items = items
+                    .into_iter()
+                    .map(|item| ValueAndType::new(item, (*item_type.inner).clone()))
+                    .collect::<Vec<_>>();
+
+                interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                    items.into_iter(),
+                )));
+
+                Ok(())
+            }
+            (Value::Record(fields), AnalysedType::Record(record_type)) => {
+                let mut from: Option<usize> = None;
+                let mut to: Option<usize> = None;
+                let mut inclusive = false;
+
+                let value_and_names = fields.into_iter().zip(record_type.fields);
+
+                for (value, name_and_type) in value_and_names {
+                    match name_and_type.name.as_str() {
+                        "from" => {
+                            from = Some(
+                                to_num(&value)
+                                    .ok_or(format!("cannot cast {:?} to a number", value))?,
+                            )
+                        }
+                        "to" => {
+                            to = Some(
+                                to_num(&value)
+                                    .ok_or(format!("cannot cast {:?} to a number", value))?,
+                            )
+                        }
+                        "inclusive" => {
+                            inclusive = match value {
+                                Value::Bool(b) => b,
+                                _ => return Err("inclusive field should be a boolean".to_string()),
+                            }
+                        }
+                        _ => return Err(format!("Invalid field name {}", name_and_type.name)),
+                    }
+                }
+
+                match (from, to) {
+                    (Some(from), Some(to)) => {
+                        if inclusive {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (from..=to)
+                                    .into_iter()
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        } else {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (from..to)
+                                    .into_iter()
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        }
+                    }
+
+                    (None, Some(to)) => {
+                        if inclusive {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (0..=to)
+                                    .into_iter()
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        } else {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (0..to)
+                                    .into_iter()
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        }
+                    }
+
+                    (Some(from), None) => {
+                        interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                            (from..)
+                                .into_iter()
+                                .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                        )));
+                    }
+
+                    (None, None) => {
+                        interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new({
+                            let range = 0..;
+                            range
+                                .into_iter()
+                                .map(|i| ValueAndType::new(Value::U64(i as u64), u64()))
+                        })));
+                    }
+                };
+
+                Ok(())
+            }
+
+            _ => Err("Internal Error: Failed to convert to an iterator".to_string()),
+        }
+    }
+
+    fn to_num(value: &Value) -> Option<usize> {
+        match value {
+            Value::U64(u64) => Some(*u64 as usize),
+            Value::Bool(_) => None,
+            Value::U8(u8) => Some(*u8 as usize),
+            Value::U16(u16) => Some(*u16 as usize),
+            Value::U32(u32) => Some(*u32 as usize),
+            Value::S8(s8) => Some(*s8 as usize),
+            Value::S16(s16) => Some(*s16 as usize),
+            Value::S32(s32) => Some(*s32 as usize),
+            Value::S64(s64) => Some(*s64 as usize),
+            Value::F32(f32) => Some(*f32 as usize),
+            Value::F64(f64) => Some(*f64 as usize),
+            _ => None,
         }
     }
 
@@ -2254,6 +2365,35 @@ mod interpreter_tests {
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+    }
+
+    mod range_tests {
+        use test_r::test;
+        use crate::{compile, Expr};
+        use crate::interpreter::rib_interpreter::Interpreter;
+
+        #[test]
+        async fn test_range() {
+            let expr = r#"
+              let x = 1..;
+
+              for i in x {
+                yield i;
+              }
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            dbg!(result);
+
+            assert!(false)
+
         }
     }
 

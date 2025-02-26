@@ -99,7 +99,7 @@ mod internal {
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
-    use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record};
+    use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, u64};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -598,7 +598,7 @@ mod internal {
             }
 
             Expr::Range { range, .. } => {
-                handle_range(range, stack, None, None);
+                handle_range(range, stack, Some(u64()), Some(u64())); // TODO; get it from inferred type
             }
 
             // Invoke is always handled by the CallType::Function branch
@@ -717,7 +717,7 @@ mod internal {
     ) {
         stack.push(ExprState::from_expr(iterable_expr));
 
-        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+        stack.push(ExprState::from_ir(RibIR::ToIterator));
 
         stack.push(ExprState::from_ir(RibIR::CreateSink(sink_type.clone())));
 
@@ -763,7 +763,7 @@ mod internal {
             reduce_variable.clone(),
         )));
 
-        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+        stack.push(ExprState::from_ir(RibIR::ToIterator));
 
         let loop_start_label = instruction_id.increment_mut();
 

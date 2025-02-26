@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use combine::parser::char::{char as char_, spaces, string};
-use combine::{attempt, optional, ParseError, Parser};
+use combine::{attempt, optional, parser, ParseError, Parser, Stream};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
@@ -21,6 +21,16 @@ use crate::parser::identifier::identifier;
 use crate::parser::select_field::select_field;
 use crate::parser::select_index::select_index;
 use crate::rib_source_span::GetSourcePosition;
+
+
+parser! {
+    pub fn select_index_0[Input]()(Input) -> Expr
+    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
+    {
+        select_index()
+    }
+}
+
 
 pub fn range<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -35,7 +45,7 @@ where
         // Allows space on either side of the dots, but not in between dots (or . and .=)
         optional(
             attempt(select_field())
-                .or(attempt(select_index()))
+                .or(attempt(select_index_0()))
                 .or(identifier())
                 .or(internal::pos_num())
                 .skip(spaces()),

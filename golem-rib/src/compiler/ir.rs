@@ -59,7 +59,7 @@ pub enum RibIR {
     Divide(AnalysedType),
     Multiply(AnalysedType),
     Negate,
-    ListToIterator,
+    ToIterator,
     CreateSink(AnalysedType),
     AdvanceIterator,
     PushToSink,
@@ -508,7 +508,7 @@ mod protobuf {
                         function_reference_type,
                     ))
                 }
-                Instruction::ListToIterator(_) => Ok(RibIR::ListToIterator),
+                Instruction::ListToIterator(_) => Ok(RibIR::ToIterator),
                 Instruction::CreateSink(create_sink) => {
                     let result = create_sink
                         .list_type
@@ -656,7 +656,7 @@ mod protobuf {
                     })
                 }
 
-                RibIR::ListToIterator => Instruction::ListToIterator(
+                RibIR::ToIterator => Instruction::ListToIterator(
                     golem_api_grpc::proto::golem::rib::ListToIterator {},
                 ),
                 RibIR::CreateSink(analysed_type) => {
