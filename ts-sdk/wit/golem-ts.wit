@@ -1,8 +1,8 @@
 package golem:ts;
 
 world golem-ts{
-  import golem:api/host@1.1.0;
-  import golem:api/oplog@1.1.0;
+  import golem:api/host@1.1.5;
+  import golem:api/oplog@1.1.5;
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;
