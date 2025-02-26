@@ -528,10 +528,7 @@ jobs:
         with:
           pattern: target-debug-*
           path: target/debug
-      - name: Rename downloaded artifacts
-        working-directory: target/debug
-        run: for file in target-debug-*; do chmod +x "$file"; mv "$file" "${file#target-debug-}"; done;
-
+          merge-multiple: true
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
