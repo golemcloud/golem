@@ -528,6 +528,9 @@ jobs:
         with:
           pattern: target-debug-*
           path: target/debug
+      - name: Rename downloaded artifacts
+        working-directory: target/debug
+        run: for file in target-debug-*; do mv "$file" "${file#target-debug-}"; done;
 
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
