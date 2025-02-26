@@ -40,7 +40,9 @@ pub fn configured(
         ShardManagerServiceConfig::Grpc(config) => {
             Arc::new(ShardManagerServiceGrpc::new(config.clone()))
         }
-        ShardManagerServiceConfig::SingleShard => Arc::new(ShardManagerServiceSingleShard::new()),
+        ShardManagerServiceConfig::SingleShard(_) => {
+            Arc::new(ShardManagerServiceSingleShard::new())
+        }
     }
 }
 

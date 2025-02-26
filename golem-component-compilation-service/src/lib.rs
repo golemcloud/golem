@@ -71,11 +71,11 @@ pub async fn run(
                     .expect("Failed to create file system blob storage"),
             )
         }
-        BlobStorageConfig::InMemory => {
+        BlobStorageConfig::InMemory(_) => {
             info!("Using in-memory blob storage");
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
-        BlobStorageConfig::KVStoreSqlite => {
+        BlobStorageConfig::KVStoreSqlite(_) => {
             Err(anyhow!("KVStoreSqlite configuration option is not supported - use an explicit Sqlite configuration instead"))?
         }
         BlobStorageConfig::Sqlite(sqlite) => {
