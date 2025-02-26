@@ -1,0 +1,81 @@
+name: "Desktop CI"
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    # TODO: Tag and publishing is not enabled until merging history
+    # tags:
+    # - "v*.*.*"
+    paths:
+      - 'desktop-app/**'
+
+jobs:
+  test-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+        include:
+          - platform: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            builds:
+              - target: aarch64-apple-darwin
+                artifact_path: ./desktop-app/src-tauri/target/aarch64-apple-darwin/release/bundle/
+              - target: x86_64-apple-darwin
+                artifact_path: ./desktop-app/src-tauri/target/x86_64-apple-darwin/release/bundle/
+          - platform: ubuntu-22.04
+            targets: ''
+            builds:
+              - target: ''
+                artifact_path: ./desktop-app/src-tauri/target/release/bundle/
+          - platform: windows-latest
+            targets: ''
+            builds:
+              - target: ''
+                artifact_path: ./desktop-app/src-tauri/target/release/bundle/
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./desktop-app/src-tauri -> target"
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: npm install --force
+        working-directory: ./desktop-app
+
+      - name: Build Tauri apps
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.builds[0].target != '' && format('--target {0}', matrix.builds[0].target) || '' }}
+          projectPath: "./desktop-app"
+
+      - name: Upload artifacts
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-app-${{ matrix.platform }}-${{ matrix.builds[0].target || 'default' }}
+          path: ${{ matrix.builds[0].artifact_path }}

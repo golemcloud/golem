@@ -8,6 +8,10 @@ members = [
     "wasm-rpc-stubgen",
 ]
 
+exclude = [
+    "desktop-app/src-tauri"
+]
+
 [workspace.dependencies]
 # Golem wit - git deps
 golem-wit = { git = "https://github.com/golemcloud/golem-wit.git", tag = "v1.1.11" }
