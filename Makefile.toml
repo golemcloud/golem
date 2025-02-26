@@ -10,7 +10,6 @@
 # - `cargo make unit-tests`: runs unit tests only
 # - `cargo make worker-executor-tests`: runs worker executor tests only
 # - `cargo make integration-tests`: runs integration tests only
-# - `cargo make sharding-tests`: runs sharding integration tests only
 # - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make api-tests-http`: runs api integration tests using HTTP API only
 # - `cargo make api-tests-grpc`: runs api integration tests using GRPC API only
@@ -216,7 +215,6 @@ description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
     "unit-tests",
     "worker-executor-tests",
-    "sharding-tests",
     "api-tests-http",
     "api-tests-grpc",
     "integration-tests",
@@ -311,25 +309,55 @@ cargo test --package golem-worker-executor-base --test integration :tag:group8 -
 '''
 
 [tasks.integration-tests]
+description = "Runs all integration tests"
+dependencies = [
+    "integration-tests-group1",
+    "integration-tests-group2",
+    "integration-tests-group3",
+    "integration-tests-group4",
+    "integration-tests-group5",
+]
+
+[task.integration-tests-group1]
 description = "Runs integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[task.integration-tests-group2]
+description = "Runs component service integration tests only"
+dependencies = []
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
 cargo test --package golem-component-service-base --test tests -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[task.integration-tests-group3]
+description = "Runs worker service integration tests only"
+dependencies = []
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
 cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[task.integration-tests-group4]
+description = "Runs golem-service-base integration tests only"
+dependencies = []
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
 cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
 '''
 
-[tasks.sharding-tests]
+[task.integration-tests-group5]
 description = "Runs sharding integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package integration-tests --test sharding -- --report-time
+cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
 '''
-# $JUNIT_OPTS temporarily removed to help debugging on CI
 
 [tasks.sharding-tests-debug]
 dependencies = ["build-bins"]
