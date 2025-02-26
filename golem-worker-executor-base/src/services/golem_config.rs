@@ -106,7 +106,6 @@ pub struct CompiledComponentServiceDisabledConfig {}
 pub enum ShardManagerServiceConfig {
     Grpc(ShardManagerServiceGrpcConfig),
     SingleShard,
-    Disabled,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

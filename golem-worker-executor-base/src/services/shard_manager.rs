@@ -41,7 +41,6 @@ pub fn configured(
             Arc::new(ShardManagerServiceGrpc::new(config.clone()))
         }
         ShardManagerServiceConfig::SingleShard => Arc::new(ShardManagerServiceSingleShard::new()),
-        ShardManagerServiceConfig::Disabled => Arc::new(ShardManagerServiceDisabled {}),
     }
 }
 
@@ -148,14 +147,5 @@ impl ShardManagerService for ShardManagerServiceSingleShard {
             1,
             HashSet::from_iter(vec![ShardId::new(0)]),
         ))
-    }
-}
-
-pub struct ShardManagerServiceDisabled {}
-
-#[async_trait]
-impl ShardManagerService for ShardManagerServiceDisabled {
-    async fn register(&self, _host: String, _port: u16) -> Result<ShardAssignment, GolemError> {
-        Ok(ShardAssignment::new(0, HashSet::new()))
     }
 }
