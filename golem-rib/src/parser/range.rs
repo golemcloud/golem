@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bigdecimal::ToPrimitive;
 use combine::parser::char::{char as char_, spaces, string};
-use combine::{attempt, choice, many1, optional, ParseError, Parser};
-
-use internal::*;
+use combine::{attempt, many1, optional, ParseError, Parser};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
@@ -26,7 +23,7 @@ use crate::parser::select_index::select_index;
 use crate::rib_source_span::GetSourcePosition;
 use crate::Range;
 
-pub(crate) fn range<Input>() -> impl Parser<Input, Output = Range>
+pub fn range<Input>() -> impl Parser<Input, Output = Range>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
@@ -41,7 +38,7 @@ where
             attempt(select_field())
                 .or(attempt(select_index()))
                 .or(identifier())
-                .or(pos_num())
+                .or(internal::pos_num())
                 .skip(spaces()),
         ),
         char_('.'),
@@ -49,22 +46,24 @@ where
         optional(
             (
                 string("=").skip(spaces()),
-                identifier().or(pos_num()).skip(spaces()),
+                identifier().or(internal::pos_num()).skip(spaces()),
             )
-                .map(|(_, expr)| RightSide::RightInclusiveExpr { expr })
+                .map(|(_, expr)| internal::RightSide::RightInclusiveExpr { expr })
                 .or(spaces()
-                    .with(identifier().or(pos_num()).skip(spaces()))
-                    .map(|expr| RightSide::RightExpr { expr })),
+                    .with(identifier().or(internal::pos_num()).skip(spaces()))
+                    .map(|expr| internal::RightSide::RightExpr { expr })),
         ),
     )
         .map(
-            |(a, b, c, d): (Option<Expr>, _, _, Option<RightSide>)| match (a, d) {
+            |(a, _, _, d): (Option<Expr>, _, _, Option<internal::RightSide>)| match (a, d) {
                 (Some(left_side), Some(right_side)) => match right_side {
-                    RightSide::RightInclusiveExpr { expr: right_side } => Range::RangeInclusive {
-                        from: left_side,
-                        to: right_side,
-                    },
-                    RightSide::RightExpr { expr: right_side } => Range::Range {
+                    internal::RightSide::RightInclusiveExpr { expr: right_side } => {
+                        Range::RangeInclusive {
+                            from: left_side,
+                            to: right_side,
+                        }
+                    }
+                    internal::RightSide::RightExpr { expr: right_side } => Range::Range {
                         from: left_side,
                         to: right_side,
                     },
@@ -73,10 +72,12 @@ where
                 (Some(left_side), None) => Range::RangeFrom { from: left_side },
 
                 (None, Some(right_side)) => match right_side {
-                    RightSide::RightInclusiveExpr { expr: right_side } => {
+                    internal::RightSide::RightInclusiveExpr { expr: right_side } => {
                         Range::RangeToInclusive { to: right_side }
                     }
-                    RightSide::RightExpr { expr: right_side } => Range::RangeTo { to: right_side },
+                    internal::RightSide::RightExpr { expr: right_side } => {
+                        Range::RangeTo { to: right_side }
+                    }
                 },
 
                 (None, None) => Range::RangeFull,
@@ -85,14 +86,12 @@ where
 }
 
 mod internal {
-    use super::*;
-    use crate::parser::select_field::select_field;
-    use crate::parser::select_index::select_index;
-    use crate::parser::sequence::sequence;
-    use crate::{InferredType, Range};
+    use crate::parser::RibParseError;
+    use crate::rib_source_span::GetSourcePosition;
+    use crate::{Expr, InferredType};
     use bigdecimal::{BigDecimal, FromPrimitive};
-    use combine::parser::char::{char as char_, digit, string};
-    use poem_openapi::__private::poem::EndpointExt;
+    use combine::parser::char::digit;
+    use combine::{many1, ParseError, Parser};
 
     pub(crate) enum RightSide {
         RightInclusiveExpr { expr: Expr },
