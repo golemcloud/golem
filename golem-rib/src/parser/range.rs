@@ -21,9 +21,8 @@ use crate::parser::identifier::identifier;
 use crate::parser::select_field::select_field;
 use crate::parser::select_index::select_index;
 use crate::rib_source_span::GetSourcePosition;
-use crate::Range;
 
-pub fn range<Input>() -> impl Parser<Input, Output = Range>
+pub fn range<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
@@ -58,29 +57,23 @@ where
             |(a, _, _, d): (Option<Expr>, _, _, Option<internal::RightSide>)| match (a, d) {
                 (Some(left_side), Some(right_side)) => match right_side {
                     internal::RightSide::RightInclusiveExpr { expr: right_side } => {
-                        Range::RangeInclusive {
-                            from: left_side,
-                            to: right_side,
-                        }
+                        Expr::range_inclusive(left_side, right_side)
                     }
-                    internal::RightSide::RightExpr { expr: right_side } => Range::Range {
-                        from: left_side,
-                        to: right_side,
-                    },
+                    internal::RightSide::RightExpr { expr: right_side } => Expr::range(left_side, right_side)
                 },
 
-                (Some(left_side), None) => Range::RangeFrom { from: left_side },
+                (Some(left_side), None) => Expr::range_from(left_side),
 
                 (None, Some(right_side)) => match right_side {
                     internal::RightSide::RightInclusiveExpr { expr: right_side } => {
-                        Range::RangeToInclusive { to: right_side }
+                        Expr::range_to_inclusive(right_side)
                     }
                     internal::RightSide::RightExpr { expr: right_side } => {
-                        Range::RangeTo { to: right_side }
+                        Expr::range_to(right_side)
                     }
                 },
 
-                (None, None) => Range::RangeFull,
+                (None, None) => Expr::range_full(),
             },
         )
 }
@@ -121,7 +114,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use crate::parser::range::range;
-    use crate::Range;
+    use crate::{Expr, InferredType, Range};
     use bigdecimal::FromPrimitive;
     use combine::stream::position;
     use combine::EasyParser;
@@ -147,18 +140,18 @@ mod tests {
 
         assert_eq!(
             result1,
-            Range::Range {
-                from: crate::Expr::number(
+            Expr::range(
+                Expr::number(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    crate::InferredType::U64
+                    InferredType::U64
                 ),
-                to: crate::Expr::number(
+                Expr::number(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    crate::InferredType::U64
+                    InferredType::U64
                 )
-            }
+            )
         );
     }
 
@@ -181,18 +174,18 @@ mod tests {
         assert!(result5.is_err());
         assert_eq!(
             result1,
-            Range::RangeInclusive {
-                from: crate::Expr::number(
+            Expr::range_inclusive(
+                Expr::number(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    crate::InferredType::U64
+                    InferredType::U64
                 ),
-                to: crate::Expr::number(
+                Expr::number(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    crate::InferredType::U64
+                    InferredType::U64
                 )
-            }
+            )
         );
     }
 
@@ -209,13 +202,11 @@ mod tests {
 
         assert_eq!(
             result1,
-            Range::RangeFrom {
-                from: crate::Expr::number(
-                    bigdecimal::BigDecimal::from_u64(1).unwrap(),
-                    None,
-                    crate::InferredType::U64
-                )
-            }
+           Expr::range_from(Expr::number(
+                bigdecimal::BigDecimal::from_u64(1).unwrap(),
+                None,
+                InferredType::U64
+            ))
         );
     }
 
@@ -230,13 +221,11 @@ mod tests {
 
         assert_eq!(
             result1,
-            Range::RangeTo {
-                to: crate::Expr::number(
-                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
-                    None,
-                    crate::InferredType::U64
-                )
-            }
+            Expr::range_to(Expr::number(
+                bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                None,
+                InferredType::U64
+            ))
         );
     }
 
@@ -256,13 +245,11 @@ mod tests {
 
         assert_eq!(
             result1,
-            Range::RangeToInclusive {
-                to: crate::Expr::number(
-                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
-                    None,
-                    crate::InferredType::U64
-                )
-            }
+            Expr::range_to_inclusive(Expr::number(
+                bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                None,
+                InferredType::U64
+            ))
         );
     }
 }
