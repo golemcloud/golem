@@ -19,9 +19,11 @@ use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::base_model::OplogIndex;
+use golem_common::model::WorkerId;
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
-use wasmtime::component::Resource;
+use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::WasiView;
 
 pub mod mysql;
@@ -29,14 +31,18 @@ pub mod postgres;
 pub mod serialized;
 pub mod types;
 
-pub(crate) fn get_begin_oplog_index<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: u32,
-) -> anyhow::Result<OplogIndex> {
-    let begin_oplog_idx = *ctx.state.open_function_table.get(&handle).ok_or_else(|| {
-        anyhow!("No matching BeginRemoteWrite index was found for the open Rdbms request")
-    })?;
-    Ok(begin_oplog_idx)
+pub struct RdbmsConnection<T: RdbmsType> {
+    pool_key: RdbmsPoolKey,
+    _owner: PhantomData<T>,
+}
+
+impl<T: RdbmsType> RdbmsConnection<T> {
+    fn new(pool_key: RdbmsPoolKey) -> Self {
+        Self {
+            pool_key,
+            _owner: PhantomData,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -204,4 +210,272 @@ where
         }
         RdbmsTransactionState::Open(transaction) => Ok((transaction_entry.pool_key, transaction)),
     }
+}
+
+async fn db_connection_query<Ctx, T, P>(
+    worker_id: &WorkerId,
+    statement: String,
+    params: Vec<P>,
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsConnection<T>>,
+) -> (
+    Option<RdbmsRequest<T>>,
+    Result<crate::services::rdbms::DbResult<T>, RdbmsError>,
+)
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    T::DbValue: FromRdbmsValue<P>,
+{
+    let pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsConnection<T>>(entry)
+        .map(|v| v.pool_key.clone());
+
+    match pool_key {
+        Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+            Ok(params) => {
+                let result = ctx
+                    .state
+                    .rdbms_service
+                    .deref()
+                    .rdbms_type_service()
+                    .query(&pool_key, worker_id, &statement, params.clone())
+                    .await;
+                (
+                    Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                    result,
+                )
+            }
+            Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
+        },
+        Err(error) => (None, Err(RdbmsError::Other(error.to_string()))),
+    }
+}
+
+async fn db_connection_execute<Ctx, T, P>(
+    worker_id: &WorkerId,
+    statement: String,
+    params: Vec<P>,
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsConnection<T>>,
+) -> (Option<RdbmsRequest<T>>, Result<u64, RdbmsError>)
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    T::DbValue: FromRdbmsValue<P>,
+{
+    let pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsConnection<T>>(entry)
+        .map(|v| v.pool_key.clone());
+
+    match pool_key {
+        Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+            Ok(params) => {
+                let result = ctx
+                    .state
+                    .rdbms_service
+                    .deref()
+                    .rdbms_type_service()
+                    .execute(&pool_key, worker_id, &statement, params.clone())
+                    .await;
+                (
+                    Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                    result,
+                )
+            }
+            Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
+        },
+        Err(error) => (None, Err(RdbmsError::Other(error.to_string()))),
+    }
+}
+
+fn db_connection_query_stream<Ctx, T, P>(
+    statement: String,
+    params: Vec<P>,
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsConnection<T>>,
+) -> Result<RdbmsRequest<T>, RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+    T::DbValue: FromRdbmsValue<P>,
+{
+    let pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsConnection<T>>(entry)
+        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .pool_key
+        .clone();
+
+    match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+        Ok(params) => Ok(RdbmsRequest::<T>::new(pool_key, statement, params)),
+        Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
+    }
+}
+
+async fn db_transaction_query<Ctx, T, P>(
+    statement: String,
+    params: Vec<P>,
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> (
+    Option<RdbmsRequest<T>>,
+    Result<crate::services::rdbms::DbResult<T>, RdbmsError>,
+)
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    T::DbValue: FromRdbmsValue<P>,
+{
+    match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+        Ok(params) => {
+            let transaction = get_db_transaction(ctx, entry).await;
+            match transaction {
+                Ok((pool_key, transaction)) => {
+                    let result = transaction.query(&statement, params.clone()).await;
+                    (
+                        Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                        result,
+                    )
+                }
+                Err(e) => (None, Err(e)),
+            }
+        }
+        Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
+    }
+}
+
+async fn db_transaction_execute<Ctx, T, P>(
+    statement: String,
+    params: Vec<P>,
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> (Option<RdbmsRequest<T>>, Result<u64, RdbmsError>)
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    T::DbValue: FromRdbmsValue<P>,
+{
+    match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+        Ok(params) => {
+            let transaction = get_db_transaction(ctx, entry).await;
+            match transaction {
+                Ok((pool_key, transaction)) => {
+                    let result = transaction.execute(&statement, params.clone()).await;
+                    (
+                        Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                        result,
+                    )
+                }
+                Err(e) => (None, Err(e)),
+            }
+        }
+        Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
+    }
+}
+
+fn db_transaction_query_stream<Ctx, T, P>(
+    statement: String,
+    params: Vec<P>,
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> Result<RdbmsRequest<T>, RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+    T::DbValue: FromRdbmsValue<P>,
+{
+    let pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .pool_key
+        .clone();
+
+    match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+        Ok(params) => Ok(RdbmsRequest::<T>::new(pool_key, statement, params)),
+        Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
+    }
+}
+
+async fn db_transaction_commit<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> Result<(), RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+{
+    let state = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|e| e.state.clone());
+
+    match state {
+        Ok(RdbmsTransactionState::Open(transaction)) => transaction.commit().await,
+        Ok(_) => Ok(()),
+        Err(e) => Err(RdbmsError::Other(e.to_string())),
+    }
+}
+
+async fn db_transaction_rollback<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> Result<(), RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+{
+    let state = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|e| e.state.clone());
+
+    match state {
+        Ok(RdbmsTransactionState::Open(transaction)) => transaction.rollback().await,
+        Ok(_) => Ok(()),
+        Err(e) => Err(RdbmsError::Other(e.to_string())),
+    }
+}
+
+trait FromRdbmsValue<T>: Sized {
+    fn from(value: T, resource_table: &mut ResourceTable) -> Result<Self, String>;
+}
+
+fn to_db_values<T, P>(
+    values: Vec<P>,
+    resource_table: &mut ResourceTable,
+) -> Result<Vec<T::DbValue>, String>
+where
+    T: RdbmsType + 'static,
+    T::DbValue: FromRdbmsValue<P>,
+{
+    let mut result: Vec<T::DbValue> = Vec::with_capacity(values.len());
+    for value in values {
+        let v: T::DbValue = FromRdbmsValue::from(value, resource_table)?;
+        result.push(v);
+    }
+    Ok(result)
+}
+
+fn get_begin_oplog_index<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> anyhow::Result<OplogIndex> {
+    let begin_oplog_idx = *ctx.state.open_function_table.get(&handle).ok_or_else(|| {
+        anyhow!("No matching BeginRemoteWrite index was found for the open Rdbms request")
+    })?;
+    Ok(begin_oplog_idx)
 }
