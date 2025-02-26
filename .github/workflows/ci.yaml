@@ -385,8 +385,6 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
-        env:
-          ACTIONS_STEP_DEBUG: true
         with:
           shared-key: debug-bins
           cache-all-crates: true
@@ -401,9 +399,38 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-bins
         timeout-minutes: 30
-      - name: Debug
-        run: ls -la target/debug
+      - name: Upload compiled component-compilation-service
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-component-compilation-service
+          path: |
+            target/debug/golem-component-compilation-service
+      - name: Upload compiled component-service
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-component-service
+          path: |
+            target/debug/golem-component-service
+      - name: Upload compiled shard-manager
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-shard-manager
+          path: |
+            target/debug/golem-shard-manager
+      - name: Upload compiled worker-service
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-worker-service
+          path: |
+            target/debug/golem-worker-service
+      - name: Upload compiled worker-executor
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-worker-executor
+          path: |
+            target/debug/worker-executor
 
+  # Integration tess not requiring prebuilt executables
   api-and-integration-tests-1:
     env:
       CARGO_BUILD_JOBS: 6
@@ -459,6 +486,7 @@ jobs:
           detailed_summary: true
           include_passed: true
 
+  # Integration tests requiring prebuilt executables
   api-and-integration-tests-2:
     env:
       CARGO_BUILD_JOBS: 6
@@ -490,12 +518,17 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
-        env:
-          ACTIONS_STEP_DEBUG: true
         with:
           shared-key: debug-bins
           cache-all-crates: true
           save-if: false
+
+      - name: Download specific files from target
+        uses: actions/download-artifact@v4
+        with:
+          pattern: target-debug-*
+          path: target/debug
+
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3

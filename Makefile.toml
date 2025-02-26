@@ -117,7 +117,7 @@ run_task = "build-bins"
 dependencies = ["wit"]
 description = "Builds all executables in debug mode"
 command = "cargo"
-args = ["build", "--workspace", "--bins"]
+args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 
 [tasks.build-worker-service]
 dependencies = ["wit"]
