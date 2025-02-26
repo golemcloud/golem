@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use bigdecimal::ToPrimitive;
-use combine::parser::char::{char as char_, spaces};
+use combine::parser::char::{char as char_, spaces, string};
 use combine::{attempt, choice, many1, optional, ParseError, Parser};
 
 use internal::*;
@@ -21,10 +21,12 @@ use internal::*;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier;
+use crate::parser::select_field::select_field;
+use crate::parser::select_index::select_index;
 use crate::rib_source_span::GetSourcePosition;
 use crate::Range;
 
-pub fn range<Input>() -> impl Parser<Input, Output = Range>
+pub(crate) fn range<Input>() -> impl Parser<Input, Output = Range>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
@@ -32,7 +34,58 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces().with(internal::range().skip(spaces()).map(|range| range))
+    (
+        // Following the range syntax with semantics of rust
+        // Allows space on either side of the dots, but not in between dots (or . and .=)
+        optional(
+            attempt(select_field())
+                .or(attempt(select_index()))
+                .or(identifier())
+                .or(pos_num())
+                .skip(spaces()),
+        ),
+        char_('.'),
+        char_('.'),
+        optional(
+            (
+                string("=").skip(spaces()),
+                identifier().or(pos_num()).skip(spaces()),
+            )
+                .map(|(_, expr)| RightSide::RightInclusiveExpr { expr })
+                .or(spaces()
+                    .with(identifier().or(pos_num()).skip(spaces()))
+                    .map(|expr| RightSide::RightExpr { expr })),
+        ),
+    )
+        .map(
+            |(a, b, c, d): (Option<Expr>, _, _, Option<RightSide>)| match (a, d) {
+                (Some(left_side), Some(right_side)) => match right_side {
+                    RightSide::RightInclusiveExpr { expr: right_side } => {
+                        Range::RangeInclusive {
+                            from: left_side,
+                            to: right_side,
+                        }
+                    }
+                    RightSide::RightExpr { expr: right_side } => Range::Range {
+                        from: left_side,
+                        to: right_side,
+                    },
+                },
+
+                (Some(left_side), None) => Range::RangeFrom { from: left_side },
+
+                (None, Some(right_side)) => match right_side {
+                    RightSide::RightInclusiveExpr { expr: right_side } => {
+                        Range::RangeToInclusive { to: right_side }
+                    }
+                    RightSide::RightExpr { expr: right_side } => {
+                        Range::RangeTo { to: right_side }
+                    }
+                },
+
+                (None, None) => Range::RangeFull,
+            },
+        )
 }
 
 mod internal {
@@ -45,71 +98,9 @@ mod internal {
     use combine::parser::char::{char as char_, digit, string};
     use poem_openapi::__private::poem::EndpointExt;
 
-    enum RightSide {
+    pub(crate) enum RightSide {
         RightInclusiveExpr { expr: Expr },
         RightExpr { expr: Expr },
-    }
-
-    pub(crate) fn range<Input>() -> impl Parser<Input, Output = Range>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-        Input::Position: GetSourcePosition,
-    {
-        (
-            // Following the range syntax with semantics of rust
-            // Allows space on either side of the dots, but not in between dots (or . and .=)
-            optional(
-                attempt(select_field())
-                    .or(attempt(select_index()))
-                    .or(identifier())
-                    .or(pos_num())
-                    .skip(spaces()),
-            ),
-            char_('.'),
-            char_('.'),
-            optional(
-                (
-                    string("=").skip(spaces()),
-                    identifier().or(pos_num()).skip(spaces()),
-                )
-                    .map(|(_, expr)| RightSide::RightInclusiveExpr { expr })
-                    .or(spaces()
-                        .with(identifier().or(pos_num()).skip(spaces()))
-                        .map(|expr| RightSide::RightExpr { expr })),
-            ),
-        )
-            .map(
-                |(a, b, c, d): (Option<Expr>, _, _, Option<RightSide>)| match (a, d) {
-                    (Some(left_side), Some(right_side)) => match right_side {
-                        RightSide::RightInclusiveExpr { expr: right_side } => {
-                            Range::RangeInclusive {
-                                from: left_side,
-                                to: right_side,
-                            }
-                        }
-                        RightSide::RightExpr { expr: right_side } => Range::Range {
-                            from: left_side,
-                            to: right_side,
-                        },
-                    },
-
-                    (Some(left_side), None) => Range::RangeFrom { from: left_side },
-
-                    (None, Some(right_side)) => match right_side {
-                        RightSide::RightInclusiveExpr { expr: right_side } => {
-                            Range::RangeToInclusive { to: right_side }
-                        }
-                        RightSide::RightExpr { expr: right_side } => {
-                            Range::RangeTo { to: right_side }
-                        }
-                    },
-
-                    (None, None) => Range::RangeFull,
-                },
-            )
     }
 
     pub(crate) fn pos_num<Input>() -> impl Parser<Input, Output = Expr>
@@ -130,22 +121,7 @@ mod internal {
             _ => Err(RibParseError::Message("Unable to parse number".to_string())),
         })
     }
-
-    pub(crate) fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-        Input::Position: GetSourcePosition,
-    {
-        choice((
-            attempt(sequence()),
-            attempt(select_field()),
-            attempt(select_index()),
-            attempt(identifier()),
-        ))
-    }
+    
 }
 
 #[cfg(test)]
