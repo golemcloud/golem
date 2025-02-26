@@ -74,6 +74,8 @@ tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 
+tag_suite!(rdbms, group1);
+
 tag_suite!(guest_languages1, group2);
 
 tag_suite!(transactions, group3);
