@@ -87,6 +87,26 @@ impl TraceContextHeaders {
             trace_states: invocation_context.trace_states,
         }
     }
+
+    pub fn to_raw_headers_map(&self) -> Vec<(String, String)> {
+        let mut headers = Vec::new();
+        headers.push((
+            "traceparent".to_string(),
+            format!(
+                "{:02x}-{}-{}-{:02x}",
+                self.version,
+                self.trace_id,
+                self.parent_id,
+                self.trace_flags.bits()
+            ),
+        ));
+
+        if !self.trace_states.is_empty() {
+            headers.push(("tracestate".to_string(), self.trace_states.join(",")));
+        }
+
+        headers
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +137,13 @@ mod test {
                 trace_flags: TraceFlags::SAMPLED,
                 trace_states: Vec::new()
             })
+        );
+        assert_eq!(
+            result.unwrap().to_raw_headers_map(),
+            vec![(
+                "traceparent".to_string(),
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()
+            )]
         )
     }
 
@@ -128,6 +155,11 @@ mod test {
             HeaderValue::from_str("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
                 .unwrap(),
         );
+        headers.insert(
+            "tracestate",
+            HeaderValue::from_str("abc=123,defgh=010203").unwrap(),
+        );
+        headers.append("tracestate", HeaderValue::from_str("ijklmn=op").unwrap());
 
         let result = TraceContextHeaders::parse(&headers);
 
@@ -138,8 +170,25 @@ mod test {
                 trace_id: TraceId(NonZeroU128::new(0x4bf92f3577b34da6a3ce929d0e0e4736).unwrap()),
                 parent_id: SpanId(NonZeroU64::new(0x00f067aa0ba902b7).unwrap()),
                 trace_flags: TraceFlags::empty(),
-                trace_states: Vec::new()
+                trace_states: vec![
+                    "abc=123".to_string(),
+                    "defgh=010203".to_string(),
+                    "ijklmn=op".to_string()
+                ]
             })
+        );
+        assert_eq!(
+            result.unwrap().to_raw_headers_map(),
+            vec![
+                (
+                    "traceparent".to_string(),
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00".to_string()
+                ),
+                (
+                    "tracestate".to_string(),
+                    "abc=123,defgh=010203,ijklmn=op".to_string()
+                )
+            ]
         )
     }
 }
