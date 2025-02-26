@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::expr::Expr;
-use crate::{ArmPattern, MatchArm};
+use crate::{ArmPattern, MatchArm, Range};
 use std::fmt::Display;
 use std::io::Write;
 
@@ -91,6 +91,38 @@ impl<W: Write> Writer<W> {
                     self.write_display(type_name)
                 } else {
                     Ok(())
+                }
+            }
+
+            Expr::Range {
+                range,
+                ..
+
+            } => match range {
+                Range::Range { from, to } => {
+                    self.write_expr(from)?;
+                    self.write_str("..")?;
+                    self.write_expr(to)
+                }
+                Range::RangeInclusive { from, to } => {
+                    self.write_expr(from)?;
+                    self.write_str("..=")?;
+                    self.write_expr(to)
+                }
+                Range::RangeFrom { from } => {
+                    self.write_str("..")?;
+                    self.write_expr(from)
+                }
+                Range::RangeTo { to } => {
+                    self.write_str("..")?;
+                    self.write_expr(to)
+                }
+                Range::RangeToInclusive { to } => {
+                    self.write_str("..=")?;
+                    self.write_expr(to)
+                }
+                Range::RangeFull => {
+                    self.write_str("..")
                 }
             }
 

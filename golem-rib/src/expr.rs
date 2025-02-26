@@ -1439,6 +1439,30 @@ pub enum Range {
     RangeFull,
 }
 
+impl Range {
+    pub fn get_exprs_mut(&mut self) -> Vec<&mut Box<Expr>> {
+        match self {
+            Range::Range { from, to } => vec![from, to],
+            Range::RangeInclusive { from, to } => vec![from, to],
+            Range::RangeFrom { from } => vec![from],
+            Range::RangeTo { to } => vec![to],
+            Range::RangeToInclusive { to } => vec![to],
+            Range::RangeFull => vec![],
+        }
+    }
+
+    pub fn get_exprs(&self) -> Vec<&Expr> {
+        match self {
+            Range::Range { from, to } => vec![from.as_ref(), to.as_ref()],
+            Range::RangeInclusive { from, to } => vec![from.as_ref(), to.as_ref()],
+            Range::RangeFrom { from } => vec![from.as_ref()],
+            Range::RangeTo { to } => vec![to.as_ref()],
+            Range::RangeToInclusive { to } => vec![to.as_ref()],
+            Range::RangeFull => vec![],
+        }
+    }
+}
+
 #[derive(Debug, Hash, Clone, PartialEq, Ord, PartialOrd)]
 pub struct Number {
     pub value: BigDecimal,
@@ -2173,7 +2197,7 @@ mod protobuf {
                                 }))),
                             }),
                         )),
-                        Range::RangeToInclusive(to) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                        Range::RangeToInclusive{ to } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
                             Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
                                 range_expr: Some(RangeExpr::RangeToInclusive(Box::new(golem_api_grpc::proto::golem::rib::RangeToInclusive {
                                     to: Some(Box::new((*to).into())),

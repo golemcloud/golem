@@ -68,6 +68,16 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
                 queue.push_back(&mut *arm.arm_resolution_expr);
             }
         }
+
+        Expr::Range {
+            range,
+            ..
+        } => {
+            for expr in  range.get_exprs_mut() {
+                queue.push_back(&mut *expr);
+            }
+        }
+
         Expr::Option {
             expr: Some(expr), ..
         } => queue.push_back(&mut *expr),
@@ -307,6 +317,13 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::GetTag { expr, .. } => {
             queue.push_back(expr);
         }
+
+        Expr::Range { range, ..} => {
+            let exprs = range.get_exprs();
+
+            queue.extend(exprs.iter());
+        }
+
         Expr::InvokeMethodLazy {
             lhs,
             args,
@@ -359,6 +376,13 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
                 queue.push_front(expr);
             }
         }
+
+        Expr::Range { range, ..} => {
+            for expr in range.get_exprs_mut() {
+                queue.push_front(&mut *expr);
+            }
+        }
+
         Expr::ExprBlock { exprs, .. } => {
             for expr in exprs.iter_mut() {
                 queue.push_back(expr);
