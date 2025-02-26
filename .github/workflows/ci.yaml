@@ -385,6 +385,8 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
+        env:
+          ACTIONS_STEP_DEBUG: true
         with:
           shared-key: debug-bins
           cache-all-crates: true
@@ -399,6 +401,8 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-bins
         timeout-minutes: 30
+      - name: Debug
+        run: ls -la target/debug
 
   api-and-integration-tests-1:
     env:
@@ -486,6 +490,8 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
+        env:
+          ACTIONS_STEP_DEBUG: true
         with:
           shared-key: debug-bins
           cache-all-crates: true
@@ -500,6 +506,8 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: Debug
+        run: ls -la target/debug
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
