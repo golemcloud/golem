@@ -318,7 +318,7 @@ dependencies = [
     "integration-tests-group5",
 ]
 
-[task.integration-tests-group1]
+[tasks.integration-tests-group1]
 description = "Runs integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
@@ -326,32 +326,32 @@ script = '''
 cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
 '''
 
-[task.integration-tests-group2]
+[tasks.integration-tests-group2]
 description = "Runs component service integration tests only"
-dependencies = []
+dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-component-service-base --test tests -- --nocapture --report-time $JUNIT_OPTS
 '''
 
-[task.integration-tests-group3]
+[tasks.integration-tests-group3]
 description = "Runs worker service integration tests only"
-dependencies = []
+dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
 '''
 
-[task.integration-tests-group4]
+[tasks.integration-tests-group4]
 description = "Runs golem-service-base integration tests only"
-dependencies = []
+dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
 '''
 
-[task.integration-tests-group5]
+[tasks.integration-tests-group5]
 description = "Runs sharding integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
