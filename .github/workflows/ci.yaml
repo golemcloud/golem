@@ -529,6 +529,10 @@ jobs:
           pattern: target-debug-*
           path: target/debug
           merge-multiple: true
+      - name: Fix permissions
+        working-directory: target/debug
+        run: chmod +x golem-component-compilation-service golem-component-service golem-shard-manager golem-worker-service worker-executor
+
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
