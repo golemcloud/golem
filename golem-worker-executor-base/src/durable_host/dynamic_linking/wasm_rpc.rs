@@ -249,7 +249,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             )?;
             let temp_handle = handle.rep();
 
-            let constructor_result = remote_invoke_and_wait(
+            let constructor_result = remote_invoke_and_await(
                 target_constructor_name,
                 params,
                 param_types,
@@ -296,7 +296,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
-            let result = remote_invoke_and_wait(
+            let result = remote_invoke_and_await(
                 target_function_name,
                 params,
                 param_types,
@@ -452,6 +452,7 @@ async fn drop_linked_resource<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRes
         }
     };
     if let Some(span_id) = span_id {
+        // TODO: if drop can be called after the invocation is done, this can fail and we can ignore it
         store.data_mut().finish_span(&span_id)?;
     }
 
@@ -483,7 +484,7 @@ async fn encode_parameters<Ctx: ResourceStore + Send>(
     Ok(wit_value_params)
 }
 
-async fn remote_invoke_and_wait<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
+async fn remote_invoke_and_await<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
     target_function_name: &ParsedFunctionName,
     params: &[Val],
     param_types: &[Type],

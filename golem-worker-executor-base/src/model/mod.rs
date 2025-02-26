@@ -36,6 +36,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
+use tracing::warn;
 use wasmtime::Trap;
 
 pub trait ShardAssignmentCheck {
@@ -391,15 +392,15 @@ impl InvocationContext {
             spans.insert(span.span_id().clone(), span);
         }
 
-        Ok((
-            Self {
-                trace_id: value.trace_id,
-                spans,
-                root,
-                trace_states: value.trace_states,
-            },
-            current_span_id,
-        ))
+        let result = Self {
+            trace_id: value.trace_id,
+            spans,
+            root,
+            trace_states: value.trace_states,
+        };
+        warn!("Initialized invocation context from stack: {result:?}, current span id: {current_span_id}");
+
+        Ok((result, current_span_id))
     }
 
     pub fn start_span(
@@ -410,10 +411,12 @@ impl InvocationContext {
         let current_span = self.span(current_span_id)?;
         let span = current_span.start_span(new_span_id);
         self.spans.insert(span.span_id().clone(), span.clone());
+        warn!("started new span {} in {current_span_id}", span.span_id());
         Ok(span)
     }
 
     pub fn finish_span(&mut self, span_id: &SpanId) -> Result<Option<SpanId>, String> {
+        warn!("finish span {span_id}");
         let span = self.span(span_id)?;
         let parent_id = span
             .parent()
@@ -485,6 +488,36 @@ impl InvocationContext {
         self.spans
             .get(span_id)
             .ok_or_else(|| format!("Span {span_id} not found"))
+    }
+}
+
+impl Debug for InvocationContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "InvocationContext trace_id={}", self.trace_id)?;
+        writeln!(f, "  root span id={}", self.root.span_id())?;
+        for span in self.spans.values() {
+            writeln!(
+                f,
+                "  span {} parent={}: {}",
+                span.span_id(),
+                span.parent()
+                    .map(|parent| parent.span_id().to_string())
+                    .unwrap_or("none".to_string()),
+                span.get_attributes(true)
+                    .iter()
+                    .map(|(key, values)| format!(
+                        "{key}=[{}]",
+                        values
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
+        Ok(())
     }
 }
 

@@ -160,10 +160,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await,
             };
-            let stack = self
-                .state
-                .invocation_context
-                .get_stack(&self.state.current_span_id);
+            let stack = self.state.invocation_context.get_stack(span.span_id());
             let result = self
                 .rpc()
                 .invoke_and_await(
@@ -304,10 +301,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await,
             };
-            let stack = self
-                .state
-                .invocation_context
-                .get_stack(&self.state.current_span_id);
+            let stack = self.state.invocation_context.get_stack(span.span_id());
             let result = self
                 .rpc()
                 .invoke(
@@ -406,10 +400,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let result = if self.state.is_live() {
             let rpc = self.rpc();
 
-            let stack = self
-                .state
-                .invocation_context
-                .get_stack(&self.state.current_span_id);
+            let stack = self.state.invocation_context.get_stack(span.span_id());
             let handle = wasmtime_wasi::runtime::spawn(async move {
                 Ok(rpc
                     .invoke_and_await(
@@ -575,6 +566,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().delete(rep)?;
         let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
         if let Ok(payload) = payload {
+            // TODO: if drop can be called after the invocation is done, this can fail and we can ignore it
             self.finish_span(payload.span_id())?;
         }
 
@@ -645,6 +637,17 @@ enum FutureInvokeResultState {
     },
 }
 
+impl FutureInvokeResultState {
+    pub fn span_id(&self) -> &SpanId {
+        match self {
+            Self::Pending { span_id, .. } => span_id,
+            Self::Completed { span_id, .. } => span_id,
+            Self::Deferred { span_id, .. } => span_id,
+            Self::Consumed { .. } => panic!("unexpected state: Consumed"),
+        }
+    }
+}
+
 #[async_trait]
 impl SubscribeAny for FutureInvokeResultState {
     async fn ready(&mut self) {
@@ -692,10 +695,16 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let handle = this.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
-            let stack = self
-                .state
-                .invocation_context
-                .get_stack(&self.state.current_span_id);
+            let span_id = {
+                let entry = self.table().get_mut(&this)?;
+                let entry = entry
+                    .payload
+                    .as_any_mut()
+                    .downcast_mut::<FutureInvokeResultState>()
+                    .unwrap();
+                entry.span_id().clone()
+            };
+            let stack = self.state.invocation_context.get_stack(&span_id);
 
             let entry = self.table().get_mut(&this)?;
             let entry = entry

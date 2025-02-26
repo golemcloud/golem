@@ -745,6 +745,10 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
     ) -> Result<(), GolemError> {
+        warn!("set_current_invocation_context: {invocation_context:?}");
+
+        // TODO: need to finish_span all the still open spans
+
         let (invocation_context, current_span_id) =
             InvocationContext::from_stack(invocation_context).map_err(GolemError::runtime)?;
 

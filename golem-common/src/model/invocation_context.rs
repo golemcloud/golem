@@ -20,9 +20,10 @@ use bincode::{BorrowDecode, Decode, Encode};
 use nonempty_collections::NEVec;
 use serde::de::Error;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
+use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -94,6 +95,14 @@ pub enum AttributeValue {
     String(String),
 }
 
+impl Display for AttributeValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(value) => write!(f, "{}", value),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum InvocationContextSpan {
     Local {
@@ -118,6 +127,16 @@ impl InvocationContextSpan {
         })
     }
 
+    fn new_with_parent(span_id: Option<SpanId>, parent: Arc<InvocationContextSpan>) -> Arc<Self> {
+        let span_id = span_id.unwrap_or(SpanId::generate());
+        Arc::new(Self::Local {
+            span_id,
+            parent: Some(parent),
+            start: Timestamp::now_utc(),
+            attributes: RwLock::new(HashMap::new()),
+        })
+    }
+
     pub fn new_at(span_id: Option<SpanId>, start: Timestamp) -> Arc<Self> {
         let span_id = span_id.unwrap_or(SpanId::generate());
         Arc::new(Self::Local {
@@ -135,11 +154,12 @@ impl InvocationContextSpan {
     pub fn new_with_attributes(
         span_id: Option<SpanId>,
         attributes: HashMap<String, AttributeValue>,
+        parent: Option<Arc<Self>>,
     ) -> Arc<Self> {
         let span_id = span_id.unwrap_or(SpanId::generate());
         Arc::new(Self::Local {
             span_id,
-            parent: None,
+            parent,
             start: Timestamp::now_utc(),
             attributes: RwLock::new(attributes),
         })
@@ -160,7 +180,7 @@ impl InvocationContextSpan {
     }
 
     pub fn start_span(self: &Arc<Self>, span_id: Option<SpanId>) -> Arc<Self> {
-        Self::new(span_id)
+        Self::new_with_parent(span_id, self.clone())
     }
 
     pub fn get_attribute(&self, key: &str, inherit: bool) -> Option<AttributeValue> {
@@ -260,6 +280,7 @@ impl InvocationContextSpan {
     }
 
     pub fn set_attribute(&self, key: String, value: AttributeValue) {
+        warn!("set attribute {key}={value} in {}", self.span_id());
         match self {
             Self::Local { attributes, .. } => {
                 attributes.write().unwrap().insert(key, value);
@@ -379,7 +400,7 @@ impl<'de> BorrowDecode<'de> for InvocationContextSpan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct InvocationContextStack {
     pub trace_id: TraceId,
     pub spans: NEVec<Arc<InvocationContextSpan>>,
@@ -410,7 +431,7 @@ impl InvocationContextStack {
     }
 
     pub fn push(&mut self, span: Arc<InvocationContextSpan>) {
-        self.spans.push(span);
+        self.spans.insert(0, span);
     }
 }
 
@@ -448,6 +469,35 @@ impl<'de> BorrowDecode<'de> for InvocationContextStack {
             spans: NEVec::try_from_vec(spans).ok_or(DecodeError::custom("No spans"))?,
             trace_states: trace_state,
         })
+    }
+}
+
+impl Debug for InvocationContextStack {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "InvocationContextStack trace_id={}", self.trace_id)?;
+        for span in &self.spans {
+            writeln!(
+                f,
+                "  span {} parent={}: {}",
+                span.span_id(),
+                span.parent()
+                    .map(|parent| parent.span_id().to_string())
+                    .unwrap_or("none".to_string()),
+                span.get_attributes(true)
+                    .iter()
+                    .map(|(key, values)| format!(
+                        "{key}=[{}]",
+                        values
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
+        Ok(())
     }
 }
 
