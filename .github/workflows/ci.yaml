@@ -402,25 +402,25 @@ jobs:
       - name: Upload compiled component-compilation-service
         uses: actions/upload-artifact@v4
         with:
-          name: target-debug-component-compilation-service
+          name: target-debug-golem-component-compilation-service
           path: |
             target/debug/golem-component-compilation-service
       - name: Upload compiled component-service
         uses: actions/upload-artifact@v4
         with:
-          name: target-debug-component-service
+          name: target-debug-golem-component-service
           path: |
             target/debug/golem-component-service
       - name: Upload compiled shard-manager
         uses: actions/upload-artifact@v4
         with:
-          name: target-debug-shard-manager
+          name: target-debug-golem-shard-manager
           path: |
             target/debug/golem-shard-manager
       - name: Upload compiled worker-service
         uses: actions/upload-artifact@v4
         with:
-          name: target-debug-worker-service
+          name: target-debug-golem-worker-service
           path: |
             target/debug/golem-worker-service
       - name: Upload compiled worker-executor
