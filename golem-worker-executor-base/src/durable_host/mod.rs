@@ -1844,6 +1844,8 @@ struct HttpRequestState {
     pub root_handle: u32,
     /// Information about the request to be included in the oplog
     pub request: SerializableHttpRequest,
+    /// SpanId
+    pub span_id: SpanId,
 }
 
 struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
@@ -1882,6 +1884,7 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
 
     invocation_context: InvocationContext,
     current_span_id: SpanId,
+    forward_trace_context_headers: bool,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1947,6 +1950,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             replay_state,
             invocation_context,
             current_span_id,
+            forward_trace_context_headers: true,
         }
     }
 

@@ -16,6 +16,7 @@ use bincode::{Decode, Encode};
 use http::{HeaderName, HeaderValue, Version};
 
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use crate::durable_host::serialized::SerializableError;
@@ -417,6 +418,23 @@ impl From<Method> for SerializableHttpMethod {
             Method::Trace => SerializableHttpMethod::Trace,
             Method::Patch => SerializableHttpMethod::Patch,
             Method::Other(method) => SerializableHttpMethod::Other(method),
+        }
+    }
+}
+
+impl Display for SerializableHttpMethod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SerializableHttpMethod::Get => write!(f, "GET"),
+            SerializableHttpMethod::Post => write!(f, "POST"),
+            SerializableHttpMethod::Put => write!(f, "PUT"),
+            SerializableHttpMethod::Delete => write!(f, "DELETE"),
+            SerializableHttpMethod::Head => write!(f, "HEAD"),
+            SerializableHttpMethod::Connect => write!(f, "CONNECT"),
+            SerializableHttpMethod::Options => write!(f, "OPTIONS"),
+            SerializableHttpMethod::Trace => write!(f, "TRACE"),
+            SerializableHttpMethod::Patch => write!(f, "PATCH"),
+            SerializableHttpMethod::Other(method) => write!(f, "{}", method),
         }
     }
 }
