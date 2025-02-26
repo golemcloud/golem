@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::wasm_rpc::{UrnExtensions, WasmRpcEntryPayload};
+use crate::durable_host::wasm_rpc::{
+    create_rpc_connection_span, UrnExtensions, WasmRpcEntryPayload,
+};
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
+use golem_common::model::invocation_context::SpanId;
 use golem_common::model::OwnedWorkerId;
 use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore};
@@ -181,6 +184,7 @@ fn register_wasm_rpc_entry<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     remote_worker_id: OwnedWorkerId,
     demand: Box<dyn RpcDemand>,
+    span_id: SpanId,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let mut wasi = store.data_mut().as_wasi_view();
     let table = wasi.table();
@@ -188,6 +192,7 @@ fn register_wasm_rpc_entry<Ctx: WorkerCtx>(
         payload: Box::new(WasmRpcEntryPayload::Interface {
             demand,
             remote_worker_id,
+            span_id,
         }),
     })?)
 }
@@ -210,7 +215,14 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (remote_worker_id, demand) =
                 create_rpc_target(&mut store, target_worker_urn).await?;
 
-            let handle = register_wasm_rpc_entry(&mut store, remote_worker_id, demand)?;
+            let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+
+            let handle = register_wasm_rpc_entry(
+                &mut store,
+                remote_worker_id,
+                demand,
+                span.span_id().clone(),
+            )?;
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
         }
         DynamicRpcCall::ResourceStubConstructor {
@@ -226,8 +238,15 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (remote_worker_id, demand) =
                 create_rpc_target(&mut store, target_worker_urn.clone()).await?;
 
+            let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+
             // First creating a resource for invoking the constructor (to avoid having to make a special case)
-            let handle = register_wasm_rpc_entry(&mut store, remote_worker_id, demand)?;
+            let handle = register_wasm_rpc_entry(
+                &mut store,
+                remote_worker_id,
+                demand,
+                span.span_id().clone(),
+            )?;
             let temp_handle = handle.rep();
 
             let constructor_result = remote_invoke_and_wait(
@@ -245,6 +264,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (remote_worker_id, demand) =
                 create_rpc_target(&mut store, target_worker_urn).await?;
 
+            let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+
             let handle = {
                 let mut wasi = store.data_mut().as_wasi_view();
                 let table = wasi.table();
@@ -258,6 +279,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                         remote_worker_id,
                         resource_uri,
                         resource_id,
+                        span_id: span.span_id().clone(),
                     }),
                 })?
             };
@@ -414,18 +436,26 @@ async fn drop_linked_resource<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRes
     interface_name: &str,
     resource_name: &str,
 ) -> anyhow::Result<()> {
-    let must_drop = {
+    let (must_invoke_remote_drop, span_id) = {
         let mut wasi = store.data_mut().as_wasi_view();
         let table = wasi.table();
         if let Some(entry) = table.get_any_mut(rep)?.downcast_ref::<WasmRpcEntry>() {
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+            let span_id = payload.span_id();
 
-            matches!(payload, WasmRpcEntryPayload::Resource { .. })
+            (
+                matches!(payload, WasmRpcEntryPayload::Resource { .. }),
+                Some(span_id.clone()),
+            )
         } else {
-            false
+            (false, None)
         }
     };
-    if must_drop {
+    if let Some(span_id) = span_id {
+        store.data_mut().finish_span(&span_id)?;
+    }
+
+    if must_invoke_remote_drop {
         let resource: Resource<WasmRpcEntry> = Resource::new_own(rep);
 
         let function_name = format!("{interface_name}.{{{resource_name}.drop}}");

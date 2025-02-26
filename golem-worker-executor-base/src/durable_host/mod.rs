@@ -47,8 +47,9 @@ use crate::worker::invocation::{find_first_available_function, invoke_worker, In
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationHooks,
-    InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement,
+    WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -58,7 +59,9 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
-use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription,
     WorkerError, WorkerResourceId,
@@ -1230,6 +1233,43 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
             resource_params: resource_params.to_vec(),
         };
         self.state.indexed_resources.remove(&key);
+    }
+}
+
+impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
+    fn start_span(
+        &mut self,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        let span_id = self.state.current_span_id.clone();
+        self.start_child_span(&span_id, initial_attributes)
+    }
+
+    fn start_child_span(
+        &mut self,
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        let span = self
+            .state
+            .invocation_context
+            .start_span(parent, None)
+            .map_err(GolemError::runtime)?;
+
+        for (name, value) in initial_attributes {
+            span.set_attribute(name.clone(), value.clone());
+        }
+
+        Ok(span)
+    }
+
+    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        let _ = self
+            .state
+            .invocation_context
+            .finish_span(span_id)
+            .map_err(GolemError::runtime);
+        Ok(())
     }
 }
 
