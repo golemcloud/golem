@@ -5,7 +5,9 @@ use golem_worker_executor_base::services::HasExtraDeps;
 
 use crate::services::config::AdditionalGolemConfig;
 
+pub mod component;
 pub mod config;
+pub mod plugins;
 pub mod resource_limits;
 
 pub trait HasAdditionalGolemConfig {

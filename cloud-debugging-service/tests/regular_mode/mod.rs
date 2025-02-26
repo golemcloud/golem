@@ -34,7 +34,6 @@ pub async fn start_regular_worker_executor(
         context.grpc_port(),
         context.http_port(),
     );
-
     let handle = Handle::current();
 
     let grpc_port = config.port;
@@ -67,7 +66,7 @@ async fn run_regular_executor(
 ) -> Result<(), anyhow::Error> {
     info!("Golem Worker Executor starting up...");
 
-    RegularWorkerExecutorBootstrap {}
+    RegularWorkerExecutorBootstrap
         .run(golem_config, prometheus_registry, runtime, join_set)
         .await?;
 

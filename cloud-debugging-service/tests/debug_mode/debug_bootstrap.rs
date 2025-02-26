@@ -1,21 +1,19 @@
 use crate::services::auth_service::TestAuthService;
 use crate::services::worker_proxy::TestWorkerProxy;
-use crate::RegularExecutorTestContext;
+use crate::{get_component_cache_config, get_component_service_config, RegularExecutorTestContext};
 use anyhow::Error;
 use async_trait::async_trait;
-use cloud_common::config::RemoteCloudServiceConfig;
 use cloud_debugging_service::additional_deps::AdditionalDeps;
 use cloud_debugging_service::auth::AuthService;
-use cloud_debugging_service::config::AdditionalDebugConfig;
 use cloud_debugging_service::debug_context::DebugContext;
 use cloud_debugging_service::debug_session::{DebugSessions, DebugSessionsDefault};
 use cloud_debugging_service::oplog::debug_oplog_service::DebugOplogService;
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
-use golem_common::model::RetryConfig;
+use cloud_debugging_service::{create_debug_wasmtime_linker, run_debug_server};
+use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
+use golem_worker_executor_base::services::component;
 use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::file_loader::FileLoader;
@@ -23,6 +21,7 @@ use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::oplog::OplogService;
+use golem_worker_executor_base::services::plugins;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
@@ -39,8 +38,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::All;
-use golem_worker_executor_base::workerctx::WorkerCtx;
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -50,76 +48,69 @@ use wasmtime::Engine;
 // A test bootstrap which depends on the original
 // bootstrap (inner) as much as possible except for auth service
 pub struct TestDebuggingServerBootStrap {
-    inner: cloud_debugging_service::ServerBootstrap,
     regular_worker_executor_context: RegularExecutorTestContext,
 }
 
 impl TestDebuggingServerBootStrap {
     pub fn new(regular_worker_executor_context: RegularExecutorTestContext) -> Self {
-        // This will be unused, and if used, produce error.
-        // We can handle this better down the line, as these
-        // are used to form the auth service in the real debug bootstrap,
-        // however, we are providing a dummy auth service that doesn't
-        // depend on it.
-        let additional_config = AdditionalDebugConfig {
-            cloud_service: RemoteCloudServiceConfig {
-                host: "localhost".to_string(),
-                port: 8080,
-                access_token: "03494299-B515-4427-8C37-4C1C915679B7".parse().unwrap(),
-                retries: RetryConfig::default(),
-            },
-        };
-
         Self {
-            inner: cloud_debugging_service::ServerBootstrap { additional_config },
             regular_worker_executor_context,
         }
     }
 }
 
 #[async_trait]
-impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
+impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
-    ) -> Arc<ActiveWorkers<DebugContext>> {
-        self.inner.create_active_workers(golem_config)
+    ) -> Arc<ActiveWorkers<DebugContext<DefaultGolemTypes>>> {
+        Arc::new(ActiveWorkers::<DebugContext<DefaultGolemTypes>>::new(
+            &golem_config.memory,
+        ))
     }
 
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<
-            dyn Plugins<
-                    <<DebugContext as WorkerCtx>::ComponentOwner as ComponentOwner>::PluginOwner,
-                    <DebugContext as WorkerCtx>::PluginScope,
-                > + Send
-                + Sync,
-        >,
-        Arc<dyn PluginsObservations + Send + Sync>,
+        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn PluginsObservations>,
     ) {
-        self.inner.create_plugins(golem_config)
+        plugins::default_configured(&golem_config.plugin_service)
+    }
+
+    fn create_component_service(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        plugin_observations: Arc<dyn PluginsObservations>,
+    ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
+        component::configured(
+            &get_component_service_config(),
+            &get_component_cache_config(),
+            &golem_config.compiled_component_service,
+            blob_storage,
+            plugin_observations,
+        )
     }
 
     async fn run_server(
         &self,
-        service_dependencies: All<DebugContext>,
-        lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
+        service_dependencies: All<DebugContext<DefaultGolemTypes>>,
+        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext<DefaultGolemTypes>>>,
         join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<()> {
-        self.inner
-            .run_server(service_dependencies, lazy_worker_activator, join_set)
-            .await
+        run_debug_server(service_dependencies, join_set).await
     }
 
     async fn create_services(
         &self,
-        active_workers: Arc<ActiveWorkers<DebugContext>>,
+        active_workers: Arc<ActiveWorkers<DebugContext<DefaultGolemTypes>>>,
         engine: Arc<Engine>,
-        linker: Arc<Linker<DebugContext>>,
+        linker: Arc<Linker<DebugContext<DefaultGolemTypes>>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -129,15 +120,15 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<DebugContext> + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<DebugContext<DefaultGolemTypes>> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         _worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
-    ) -> anyhow::Result<All<DebugContext>> {
+    ) -> anyhow::Result<All<DebugContext<DefaultGolemTypes>>> {
         let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(TestAuthService);
 
         // The bootstrap of debug server uses a worker proxy which bypasses the worker service
@@ -250,7 +241,10 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         ))
     }
 
-    fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
-        self.inner.create_wasmtime_linker(engine)
+    fn create_wasmtime_linker(
+        &self,
+        engine: &Engine,
+    ) -> anyhow::Result<Linker<DebugContext<DefaultGolemTypes>>> {
+        create_debug_wasmtime_linker(engine)
     }
 }

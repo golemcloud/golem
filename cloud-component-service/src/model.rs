@@ -1,14 +1,13 @@
-use crate::repo::{CloudComponentOwnerRow, CloudPluginScopeRow};
+use crate::repo::CloudPluginScopeRow;
 use crate::service::component::CloudComponentService;
 use async_trait::async_trait;
 use cloud_common::auth::CloudAuthCtx;
-use cloud_common::model::CloudPluginOwner;
-use golem_common::model::component::ComponentOwner;
+use cloud_common::model::CloudComponentOwner;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::{ComponentPluginScope, PluginInstallation};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, Empty, HasAccountId, InitialComponentFile, ProjectId,
+    AccountId, ComponentId, ComponentType, Empty, InitialComponentFile, ProjectId,
 };
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
@@ -17,58 +16,8 @@ use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct CloudComponentOwner {
-    pub project_id: ProjectId,
-    pub account_id: AccountId,
-}
-
-impl From<CloudComponentOwner> for CloudPluginOwner {
-    fn from(value: CloudComponentOwner) -> Self {
-        CloudPluginOwner {
-            account_id: value.account_id,
-        }
-    }
-}
-
-impl Display for CloudComponentOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.account_id, self.project_id)
-    }
-}
-
-impl FromStr for CloudComponentOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(format!("Invalid namespace: {s}"));
-        }
-
-        Ok(Self {
-            project_id: ProjectId::try_from(parts[1])?,
-            account_id: AccountId::from(parts[0]),
-        })
-    }
-}
-
-impl HasAccountId for CloudComponentOwner {
-    fn account_id(&self) -> AccountId {
-        self.account_id.clone()
-    }
-}
-
-impl ComponentOwner for CloudComponentOwner {
-    type Row = CloudComponentOwnerRow;
-    type PluginOwner = CloudPluginOwner;
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -257,6 +206,7 @@ pub struct Component {
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
+    pub account_id: AccountId,
     pub project_id: ProjectId,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub component_type: Option<ComponentType>,
@@ -265,12 +215,17 @@ pub struct Component {
 }
 
 impl Component {
-    pub fn new(component: golem_service_base::model::Component, project_id: ProjectId) -> Self {
+    pub fn new(
+        component: golem_service_base::model::Component,
+        account_id: AccountId,
+        project_id: ProjectId,
+    ) -> Self {
         Self {
             versioned_component_id: component.versioned_component_id,
             component_name: component.component_name,
             component_size: component.component_size,
             metadata: component.metadata,
+            account_id,
             project_id,
             created_at: component.created_at,
             component_type: component.component_type,
@@ -319,6 +274,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
             project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
+            account_id: value.account_id.ok_or("Missing account_id")?.into(),
             created_at,
             component_type,
             files,
@@ -335,6 +291,7 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             project_id: Some(value.project_id.into()),
+            account_id: Some(value.account_id.into()),
             created_at: value
                 .created_at
                 .map(|t| prost_types::Timestamp::from(SystemTime::from(t))),
@@ -359,6 +316,7 @@ impl From<golem_component_service_base::model::Component<CloudComponentOwner>> f
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,
+            account_id: value.owner.account_id,
             project_id: value.owner.project_id,
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),

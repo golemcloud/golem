@@ -1,8 +1,7 @@
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
@@ -19,6 +18,7 @@ use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
     InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
+use golem_worker_executor_base::DefaultGolemTypes;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 
@@ -60,12 +60,12 @@ pub struct TestWorkerCtx {
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
-    type ComponentOwner = DefaultComponentOwner;
-    type PluginScope = DefaultPluginScope;
+
+    type Types = DefaultGolemTypes;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata,
+        component_metadata: ComponentMetadata<DefaultGolemTypes>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -79,17 +79,13 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -141,7 +137,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata {
+    fn component_metadata(&self) -> &ComponentMetadata<DefaultGolemTypes> {
         self.durable_ctx.component_metadata()
     }
 
@@ -317,7 +313,7 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &ComponentMetadata<DefaultGolemTypes>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -459,6 +455,17 @@ impl InvocationManagement for TestWorkerCtx {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_idempotency_key().await
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.durable_ctx.get_current_invocation_context().await
+    }
+
+    async fn set_current_invocation_context(
+        &mut self,
+        stack: InvocationContextStack,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx.set_current_invocation_context(stack).await
     }
 
     fn is_live(&self) -> bool {

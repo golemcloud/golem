@@ -15,6 +15,18 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
+[cloud_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[cloud_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
 [compiled_component_service]
 type = "Enabled"
 
@@ -23,18 +35,19 @@ type = "Enabled"
 [component_cache]
 max_capacity = 32
 max_metadata_capacity = 16384
+max_resolved_component_capacity = 1024
+max_resolved_project_capacity = 1024
 time_to_idle = "12h"
 
 [component_service]
-type = "Grpc"
-
-[component_service.config]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 host = "localhost"
 max_component_size = 52428800
 port = 9090
+project_host = "localhost"
+project_port = 9091
 
-[component_service.config.retries]
+[component_service.retries]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
@@ -123,9 +136,6 @@ multiplier = 3.0
 [scheduler]
 refresh_interval = "2s"
 
-[shard_manager_service]
-type = "Disabled"
-
 [suspend]
 suspend_after = "10s"
 
@@ -177,6 +187,18 @@ without_time = false
 # [blob_storage.config]
 # root = "../data/blob_storage"
 # 
+# [cloud_service]
+# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# host = "localhost"
+# port = 8080
+# 
+# [cloud_service.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
 # [compiled_component_service]
 # type = "Enabled"
 # 
@@ -185,18 +207,19 @@ without_time = false
 # [component_cache]
 # max_capacity = 32
 # max_metadata_capacity = 16384
+# max_resolved_component_capacity = 1024
+# max_resolved_project_capacity = 1024
 # time_to_idle = "12h"
 # 
 # [component_service]
-# type = "Grpc"
-# 
-# [component_service.config]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # host = "localhost"
 # max_component_size = 52428800
 # port = 9090
+# project_host = "localhost"
+# project_port = 9091
 # 
-# [component_service.config.retries]
+# [component_service.retries]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
@@ -285,9 +308,6 @@ without_time = false
 # [scheduler]
 # refresh_interval = "2s"
 # 
-# [shard_manager_service]
-# type = "Disabled"
-# 
 # [suspend]
 # suspend_after = "10s"
 # 
@@ -320,29 +340,3 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-## Generated from default config
-[cloud_service]
-access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-host = "localhost"
-port = 8080
-
-[cloud_service.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-
-## Generated from example config: default-additional-config
-# [cloud_service]
-# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-# host = "localhost"
-# port = 8080
-# 
-# [cloud_service.retries]
-# max_attempts = 5
-# max_delay = "2s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 2.0

@@ -1,10 +1,10 @@
-use crate::model::{CloudComponentOwner, CloudPluginScope};
+use crate::model::CloudPluginScope;
 use crate::service::CloudComponentError;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::BaseAuthService;
 use cloud_common::clients::limit::LimitService;
 use cloud_common::clients::project::ProjectService;
-use cloud_common::model::{CloudPluginOwner, ProjectAction};
+use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, ProjectAction};
 use futures_util::Stream;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::DynamicLinkedInstance;

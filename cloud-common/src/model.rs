@@ -1,20 +1,20 @@
+use crate::auth::CloudNamespace;
+use crate::repo::component::CloudComponentOwnerRow;
+use crate::repo::CloudPluginOwnerRow;
+use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::plugin::PluginOwner;
+use golem_common::model::{AccountId, HasAccountId, ProjectId};
+use golem_common::newtype_uuid;
+use poem_openapi::{Enum, Object};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-
-use golem_common::model::plugin::PluginOwner;
-use golem_common::model::{AccountId, HasAccountId, ProjectId};
-use poem_openapi::{Enum, Object};
-use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
 use uuid::Uuid;
-
-use crate::auth::CloudNamespace;
-use crate::repo::CloudPluginOwnerRow;
-use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
-use golem_common::newtype_uuid;
 
 newtype_uuid!(PlanId, cloud_api_grpc::proto::golem::cloud::plan::PlanId);
 newtype_uuid!(
@@ -338,39 +338,6 @@ impl Display for Role {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    fn role_to_from() {
-        for role in Role::iter() {
-            let role_as_i32: i32 = role.clone().into();
-            let deserialized_role = Role::try_from(role_as_i32).unwrap();
-            assert_eq!(role, deserialized_role);
-
-            let role_as_str = role.to_string();
-            let deserialized_role = Role::from_str(&role_as_str).unwrap();
-            assert_eq!(role, deserialized_role);
-            assert_eq!(role, deserialized_role);
-        }
-    }
-
-    #[test]
-    fn project_action_to_from() {
-        for action in ProjectAction::iter() {
-            let action_as_i32: i32 = action.clone().into();
-            let deserialized_action = ProjectAction::try_from(action_as_i32).unwrap();
-            assert_eq!(action, deserialized_action);
-
-            let action_as_str = action.to_string();
-            let deserialized_action = ProjectAction::from_str(&action_as_str).unwrap();
-            assert_eq!(action, deserialized_action);
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProjectView {
     pub id: ProjectId,
@@ -435,4 +402,86 @@ impl HasAccountId for CloudPluginOwner {
 
 impl PluginOwner for CloudPluginOwner {
     type Row = CloudPluginOwnerRow;
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct CloudComponentOwner {
+    pub project_id: ProjectId,
+    pub account_id: AccountId,
+}
+
+impl From<CloudComponentOwner> for CloudPluginOwner {
+    fn from(value: CloudComponentOwner) -> Self {
+        CloudPluginOwner {
+            account_id: value.account_id,
+        }
+    }
+}
+
+impl Display for CloudComponentOwner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.account_id, self.project_id)
+    }
+}
+
+impl FromStr for CloudComponentOwner {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid namespace: {s}"));
+        }
+
+        Ok(Self {
+            project_id: ProjectId::try_from(parts[1])?,
+            account_id: AccountId::from(parts[0]),
+        })
+    }
+}
+
+impl HasAccountId for CloudComponentOwner {
+    fn account_id(&self) -> AccountId {
+        self.account_id.clone()
+    }
+}
+
+impl ComponentOwner for CloudComponentOwner {
+    type Row = CloudComponentOwnerRow;
+    type PluginOwner = CloudPluginOwner;
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn role_to_from() {
+        for role in Role::iter() {
+            let role_as_i32: i32 = role.clone().into();
+            let deserialized_role = Role::try_from(role_as_i32).unwrap();
+            assert_eq!(role, deserialized_role);
+
+            let role_as_str = role.to_string();
+            let deserialized_role = Role::from_str(&role_as_str).unwrap();
+            assert_eq!(role, deserialized_role);
+            assert_eq!(role, deserialized_role);
+        }
+    }
+
+    #[test]
+    fn project_action_to_from() {
+        for action in ProjectAction::iter() {
+            let action_as_i32: i32 = action.clone().into();
+            let deserialized_action = ProjectAction::try_from(action_as_i32).unwrap();
+            assert_eq!(action, deserialized_action);
+
+            let action_as_str = action.to_string();
+            let deserialized_action = ProjectAction::from_str(&action_as_str).unwrap();
+            assert_eq!(action, deserialized_action);
+        }
+    }
 }

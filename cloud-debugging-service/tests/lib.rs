@@ -21,10 +21,13 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
+use golem_worker_executor_base::services::additional_config::{
+    ComponentCacheConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
+};
 use golem_worker_executor_base::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
-    MemoryConfig, ShardManagerServiceConfig, WorkerServiceGrpcConfig,
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, GolemConfig,
+    IndexedStorageConfig, KeyValueStorageConfig, MemoryConfig, ShardManagerServiceConfig,
+    WorkerServiceGrpcConfig,
 };
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -95,9 +98,6 @@ pub fn get_golem_config(
         }),
         port: server_port,
         http_port,
-        component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
-            root: Path::new("data/components").to_path_buf(),
-        }),
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
@@ -110,6 +110,16 @@ pub fn get_golem_config(
         memory: MemoryConfig::default(),
         ..Default::default()
     }
+}
+
+pub fn get_component_service_config() -> ComponentServiceConfig {
+    ComponentServiceConfig::Local(ComponentServiceLocalConfig {
+        root: PathBuf::from("data/components"),
+    })
+}
+
+pub fn get_component_cache_config() -> ComponentCacheConfig {
+    ComponentCacheConfig::default()
 }
 
 // In a debuggint test suite, we have a regular worker executor with its own dependencies
@@ -202,9 +212,8 @@ impl RegularWorkerExecutorTestDependencies {
         );
         let component_directory =
             Path::new("../cloud-debugging-service/test-components").to_path_buf();
-        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-            FileSystemComponentService::new(Path::new("data/components")),
-        );
+        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+            Arc::new(FileSystemComponentService::new(Path::new("data/components")).await);
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
                 .await

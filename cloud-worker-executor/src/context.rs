@@ -1,21 +1,21 @@
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::{AdditionalDeps, HasResourceLimits};
+use crate::CloudGolemTypes;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::golem_rpc_0_1_x::types::{
-    CancellationToken, Datetime, FutureInvokeResult, HostFutureInvokeResult, WasmRpc,
+    Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
+use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, RpcError, Uri, Value, WitValue};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -25,7 +25,6 @@ use golem_worker_executor_base::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
     ReadFileResult, TrapType, WorkerConfig,
 };
-use golem_worker_executor_base::preview2::Pollable;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
@@ -154,6 +153,17 @@ impl InvocationManagement for Context {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.durable_ctx.get_current_invocation_context().await
+    }
+
+    async fn set_current_invocation_context(
+        &mut self,
+        stack: InvocationContextStack,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx.set_current_invocation_context(stack).await
+    }
+
     fn is_live(&self) -> bool {
         self.durable_ctx.is_live()
     }
@@ -267,12 +277,12 @@ impl ExternalOperations<Context> for Context {
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &OwnedWorkerId,
-        latest_worker_status: &WorkerStatusRecord,
+        worker_status_record: &WorkerStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
             this,
             worker_id,
-            latest_worker_status,
+            worker_status_record,
         )
         .await
     }
@@ -475,7 +485,7 @@ impl HostWasmRpc for Context {
         scheduled_time: Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Resource<CancellationToken>> {
+    ) -> anyhow::Result<Resource<CancellationTokenEntry>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, function_name, function_params)
             .await
@@ -514,7 +524,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &ComponentMetadata<CloudGolemTypes>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -525,12 +535,11 @@ impl DynamicLinking<Context> for Context {
 impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
 
-    type ComponentOwner = DefaultComponentOwner;
-    type PluginScope = DefaultPluginScope;
+    type Types = CloudGolemTypes;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata,
+        component_metadata: ComponentMetadata<CloudGolemTypes>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
@@ -546,17 +555,13 @@ impl WorkerCtx for Context {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -613,7 +618,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata {
+    fn component_metadata(&self) -> &ComponentMetadata<CloudGolemTypes> {
         self.durable_ctx.component_metadata()
     }
 

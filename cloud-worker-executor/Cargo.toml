@@ -14,12 +14,15 @@ test = false
 [dependencies]
 golem-common = { workspace = true }
 golem-api-grpc = { workspace = true }
+golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-worker-executor-base = { workspace = true }
+golem-service-base = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 cloud-common = { path = "../cloud-common" }
 
 anyhow = { workspace = true }
+async-lock = { workspace = true }
 async-mutex = "1.4.0"
 async-trait = { workspace = true }
 bincode = { workspace = true }
@@ -49,6 +52,7 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 rustix = { version = "0.38.30", features = ["event"] }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = "3.9.0"
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -68,4 +72,3 @@ windows-sys = "0.52.0"
 
 [dev-dependencies]
 test-r = { workspace = true }
-

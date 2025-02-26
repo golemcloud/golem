@@ -1,6 +1,6 @@
 use crate::additional_deps::AdditionalDeps;
 use crate::auth::{AuthService, AuthServiceDefault};
-use crate::config::{AdditionalDebugConfig, DebugConfig};
+use crate::config::DebugConfig;
 use crate::debug_context::DebugContext;
 use crate::debug_session::{DebugSessions, DebugSessionsDefault};
 use crate::oplog::debug_oplog_service::DebugOplogService;
@@ -11,16 +11,18 @@ use axum::routing::any;
 use axum::Router;
 use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
 use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use cloud_worker_executor::services::component::ComponentServiceCloudGrpc;
+use cloud_worker_executor::services::plugins::CloudPluginsWrapper;
+use cloud_worker_executor::CloudGolemTypes;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::golem::{api0_2_2, api1_1_5};
+use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::{ComponentServiceConfig, GolemConfig};
+use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::oplog::OplogService;
@@ -39,10 +41,9 @@ use golem_worker_executor_base::services::worker_enumeration::{
 };
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{plugins, All, HasConfig};
+use golem_worker_executor_base::services::{compiled_component, plugins, All, HasConfig};
 use golem_worker_executor_base::wasi_host::create_linker;
-use golem_worker_executor_base::workerctx::WorkerCtx;
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor_base::{Bootstrap, GolemTypes};
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
@@ -50,6 +51,7 @@ use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
+use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -70,79 +72,81 @@ pub mod services;
 pub mod websocket;
 
 pub struct ServerBootstrap {
-    pub additional_config: AdditionalDebugConfig,
+    pub debug_config: DebugConfig,
 }
 
 #[async_trait]
-impl Bootstrap<DebugContext> for ServerBootstrap {
+impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
-    ) -> Arc<ActiveWorkers<DebugContext>> {
-        Arc::new(ActiveWorkers::<DebugContext>::new(&golem_config.memory))
+    ) -> Arc<ActiveWorkers<DebugContext<CloudGolemTypes>>> {
+        Arc::new(ActiveWorkers::<DebugContext<CloudGolemTypes>>::new(
+            &golem_config.memory,
+        ))
+    }
+
+    fn create_component_service(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        plugins: Arc<dyn PluginsObservations>,
+    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+        let compiled_component_service =
+            compiled_component::configured(&golem_config.compiled_component_service, blob_storage);
+        let component_service_config = &self.debug_config.component_service;
+        let component_cache_config = &self.debug_config.component_cache;
+
+        let access_token = component_service_config
+            .access_token
+            .parse::<Uuid>()
+            .expect("Access token must be an UUID");
+
+        Arc::new(ComponentServiceCloudGrpc::new(
+            component_service_config.component_uri(),
+            component_service_config.project_uri(),
+            access_token,
+            component_cache_config.max_capacity,
+            component_cache_config.max_metadata_capacity,
+            component_cache_config.max_resolved_component_capacity,
+            component_cache_config.max_resolved_project_capacity,
+            component_cache_config.time_to_idle,
+            golem_config.retry.clone(),
+            compiled_component_service,
+            component_service_config.max_component_size,
+            plugins,
+        ))
     }
 
     async fn run_server(
         &self,
-        service_dependencies: All<DebugContext>,
-        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
+        service_dependencies: All<DebugContext<CloudGolemTypes>>,
+        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext<CloudGolemTypes>>>,
         join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<()> {
-        let debug_service = Arc::new(DebugServiceDefault::new(service_dependencies.clone()));
-
-        let handle_ws = |ws| websocket::handle_ws(ws, debug_service);
-
-        let config = service_dependencies.config();
-
-        let app = Router::new().route("/ws", any(handle_ws));
-
-        let addr = SocketAddrV4::new(
-            config
-                .http_address
-                .parse::<Ipv4Addr>()
-                .context("http_address configuration")?,
-            config.port,
-        );
-
-        let listener = TcpListener::bind(addr).await?;
-        let local_addr = listener.local_addr()?;
-
-        join_set.spawn(
-            async move {
-                axum::serve(listener, app).await?;
-                Ok(())
-            }
-            .in_current_span(),
-        );
-
-        info!("Jrpc server started on {local_addr}");
-
-        Ok(())
+        run_debug_server(service_dependencies, join_set).await
     }
 
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<
-            dyn Plugins<
-                    <<DebugContext as WorkerCtx>::ComponentOwner as ComponentOwner>::PluginOwner,
-                    <DebugContext as WorkerCtx>::PluginScope,
-                > + Send
-                + Sync,
-        >,
-        Arc<dyn PluginsObservations + Send + Sync>,
+        Arc<dyn Plugins<CloudGolemTypes>>,
+        Arc<dyn PluginsObservations>,
     ) {
-        plugins::default_configured(&golem_config.plugin_service)
+        let (plugins, plugin_observations) =
+            plugins::default_configured(&golem_config.plugin_service);
+        let wrapper = Arc::new(CloudPluginsWrapper::new(plugin_observations, plugins));
+        (wrapper.clone(), wrapper)
     }
 
     async fn create_services(
         &self,
-        active_workers: Arc<ActiveWorkers<DebugContext>>,
+        active_workers: Arc<ActiveWorkers<DebugContext<CloudGolemTypes>>>,
         engine: Arc<Engine>,
-        linker: Arc<Linker<DebugContext>>,
+        linker: Arc<Linker<DebugContext<CloudGolemTypes>>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -152,35 +156,26 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<DebugContext> + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<DebugContext<CloudGolemTypes>> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
-    ) -> anyhow::Result<All<DebugContext>> {
-        let config: ComponentServiceConfig = golem_config.component_service.clone();
-
-        let remote_cloud_service_config = self.additional_config.cloud_service.clone();
+    ) -> anyhow::Result<All<DebugContext<CloudGolemTypes>>> {
+        let remote_cloud_service_config = self.debug_config.cloud_service.clone();
 
         let project_service: Arc<dyn ProjectService + Send + Sync> =
             Arc::new(ProjectServiceDefault::new(&remote_cloud_service_config));
         let grant_service: Arc<dyn GrantService + Send + Sync> =
             Arc::new(GrantServiceDefault::new(&remote_cloud_service_config));
 
-        let component_service_grpc_config = match config {
-            ComponentServiceConfig::Grpc(grpc) => Ok(grpc),
-            ComponentServiceConfig::Local(_) => {
-                Err(anyhow::Error::msg("Cannot create auth_service for debugging service with local component service config".to_string()))
-            }
-        }?;
-
         let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(AuthServiceDefault::new(
             project_service.clone(),
             grant_service.clone(),
-            component_service_grpc_config,
+            self.debug_config.component_service.clone(),
         ));
 
         let debug_sessions: Arc<dyn DebugSessions + Sync + Send> =
@@ -285,38 +280,83 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         ))
     }
 
-    fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
-        let mut linker = create_linker(engine, get_durable_ctx)?;
-        api0_2_2::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_5::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(
-            &mut linker,
-            get_durable_ctx,
-        )?;
-        Ok(linker)
+    fn create_wasmtime_linker(
+        &self,
+        engine: &Engine,
+    ) -> anyhow::Result<Linker<DebugContext<CloudGolemTypes>>> {
+        create_debug_wasmtime_linker(engine)
     }
 }
 
-fn get_durable_ctx(ctx: &mut DebugContext) -> &mut DurableWorkerCtx<DebugContext> {
+fn get_durable_ctx<T: GolemTypes>(
+    ctx: &mut DebugContext<T>,
+) -> &mut DurableWorkerCtx<DebugContext<T>> {
     &mut ctx.durable_ctx
+}
+
+pub fn create_debug_wasmtime_linker<T: GolemTypes>(
+    engine: &Engine,
+) -> anyhow::Result<Linker<DebugContext<T>>> {
+    let mut linker = create_linker(engine, get_durable_ctx)?;
+    golem_api_0_2_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    Ok(linker)
+}
+
+pub async fn run_debug_server<T: GolemTypes>(
+    service_dependencies: All<DebugContext<T>>,
+    join_set: &mut JoinSet<Result<(), Error>>,
+) -> anyhow::Result<()> {
+    let debug_service = Arc::new(DebugServiceDefault::new(service_dependencies.clone()));
+
+    let handle_ws = |ws| websocket::handle_ws(ws, debug_service);
+
+    let config = service_dependencies.config();
+
+    let app = Router::new().route("/ws", any(handle_ws));
+
+    let addr = SocketAddrV4::new(
+        config
+            .http_address
+            .parse::<Ipv4Addr>()
+            .context("http_address configuration")?,
+        config.port,
+    );
+
+    let listener = TcpListener::bind(addr).await?;
+    let local_addr = listener.local_addr()?;
+
+    join_set.spawn(
+        async move {
+            axum::serve(listener, app).await?;
+            Ok(())
+        }
+        .in_current_span(),
+    );
+
+    info!("Jrpc server started on {local_addr}");
+
+    Ok(())
 }
 
 pub async fn run(
     debug_config: DebugConfig,
-    additional_config: AdditionalDebugConfig,
     prometheus_registry: Registry,
     runtime: Handle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Golem Debug Worker Executor starting up...");
     let mut join_set = JoinSet::new();
-    ServerBootstrap { additional_config }
-        .run(
-            debug_config.golem_config,
-            prometheus_registry,
-            runtime,
-            &mut join_set,
-        )
-        .await?;
+    ServerBootstrap {
+        debug_config: debug_config.clone(),
+    }
+    .run(
+        debug_config.into_golem_config(),
+        prometheus_registry,
+        runtime,
+        &mut join_set,
+    )
+    .await?;
 
     while let Some(res) = join_set.join_next().await {
         res??

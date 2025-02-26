@@ -20,27 +20,6 @@ type = "Enabled"
 
 [compiled_component_service.config]
 
-[component_cache]
-max_capacity = 32
-max_metadata_capacity = 16384
-time_to_idle = "12h"
-
-[component_service]
-type = "Grpc"
-
-[component_service.config]
-access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-host = "localhost"
-max_component_size = 52428800
-port = 9090
-
-[component_service.config.retries]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
-
 [indexed_storage]
 type = "KVStoreRedis"
 
@@ -207,27 +186,6 @@ without_time = false
 # 
 # [compiled_component_service.config]
 # 
-# [component_cache]
-# max_capacity = 32
-# max_metadata_capacity = 16384
-# time_to_idle = "12h"
-# 
-# [component_service]
-# type = "Grpc"
-# 
-# [component_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# host = "localhost"
-# max_component_size = 52428800
-# port = 9090
-# 
-# [component_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
 # [indexed_storage]
 # type = "Redis"
 # 
@@ -365,27 +323,6 @@ without_time = false
 # 
 # [compiled_component_service.config]
 # 
-# [component_cache]
-# max_capacity = 32
-# max_metadata_capacity = 16384
-# time_to_idle = "12h"
-# 
-# [component_service]
-# type = "Grpc"
-# 
-# [component_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# host = "localhost"
-# max_component_size = 52428800
-# port = 9090
-# 
-# [component_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
 # [indexed_storage]
 # type = "InMemory"
 # 
@@ -500,6 +437,28 @@ without_time = false
 # span_events_full = false
 # without_time = false
 ## Generated from default config
+[component_cache]
+max_capacity = 32
+max_metadata_capacity = 16384
+max_resolved_component_capacity = 1024
+max_resolved_project_capacity = 1024
+time_to_idle = "12h"
+
+[component_service]
+access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+host = "localhost"
+max_component_size = 52428800
+port = 9090
+project_host = "localhost"
+project_port = 9091
+
+[component_service.retries]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [resource_limits]
 type = "Grpc"
 
@@ -518,5 +477,27 @@ multiplier = 2.0
 
 
 ## Generated from example config: with disabled resource limits
+# [component_cache]
+# max_capacity = 32
+# max_metadata_capacity = 16384
+# max_resolved_component_capacity = 1024
+# max_resolved_project_capacity = 1024
+# time_to_idle = "12h"
+# 
+# [component_service]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# host = "localhost"
+# max_component_size = 52428800
+# port = 9090
+# project_host = "localhost"
+# project_port = 9091
+# 
+# [component_service.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [resource_limits]
 # type = "Disabled"

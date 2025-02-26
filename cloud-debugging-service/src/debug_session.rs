@@ -436,8 +436,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 plugin: deactivate_plugin_params.plugin.installation_id,
             })
         }
-        PublicOplogEntry::Revert(revert_params) => Ok(OplogEntry::Restart {
+        PublicOplogEntry::Revert(revert_params) => Ok(OplogEntry::Revert {
             timestamp: revert_params.timestamp,
+            dropped_region: revert_params.dropped_region,
         }),
         PublicOplogEntry::CancelInvocation(cancel_invocation_params) => {
             Ok(OplogEntry::CancelPendingInvocation {

@@ -2,10 +2,11 @@ use crate::context::Context;
 use crate::services::config::AdditionalGolemConfig;
 use crate::services::{resource_limits, AdditionalDeps};
 use async_trait::async_trait;
-use golem_common::model::component::ComponentOwner;
+use cloud_common::model::CloudComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::golem::{api0_2_2, api1_1_5};
+use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
@@ -28,17 +29,20 @@ use golem_worker_executor_base::services::worker_enumeration::{
 };
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{plugins, All};
+use golem_worker_executor_base::services::{compiled_component, plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
-use golem_worker_executor_base::workerctx::WorkerCtx;
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor_base::{Bootstrap, GolemTypes};
 use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::info;
+use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
+
+use self::services::component::ComponentServiceCloudGrpc;
+use self::services::plugins::CloudPluginsWrapper;
 
 #[cfg(test)]
 test_r::enable!();
@@ -46,6 +50,16 @@ test_r::enable!();
 pub mod context;
 pub mod metrics;
 pub mod services;
+
+pub struct CloudGolemTypes;
+
+impl GolemTypes for CloudGolemTypes {
+    type ComponentOwner = CloudComponentOwner;
+
+    // TODO: These should eventually be cloud types
+    type PluginOwner = DefaultPluginOwner;
+    type PluginScope = DefaultPluginScope;
+}
 
 struct ServerBootstrap {
     additional_golem_config: Arc<AdditionalGolemConfig>,
@@ -61,16 +75,45 @@ impl Bootstrap<Context> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<
-            dyn Plugins<
-                    <<Context as WorkerCtx>::ComponentOwner as ComponentOwner>::PluginOwner,
-                    <Context as WorkerCtx>::PluginScope,
-                > + Send
-                + Sync,
-        >,
-        Arc<dyn PluginsObservations + Send + Sync>,
+        Arc<dyn Plugins<CloudGolemTypes>>,
+        Arc<dyn PluginsObservations>,
     ) {
-        plugins::default_configured(&golem_config.plugin_service)
+        let (plugins, plugin_observations) =
+            plugins::default_configured(&golem_config.plugin_service);
+        let wrapper = Arc::new(CloudPluginsWrapper::new(plugin_observations, plugins));
+        (wrapper.clone(), wrapper)
+    }
+
+    fn create_component_service(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        plugin_observations: Arc<dyn PluginsObservations>,
+    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+        let compiled_component_service =
+            compiled_component::configured(&golem_config.compiled_component_service, blob_storage);
+        let component_service_config = &self.additional_golem_config.component_service;
+        let component_cache_config = &self.additional_golem_config.component_cache;
+
+        let access_token = component_service_config
+            .access_token
+            .parse::<Uuid>()
+            .expect("Access token must be an UUID");
+
+        Arc::new(ComponentServiceCloudGrpc::new(
+            component_service_config.component_uri(),
+            component_service_config.project_uri(),
+            access_token,
+            component_cache_config.max_capacity,
+            component_cache_config.max_metadata_capacity,
+            component_cache_config.max_resolved_component_capacity,
+            component_cache_config.max_resolved_project_capacity,
+            component_cache_config.time_to_idle,
+            golem_config.retry.clone(),
+            compiled_component_service,
+            component_service_config.max_component_size,
+            plugin_observations,
+        ))
     }
 
     async fn create_services(
@@ -79,7 +122,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<Context>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -95,7 +138,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
         let additional_golem_config = self.additional_golem_config.clone();
@@ -195,8 +238,8 @@ impl Bootstrap<Context> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        api0_2_2::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_5::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_0_2_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(
             &mut linker,
             get_durable_ctx,

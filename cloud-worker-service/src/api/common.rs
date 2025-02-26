@@ -197,6 +197,7 @@ impl From<BaseApiDefinitionError> for ApiEndpointError {
             BaseApiDefinitionError::Internal(_) => ApiEndpointError::internal(value),
             BaseApiDefinitionError::SecuritySchemeError(error) => ApiEndpointError::from(error),
             BaseApiDefinitionError::IdentityProviderError(error) => ApiEndpointError::from(error),
+            BaseApiDefinitionError::RibInternal(_) => ApiEndpointError::internal(value),
         }
     }
 }

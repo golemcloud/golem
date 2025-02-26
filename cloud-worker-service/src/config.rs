@@ -1,9 +1,9 @@
+use cloud_common::config::RemoteCloudServiceConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_service_base::config::MergedConfigLoaderOrDumper;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
-use cloud_common::config::{MergedConfigLoaderOrDumper, RemoteCloudServiceConfig};
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct WorkerServiceCloudConfig {

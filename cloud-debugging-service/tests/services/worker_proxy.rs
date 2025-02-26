@@ -6,6 +6,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     fork_worker_response, revert_worker_response, ForkWorkerRequest, RevertWorkerRequest,
 };
 use golem_common::base_model::OplogIndex;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
@@ -51,6 +52,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_worker_id: WorkerId,
         _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
+        _invocation_context_stack: InvocationContextStack,
     ) -> Result<TypeAnnotatedValue, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             GolemError::unknown(
@@ -68,6 +70,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_worker_id: WorkerId,
         _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
+        _invocation_context_stack: InvocationContextStack,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             GolemError::unknown(

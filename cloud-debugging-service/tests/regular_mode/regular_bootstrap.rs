@@ -1,12 +1,12 @@
 use crate::regular_mode::worker_ctx::TestWorkerCtx;
+use crate::{get_component_cache_config, get_component_service_config};
 use async_trait::async_trait;
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::golem::{api0_2_2, api1_1_5};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::ComponentService;
+use golem_worker_executor_base::services::component::{self, ComponentService};
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
@@ -28,14 +28,13 @@ use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
-use golem_worker_executor_base::workerctx::WorkerCtx;
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
-pub struct RegularWorkerExecutorBootstrap {}
+pub struct RegularWorkerExecutorBootstrap;
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
@@ -50,16 +49,25 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<
-            dyn Plugins<
-                    <<TestWorkerCtx as WorkerCtx>::ComponentOwner as ComponentOwner>::PluginOwner,
-                    <TestWorkerCtx as WorkerCtx>::PluginScope,
-                > + Send
-                + Sync,
-        >,
-        Arc<dyn PluginsObservations + Send + Sync>,
+        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn PluginsObservations>,
     ) {
         plugins::default_configured(&golem_config.plugin_service)
+    }
+
+    fn create_component_service(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        plugin_observations: Arc<dyn PluginsObservations>,
+    ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
+        component::configured(
+            &get_component_service_config(),
+            &get_component_cache_config(),
+            &golem_config.compiled_component_service,
+            blob_storage,
+            plugin_observations,
+        )
     }
 
     async fn create_services(
@@ -68,7 +76,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -84,7 +92,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let worker_fork = Arc::new(DefaultWorkerFork::new(

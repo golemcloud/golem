@@ -17,6 +17,7 @@ use golem_worker_executor_base::services::{
     HasWorkerForkService, HasWorkerService,
 };
 use golem_worker_executor_base::worker::Worker;
+use golem_worker_executor_base::GolemTypes;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -106,10 +107,10 @@ impl DebugServiceError {
 
     pub fn get_worker_id(&self) -> Option<WorkerId> {
         match self {
-            DebugServiceError::Internal { worker_id, .. } => worker_id.clone(),
+            DebugServiceError::Internal { worker_id, .. } => (*worker_id).clone(),
             DebugServiceError::Unauthorized { .. } => None,
             DebugServiceError::Conflict { worker_id, .. } => Some(worker_id.clone()),
-            DebugServiceError::ValidationFailed { worker_id, .. } => worker_id.clone(),
+            DebugServiceError::ValidationFailed { worker_id, .. } => (*worker_id).clone(),
         }
     }
 
@@ -139,14 +140,14 @@ impl DebugServiceError {
     }
 }
 
-pub struct DebugServiceDefault {
+pub struct DebugServiceDefault<T: GolemTypes> {
     worker_auth_service: Arc<dyn AuthService + Sync + Send>,
     debug_session: Arc<dyn DebugSessions + Sync + Send>,
-    all: All<DebugContext>,
+    all: All<DebugContext<T>>,
 }
 
-impl DebugServiceDefault {
-    pub fn new(all: All<DebugContext>) -> Self {
+impl<T: GolemTypes> DebugServiceDefault<T> {
+    pub fn new(all: All<DebugContext<T>>) -> Self {
         let extra_deps = all.extra_deps();
         let debug_session = extra_deps.debug_session();
         let worker_auth_service = extra_deps.auth_service();
@@ -420,7 +421,7 @@ impl DebugServiceDefault {
 
     pub async fn new_target_index(
         worker_id: &WorkerId,
-        worker: &Arc<Worker<DebugContext>>,
+        worker: &Arc<Worker<DebugContext<T>>>,
         target_oplog_index: OplogIndex,
     ) -> Result<OplogIndex, DebugServiceError> {
         // New target index to be calculated here
@@ -470,7 +471,7 @@ impl DebugServiceDefault {
 }
 
 #[async_trait]
-impl DebugService for DebugServiceDefault {
+impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
     async fn connect(
         &self,
         auth_ctx: &CloudAuthCtx,
@@ -633,6 +634,7 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
+    use golem_worker_executor_base::DefaultGolemTypes;
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
@@ -648,7 +650,7 @@ mod tests {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result = DebugServiceDefault::get_target_oplog_index_at_invocation_boundary(
+        let result = DebugServiceDefault::<DefaultGolemTypes>::get_target_oplog_index_at_invocation_boundary(
             Arc::new(TestOplog::new(5)),
             target_oplog_index,
             original_last_oplog_index,
@@ -663,7 +665,7 @@ mod tests {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result = DebugServiceDefault::get_target_oplog_index_at_invocation_boundary(
+        let result = DebugServiceDefault::<DefaultGolemTypes>::get_target_oplog_index_at_invocation_boundary(
             Arc::new(TestOplog::new(11)),
             target_oplog_index,
             original_last_oplog_index,

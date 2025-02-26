@@ -1,5 +1,5 @@
 use crate::config::ComponentServiceConfig;
-use crate::model::{CloudComponentOwner, CloudPluginScope};
+use crate::model::CloudPluginScope;
 use crate::service::component::CloudComponentService;
 use crate::service::plugin::CloudPluginService;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
@@ -7,7 +7,7 @@ use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthSe
 use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
 use cloud_common::clients::limit::{LimitError, LimitService, LimitServiceDefault};
 use cloud_common::clients::project::{ProjectError, ProjectService, ProjectServiceDefault};
-use cloud_common::model::CloudPluginOwner;
+use cloud_common::model::{CloudComponentOwner, CloudPluginOwner};
 use golem_common::config::DbConfig;
 use golem_common::SafeDisplay;
 use golem_component_service_base::config::{ComponentCompilationConfig, ComponentStoreConfig};
