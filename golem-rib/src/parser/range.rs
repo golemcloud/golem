@@ -21,8 +21,8 @@ use internal::*;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier;
-use crate::Range;
 use crate::rib_source_span::GetSourcePosition;
+use crate::Range;
 
 pub fn range<Input>() -> impl Parser<Input, Output = Range>
 where
@@ -36,14 +36,14 @@ where
 }
 
 mod internal {
-    use bigdecimal::{BigDecimal, FromPrimitive};
+    use super::*;
     use crate::parser::select_field::select_field;
     use crate::parser::select_index::select_index;
     use crate::parser::sequence::sequence;
+    use crate::{InferredType, Range};
+    use bigdecimal::{BigDecimal, FromPrimitive};
     use combine::parser::char::{char as char_, digit, string};
     use poem_openapi::__private::poem::EndpointExt;
-    use crate::{InferredType, Range};
-    use super::*;
 
     enum RightSide {
         RightInclusiveExpr { expr: Expr },
@@ -61,26 +61,55 @@ mod internal {
         (
             // Following the range syntax with semantics of rust
             // Allows space on either side of the dots, but not in between dots (or . and .=)
-            attempt(select_field()).or(attempt(select_index())).or(identifier()).or(pos_num()).skip(spaces()),
+            optional(
+                attempt(select_field())
+                    .or(attempt(select_index()))
+                    .or(identifier())
+                    .or(pos_num())
+                    .skip(spaces()),
+            ),
             char_('.'),
             char_('.'),
-            optional((string("=").skip(spaces()),  identifier().or(pos_num()).skip(spaces())).map(|(_, expr)| RightSide::RightInclusiveExpr { expr }).or(
-                spaces().with(identifier().or(pos_num()).skip(spaces())).map(|expr| RightSide::RightExpr { expr }),
-            )),
+            optional(
+                (
+                    string("=").skip(spaces()),
+                    identifier().or(pos_num()).skip(spaces()),
+                )
+                    .map(|(_, expr)| RightSide::RightInclusiveExpr { expr })
+                    .or(spaces()
+                        .with(identifier().or(pos_num()).skip(spaces()))
+                        .map(|expr| RightSide::RightExpr { expr })),
+            ),
         )
-            .map(|(a, b, c, d): (Expr, _, _, Option<RightSide>)| {
-                match d {
-                    Some(RightSide::RightInclusiveExpr { expr }) => {
-                        Range::RangeInclusive { from: a, to: expr }
-                    }
-                    Some(RightSide::RightExpr { expr }) => {
-                        Range::Range { from: a, to: expr }
-                    }
-                    None => {
-                        Range::RangeFrom { from: a }
-                    }
-                }
-            })
+            .map(
+                |(a, b, c, d): (Option<Expr>, _, _, Option<RightSide>)| match (a, d) {
+                    (Some(left_side), Some(right_side)) => match right_side {
+                        RightSide::RightInclusiveExpr { expr: right_side } => {
+                            Range::RangeInclusive {
+                                from: left_side,
+                                to: right_side,
+                            }
+                        }
+                        RightSide::RightExpr { expr: right_side } => Range::Range {
+                            from: left_side,
+                            to: right_side,
+                        },
+                    },
+
+                    (Some(left_side), None) => Range::RangeFrom { from: left_side },
+
+                    (None, Some(right_side)) => match right_side {
+                        RightSide::RightInclusiveExpr { expr: right_side } => {
+                            Range::RangeToInclusive { to: right_side }
+                        }
+                        RightSide::RightExpr { expr: right_side } => {
+                            Range::RangeTo { to: right_side }
+                        }
+                    },
+
+                    (None, None) => Range::RangeFull,
+                },
+            )
     }
 
     pub(crate) fn pos_num<Input>() -> impl Parser<Input, Output = Expr>
@@ -94,7 +123,9 @@ mod internal {
         many1(digit()).and_then(|s: String| match s {
             s if s.len() > 0 => s
                 .parse::<u64>()
-                .map(|num: u64| Expr::number(BigDecimal::from_u64(num).unwrap(), None, InferredType::U64))
+                .map(|num: u64| {
+                    Expr::number(BigDecimal::from_u64(num).unwrap(), None, InferredType::U64)
+                })
                 .map_err(|_| RibParseError::Message("Unable to parse number".to_string())),
             _ => Err(RibParseError::Message("Unable to parse number".to_string())),
         })
@@ -119,20 +150,19 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use crate::parser::range::range;
+    use crate::Range;
     use bigdecimal::FromPrimitive;
     use combine::stream::position;
     use combine::EasyParser;
     use test_r::test;
-    use crate::parser::range::range;
-    use crate::Range;
 
     #[test]
     fn test_range_inclusive() {
-
         // All kind of ranges that `rust` supports
         let range1 = "1..=2"; // no spaces on both ends
         let range2 = "1 ..= 2"; // space on both end
-        let range3      = "1 ..=2"; // space on left
+        let range3 = "1 ..=2"; // space on left
         let range4 = "1..=   2"; // space on right
 
         let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
@@ -140,27 +170,29 @@ mod tests {
         let result3 = range().easy_parse(position::Stream::new(range3)).unwrap().0;
         let result4 = range().easy_parse(position::Stream::new(range4)).unwrap().0;
 
-        assert_eq!(result1, Range::RangeInclusive {
-            from: crate::Expr::number(
-                bigdecimal::BigDecimal::from_u64(1).unwrap(),
-                None,
-                crate::InferredType::U64
-            ),
-            to: crate::Expr::number(
-                bigdecimal::BigDecimal::from_u64(2).unwrap(),
-                None,
-                crate::InferredType::U64
-            )
-        });
+        assert_eq!(
+            result1,
+            Range::RangeInclusive {
+                from: crate::Expr::number(
+                    bigdecimal::BigDecimal::from_u64(1).unwrap(),
+                    None,
+                    crate::InferredType::U64
+                ),
+                to: crate::Expr::number(
+                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                    None,
+                    crate::InferredType::U64
+                )
+            }
+        );
     }
 
     #[test]
     fn test_range() {
-
         // All kind of ranges that `rust` supports
         let range1 = "1..2"; // no spaces on both ends
         let range2 = "1 .. 2"; // space on both end
-        let range3      = "1 ..2"; // space on left
+        let range3 = "1 ..2"; // space on left
         let range4 = "1.. 2"; // space on right
 
         let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
@@ -168,17 +200,20 @@ mod tests {
         let result3 = range().easy_parse(position::Stream::new(range3)).unwrap().0;
         let result4 = range().easy_parse(position::Stream::new(range4)).unwrap().0;
 
-        assert_eq!(result1, Range::Range {
-            from: crate::Expr::number(
-                bigdecimal::BigDecimal::from_u64(1).unwrap(),
-                None,
-                crate::InferredType::U64
-            ),
-            to: crate::Expr::number(
-                bigdecimal::BigDecimal::from_u64(2).unwrap(),
-                None,
-                crate::InferredType::U64
-            )
-        });
+        assert_eq!(
+            result1,
+            Range::Range {
+                from: crate::Expr::number(
+                    bigdecimal::BigDecimal::from_u64(1).unwrap(),
+                    None,
+                    crate::InferredType::U64
+                ),
+                to: crate::Expr::number(
+                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                    None,
+                    crate::InferredType::U64
+                )
+            }
+        );
     }
 }
