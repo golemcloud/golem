@@ -158,18 +158,57 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn test_range() {
+        // All kind of ranges that `rust` supports
+        let range1 = "1..2"; // no spaces on both ends
+        let range2 = "1 .. 2"; // space on both end
+        let range3 = "1 ..2"; // space on left
+        let range4 = "1.. 2"; // space on right
+        let invalid_range = "1. .2";
+
+        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
+        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
+        let result3 = range().easy_parse(position::Stream::new(range3)).unwrap().0;
+        let result4 = range().easy_parse(position::Stream::new(range4)).unwrap().0;
+        let result5 = range().easy_parse(position::Stream::new(invalid_range));
+
+        assert!(result1 == result2 && result2 == result3 && result3 == result4);
+        assert!(result5.is_err());
+
+        assert_eq!(
+            result1,
+            Range::Range {
+                from: crate::Expr::number(
+                    bigdecimal::BigDecimal::from_u64(1).unwrap(),
+                    None,
+                    crate::InferredType::U64
+                ),
+                to: crate::Expr::number(
+                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                    None,
+                    crate::InferredType::U64
+                )
+            }
+        );
+    }
+
+    #[test]
     fn test_range_inclusive() {
         // All kind of ranges that `rust` supports
         let range1 = "1..=2"; // no spaces on both ends
         let range2 = "1 ..= 2"; // space on both end
         let range3 = "1 ..=2"; // space on left
         let range4 = "1..=   2"; // space on right
+        let invalid_range = "1.. =2";
 
         let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
         let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
         let result3 = range().easy_parse(position::Stream::new(range3)).unwrap().0;
         let result4 = range().easy_parse(position::Stream::new(range4)).unwrap().0;
+        let result5 = range().easy_parse(position::Stream::new(invalid_range));
 
+        assert!(result1 == result2 && result2 == result3 && result3 == result4);
+        assert!(result5.is_err());
         assert_eq!(
             result1,
             Range::RangeInclusive {
@@ -188,26 +227,40 @@ mod tests {
     }
 
     #[test]
-    fn test_range() {
+    fn test_range_from() {
         // All kind of ranges that `rust` supports
-        let range1 = "1..2"; // no spaces on both ends
-        let range2 = "1 .. 2"; // space on both end
-        let range3 = "1 ..2"; // space on left
-        let range4 = "1.. 2"; // space on right
+        let range1 = "1.."; // no spaces on both ends
+        let range2 = "1 .."; // space on both end
 
         let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
         let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
-        let result3 = range().easy_parse(position::Stream::new(range3)).unwrap().0;
-        let result4 = range().easy_parse(position::Stream::new(range4)).unwrap().0;
+
+        assert_eq!(result1, result2);
 
         assert_eq!(
             result1,
-            Range::Range {
+            Range::RangeFrom {
                 from: crate::Expr::number(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
                     crate::InferredType::U64
-                ),
+                )
+            }
+        );
+    }
+
+    #[test]
+    fn test_range_to() {
+        // All kind of ranges that `rust` supports
+        let range1 = "..2"; // no spaces on both ends
+        let range2 = ".. 2"; // space on both end
+
+        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
+        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
+
+        assert_eq!(
+            result1,
+            Range::RangeTo {
                 to: crate::Expr::number(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
@@ -216,4 +269,32 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn test_range_to_inclusive() {
+        // All kind of ranges that `rust` supports
+        let range1 = "..=2"; // no spaces on both ends
+        let range2 = "..= 2";
+        let invalid = ".. =2";
+
+        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
+        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
+        let result3 = range().easy_parse(position::Stream::new(invalid));
+
+        assert_eq!(result1, result2);
+        assert!(result3.is_err());
+
+        assert_eq!(
+            result1,
+            Range::RangeToInclusive {
+                to: crate::Expr::number(
+                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                    None,
+                    crate::InferredType::U64
+                )
+            }
+        );
+    }
+
+
 }
