@@ -60,12 +60,10 @@ where
         .map(
             |(a, b, c, d): (Option<Expr>, _, _, Option<RightSide>)| match (a, d) {
                 (Some(left_side), Some(right_side)) => match right_side {
-                    RightSide::RightInclusiveExpr { expr: right_side } => {
-                        Range::RangeInclusive {
-                            from: left_side,
-                            to: right_side,
-                        }
-                    }
+                    RightSide::RightInclusiveExpr { expr: right_side } => Range::RangeInclusive {
+                        from: left_side,
+                        to: right_side,
+                    },
                     RightSide::RightExpr { expr: right_side } => Range::Range {
                         from: left_side,
                         to: right_side,
@@ -78,9 +76,7 @@ where
                     RightSide::RightInclusiveExpr { expr: right_side } => {
                         Range::RangeToInclusive { to: right_side }
                     }
-                    RightSide::RightExpr { expr: right_side } => {
-                        Range::RangeTo { to: right_side }
-                    }
+                    RightSide::RightExpr { expr: right_side } => Range::RangeTo { to: right_side },
                 },
 
                 (None, None) => Range::RangeFull,
@@ -121,7 +117,6 @@ mod internal {
             _ => Err(RibParseError::Message("Unable to parse number".to_string())),
         })
     }
-    
 }
 
 #[cfg(test)]
@@ -271,6 +266,4 @@ mod tests {
             }
         );
     }
-
-
 }

@@ -1372,24 +1372,12 @@ impl Expr {
 
 #[derive(Debug, PartialEq)]
 pub enum Range {
-    Range {
-        from: Expr,
-        to: Expr
-    },
-    RangeInclusive {
-        from: Expr,
-        to: Expr
-    },
-    RangeFrom {
-        from: Expr,
-    },
-    RangeTo {
-        to: Expr
-    },
-    RangeToInclusive {
-        to: Expr
-    },
-    RangeFull
+    Range { from: Expr, to: Expr },
+    RangeInclusive { from: Expr, to: Expr },
+    RangeFrom { from: Expr },
+    RangeTo { to: Expr },
+    RangeToInclusive { to: Expr },
+    RangeFull,
 }
 
 #[derive(Debug, Hash, Clone, PartialEq, Ord, PartialOrd)]
