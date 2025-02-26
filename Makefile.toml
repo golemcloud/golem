@@ -320,7 +320,7 @@ dependencies = [
 
 [tasks.integration-tests-group1]
 description = "Runs integration tests only"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
@@ -353,7 +353,7 @@ cargo test --package golem-service-base --test integration -- --nocapture --repo
 
 [tasks.integration-tests-group5]
 description = "Runs sharding integration tests only"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
@@ -379,7 +379,7 @@ cargo test \
 
 [tasks.api-tests-http]
 description = "Runs API HTTP tests only"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
 script = '''
 cargo test --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
@@ -387,7 +387,7 @@ cargo test --package integration-tests --test api -- --nocapture --report-time $
 
 [tasks.api-tests-grpc]
 description = "Runs API GRPC tests only"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
 script = '''
 cargo test --package integration-tests --test api -- :tag: --nocapture --report-time $JUNIT_OPTS
