@@ -44,6 +44,13 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
                 warn!("No matching BeginRemoteWrite index was found when HTTP response arrived. Handle: {}; open functions: {:?}", state.root_handle, ctx.state.open_function_table);
             }
         }
+
+        ctx.state
+            .invocation_context
+            .finish_span(&state.span_id)
+            .map_err(|err| GolemError::Runtime {
+                details: format!("Failed to close outgoing http request span: {err}"),
+            })?;
     } else {
         warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);
     }
