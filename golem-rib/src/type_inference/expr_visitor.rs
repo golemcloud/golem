@@ -69,11 +69,8 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             }
         }
 
-        Expr::Range {
-            range,
-            ..
-        } => {
-            for expr in  range.get_exprs_mut() {
+        Expr::Range { range, .. } => {
+            for expr in range.get_exprs_mut() {
                 queue.push_back(&mut *expr);
             }
         }
@@ -318,7 +315,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             queue.push_back(expr);
         }
 
-        Expr::Range { range, ..} => {
+        Expr::Range { range, .. } => {
             let exprs = range.get_exprs();
 
             queue.extend(exprs.iter());
@@ -377,7 +374,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             }
         }
 
-        Expr::Range { range, ..} => {
+        Expr::Range { range, .. } => {
             for expr in range.get_exprs_mut() {
                 queue.push_front(&mut *expr);
             }

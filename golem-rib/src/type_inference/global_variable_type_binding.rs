@@ -74,7 +74,8 @@ mod internal {
     use crate::rib_source_span::SourceSpan;
     use crate::type_checker::{Path, PathElem};
     use crate::{
-        CustomError, Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId,
+        CustomError, Expr, GlobalVariableTypeSpec, InferredType, MatchArm, Range, TypeName,
+        VariableId,
     };
     use std::collections::VecDeque;
     use std::ops::Deref;
@@ -607,6 +608,15 @@ mod internal {
                     &mut temp_stack,
                     source_span,
                 ),
+
+                Expr::Range {
+                    range,
+                    inferred_type,
+                    source_span,
+                    ..
+                } => {
+                    handle_range(range, source_span, inferred_type.clone(), &mut temp_stack);
+                }
             }
         }
 
@@ -616,7 +626,7 @@ mod internal {
             .ok_or(CustomError::new(expr, "failed to bind global variable types").into())
     }
 
-    pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
+    fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
         let mut stack = VecDeque::new();
 
         stack.push_back(expr);
@@ -628,7 +638,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn handle_list_comprehension(
+    fn handle_list_comprehension(
         variable_id: &VariableId,
         current_iterable_expr: &Expr,
         current_yield_expr: &Expr,
@@ -657,7 +667,7 @@ mod internal {
         ))
     }
 
-    pub(crate) fn handle_list_reduce(
+    fn handle_list_reduce(
         reduce_variable: &VariableId,
         iterated_variable: &VariableId,
         iterable_expr: &Expr,
@@ -696,7 +706,7 @@ mod internal {
         ))
     }
 
-    pub(crate) fn handle_tuple(
+    fn handle_tuple(
         tuple_elems: &[Expr],
         current_tuple_type: &InferredType,
         result_expr_queue: &mut VecDeque<(Expr, bool)>,
@@ -721,7 +731,7 @@ mod internal {
         result_expr_queue.push_front((new_tuple, false));
     }
 
-    pub(crate) fn handle_select_field(
+    fn handle_select_field(
         original_selection_expr: &Expr,
         field: &str,
         continue_search: bool,
@@ -801,7 +811,7 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn handle_result_ok(
+    fn handle_result_ok(
         original_ok_expr: &Expr,
         current_ok_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -821,7 +831,7 @@ mod internal {
         temp_stack.push_front((new_result, true));
     }
 
-    pub(crate) fn handle_result_error(
+    fn handle_result_error(
         original_error_expr: &Expr,
         current_error_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -843,7 +853,7 @@ mod internal {
         temp_stack.push_front((new_result, false));
     }
 
-    pub(crate) fn handle_option_some(
+    fn handle_option_some(
         original_some_expr: &Expr,
         current_some_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -862,7 +872,7 @@ mod internal {
         temp_stack.push_front((new_option, false));
     }
 
-    pub(crate) fn handle_if_else(
+    fn handle_if_else(
         original_predicate: &Expr,
         original_then_expr: &Expr,
         original_else_expr: &Expr,
@@ -947,7 +957,7 @@ mod internal {
         temp_stack.push_front((new_expr, false));
     }
 
-    pub(crate) fn handle_concat(
+    fn handle_concat(
         exprs: &Vec<Expr>,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
@@ -968,7 +978,7 @@ mod internal {
         temp_stack.push_front((new_concat, false));
     }
 
-    pub(crate) fn handle_multiple(
+    fn handle_multiple(
         current_expr_list: &Vec<Expr>,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -994,7 +1004,7 @@ mod internal {
         temp_stack.push_front((new_multiple, false));
     }
 
-    pub(crate) fn handle_not(
+    fn handle_not(
         original_not_expr: &Expr,
         current_not_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -1012,7 +1022,7 @@ mod internal {
         temp_stack.push_front((new_not, false));
     }
 
-    pub(crate) fn handle_math_op<F>(
+    fn handle_math_op<F>(
         original_left_expr: &Expr,
         original_right_expr: &Expr,
         result_type: &InferredType,
@@ -1043,7 +1053,7 @@ mod internal {
         temp_stack.push_front((new_math_op, false));
     }
 
-    pub(crate) fn handle_comparison_op<F>(
+    fn handle_comparison_op<F>(
         original_left_expr: &Expr,
         original_right_expr: &Expr,
         result_type: &InferredType,
@@ -1069,7 +1079,7 @@ mod internal {
         temp_stack.push_front((new_binary, false));
     }
 
-    pub(crate) fn handle_invoke_method(
+    fn handle_invoke_method(
         original_lhs_expr: &Expr,
         method_name: &str,
         args: &[Expr],
@@ -1140,7 +1150,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn handle_call(
+    fn handle_call(
         call_type: &CallType,
         arguments: &[Expr],
         generic_type_parameter: &Option<GenericTypeParameter>,
@@ -1310,7 +1320,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn handle_unwrap(
+    fn handle_unwrap(
         expr: &Expr,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -1324,7 +1334,7 @@ mod internal {
         temp_stack.push_front((new_unwrap, false));
     }
 
-    pub(crate) fn handle_get_tag(
+    fn handle_get_tag(
         expr: &Expr,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -1337,7 +1347,7 @@ mod internal {
         temp_stack.push_front((new_get_tag, false));
     }
 
-    pub(crate) fn handle_let(
+    fn handle_let(
         original_variable_id: &VariableId,
         original_expr: &Expr,
         optional_type: &Option<TypeName>,
@@ -1359,7 +1369,7 @@ mod internal {
         temp_stack.push_front((new_let, false));
     }
 
-    pub(crate) fn handle_sequence(
+    fn handle_sequence(
         current_expr_list: &[Expr],
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
@@ -1382,7 +1392,88 @@ mod internal {
         temp_stack.push_front((expr, false));
     }
 
-    pub(crate) fn handle_record(
+    fn handle_range(
+        range: &Range,
+        source_span: &SourceSpan,
+        inferred_type: InferredType,
+        temp_stack: &mut VecDeque<(Expr, bool)>,
+    ) {
+        match range {
+            Range::Range { from, to } => {
+                let right = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(to.deref().clone());
+                let left = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(from.deref().clone());
+                let new_range = Expr::range(left, right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                temp_stack.push_front((new_range, false));
+            }
+            Range::RangeInclusive { from, to } => {
+                let right = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(to.deref().clone());
+                let left = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(from.deref().clone());
+                let new_range = Expr::range_inclusive(left, right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                temp_stack.push_front((new_range, false));
+            }
+            Range::RangeFrom { from } => {
+                let left = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(from.deref().clone());
+                let new_range = Expr::range_from(left)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                temp_stack.push_front((new_range, false));
+            }
+            Range::RangeTo { to } => {
+                let right = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(to.deref().clone());
+                let new_range = Expr::range_to(right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                temp_stack.push_front((new_range, false));
+            }
+            Range::RangeToInclusive { to } => {
+                let right = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(to.deref().clone());
+                let new_range = Expr::range_to_inclusive(right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                temp_stack.push_front((new_range, false));
+            }
+
+            Range::RangeFull => {
+                let new_range = Expr::range_full()
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                temp_stack.push_front((new_range, false));
+            }
+        }
+    }
+
+    fn handle_record(
         current_expr_list: &[(String, Box<Expr>)],
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,

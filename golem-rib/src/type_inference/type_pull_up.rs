@@ -577,6 +577,19 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 &mut inferred_type_stack,
                 source_span,
             ),
+
+            Expr::Range {
+                range,
+                inferred_type,
+                source_span,
+            } => {
+                internal::handle_range(
+                    range,
+                    source_span,
+                    inferred_type.clone(),
+                    &mut inferred_type_stack,
+                );
+            }
         }
     }
 
@@ -600,7 +613,7 @@ mod internal {
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        ActualType, ExpectedType, Expr, InferredType, MatchArm, TypeMismatchError, TypeName,
+        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
         VariableId,
     };
     use std::collections::VecDeque;
@@ -1037,6 +1050,79 @@ mod internal {
             result_type.clone(),
         );
         inferred_type_stack.push_front(new_binary);
+    }
+
+    pub(crate) fn handle_range(
+        range: &Range,
+        source_span: &SourceSpan,
+        inferred_type: InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        match range {
+            Range::Range { from, to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+                let new_range = Expr::range(left, right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeInclusive { from, to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+                let new_range = Expr::range_inclusive(left, right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeFrom { from } => {
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+                let new_range = Expr::range_from(left)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeTo { to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let new_range = Expr::range_to(right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeToInclusive { to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let new_range = Expr::range_to_inclusive(right)
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeFull => {
+                let new_range = Expr::range_full()
+                    .with_inferred_type(inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+        }
     }
 
     pub(crate) fn handle_call(

@@ -28,6 +28,7 @@ use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::Parser;
 use combine::{eof, EasyParser};
+use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
@@ -36,7 +37,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -68,9 +68,9 @@ pub enum Expr {
         source_span: SourceSpan,
     },
     Range {
-       range: Range,
-       inferred_type: InferredType,
-       source_span: SourceSpan,
+        range: Range,
+        inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Record {
         exprs: Vec<(String, Box<Expr>)>,
@@ -665,7 +665,10 @@ impl Expr {
 
     pub fn range(from: Expr, to: Expr) -> Self {
         Expr::Range {
-            range: Range::Range { from: Box::new(from), to: Box::new(to) },
+            range: Range::Range {
+                from: Box::new(from),
+                to: Box::new(to),
+            },
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
         }
@@ -673,7 +676,9 @@ impl Expr {
 
     pub fn range_from(from: Expr) -> Self {
         Expr::Range {
-            range: Range::RangeFrom { from: Box::new(from) },
+            range: Range::RangeFrom {
+                from: Box::new(from),
+            },
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
         }
@@ -697,7 +702,10 @@ impl Expr {
 
     pub fn range_inclusive(from: Expr, to: Expr) -> Self {
         Expr::Range {
-            range: Range::RangeInclusive { from: Box::new(from), to: Box::new(to) },
+            range: Range::RangeInclusive {
+                from: Box::new(from),
+                to: Box::new(to),
+            },
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
         }
@@ -1435,7 +1443,7 @@ pub enum Range {
     RangeInclusive { from: Box<Expr>, to: Box<Expr> },
     RangeFrom { from: Box<Expr> },
     RangeTo { to: Box<Expr> },
-    RangeToInclusive { to: Box<Expr>},
+    RangeToInclusive { to: Box<Expr> },
     RangeFull,
 }
 
@@ -1701,9 +1709,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let range_expr = range.range_expr.ok_or("Missing range expr")?;
 
                 match range_expr {
-                    RangeExpr::RangeFull(_) => {
-                        Expr::range_full()
-                    }
+                    RangeExpr::RangeFull(_) => Expr::range_full(),
                     RangeExpr::RangeFrom(range_from) => {
                         let from = range_from.from.ok_or("Missing from expr")?;
                         Expr::range_from((*from).try_into()?)
@@ -2141,8 +2147,8 @@ impl Serialize for Expr {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
     use crate::{ArmPattern, Expr, MatchArm, Range};
+    use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
@@ -2173,55 +2179,72 @@ mod protobuf {
                     }),
                 )),
 
-                Expr::Range {
-                    range,
-                    ..
-                } => {
-                    match range {
-                        Range::RangeFull => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                Expr::Range { range, .. } => match range {
+                    Range::RangeFull => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                        Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                            range_expr: Some(RangeExpr::RangeFull(
+                                golem_api_grpc::proto::golem::rib::RangeFull {},
+                            )),
+                        }),
+                    )),
+                    Range::RangeFrom { from } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
                             Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::RangeFull(golem_api_grpc::proto::golem::rib::RangeFull {})),
+                                range_expr: Some(RangeExpr::RangeFrom(Box::new(
+                                    golem_api_grpc::proto::golem::rib::RangeFrom {
+                                        from: Some(Box::new((*from).into())),
+                                    },
+                                ))),
                             }),
-                        )),
-                        Range::RangeFrom{ from } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::RangeFrom(Box::new(golem_api_grpc::proto::golem::rib::RangeFrom {
-                                    from: Some(Box::new((*from).into())),
-                                }))),
-                            }),
-                        )),
-                        Range::RangeTo{ to } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::RangeTo(Box::new(golem_api_grpc::proto::golem::rib::RangeTo {
-                                    to: Some(Box::new((*to).into())),
-                                }))),
-                            }),
-                        )),
-                        Range::RangeToInclusive{ to } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::RangeToInclusive(Box::new(golem_api_grpc::proto::golem::rib::RangeToInclusive {
-                                    to: Some(Box::new((*to).into())),
-                                }))),
-                            }),
-                        )),
-                        Range::Range{ from, to}  => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::Range(Box::new(golem_api_grpc::proto::golem::rib::Range {
-                                    from: Some(Box::new((*from).into())),
-                                    to: Some(Box::new((*to).into())),
-                                }))),
-                            }),
-                        )),
-                        Range::RangeInclusive{ from, to} => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::RangeInclusive(Box::new(golem_api_grpc::proto::golem::rib::RangeInclusive {
-                                    from: Some(Box::new((*from).into())),
-                                    to: Some(Box::new((*to).into())),
-                                }))),
-                            }),
-                        )),
+                        ))
                     }
-                }
+                    Range::RangeTo { to } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                                range_expr: Some(RangeExpr::RangeTo(Box::new(
+                                    golem_api_grpc::proto::golem::rib::RangeTo {
+                                        to: Some(Box::new((*to).into())),
+                                    },
+                                ))),
+                            }),
+                        ))
+                    }
+                    Range::RangeToInclusive { to } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                                range_expr: Some(RangeExpr::RangeToInclusive(Box::new(
+                                    golem_api_grpc::proto::golem::rib::RangeToInclusive {
+                                        to: Some(Box::new((*to).into())),
+                                    },
+                                ))),
+                            }),
+                        ))
+                    }
+                    Range::Range { from, to } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                                range_expr: Some(RangeExpr::Range(Box::new(
+                                    golem_api_grpc::proto::golem::rib::Range {
+                                        from: Some(Box::new((*from).into())),
+                                        to: Some(Box::new((*to).into())),
+                                    },
+                                ))),
+                            }),
+                        ))
+                    }
+                    Range::RangeInclusive { from, to } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                                range_expr: Some(RangeExpr::RangeInclusive(Box::new(
+                                    golem_api_grpc::proto::golem::rib::RangeInclusive {
+                                        from: Some(Box::new((*from).into())),
+                                        to: Some(Box::new((*to).into())),
+                                    },
+                                ))),
+                            }),
+                        ))
+                    }
+                },
 
                 Expr::SelectIndex {
                     expr,

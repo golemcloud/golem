@@ -90,7 +90,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 range,
                 inferred_type,
                 ..
-            } =>  {
+            } => {
                 for expr in range.get_exprs_mut() {
                     queue.push(expr);
                 }

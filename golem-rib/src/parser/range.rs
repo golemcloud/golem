@@ -59,7 +59,9 @@ where
                     internal::RightSide::RightInclusiveExpr { expr: right_side } => {
                         Expr::range_inclusive(left_side, right_side)
                     }
-                    internal::RightSide::RightExpr { expr: right_side } => Expr::range(left_side, right_side)
+                    internal::RightSide::RightExpr { expr: right_side } => {
+                        Expr::range(left_side, right_side)
+                    }
                 },
 
                 (Some(left_side), None) => Expr::range_from(left_side),
@@ -202,7 +204,7 @@ mod tests {
 
         assert_eq!(
             result1,
-           Expr::range_from(Expr::number(
+            Expr::range_from(Expr::number(
                 bigdecimal::BigDecimal::from_u64(1).unwrap(),
                 None,
                 InferredType::U64

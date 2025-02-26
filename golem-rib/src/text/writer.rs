@@ -94,11 +94,7 @@ impl<W: Write> Writer<W> {
                 }
             }
 
-            Expr::Range {
-                range,
-                ..
-
-            } => match range {
+            Expr::Range { range, .. } => match range {
                 Range::Range { from, to } => {
                     self.write_expr(from)?;
                     self.write_str("..")?;
@@ -121,10 +117,8 @@ impl<W: Write> Writer<W> {
                     self.write_str("..=")?;
                     self.write_expr(to)
                 }
-                Range::RangeFull => {
-                    self.write_str("..")
-                }
-            }
+                Range::RangeFull => self.write_str(".."),
+            },
 
             Expr::Let {
                 variable_id,
