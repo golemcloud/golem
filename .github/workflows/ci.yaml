@@ -500,10 +500,8 @@ jobs:
             description: "Full integration tests"
           - name: integration-tests-group5
             description: "Sharding tests"
-          - name: api-tests-http
-            description: "HTTP API tests"
-          - name: api-tests-grpc
-            description: "gRPC API tests"
+          - name: api-tests
+            description: "API tests"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -543,8 +541,7 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - name: Debug
-        run: ls -la target/debug
+
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true

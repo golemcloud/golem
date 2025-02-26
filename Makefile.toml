@@ -215,8 +215,7 @@ description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
     "unit-tests",
     "worker-executor-tests",
-    "api-tests-http",
-    "api-tests-grpc",
+    "api-tests",
     "integration-tests",
 ]
 
@@ -376,6 +375,10 @@ cargo test \
 --test sharding ${@} \
 -- --nocapture --test-threads=1
 '''
+
+[tasks.api-tests]
+description =  "Runs all API tests"
+dependencies = ["api-tests-http", "api-tests-grpc"]
 
 [tasks.api-tests-http]
 description = "Runs API HTTP tests only"
