@@ -29,6 +29,7 @@ use combine::stream::position;
 use combine::Parser;
 use combine::{eof, EasyParser};
 use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
+use golem_wasm_ast::analysis::analysed_type::record;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
@@ -37,7 +38,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use golem_wasm_ast::analysis::analysed_type::record;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -1449,7 +1449,6 @@ pub enum Range {
 }
 
 impl Range {
-
     pub fn from(&self) -> Option<&Expr> {
         match self {
             Range::Range { from, .. } => Some(from),
@@ -1478,7 +1477,6 @@ impl Range {
             _ => false,
         }
     }
-
 
     pub fn get_exprs_mut(&mut self) -> Vec<&mut Box<Expr>> {
         match self {
