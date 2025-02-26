@@ -91,16 +91,14 @@ mod protobuf {
 
 mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
-    use crate::{
-        AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR, VariableId, WorkerNamePresence,
-    };
-    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
+    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType, InferredType, InstructionId, Range, RibIR, VariableId, WorkerNamePresence};
+    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags, TypeRecord};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
+    use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record};
 
     pub(crate) fn process_expr(
         expr: &Expr,
@@ -596,6 +594,19 @@ mod internal {
                 )
             }
 
+            Expr::Range {
+                range,
+                ..
+            } => {
+                handle_range(
+                    range,
+                    stack,
+                    None,
+                    None
+                );
+
+            }
+
             // Invoke is always handled by the CallType::Function branch
             Expr::InvokeMethodLazy { .. } => {}
 
@@ -649,6 +660,63 @@ mod internal {
         pub(crate) fn from_ir(ir: RibIR) -> Self {
             ExprState::Instruction(ir)
         }
+    }
+
+    fn handle_range(
+        range: &Range,
+        stack: &mut Vec<ExprState>,
+        from_analysed_type: Option<AnalysedType>,
+        to_analysed_type: Option<AnalysedType>,
+    ) {
+
+        let analysed_type = match (from_analysed_type, to_analysed_type) {
+            (Some(from_type), Some(to_type)) => {
+                record(vec![
+                    field("from", option(from_type)),
+                    field("to", option(to_type)),
+                    field("inclusive", bool()),
+                ])
+            }
+
+            (None, Some(to_type)) => {
+                record(vec![
+                    field("to", option(to_type)),
+                    field("inclusive", bool()),
+                ])
+            }
+
+            (Some(from_type), None) => {
+                record(vec![
+                    field("from", option(from_type)),
+                    field("inclusive", bool()),
+                ])
+            }
+
+            // We will keep pushing inclusive to avoid checks at run time
+            (None, None) => {
+                record(vec![
+                    field("inclusive", bool()),
+                ])
+            }
+        };
+
+        let from = range.from();
+        let to = range.to();
+        let inclusive = range.inclusive();
+
+        if let Some(from) = from {
+            stack.push(ExprState::from_expr(from));
+            stack.push(ExprState::from_ir(RibIR::UpdateRecord("from".to_string())));
+        }
+
+        if let Some(to) = to {
+            stack.push(ExprState::from_expr(to));
+            stack.push(ExprState::from_ir(RibIR::UpdateRecord("to".to_string())));
+        }
+
+        stack.push(ExprState::from_ir(RibIR::PushLit(ValueAndType::new(Value::Bool(inclusive), bool()))));
+
+        stack.push(ExprState::from_ir(RibIR::CreateAndPushRecord(analysed_type)));
     }
 
     fn handle_list_comprehension(

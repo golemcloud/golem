@@ -30,13 +30,14 @@ use combine::Parser;
 use combine::{eof, EasyParser};
 use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
+use golem_wasm_ast::analysis::analysed_type::record;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -1448,6 +1449,37 @@ pub enum Range {
 }
 
 impl Range {
+
+    pub fn from(&self) -> Option<&Expr> {
+        match self {
+            Range::Range { from, .. } => Some(from),
+            Range::RangeInclusive { from, .. } => Some(from),
+            Range::RangeFrom { from } => Some(from),
+            Range::RangeTo { .. } => None,
+            Range::RangeToInclusive { .. } => None,
+            Range::RangeFull => None,
+        }
+    }
+
+    pub fn to(&self) -> Option<&Expr> {
+        match self {
+            Range::Range { to, .. } => Some(to),
+            Range::RangeInclusive { to, .. } => Some(to),
+            Range::RangeFrom { .. } => None,
+            Range::RangeTo { to } => Some(to),
+            Range::RangeToInclusive { to } => Some(to),
+            Range::RangeFull => None,
+        }
+    }
+
+    pub fn inclusive(&self) -> bool {
+        match self {
+            Range::RangeInclusive { .. } | Range::RangeToInclusive { .. } => true,
+            _ => false,
+        }
+    }
+
+
     pub fn get_exprs_mut(&mut self) -> Vec<&mut Box<Expr>> {
         match self {
             Range::Range { from, to } => vec![from, to],
