@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use combine::parser::char::{char as char_, spaces, string};
-use combine::{attempt, many1, optional, ParseError, Parser};
+use combine::{attempt, optional, ParseError, Parser};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
