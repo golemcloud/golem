@@ -12,19 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bigdecimal::BigDecimal;
 use combine::parser::char;
 use combine::parser::char::spaces;
 use combine::{parser, position};
 use combine::{ParseError, Parser};
+use std::fmt::format;
+use std::str::FromStr;
 
 use super::binary_op::BinaryOp;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::range::RangeType;
-use crate::parser::rib_expr::internal::{MathOrRange};
+use crate::parser::range_type::RangeType;
+use crate::parser::rib_expr::internal::MathOrRange;
 use crate::rib_source_span::GetSourcePosition;
+use crate::InferredType;
 
 // A rib expression := (simple_expr, rib_expr_rest*)
+// A simple recursion never goes in recursion on LHS
 parser! {
     pub fn rib_expr[Input]()(Input) -> Expr
     where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
@@ -45,48 +50,64 @@ where
         .and(
             spaces()
                 .with(
-                    (
-                        internal::simple_expr(),
-                        internal::rib_expr_rest(),
-                    )
-                        .map(|(expr, rest)| {
-
-                            match rest {
-                                MathOrRange::Math(rest) => {
-                                    rest.into_iter().fold(expr, |acc, (op, next)| match op {
-                                        BinaryOp::GreaterThan => Expr::greater_than(acc, next),
-                                        BinaryOp::LessThan => Expr::less_than(acc, next),
-                                        BinaryOp::LessThanOrEqualTo => Expr::less_than_or_equal_to(acc, next),
-                                        BinaryOp::GreaterThanOrEqualTo => {
-                                            Expr::greater_than_or_equal_to(acc, next)
-                                        }
-                                        BinaryOp::EqualTo => Expr::equal_to(acc, next),
-                                        BinaryOp::And => Expr::and(acc, next),
-                                        BinaryOp::Or => Expr::or(acc, next),
-                                        BinaryOp::Add => Expr::plus(acc, next),
-                                        BinaryOp::Subtract => Expr::minus(acc, next),
-                                        BinaryOp::Multiply => Expr::multiply(acc, next),
-                                        BinaryOp::Divide => Expr::divide(acc, next),
-                                    })
-                                }
-                                MathOrRange::Range((range_type, opt)) => {
-                                    match range_type {
-                                        RangeType::Inclusive => {
-                                            match opt {
-                                                Some(rhs) => Expr::range_inclusive(expr, rhs),
-                                                None => panic!("Inclusive range should have a right hand side"),
-                                            }
-                                        }
-                                        RangeType::Exclusive => {
-                                            match opt {
-                                                Some(rhs) => Expr::range(expr, rhs),
-                                                None => Expr::range_from(expr),
-                                            }
-                                        }
+                    (internal::simple_expr(), internal::rib_expr_rest()).map(|(expr, rest)| {
+                        match rest {
+                            MathOrRange::BinaryMath(rest) => {
+                                rest.into_iter().fold(expr, |acc, (op, next)| match op {
+                                    BinaryOp::GreaterThan => Expr::greater_than(acc, next),
+                                    BinaryOp::LessThan => Expr::less_than(acc, next),
+                                    BinaryOp::LessThanOrEqualTo => {
+                                        Expr::less_than_or_equal_to(acc, next)
                                     }
-                                }
+                                    BinaryOp::GreaterThanOrEqualTo => {
+                                        Expr::greater_than_or_equal_to(acc, next)
+                                    }
+                                    BinaryOp::EqualTo => Expr::equal_to(acc, next),
+                                    BinaryOp::And => Expr::and(acc, next),
+                                    BinaryOp::Or => Expr::or(acc, next),
+                                    BinaryOp::Add => Expr::plus(acc, next),
+                                    BinaryOp::Subtract => Expr::minus(acc, next),
+                                    BinaryOp::Multiply => Expr::multiply(acc, next),
+                                    BinaryOp::Divide => Expr::divide(acc, next),
+                                })
                             }
-                        }),
+                            MathOrRange::Fraction(fraction) => match fraction {
+                                Expr::Number {
+                                    number: fraction, type_annotation, inferred_type, ..
+                                } => match expr {
+                                    Expr::Number { number, .. } => {
+                                        let lhs = number.value;
+                                        let rhs = fraction.value;
+                                        let with_fraction = format!("{}.{}", lhs, rhs);
+                                        let big_decimal =
+                                            BigDecimal::from_str(with_fraction.as_str()).unwrap();
+                                        return Expr::number(
+                                            big_decimal,
+                                            type_annotation,
+                                            inferred_type
+                                        );
+                                    }
+                                    _ => {
+                                        panic!("Fraction should be used with a number")
+                                    }
+                                },
+
+                                _ => {
+                                    panic!("Fraction should be a number")
+                                }
+                            },
+                            MathOrRange::Range((range_type, opt)) => match range_type {
+                                RangeType::Inclusive => match opt {
+                                    Some(rhs) => Expr::range_inclusive(expr, rhs),
+                                    None => panic!("Inclusive range should have a right hand side"),
+                                },
+                                RangeType::Exclusive => match opt {
+                                    Some(rhs) => Expr::range(expr, rhs),
+                                    None => Expr::range_from(expr),
+                                },
+                            },
+                        }
+                    }),
                 )
                 .skip(spaces()),
         )
@@ -118,19 +139,22 @@ mod internal {
     use crate::parser::pattern_match::pattern_match;
     use crate::parser::record::record;
     use crate::parser::result::result;
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
 
     use crate::parser::list_aggregation::list_aggregation;
     use crate::parser::list_comprehension::list_comprehension;
-    use crate::parser::range::{range_type, RangeType};
+    use crate::parser::range_type::{range_type, RangeType};
     use crate::parser::select_field::select_field;
     use crate::parser::select_index::select_index;
     use crate::parser::sequence::sequence;
     use crate::parser::tuple::tuple;
     use crate::parser::worker_function_invoke::worker_function_invoke;
     use crate::rib_source_span::GetSourcePosition;
-    use crate::Expr;
-    use combine::parser::char::spaces;
-    use combine::{attempt, choice, many, optional, parser, ParseError, Parser, Stream};
+    use crate::{Expr, InferredType, TypeName};
+    use combine::parser::char::{char, digit, spaces};
+    use combine::{attempt, choice, many, many1, optional, parser, ParseError, Parser, Stream};
+    use crate::parser::type_name::parse_basic_type;
 
     // A simple expression is a composition of all parsers that doesn't involve left recursion
     pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
@@ -174,28 +198,57 @@ mod internal {
         }
     }
 
-
     pub(crate) enum MathOrRange {
-        Math(Vec<(BinaryOp, Expr)>),
+        BinaryMath(Vec<(BinaryOp, Expr)>),
         Range((RangeType, Option<Expr>)),
+        Fraction(Expr),
     }
 
     pub fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = MathOrRange>
     where
-        Input: combine::Stream<Token = char>,
+        Input: Stream<Token = char>,
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
         Input::Position: GetSourcePosition,
     {
-        many((binary_op(), simple_expr())).map(|binary_op_with_expr| {
-           MathOrRange::Math(binary_op_with_expr)
-        }).or((range_type(), optional(simple_expr_())).map(|(range_type, expr)| {
-            match expr {
+        attempt(
+            (range_type(), optional(simple_expr_())).map(|(range_type, expr)| match expr {
                 Some(expr) => MathOrRange::Range((range_type, Some(expr))),
                 None => MathOrRange::Range((range_type, None)),
-            }
-        }))
+            }),
+        )
+        .or((
+            char('.'),
+            many1(digit()),
+            optional(
+                // To keep backward compatibility
+                choice!(
+                    attempt(parse_basic_type()),
+                    attempt(
+                        char(':')
+                            .skip(spaces())
+                            .with(parse_basic_type())
+                            .skip(spaces()),
+                    )
+                ),
+            ),
+        )
+            .map(|(_, digits, type_name): (_, Vec<char>, Option<TypeName>)| {
+                let fraction = digits.into_iter().collect::<String>();
+                let big_decimal = BigDecimal::from_str(fraction.as_str()).unwrap();
+
+                let fraction = match type_name {
+                    Some(typ_name) => {
+                        Expr::untyped_number_with_type_name(big_decimal, typ_name.clone())
+                    }
+                    None => Expr::untyped_number(big_decimal),
+                };
+
+                MathOrRange::Fraction(fraction)
+            }))
+        .or(many((binary_op(), simple_expr()))
+            .map(|binary_op_with_expr| MathOrRange::BinaryMath(binary_op_with_expr)))
     }
 
     parser! {

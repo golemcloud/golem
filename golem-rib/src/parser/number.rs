@@ -34,7 +34,7 @@ where
     spaces()
         .with(
             (
-                many1(digit().or(char('-')).or(char('.'))),
+                many1(digit().or(char('-'))),
                 optional(
                     // To keep backward compatibility
                     choice!(
@@ -42,7 +42,7 @@ where
                         attempt(
                             char(':')
                                 .skip(spaces())
-                                .with(parse_type_name())
+                                .with(parse_basic_type())
                                 .skip(spaces()),
                         )
                     ),
@@ -52,23 +52,21 @@ where
                     let primitive = s.into_iter().collect::<String>();
                     let big_decimal = BigDecimal::from_str(primitive.as_str());
 
-                    match big_decimal {
-                        Ok(big_decimal) => {
-                            if let Some(typ_name) = typ_name {
-                                Ok(Expr::untyped_number_with_type_name(
-                                    big_decimal,
-                                    typ_name.clone(),
-                                ))
-                            } else {
-                                Ok(Expr::untyped_number(big_decimal))
-                            }
-                        }
-                        Err(_) => {
-                            Err(RibParseError::Message("Unable to parse number".to_string()).into())
+                match big_decimal {
+                    Ok(big_decimal) => {
+                        if let Some(typ_name) = typ_name {
+                            Ok(Expr::untyped_number_with_type_name(
+                                big_decimal,
+                                typ_name.clone(),
+                            ))
+                        } else {
+                            Ok(Expr::untyped_number(big_decimal))
                         }
                     }
-                }),
-        )
+                    Err(_) => Err(RibParseError::Message("Unable to parse number".to_string()).into()),
+                }
+            }),
+    )
         .message("Unable to parse number")
 }
 
