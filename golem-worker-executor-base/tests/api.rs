@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test, timeout};
-
 use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::compatibility::worker_recovery::save_recovery_golden_file;
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
@@ -22,6 +20,7 @@ use axum::routing::get;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
+use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_common::model::{
     AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
@@ -46,6 +45,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use tracing::{debug, info};
 
@@ -3263,4 +3263,98 @@ async fn resolve_components_from_name(
     );
 
     executor.check_oplog_is_queryable(&resolve_worker).await;
+}
+
+/// Test scheduling an invocation for a different worker using stubless rpc.
+#[test_r::timeout(5000)]
+#[test]
+#[tracing::instrument]
+async fn scheduled_invocation_stubless(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let server_component = executor
+        .component("scheduled_invocation_stubless_server")
+        .store()
+        .await;
+
+    let server_worker = executor.start_worker(&server_component, "worker_1").await;
+
+    let client_component = executor
+        .component("scheduled_invocation_stubless_client")
+        .with_dynamic_linking(&[(
+            "it:scheduled-invocation-stubless-server-client/server-client",
+            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                target_interface_name: HashMap::from_iter(vec![(
+                    "server-api".to_string(),
+                    "it:scheduled-invocation-stubless-server-exports/server-api".to_string(),
+                )]),
+            }),
+        )])
+        .store()
+        .await;
+
+    let client_worker = executor.start_worker(&client_component, "worker_1").await;
+
+    // first invocation: schedule increment in the future and poll
+    {
+        executor
+            .invoke_and_await(
+                &client_worker,
+                "it:scheduled-invocation-stubless-client-exports/client-api.{test1}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let mut done = false;
+        while !done {
+            let result = executor
+                .invoke_and_await(
+                    &server_worker,
+                    "it:scheduled-invocation-stubless-server-exports/server-api.{get-global-value}",
+                    vec![],
+                )
+                .await
+                .unwrap();
+
+            if result.len() == 1 && result[0] == Value::U64(1) {
+                done = true;
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    // second invocation: schedule increment in the future and cancel beforehand
+    {
+        executor
+            .invoke_and_await(
+                &client_worker,
+                "it:scheduled-invocation-stubless-client-exports/client-api.{test2}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let result = executor
+            .invoke_and_await(
+                &server_worker,
+                "it:scheduled-invocation-stubless-server-exports/server-api.{get-global-value}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result.as_slice(), [Value::U64(1)]));
+    }
+
+    executor.check_oplog_is_queryable(&client_worker).await;
+    executor.check_oplog_is_queryable(&server_worker).await;
 }

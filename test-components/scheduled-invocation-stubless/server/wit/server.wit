@@ -1,0 +1,10 @@
+package it:scheduled-invocation-stubless-server;
+
+interface server-api {
+  inc-global-by: func(value: u64);
+  get-global-value: func() -> u64;
+}
+
+world server {
+  export server-api;
+}

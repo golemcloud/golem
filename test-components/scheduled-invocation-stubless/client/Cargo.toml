@@ -1,0 +1,32 @@
+[package]
+name = "scheduled-invocation-stubless-client"
+version = "0.0.1"
+edition = "2021"
+
+[package.metadata.component.target]
+path = "wit-generated"
+
+[package.metadata.component.target.dependencies]
+"wasi:io" = { path = "wit-generated/deps/io" }
+"wasi:clocks" = { path = "wit-generated/deps/clocks" }
+"golem:rpc" = { path = "wit-generated/deps/wasm-rpc" }
+"golem:api" = { path = "wit-generated/deps/golem-1.x" }
+"it:scheduled-invocation-stubless-server-client" = { path = "wit-generated/deps/it_scheduled-invocation-stubless-server-client" }
+"it:scheduled-invocation-stubless-client-exports" = { path = "wit-generated/deps/it_scheduled-invocation-stubless-client-exports" }
+
+[dependencies]
+once_cell = "1.19.0"
+rand = "0.8.5"
+
+[dependencies.uuid]
+version = "1.7.0"
+features = ["v4", "serde"]
+
+[dependencies.wit-bindgen-rt]
+version = "0.26.0"
+features = ["bitflags"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
