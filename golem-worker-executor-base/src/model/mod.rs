@@ -31,7 +31,7 @@ use golem_common::model::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
@@ -409,16 +409,29 @@ impl InvocationContext {
         self.trace_states = new_invocation_context.trace_states;
 
         let root_span_id = new_invocation_context.root.span_id();
-        for (span_id, new_span) in new_invocation_context.spans {
+        let mut reassigned = HashSet::new();
+        let mut to_update = Vec::new();
+        for (span_id, new_span) in &new_invocation_context.spans {
             // If we already have one of the new spans, we keep the old one and update the links
             // This can happen with circular RPC invocations.
 
-            if let std::collections::hash_map::Entry::Vacant(e) = self.spans.entry(span_id) {
-                e.insert(new_span);
+            if !self.spans.contains_key(&span_id) {
+                to_update.push(new_span.clone()); // parent reference in this span may have to be replaced
+                self.spans.insert(span_id.clone(), new_span.clone());
             } else {
-                todo!()
+                reassigned.insert(span_id); // references to this span must be updated
             }
         }
+
+        for span in to_update {
+            if let Some(parent_id) = span.parent() {
+                if reassigned.contains(parent_id.span_id()) {
+                    let parent = self.spans.get(parent_id.span_id()).unwrap().clone();
+                    span.replace_parent(Some(parent));
+                }
+            }
+        }
+
         self.root = self.spans.get(root_span_id).unwrap().clone();
     }
 
@@ -488,10 +501,10 @@ impl InvocationContext {
 
     pub fn get_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         let mut result = Vec::new();
-        let mut current = self.span(current_span_id).unwrap();
+        let mut current = self.span(current_span_id).unwrap().clone();
         loop {
             result.push(current.clone());
-            match current.parent().as_ref() {
+            match current.parent() {
                 Some(parent) => {
                     current = parent;
                 }
