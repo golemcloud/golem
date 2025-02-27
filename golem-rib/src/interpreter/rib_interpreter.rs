@@ -2478,6 +2478,45 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
+
+        #[test]
+        async fn test_range_returns_4() {
+            let expr = r#"
+              let x = 1:u64;
+              let y = x;
+              let range = x..=y;
+              let range2 = x..;
+              let range3 = x..y;
+              range;
+              range2;
+              range3
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(
+                    vec![
+                        Value::U64(1),
+                        Value::U64(1),
+                        Value::Bool(false)
+                    ]
+                ),
+
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool())
+                ])
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
     }
 
 
