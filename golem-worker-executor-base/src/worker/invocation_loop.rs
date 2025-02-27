@@ -519,8 +519,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .await;
 
         // TODO: we should not close "inherited" spans here, just the ones created for this particular invocation (but also the one(s) from API Gateway)
-        // TODO: also we cannot close things that are still referenced by some preserved spans. so this should somehow
-        // TODO: be ref tracking?
+        // TODO: it's ok if we close a request span and some child spans remain open; spans can outlive parents, and the contextual information remains there through the direct parent link
         for span_id in span_ids {
             self.store.data_mut().finish_span(&span_id)?;
         }
