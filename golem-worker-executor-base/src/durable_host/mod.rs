@@ -747,12 +747,10 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     ) -> Result<(), GolemError> {
         warn!("set_current_invocation_context: {invocation_context:?}");
 
-        // TODO: need to finish_span all the still open spans
-
         let (invocation_context, current_span_id) =
             InvocationContext::from_stack(invocation_context).map_err(GolemError::runtime)?;
 
-        self.state.invocation_context = invocation_context;
+        self.state.invocation_context.switch_to(invocation_context);
         self.state.current_span_id = current_span_id;
 
         Ok(())
@@ -1254,6 +1252,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        warn!("start_child_span in {parent}");
         let span = self
             .state
             .invocation_context
@@ -1336,6 +1335,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .data_mut()
                             .set_current_idempotency_key(idempotency_key)
                             .await;
+
+                        let span_ids = invocation_context.span_ids();
                         store
                             .as_context_mut()
                             .data_mut()
@@ -1351,6 +1352,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         )
                         .instrument(span)
                         .await;
+
+                        // TODO: we should not close "inherited" spans here, just the ones created for this particular invocation (but also the one(s) from API Gateway)
+                        for span_id in span_ids {
+                            store.as_context_mut().data_mut().finish_span(&span_id)?;
+                        }
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {

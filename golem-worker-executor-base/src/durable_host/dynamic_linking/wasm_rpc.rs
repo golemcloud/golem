@@ -27,7 +27,7 @@ use golem_wasm_rpc::{HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
-use tracing::Instrument;
+use tracing::{warn, Instrument};
 use wasmtime::component::types::{ComponentInstance, ComponentItem, Field};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
@@ -217,6 +217,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
 
             let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
 
+            warn!("CREATED RPC CONNECTION SPAN {} AND CREATING NEW WASM RPC ENTRY", span.span_id());
             let handle = register_wasm_rpc_entry(
                 &mut store,
                 remote_worker_id,
@@ -239,6 +240,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 create_rpc_target(&mut store, target_worker_urn.clone()).await?;
 
             let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+
+            warn!("CREATED RPC CONNECTION SPAN {} AND CREATING NEW WASM RPC ENTRY FOR CALLING CONSTRUCTOR", span.span_id());
 
             // First creating a resource for invoking the constructor (to avoid having to make a special case)
             let handle = register_wasm_rpc_entry(
@@ -265,6 +268,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 create_rpc_target(&mut store, target_worker_urn).await?;
 
             let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+
+            warn!("CREATED RPC CONNECTION SPAN {} AND CREATING NEW WASM RPC ENTRY AFTER CALLING CONSTRUCTOR", span.span_id());
 
             let handle = {
                 let mut wasi = store.data_mut().as_wasi_view();
@@ -451,10 +456,6 @@ async fn drop_linked_resource<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRes
             (false, None)
         }
     };
-    if let Some(span_id) = span_id {
-        // TODO: if drop can be called after the invocation is done, this can fail and we can ignore it
-        store.data_mut().finish_span(&span_id)?;
-    }
 
     if must_invoke_remote_drop {
         let resource: Resource<WasmRpcEntry> = Resource::new_own(rep);
@@ -465,6 +466,12 @@ async fn drop_linked_resource<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRes
             .invoke_and_await(resource, function_name, vec![])
             .await?;
     }
+
+    if let Some(span_id) = span_id {
+        warn!("DROPPING LINKED RESOURCE");
+        store.data_mut().finish_span(&span_id)?;
+    }
+
     Ok(())
 }
 

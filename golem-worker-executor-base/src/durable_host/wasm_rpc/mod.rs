@@ -566,7 +566,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().delete(rep)?;
         let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
         if let Ok(payload) = payload {
-            // TODO: if drop can be called after the invocation is done, this can fail and we can ignore it
             self.finish_span(payload.span_id())?;
         }
 
@@ -1173,6 +1172,7 @@ pub fn create_invocation_span<Ctx: InvocationContextManagement>(
     function_name: &str,
     idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<Arc<InvocationContextSpan>> {
+    warn!("create_invocation_span in connection_span_id: {connection_span_id}");
     Ok(ctx.start_child_span(
         connection_span_id,
         &[

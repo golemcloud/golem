@@ -19,7 +19,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use nonempty_collections::NEVec;
 use serde::de::Error;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
@@ -432,6 +432,13 @@ impl InvocationContextStack {
 
     pub fn push(&mut self, span: Arc<InvocationContextSpan>) {
         self.spans.insert(0, span);
+    }
+
+    pub fn span_ids(&self) -> HashSet<SpanId> {
+        self.spans
+            .iter()
+            .map(|span| span.span_id().clone())
+            .collect()
     }
 }
 

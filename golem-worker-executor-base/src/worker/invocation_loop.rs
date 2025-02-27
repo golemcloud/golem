@@ -491,6 +491,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.owned_worker_id.worker_id(),
         );
 
+        let span_ids = invocation_context.span_ids();
         self.store
             .data_mut()
             .set_current_invocation_context(invocation_context)
@@ -509,13 +510,22 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // the invocation writes the invocation start oplog entry
         self.store.data().update_pending_invocations().await;
 
-        invoke_worker(
+        let result = invoke_worker(
             full_function_name.to_string(),
             function_input.to_owned(),
             self.store,
             self.instance,
         )
-        .await
+        .await;
+
+        // TODO: we should not close "inherited" spans here, just the ones created for this particular invocation (but also the one(s) from API Gateway)
+        for span_id in span_ids {
+            self.store
+                .data_mut()
+                .finish_span(&span_id)?;
+        }
+
+        result
     }
 
     /// The logic handling a successfully finished worker invocation

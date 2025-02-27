@@ -403,11 +403,32 @@ impl InvocationContext {
         Ok((result, current_span_id))
     }
 
+    /// Switch to the new invocation context but keep the existing open spans
+    pub fn switch_to(&mut self, new_invocation_context: InvocationContext) {
+        self.trace_id = new_invocation_context.trace_id;
+        self.trace_states = new_invocation_context.trace_states;
+
+        let root_span_id = new_invocation_context.root.span_id();
+        for (span_id, new_span) in new_invocation_context.spans {
+            // If we already have one of the new spans, we keep the old one and update the links
+            // This can happen with circular RPC invocations.
+
+            if self.spans.contains_key(&span_id) {
+                todo!()
+            } else {
+                self.spans.insert(span_id, new_span);
+            }
+        }
+        self.root = self.spans.get(&root_span_id).unwrap().clone();
+    }
+
     pub fn start_span(
         &mut self,
         current_span_id: &SpanId,
         new_span_id: Option<SpanId>,
     ) -> Result<Arc<InvocationContextSpan>, String> {
+        warn!("attempting to start new span in {current_span_id}");
+
         let current_span = self.span(current_span_id)?;
         let span = current_span.start_span(new_span_id);
         self.spans.insert(span.span_id().clone(), span.clone());
