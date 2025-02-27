@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::rdbms::{
-    db_connection_execute, db_connection_query, db_connection_query_stream, db_transaction_commit,
-    db_transaction_execute, db_transaction_query, db_transaction_query_stream,
-    db_transaction_rollback, get_begin_oplog_index, get_db_query_stream, FromRdbmsValue,
-    RdbmsConnection, RdbmsResultStreamEntry, RdbmsResultStreamState, RdbmsTransactionEntry,
-    RdbmsTransactionState,
+    begin_db_transaction, db_connection_drop, db_connection_durable_execute,
+    db_connection_durable_query, db_connection_durable_query_stream, db_result_stream_drop,
+    db_result_stream_durable_get_columns, db_result_stream_durable_get_next, db_transaction_drop,
+    db_transaction_durable_commit, db_transaction_durable_execute, db_transaction_durable_query,
+    db_transaction_durable_query_stream, db_transaction_durable_rollback, open_db_connection,
+    FromRdbmsValue, RdbmsConnection, RdbmsResultStreamEntry, RdbmsTransactionEntry,
 };
-use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::wasi::rdbms::mysql::{
     DbColumn, DbColumnType, DbResult, DbRow, DbValue, Error, Host, HostDbConnection,
     HostDbResultStream, HostDbTransaction,
@@ -31,11 +30,8 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bit_vec::BitVec;
-use golem_common::model::oplog::DurableFunctionType;
-use std::ops::Deref;
 use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
-use wasmtime_wasi::WasiView;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -48,24 +44,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         &mut self,
         address: String,
     ) -> anyhow::Result<Result<Resource<MysqlDbConnection>, Error>> {
-        self.observe_function_call("rdbms::mysql::db-connection", "open");
-
-        let worker_id = self.state.owned_worker_id.worker_id.clone();
-        let result = self
-            .state
-            .rdbms_service
-            .mysql()
-            .create(&address, &worker_id)
-            .await;
-
-        match result {
-            Ok(key) => {
-                let entry = MysqlDbConnection::new(key);
-                let resource = self.as_wasi_view().table().push(entry)?;
-                Ok(Ok(resource))
-            }
-            Err(e) => Ok(Err(e.into())),
-        }
+        open_db_connection(address, self).await
     }
 
     async fn query_stream(
@@ -74,42 +53,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
-        let begin_oplog_idx = self
-            .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
-            .await?;
-        let durability = Durability::<RdbmsRequest<MysqlType>, SerializableError>::new(
-            self,
-            "rdbms::mysql::db-connection",
-            "query-stream",
-            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-        )
-        .await?;
-        let result = if durability.is_live() {
-            let result = db_connection_query_stream(statement, params, self, &self_);
-            durability.persist(self, (), result).await
-        } else {
-            durability.replay(self).await
-        };
-        match result {
-            Ok(request) => {
-                let entry = DbResultStreamEntry::new(request, RdbmsResultStreamState::New, None);
-                let resource = self.as_wasi_view().table().push(entry)?;
-                let handle = resource.rep();
-                self.state
-                    .open_function_table
-                    .insert(handle, begin_oplog_idx);
-                Ok(Ok(resource))
-            }
-            Err(error) => {
-                self.end_durable_function(
-                    &DurableFunctionType::WriteRemoteBatched(None),
-                    begin_oplog_idx,
-                    false,
-                )
-                .await?;
-                Ok(Err(error.into()))
-            }
-        }
+        db_connection_durable_query_stream(statement, params, self, &self_).await
     }
 
     async fn query(
@@ -118,23 +62,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
-        let worker_id = self.state.owned_worker_id.worker_id.clone();
-        let durability =
-            Durability::<crate::services::rdbms::DbResult<MysqlType>, SerializableError>::new(
-                self,
-                "rdbms::mysql::db-connection",
-                "query",
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
-        let result = if durability.is_live() {
-            let (input, result) =
-                db_connection_query(&worker_id, statement, params, self, &self_).await;
-            durability.persist(self, input, result).await
-        } else {
-            durability.replay(self).await
-        };
-        Ok(result.map(DbResult::from).map_err(Error::from))
+        db_connection_durable_query(statement, params, self, &self_).await
     }
 
     async fn execute(
@@ -143,72 +71,18 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        let worker_id = self.state.owned_worker_id.worker_id.clone();
-        let durability = Durability::<u64, SerializableError>::new(
-            self,
-            "rdbms::mysql::db-connection",
-            "execute",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
-
-        let result = if durability.is_live() {
-            let (input, result) =
-                db_connection_execute(&worker_id, statement, params, self, &self_).await;
-            durability.persist(self, input, result).await
-        } else {
-            durability.replay(self).await
-        };
-        Ok(result.map_err(Error::from))
+        db_connection_durable_execute(statement, params, self, &self_).await
     }
 
     async fn begin_transaction(
         &mut self,
         self_: Resource<MysqlDbConnection>,
     ) -> anyhow::Result<Result<Resource<DbTransactionEntry>, Error>> {
-        self.observe_function_call("rdbms::mysql::db-connection", "begin-transaction");
-
-        let begin_oplog_index = self
-            .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
-            .await?;
-
-        let pool_key = self
-            .as_wasi_view()
-            .table()
-            .get::<MysqlDbConnection>(&self_)?
-            .pool_key
-            .clone();
-
-        let entry = DbTransactionEntry::new(pool_key, RdbmsTransactionState::New);
-        let resource = self.as_wasi_view().table().push(entry)?;
-        let handle = resource.rep();
-        self.state
-            .open_function_table
-            .insert(handle, begin_oplog_index);
-        Ok(Ok(resource))
+        begin_db_transaction(self, &self_).await
     }
 
     async fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
-        self.observe_function_call("rdbms::mysql::db-connection", "drop");
-
-        let worker_id = self.state.owned_worker_id.worker_id.clone();
-        let pool_key = self
-            .as_wasi_view()
-            .table()
-            .get::<MysqlDbConnection>(&rep)?
-            .pool_key
-            .clone();
-
-        let _ = self
-            .state
-            .rdbms_service
-            .mysql()
-            .remove(&pool_key, &worker_id);
-
-        self.as_wasi_view()
-            .table()
-            .delete::<MysqlDbConnection>(rep)?;
-        Ok(())
+        db_connection_drop(self, rep).await
     }
 }
 
@@ -220,92 +94,18 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
-        let handle = self_.rep();
-        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability = Durability::<Vec<mysql_types::DbColumn>, SerializableError>::new(
-            self,
-            "rdbms::mysql::db-result-stream",
-            "get-columns",
-            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-        )
-        .await?;
-
-        let result = if durability.is_live() {
-            let query_stream = get_db_query_stream(self, &self_).await;
-
-            let result = match query_stream {
-                Ok(query_stream) => query_stream.deref().get_columns().await,
-                Err(e) => Err(e),
-            };
-
-            durability.persist(self, (), result).await
-        } else {
-            durability.replay(self).await
-        };
-
-        match result {
-            Ok(columns) => Ok(columns.into_iter().map(|c| c.into()).collect()),
-            Err(e) => Err(Error::from(e).into()),
-        }
+        db_result_stream_durable_get_columns(self, &self_).await
     }
 
     async fn get_next(
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        let handle = self_.rep();
-        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability = Durability::<
-            Option<Vec<crate::services::rdbms::DbRow<mysql_types::DbValue>>>,
-            SerializableError,
-        >::new(
-            self,
-            "rdbms::mysql::db-result-stream",
-            "get-next",
-            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-        )
-        .await?;
-
-        let result = if durability.is_live() {
-            let query_stream = get_db_query_stream(self, &self_).await;
-
-            let result = match query_stream {
-                Ok(query_stream) => query_stream.deref().get_next().await,
-                Err(e) => Err(e),
-            };
-            durability.persist(self, (), result).await
-        } else {
-            durability.replay(self).await
-        };
-
-        match result {
-            Ok(rows) => Ok(rows.map(|r| r.into_iter().map(|r| r.into()).collect())),
-            Err(e) => Err(Error::from(e).into()),
-        }
+        db_result_stream_durable_get_next(self, &self_).await
     }
 
     async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
-        self.observe_function_call("rdbms::mysql::db-result-stream", "drop");
-        let handle = rep.rep();
-        let entry = self
-            .as_wasi_view()
-            .table()
-            .delete::<DbResultStreamEntry>(rep)?;
-
-        if entry.transaction_handle.is_none() {
-            let begin_oplog_idx = get_begin_oplog_index(self, handle);
-            if let Ok(begin_oplog_idx) = begin_oplog_idx {
-                self.end_durable_function(
-                    &DurableFunctionType::WriteRemoteBatched(None),
-                    begin_oplog_idx,
-                    false,
-                )
-                .await?;
-                self.state.open_function_table.remove(&handle);
-            }
-        }
-
-        Ok(())
+        db_result_stream_drop(self, rep).await
     }
 }
 
@@ -319,23 +119,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
-        let handle = self_.rep();
-        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability =
-            Durability::<crate::services::rdbms::DbResult<MysqlType>, SerializableError>::new(
-                self,
-                "rdbms::mysql::db-transaction",
-                "query",
-                DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-            )
-            .await?;
-        let result = if durability.is_live() {
-            let (input, result) = db_transaction_query(statement, params, self, &self_).await;
-            durability.persist(self, input, result).await
-        } else {
-            durability.replay(self).await
-        };
-        Ok(result.map(DbResult::from).map_err(Error::from))
+        db_transaction_durable_query(statement, params, self, &self_).await
     }
 
     async fn query_stream(
@@ -344,34 +128,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
-        let handle = self_.rep();
-        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability = Durability::<RdbmsRequest<MysqlType>, SerializableError>::new(
-            self,
-            "rdbms::mysql::db-transaction",
-            "query-stream",
-            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-        )
-        .await?;
-        let result = if durability.is_live() {
-            let result = db_transaction_query_stream(statement, params, self, &self_);
-            durability.persist(self, (), result).await
-        } else {
-            durability.replay(self).await
-        };
-        match result {
-            Ok(request) => {
-                let entry =
-                    DbResultStreamEntry::new(request, RdbmsResultStreamState::New, Some(handle));
-                let resource = self.as_wasi_view().table().push(entry)?;
-                let handle = resource.rep();
-                self.state
-                    .open_function_table
-                    .insert(handle, begin_oplog_idx);
-                Ok(Ok(resource))
-            }
-            Err(error) => Ok(Err(error.into())),
-        }
+        db_transaction_durable_query_stream(statement, params, self, &self_).await
     }
 
     async fn execute(
@@ -380,93 +137,25 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        let handle = self_.rep();
-        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability = Durability::<u64, SerializableError>::new(
-            self,
-            "rdbms::mysql::db-transaction",
-            "execute",
-            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-        )
-        .await?;
-        let result = if durability.is_live() {
-            let (input, result) = db_transaction_execute(statement, params, self, &self_).await;
-            durability.persist(self, input, result).await
-        } else {
-            durability.replay(self).await
-        };
-        Ok(result.map_err(Error::from))
+        db_transaction_durable_execute(statement, params, self, &self_).await
     }
 
     async fn commit(
         &mut self,
         self_: Resource<DbTransactionEntry>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let handle = self_.rep();
-        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability = Durability::<(), SerializableError>::new(
-            self,
-            "rdbms::mysql::db-transaction",
-            "commit",
-            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-        )
-        .await?;
-        let result = if durability.is_live() {
-            let result = db_transaction_commit(self, &self_).await;
-            durability.persist(self, (), result).await
-        } else {
-            durability.replay(self).await
-        };
-        Ok(result.map_err(Error::from))
+        db_transaction_durable_commit(self, &self_).await
     }
 
     async fn rollback(
         &mut self,
         self_: Resource<DbTransactionEntry>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let handle = self_.rep();
-        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability = Durability::<(), SerializableError>::new(
-            self,
-            "rdbms::mysql::db-transaction",
-            "rollback",
-            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-        )
-        .await?;
-        let result = if durability.is_live() {
-            let result = db_transaction_rollback(self, &self_).await;
-            durability.persist(self, (), result).await
-        } else {
-            durability.replay(self).await
-        };
-        Ok(result.map_err(Error::from))
+        db_transaction_durable_rollback(self, &self_).await
     }
 
     async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
-        self.observe_function_call("rdbms::mysql::db-result-stream", "drop");
-        let handle = rep.rep();
-
-        let entry = self
-            .as_wasi_view()
-            .table()
-            .delete::<DbTransactionEntry>(rep)?;
-
-        if let RdbmsTransactionState::Open(transaction) = entry.state {
-            let _ = transaction.rollback_if_open().await;
-        }
-
-        let begin_oplog_idx = get_begin_oplog_index(self, handle);
-        if let Ok(begin_oplog_idx) = begin_oplog_idx {
-            self.end_durable_function(
-                &DurableFunctionType::WriteRemoteBatched(None),
-                begin_oplog_idx,
-                false,
-            )
-            .await?;
-            self.state.open_function_table.remove(&handle);
-        }
-
-        Ok(())
+        db_transaction_drop(self, rep).await
     }
 }
 
@@ -572,6 +261,15 @@ impl From<mysql_types::DbValue> for DbValue {
     }
 }
 
+impl FromRdbmsValue<crate::services::rdbms::DbRow<mysql_types::DbValue>> for DbRow {
+    fn from(
+        value: crate::services::rdbms::DbRow<mysql_types::DbValue>,
+        _resource_table: &mut ResourceTable,
+    ) -> Result<DbRow, String> {
+        Ok(value.into())
+    }
+}
+
 impl From<crate::services::rdbms::DbRow<mysql_types::DbValue>> for DbRow {
     fn from(value: crate::services::rdbms::DbRow<mysql_types::DbValue>) -> Self {
         Self {
@@ -664,12 +362,30 @@ impl From<DbColumnType> for mysql_types::DbColumnType {
     }
 }
 
+impl FromRdbmsValue<crate::services::rdbms::DbResult<MysqlType>> for DbResult {
+    fn from(
+        value: crate::services::rdbms::DbResult<MysqlType>,
+        _resource_table: &mut ResourceTable,
+    ) -> Result<DbResult, String> {
+        Ok(value.into())
+    }
+}
+
 impl From<crate::services::rdbms::DbResult<MysqlType>> for DbResult {
     fn from(value: crate::services::rdbms::DbResult<MysqlType>) -> Self {
         Self {
             columns: value.columns.into_iter().map(|v| v.into()).collect(),
             rows: value.rows.into_iter().map(|v| v.into()).collect(),
         }
+    }
+}
+
+impl FromRdbmsValue<mysql_types::DbColumn> for DbColumn {
+    fn from(
+        value: mysql_types::DbColumn,
+        _resource_table: &mut ResourceTable,
+    ) -> Result<DbColumn, String> {
+        Ok(value.into())
     }
 }
 
@@ -703,6 +419,15 @@ impl From<crate::services::rdbms::Error> for Error {
 impl FromRdbmsValue<DbValue> for mysql_types::DbValue {
     fn from(value: DbValue, _resource_table: &mut ResourceTable) -> Result<Self, String> {
         value.try_into()
+    }
+}
+
+impl FromRdbmsValue<mysql_types::DbValue> for DbValue {
+    fn from(
+        value: mysql_types::DbValue,
+        _resource_table: &mut ResourceTable,
+    ) -> Result<DbValue, String> {
+        Ok(value.into())
     }
 }
 
