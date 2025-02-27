@@ -1095,33 +1095,6 @@ mod internal {
 
                 inferred_type_stack.push_front(new_range);
             }
-            Range::RangeTo { to } => {
-                let right = inferred_type_stack
-                    .pop_front()
-                    .unwrap_or(to.deref().clone());
-                let new_range = Expr::range_to(right)
-                    .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
-
-                inferred_type_stack.push_front(new_range);
-            }
-            Range::RangeToInclusive { to } => {
-                let right = inferred_type_stack
-                    .pop_front()
-                    .unwrap_or(to.deref().clone());
-                let new_range = Expr::range_to_inclusive(right)
-                    .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
-
-                inferred_type_stack.push_front(new_range);
-            }
-            Range::RangeFull => {
-                let new_range = Expr::range_full()
-                    .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
-
-                inferred_type_stack.push_front(new_range);
-            }
         }
     }
 

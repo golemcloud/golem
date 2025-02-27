@@ -684,21 +684,6 @@ impl Expr {
         }
     }
 
-    pub fn range_to(to: Expr) -> Self {
-        Expr::Range {
-            range: Range::RangeTo { to: Box::new(to) },
-            inferred_type: InferredType::Unknown,
-            source_span: SourceSpan::default(),
-        }
-    }
-
-    pub fn range_to_inclusive(to: Expr) -> Self {
-        Expr::Range {
-            range: Range::RangeToInclusive { to: Box::new(to) },
-            inferred_type: InferredType::Unknown,
-            source_span: SourceSpan::default(),
-        }
-    }
 
     pub fn range_inclusive(from: Expr, to: Expr) -> Self {
         Expr::Range {
@@ -707,14 +692,6 @@ impl Expr {
                 to: Box::new(to),
             },
             inferred_type: InferredType::List(Box::new(InferredType::U64)),
-            source_span: SourceSpan::default(),
-        }
-    }
-
-    pub fn range_full() -> Self {
-        Expr::Range {
-            range: Range::RangeFull,
-            inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
         }
     }
@@ -1442,9 +1419,6 @@ pub enum Range {
     Range { from: Box<Expr>, to: Box<Expr> },
     RangeInclusive { from: Box<Expr>, to: Box<Expr> },
     RangeFrom { from: Box<Expr> },
-    RangeTo { to: Box<Expr> },
-    RangeToInclusive { to: Box<Expr> },
-    RangeFull,
 }
 
 impl Range {
@@ -1453,9 +1427,6 @@ impl Range {
             Range::Range { from, .. } => Some(from),
             Range::RangeInclusive { from, .. } => Some(from),
             Range::RangeFrom { from } => Some(from),
-            Range::RangeTo { .. } => None,
-            Range::RangeToInclusive { .. } => None,
-            Range::RangeFull => None,
         }
     }
 
@@ -1464,15 +1435,12 @@ impl Range {
             Range::Range { to, .. } => Some(to),
             Range::RangeInclusive { to, .. } => Some(to),
             Range::RangeFrom { .. } => None,
-            Range::RangeTo { to } => Some(to),
-            Range::RangeToInclusive { to } => Some(to),
-            Range::RangeFull => None,
         }
     }
 
     pub fn inclusive(&self) -> bool {
         match self {
-            Range::RangeInclusive { .. } | Range::RangeToInclusive { .. } => true,
+            Range::RangeInclusive { .. }  => true,
             _ => false,
         }
     }
@@ -1482,9 +1450,6 @@ impl Range {
             Range::Range { from, to } => vec![from, to],
             Range::RangeInclusive { from, to } => vec![from, to],
             Range::RangeFrom { from } => vec![from],
-            Range::RangeTo { to } => vec![to],
-            Range::RangeToInclusive { to } => vec![to],
-            Range::RangeFull => vec![],
         }
     }
 
@@ -1493,9 +1458,6 @@ impl Range {
             Range::Range { from, to } => vec![from.as_ref(), to.as_ref()],
             Range::RangeInclusive { from, to } => vec![from.as_ref(), to.as_ref()],
             Range::RangeFrom { from } => vec![from.as_ref()],
-            Range::RangeTo { to } => vec![to.as_ref()],
-            Range::RangeToInclusive { to } => vec![to.as_ref()],
-            Range::RangeFull => vec![],
         }
     }
 }
@@ -1738,18 +1700,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let range_expr = range.range_expr.ok_or("Missing range expr")?;
 
                 match range_expr {
-                    RangeExpr::RangeFull(_) => Expr::range_full(),
                     RangeExpr::RangeFrom(range_from) => {
                         let from = range_from.from.ok_or("Missing from expr")?;
                         Expr::range_from((*from).try_into()?)
-                    }
-                    RangeExpr::RangeTo(range_to) => {
-                        let to = range_to.to.ok_or("Missing to expr")?;
-                        Expr::range_to((*to).try_into()?)
-                    }
-                    RangeExpr::RangeToInclusive(range_to_inclusive) => {
-                        let to = range_to_inclusive.to.ok_or("Missing to expr")?;
-                        Expr::range_to_inclusive((*to).try_into()?)
                     }
                     RangeExpr::Range(range) => {
                         let from = range.from.ok_or("Missing from expr")?;
@@ -2209,41 +2162,12 @@ mod protobuf {
                 )),
 
                 Expr::Range { range, .. } => match range {
-                    Range::RangeFull => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                        Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                            range_expr: Some(RangeExpr::RangeFull(
-                                golem_api_grpc::proto::golem::rib::RangeFull {},
-                            )),
-                        }),
-                    )),
                     Range::RangeFrom { from } => {
                         Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
                             Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
                                 range_expr: Some(RangeExpr::RangeFrom(Box::new(
                                     golem_api_grpc::proto::golem::rib::RangeFrom {
                                         from: Some(Box::new((*from).into())),
-                                    },
-                                ))),
-                            }),
-                        ))
-                    }
-                    Range::RangeTo { to } => {
-                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::RangeTo(Box::new(
-                                    golem_api_grpc::proto::golem::rib::RangeTo {
-                                        to: Some(Box::new((*to).into())),
-                                    },
-                                ))),
-                            }),
-                        ))
-                    }
-                    Range::RangeToInclusive { to } => {
-                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
-                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
-                                range_expr: Some(RangeExpr::RangeToInclusive(Box::new(
-                                    golem_api_grpc::proto::golem::rib::RangeToInclusive {
-                                        to: Some(Box::new((*to).into())),
                                     },
                                 ))),
                             }),

@@ -109,15 +109,6 @@ impl<W: Write> Writer<W> {
                     self.write_str("..")?;
                     self.write_expr(from)
                 }
-                Range::RangeTo { to } => {
-                    self.write_str("..")?;
-                    self.write_expr(to)
-                }
-                Range::RangeToInclusive { to } => {
-                    self.write_str("..=")?;
-                    self.write_expr(to)
-                }
-                Range::RangeFull => self.write_str(".."),
             },
 
             Expr::Let {

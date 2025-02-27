@@ -1440,36 +1440,6 @@ mod internal {
 
                 temp_stack.push_front((new_range, false));
             }
-            Range::RangeTo { to } => {
-                let right = temp_stack
-                    .pop_front()
-                    .map(|x| x.0)
-                    .unwrap_or(to.deref().clone());
-                let new_range = Expr::range_to(right)
-                    .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
-
-                temp_stack.push_front((new_range, false));
-            }
-            Range::RangeToInclusive { to } => {
-                let right = temp_stack
-                    .pop_front()
-                    .map(|x| x.0)
-                    .unwrap_or(to.deref().clone());
-                let new_range = Expr::range_to_inclusive(right)
-                    .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
-
-                temp_stack.push_front((new_range, false));
-            }
-
-            Range::RangeFull => {
-                let new_range = Expr::range_full()
-                    .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
-
-                temp_stack.push_front((new_range, false));
-            }
         }
     }
 

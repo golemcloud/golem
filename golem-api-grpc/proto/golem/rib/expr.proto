@@ -49,10 +49,7 @@ message Expr {
 
 message RangeExpr {
     oneof range_expr {
-        RangeFull range_full = 1;
         RangeFrom range_from = 2;
-        RangeTo range_to = 3;
-        RangeToInclusive range_to_inclusive = 4;
         Range range = 5;
         RangeInclusive range_inclusive = 6;
     }
@@ -66,16 +63,6 @@ message Range {
 message RangeFrom {
     Expr from = 1;
 }
-
-message RangeTo {
-    Expr to = 1;
-}
-
-message RangeToInclusive {
-    Expr to = 1;
-}
-
-message RangeFull {}
 
 message RangeInclusive {
     Expr from = 1;
