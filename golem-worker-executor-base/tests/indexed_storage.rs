@@ -29,7 +29,7 @@ use golem_worker_executor_base::storage::indexed::{
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
 use std::sync::Arc;
-use test_r::{define_matrix_dimension, inherit_test_dep, non_flaky, test, test_dep};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use uuid::Uuid;
 
 #[async_trait]
