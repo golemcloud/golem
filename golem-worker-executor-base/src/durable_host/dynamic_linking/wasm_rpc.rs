@@ -217,7 +217,10 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
 
             let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
 
-            warn!("CREATED RPC CONNECTION SPAN {} AND CREATING NEW WASM RPC ENTRY", span.span_id());
+            warn!(
+                "CREATED RPC CONNECTION SPAN {} AND CREATING NEW WASM RPC ENTRY",
+                span.span_id()
+            );
             let handle = register_wasm_rpc_entry(
                 &mut store,
                 remote_worker_id,

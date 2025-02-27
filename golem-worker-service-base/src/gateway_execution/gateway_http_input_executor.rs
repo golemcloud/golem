@@ -290,8 +290,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         &self,
         script: &InvocationContextCompiled,
         request_value: &serde_json::Map<String, Value>,
-        request_attributes: HashMap<String, AttributeValue>,
-    ) -> GatewayHttpResult<(Option<TraceId>, Arc<InvocationContextSpan>)> {
+    ) -> GatewayHttpResult<(Option<TraceId>, HashMap<String, ValueAndType>)> {
         let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
             .await
             .map_err(GatewayHttpError::BadRequest)?;
@@ -305,15 +304,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             ))?;
         let record: HashMap<String, ValueAndType> = HashMap::from_iter(value);
 
-        let span_id = record
-            .get("span_id")
-            .or(record.get("span-id"))
-            .map(to_attribute_value)
-            .transpose()?
-            .map(SpanId::from_attribute_value)
-            .transpose()
-            .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Span ID: {err}")))?;
-
         let trace_id = record
             .get("trace_id")
             .or(record.get("trace-id"))
@@ -323,7 +313,24 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .transpose()
             .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Trace ID: {err}")))?;
 
-        let span = InvocationContextSpan::new_with_attributes(span_id, request_attributes);
+        Ok((trace_id, record))
+    }
+
+    fn materialize_user_invocation_context(
+        record: HashMap<String, ValueAndType>,
+        parent: Option<Arc<InvocationContextSpan>>,
+        request_attributes: HashMap<String, AttributeValue>,
+    ) -> GatewayHttpResult<Arc<InvocationContextSpan>> {
+        let span_id = record
+            .get("span_id")
+            .or(record.get("span-id"))
+            .map(to_attribute_value)
+            .transpose()?
+            .map(SpanId::from_attribute_value)
+            .transpose()
+            .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Span ID: {err}")))?;
+
+        let span = InvocationContextSpan::new_with_attributes(span_id, request_attributes, parent);
 
         for (key, value) in record {
             if key != "span_id" && key != "span-id" && key != "trace_id" && key != "trace-id" {
@@ -331,7 +338,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             }
         }
 
-        Ok((trace_id, span))
+        Ok(span)
     }
 
     async fn get_worker_detail(
@@ -374,15 +381,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         {
             let request_attributes = extract_request_attributes(&request.underlying);
 
-            let (user_defined_trace_id, user_defined_span) = self
-                .evaluate_invocation_context_rib_script(
-                    invocation_context_compiled,
-                    request_value,
-                    request_attributes,
-                )
-                .await?;
-
             let trace_context_headers = TraceContextHeaders::parse(request.underlying.headers());
+
+            let (user_defined_trace_id, user_defined_span) = self
+                .evaluate_invocation_context_rib_script(invocation_context_compiled, request_value)
+                .await?;
 
             match (trace_context_headers, &user_defined_trace_id) {
                 (Some(ctx), None) => {
@@ -392,15 +395,30 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                         InvocationContextSpan::external_parent(ctx.parent_id),
                         ctx.trace_states,
                     );
+                    let user_defined_span = Self::materialize_user_invocation_context(
+                        user_defined_span,
+                        Some(ctx.spans.first().clone()),
+                        request_attributes,
+                    )?;
                     ctx.push(user_defined_span);
                     ctx
                 }
                 (_, Some(trace_id)) => {
                     // Forced a new trace, ignoring the trace context in the headers
+                    let user_defined_span = Self::materialize_user_invocation_context(
+                        user_defined_span,
+                        None,
+                        request_attributes,
+                    )?;
                     InvocationContextStack::new(trace_id.clone(), user_defined_span, Vec::new())
                 }
                 (None, _) => {
                     // No trace context in headers, starting a new trace
+                    let user_defined_span = Self::materialize_user_invocation_context(
+                        user_defined_span,
+                        None,
+                        request_attributes,
+                    )?;
                     InvocationContextStack::new(
                         user_defined_trace_id.unwrap_or_else(TraceId::generate),
                         user_defined_span,

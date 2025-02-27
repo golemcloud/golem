@@ -413,13 +413,13 @@ impl InvocationContext {
             // If we already have one of the new spans, we keep the old one and update the links
             // This can happen with circular RPC invocations.
 
-            if self.spans.contains_key(&span_id) {
-                todo!()
+            if let std::collections::hash_map::Entry::Vacant(e) = self.spans.entry(span_id) {
+                e.insert(new_span);
             } else {
-                self.spans.insert(span_id, new_span);
+                todo!()
             }
         }
-        self.root = self.spans.get(&root_span_id).unwrap().clone();
+        self.root = self.spans.get(root_span_id).unwrap().clone();
     }
 
     pub fn start_span(

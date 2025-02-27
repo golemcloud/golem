@@ -52,6 +52,7 @@ pub fn invocation_context_from_request(request: &poem::Request) -> InvocationCon
             ctx.push(InvocationContextSpan::new_with_attributes(
                 None,
                 request_attributes,
+                Some(ctx.spans.first().clone()),
             ));
             ctx
         }
@@ -59,7 +60,7 @@ pub fn invocation_context_from_request(request: &poem::Request) -> InvocationCon
             // No trace context in headers, starting a new trace
             InvocationContextStack::new(
                 TraceId::generate(),
-                InvocationContextSpan::new_with_attributes(None, request_attributes),
+                InvocationContextSpan::new_with_attributes(None, request_attributes, None),
                 Vec::new(),
             )
         }

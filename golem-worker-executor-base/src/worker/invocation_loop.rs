@@ -520,9 +520,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         // TODO: we should not close "inherited" spans here, just the ones created for this particular invocation (but also the one(s) from API Gateway)
         for span_id in span_ids {
-            self.store
-                .data_mut()
-                .finish_span(&span_id)?;
+            self.store.data_mut().finish_span(&span_id)?;
         }
 
         result
