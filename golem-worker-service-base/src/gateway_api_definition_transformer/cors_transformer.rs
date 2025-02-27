@@ -143,6 +143,7 @@ mod tests {
             worker_name: None,
             idempotency_key: None,
             response_mapping: ResponseMapping(Expr::literal("")),
+            invocation_context: None,
         };
 
         Route {
@@ -162,6 +163,7 @@ mod tests {
             worker_name: None,
             idempotency_key: None,
             response_mapping: ResponseMapping(Expr::literal("")),
+            invocation_context: None,
         };
 
         Route {

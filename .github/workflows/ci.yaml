@@ -367,10 +367,84 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
-  api-and-integration-tests:
+  build-bins:
     env:
       CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-component
+        run: cargo binstall --no-confirm cargo-component@0.20.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug-bins
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Building executables for tests
+        env:
+          QUIET: true
+        run: cargo make --profile ci build-bins
+        timeout-minutes: 30
+      - name: Upload compiled component-compilation-service
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-golem-component-compilation-service
+          path: |
+            target/debug/golem-component-compilation-service
+      - name: Upload compiled component-service
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-golem-component-service
+          path: |
+            target/debug/golem-component-service
+      - name: Upload compiled shard-manager
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-golem-shard-manager
+          path: |
+            target/debug/golem-shard-manager
+      - name: Upload compiled worker-service
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-golem-worker-service
+          path: |
+            target/debug/golem-worker-service
+      - name: Upload compiled worker-executor
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-debug-worker-executor
+          path: |
+            target/debug/worker-executor
+
+  # Integration tess not requiring prebuilt executables
+  api-and-integration-tests-1:
+    env:
+      CARGO_BUILD_JOBS: 6
+    runs-on: ubuntu-latest-xlarge
+    strategy:
+      fail-fast: true
+      matrix:
+        group:
+          - name: integration-tests-group2
+            description: "Component service integration tests"
+          - name: integration-tests-group3
+            description: "Worker service integration tests"
+          - name: integration-tests-group4
+            description: "Base service integration tests"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -399,20 +473,10 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - name: API tests - HTTP
+      - name: ${{ matrix.group.description }}
         env:
           QUIET: true
-        run: cargo make --profile ci api-tests-http
-        timeout-minutes: 30
-      - name: API tests - GRPC
-        env:
-          QUIET: true
-        run: cargo make --profile ci api-tests-grpc
-        timeout-minutes: 30
-      - name: Integration tests
-        env:
-          QUIET: true
-        run: cargo make --profile ci integration-tests
+        run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
@@ -421,10 +485,23 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
-  sharding-tests:
+
+  # Integration tests requiring prebuilt executables
+  api-and-integration-tests-2:
     env:
       CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
+    needs: build-bins
+    strategy:
+      fail-fast: true
+      matrix:
+        group:
+          - name: integration-tests-group1
+            description: "Full integration tests"
+          - name: integration-tests-group5
+            description: "Sharding tests"
+          - name: api-tests
+            description: "API tests"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -435,11 +512,25 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-component
+        run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug
+          shared-key: debug-bins
           cache-all-crates: true
           save-if: false
+
+      - name: Download specific files from target
+        uses: actions/download-artifact@v4
+        with:
+          pattern: target-debug-*
+          path: target/debug
+          merge-multiple: true
+      - name: Fix permissions
+        working-directory: target/debug
+        run: chmod +x golem-component-compilation-service golem-component-service golem-shard-manager golem-worker-service worker-executor
+
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -450,11 +541,12 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - name: Sharding tests
+
+      - name: ${{ matrix.group.description }}
         env:
           QUIET: true
-        run: cargo make --profile ci sharding-tests
-        timeout-minutes: 40
+        run: cargo make --profile ci ${{ matrix.group.name }}
+        timeout-minutes: 30
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
@@ -462,14 +554,15 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   publish:
     needs:
       [
         build-and-test,
         wasm-rpc-stub,
         worker-tests,
-        api-and-integration-tests,
-        sharding-tests,
+        api-and-integration-tests-1,
+        api-and-integration-tests-2,
       ]
     if: "startsWith(github.ref, 'refs/tags/v')"
     runs-on: ubuntu-latest

@@ -65,7 +65,7 @@ lazy_static = { workspace = true }
 log = "0.4.22"
 md5 = "0.7.0"
 metrohash = "1.0.7"
-nonempty-collections = "0.2.9"
+nonempty-collections = { workspace = true}
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }

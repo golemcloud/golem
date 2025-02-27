@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::rib_compilation_error::RibCompilationError;
 use crate::{Expr, FunctionTypeRegistry};
 
 // Handling the following and making sure the types are inferred fully at this stage.
@@ -24,7 +25,7 @@ use crate::{Expr, FunctionTypeRegistry};
 pub fn identify_instance_creation(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
-) -> Result<(), String> {
+) -> Result<(), RibCompilationError> {
     internal::search_for_invalid_instance_declarations(expr)?;
     internal::identify_instance_creation_with_worker(expr, function_type_registry)
 }
@@ -32,15 +33,19 @@ pub fn identify_instance_creation(
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::instance_type::InstanceType;
+    use crate::rib_compilation_error::RibCompilationError;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, ParsedFunctionReference};
+    use crate::{CustomError, Expr, FunctionCallError, InferredType, ParsedFunctionReference};
     use std::collections::VecDeque;
 
-    pub(crate) fn search_for_invalid_instance_declarations(expr: &mut Expr) -> Result<(), String> {
+    pub(crate) fn search_for_invalid_instance_declarations(
+        expr: &mut Expr,
+    ) -> Result<(), RibCompilationError> {
         let mut queue = VecDeque::new();
         queue.push_front(expr);
         while let Some(expr) = queue.pop_front() {
+            let expr_copied = expr.clone();
             match expr {
                 Expr::Let {
                     variable_id, expr, ..
@@ -48,19 +53,25 @@ mod internal {
                     queue.push_front(expr);
 
                     if variable_id.name() == "instance" {
-                        return Err(
-                            "`instance` is a reserved keyword and cannot be used as a variable."
-                                .to_string(),
-                        );
+                        return Err(CustomError::new(
+                            &expr_copied,
+                            "`instance` is a reserved keyword and cannot be used as a variable.",
+                        )
+                        .into());
                     }
                 }
                 Expr::Identifier { variable_id, .. } => {
                     if variable_id.name() == "instance" && variable_id.is_global() {
-                        return Err(concat!(
-                        "`instance` is a reserved keyword.\n ",
-                        "note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n ",
-                        "note: For a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name"
-                        ).to_string());
+                        let err = CustomError::new(
+                            &expr_copied,
+                             "`instance` is a reserved keyword"
+                        ).with_help_message(
+                            "use `instance()` instead of `instance` to create an ephemeral worker instance."
+                        ).with_help_message(
+                            "for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name"
+                        );
+
+                        return Err(err.into());
                     }
                 }
 
@@ -77,10 +88,13 @@ mod internal {
     pub(crate) fn identify_instance_creation_with_worker(
         expr: &mut Expr,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), String> {
+    ) -> Result<(), RibCompilationError> {
         let mut queue = VecDeque::new();
         queue.push_back(expr);
+
         while let Some(expr) = queue.pop_back() {
+            let expr_copied = expr.clone();
+
             match expr {
                 Expr::Call {
                     call_type,
@@ -91,7 +105,15 @@ mod internal {
                 } => {
                     let type_parameter = generic_type_parameter
                         .clone()
-                        .map(|type_parameter| TypeParameter::from_str(&type_parameter.value))
+                        .map(|type_parameter| {
+                            TypeParameter::from_str(&type_parameter.value).map_err(|err| {
+                                FunctionCallError::InvalidGenericTypeParameter {
+                                    generic_type_parameter: type_parameter.value.clone(),
+                                    expr: expr_copied.clone(),
+                                    message: err,
+                                }
+                            })
+                        })
                         .transpose()?;
 
                     let instance_creation_details =
@@ -103,6 +125,7 @@ mod internal {
                             function_type_registry.clone(),
                             instance_creation_details.worker_name(),
                             type_parameter,
+                            expr_copied,
                         )?;
                         *inferred_type = InferredType::Instance {
                             instance_type: Box::new(new_instance_type),

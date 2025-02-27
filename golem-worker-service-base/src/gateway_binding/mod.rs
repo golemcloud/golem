@@ -21,7 +21,7 @@ pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{Expr, RibByteCode, RibInputTypeInfo};
+use rib::{Expr, RibByteCode, RibError, RibInputTypeInfo};
 pub use static_binding::*;
 
 mod gateway_binding_compiled;
@@ -96,6 +96,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                     response: Some(worker_binding.response_mapping.0.into()),
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
                     static_binding: None,
+                    invocation_context: worker_binding.invocation_context.map(|x| x.into()),
                 },
             ),
             GatewayBinding::FileServer(worker_binding) => Ok(
@@ -106,6 +107,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                     response: Some(worker_binding.response_mapping.0.into()),
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
                     static_binding: None,
+                    invocation_context: None,
                 },
             ),
             GatewayBinding::Static(static_binding) => {
@@ -132,6 +134,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                         response: None,
                         idempotency_key: None,
                         static_binding: Some(static_binding),
+                        invocation_context: None,
                     },
                 )
             }
@@ -143,6 +146,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                     response: None,
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
                     static_binding: None,
+                    invocation_context: None,
                 },
             ),
         }
@@ -168,6 +172,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 )?;
                 let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
+                let invocation_context =
+                    value.invocation_context.map(Expr::try_from).transpose()?;
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 
@@ -176,6 +182,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                     worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
+                    invocation_context,
                 }))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
@@ -192,6 +199,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                     worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
+                    invocation_context: None,
                 }))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
@@ -237,7 +245,7 @@ impl WorkerNameCompiled {
     pub fn from_worker_name(
         worker_name: &Expr,
         exports: &[AnalysedExport],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RibError> {
         let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, exports)?;
 
         Ok(WorkerNameCompiled {
@@ -259,7 +267,7 @@ impl IdempotencyKeyCompiled {
     pub fn from_idempotency_key(
         idempotency_key: &Expr,
         exports: &[AnalysedExport],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RibError> {
         let idempotency_key_compiled =
             DefaultWorkerServiceRibCompiler::compile(idempotency_key, exports)?;
 
@@ -267,6 +275,29 @@ impl IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
             compiled_idempotency_key: idempotency_key_compiled.byte_code,
             rib_input: idempotency_key_compiled.rib_input_type_info,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvocationContextCompiled {
+    pub invocation_context: Expr,
+    pub compiled_invocation_context: RibByteCode,
+    pub rib_input: RibInputTypeInfo,
+}
+
+impl InvocationContextCompiled {
+    pub fn from_invocation_context(
+        invocation_context: &Expr,
+        exports: &[AnalysedExport],
+    ) -> Result<Self, RibError> {
+        let invocation_context_compiled =
+            DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;
+
+        Ok(InvocationContextCompiled {
+            invocation_context: invocation_context.clone(),
+            compiled_invocation_context: invocation_context_compiled.byte_code,
+            rib_input: invocation_context_compiled.rib_input_type_info,
         })
     }
 }

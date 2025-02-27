@@ -19,6 +19,9 @@ use crate::workerctx::WorkerCtx;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::Stream;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
@@ -26,7 +29,9 @@ use golem_common::model::{
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
@@ -354,6 +359,133 @@ pub enum ReadFileResult {
     Ok(Pin<Box<dyn Stream<Item = Result<Bytes, GolemError>> + Send + 'static>>),
     NotFound,
     NotAFile,
+}
+
+pub struct InvocationContext {
+    pub trace_id: TraceId,
+    pub spans: HashMap<SpanId, Arc<InvocationContextSpan>>,
+    pub root: Arc<InvocationContextSpan>,
+    pub trace_states: Vec<String>,
+}
+
+impl InvocationContext {
+    pub fn new(trace_id: Option<TraceId>) -> Self {
+        let trace_id = trace_id.unwrap_or(TraceId::generate());
+        let root = InvocationContextSpan::new(None);
+        let mut spans = HashMap::new();
+        spans.insert(root.span_id().clone(), root.clone());
+        Self {
+            trace_id,
+            spans,
+            root,
+            trace_states: Vec::new(),
+        }
+    }
+
+    pub fn from_stack(value: InvocationContextStack) -> Result<(Self, SpanId), String> {
+        let root = value.spans.last().clone();
+        let current_span_id = value.spans.first().span_id().clone();
+
+        let mut spans = HashMap::new();
+        for span in value.spans {
+            spans.insert(span.span_id().clone(), span);
+        }
+
+        Ok((
+            Self {
+                trace_id: value.trace_id,
+                spans,
+                root,
+                trace_states: value.trace_states,
+            },
+            current_span_id,
+        ))
+    }
+
+    pub fn start_span(
+        &mut self,
+        current_span_id: &SpanId,
+        new_span_id: Option<SpanId>,
+    ) -> Result<Arc<InvocationContextSpan>, String> {
+        let current_span = self.span(current_span_id)?;
+        let span = current_span.start_span(new_span_id);
+        self.spans.insert(span.span_id().clone(), span.clone());
+        Ok(span)
+    }
+
+    pub fn finish_span(&mut self, span_id: &SpanId) -> Result<Option<SpanId>, String> {
+        let span = self.span(span_id)?;
+        let parent_id = span
+            .parent()
+            .as_ref()
+            .map(|parent| parent.span_id().clone());
+        self.spans.remove(span_id);
+        Ok(parent_id)
+    }
+
+    pub fn get_attribute(
+        &self,
+        span_id: &SpanId,
+        key: &str,
+        inherit: bool,
+    ) -> Result<Option<AttributeValue>, String> {
+        let span = self.span(span_id)?;
+        Ok(span.get_attribute(key, inherit))
+    }
+
+    pub fn get_attribute_chain(
+        &self,
+        span_id: &SpanId,
+        key: &str,
+    ) -> Result<Option<Vec<AttributeValue>>, String> {
+        let span = self.span(span_id)?;
+        Ok(span.get_attribute_chain(key))
+    }
+
+    pub fn get_attributes(
+        &self,
+        span_id: &SpanId,
+        inherit: bool,
+    ) -> Result<HashMap<String, Vec<AttributeValue>>, String> {
+        let span = self.span(span_id)?;
+        Ok(span.get_attributes(inherit))
+    }
+
+    pub fn set_attribute(
+        &self,
+        span_id: &SpanId,
+        key: String,
+        value: AttributeValue,
+    ) -> Result<(), String> {
+        let span = self.span(span_id)?;
+        span.set_attribute(key, value);
+        Ok(())
+    }
+
+    pub fn get_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        let mut result = Vec::new();
+        let mut current = self.span(current_span_id).unwrap();
+        loop {
+            result.push(current.clone());
+            match current.parent().as_ref() {
+                Some(parent) => {
+                    current = parent;
+                }
+                None => break,
+            }
+        }
+        InvocationContextStack {
+            trace_id: self.trace_id.clone(),
+            spans: NEVec::try_from_vec(result).unwrap(), // result is always non-empty
+            trace_states: self.trace_states.clone(),
+        }
+    }
+
+    fn span(&self, span_id: &SpanId) -> Result<&Arc<InvocationContextSpan>, String> {
+        self.spans
+            .get(span_id)
+            .ok_or_else(|| format!("Span {span_id} not found"))
+    }
 }
 
 #[cfg(test)]

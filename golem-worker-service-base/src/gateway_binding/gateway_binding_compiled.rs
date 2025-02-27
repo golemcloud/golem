@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::StaticBinding;
 use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
+use crate::gateway_binding::{InvocationContextCompiled, StaticBinding};
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType as ProtoGatewayBindingType;
 use golem_common::model::GatewayBindingType;
 use rib::RibOutputTypeInfo;
@@ -132,6 +132,9 @@ impl TryFrom<GatewayBindingCompiled>
                             )?,
                         ),
                         response_rib_output: None,
+                        invocation_context: None,
+                        compiled_invocation_context_expr: None,
+                        invocation_context_rib_input: None,
                     },
                 )
             }
@@ -194,6 +197,25 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     _ => None,
                 };
 
+                let invocation_context_compiled = match (
+                    value.invocation_context,
+                    value.compiled_invocation_context_expr,
+                    value.invocation_context_rib_input,
+                ) {
+                    (
+                        Some(invocation_context),
+                        Some(compiled_invocation_context),
+                        Some(rib_input),
+                    ) => Some(InvocationContextCompiled {
+                        invocation_context: rib::Expr::try_from(invocation_context)?,
+                        compiled_invocation_context: rib::RibByteCode::try_from(
+                            compiled_invocation_context,
+                        )?,
+                        rib_input: rib::RibInputTypeInfo::try_from(rib_input)?,
+                    }),
+                    _ => None,
+                };
+
                 let response_compiled = ResponseMappingCompiled {
                     response_mapping_expr: rib::Expr::try_from(
                         value.response.ok_or("Missing response for Worker")?,
@@ -226,6 +248,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         worker_name_compiled,
                         idempotency_key_compiled,
                         response_compiled,
+                        invocation_context_compiled,
                     }))
                 } else {
                     Ok(GatewayBindingCompiled::FileServer(WorkerBindingCompiled {
@@ -233,6 +256,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         worker_name_compiled,
                         idempotency_key_compiled,
                         response_compiled,
+                        invocation_context_compiled,
                     }))
                 }
             }
@@ -328,6 +352,16 @@ mod internal {
                 None => (None, None, None),
             };
 
+        let (invocation_context, compiled_invocation_context_expr, invocation_context_rib_input) =
+            match worker_binding.invocation_context_compiled {
+                Some(x) => (
+                    Some(x.invocation_context.into()),
+                    Some(x.compiled_invocation_context.try_into()?),
+                    Some(x.rib_input.into()),
+                ),
+                None => (None, None, None),
+            };
+
         let response = Some(
             worker_binding
                 .response_compiled
@@ -374,6 +408,9 @@ mod internal {
                 binding_type: Some(binding_type),
                 static_binding: None,
                 response_rib_output,
+                invocation_context,
+                compiled_invocation_context_expr,
+                invocation_context_rib_input,
             },
         )
     }
@@ -427,6 +464,9 @@ mod internal {
                 binding_type: Some(binding_type),
                 static_binding: None,
                 response_rib_output: None,
+                invocation_context: None,
+                compiled_invocation_context_expr: None,
+                invocation_context_rib_input: None,
             },
         )
     }

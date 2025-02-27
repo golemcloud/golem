@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::http::serialized::{SerializableHttpMethod, SerializableHttpRequest};
+use crate::durable_host::{
+    DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
+};
+use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan};
+use golem_common::model::oplog::DurableFunctionType;
+use golem_service_base::headers::TraceContextHeaders;
 use std::collections::HashMap;
+use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::types;
 use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
 use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::{HttpError, HttpResult};
-
-use golem_common::model::oplog::DurableFunctionType;
-
-use crate::durable_host::http::serialized::SerializableHttpRequest;
-use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
-};
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -44,6 +45,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await
             .map_err(|err| HttpError::trap(anyhow!(err)))?;
 
+        let span = self
+            .state
+            .invocation_context
+            .start_span(&self.state.current_span_id, None)
+            .map_err(|err| HttpError::trap(anyhow!(err)))?;
+
         let host_request = self.table().get(&request)?;
         let uri = format!(
             "{}{}",
@@ -54,7 +61,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .unwrap_or(&String::new())
         );
         let method = host_request.method.clone().into();
-        let headers: HashMap<String, String> = host_request
+
+        setup_outgoing_http_request_span(&span, &uri, &method);
+
+        let mut headers: HashMap<String, String> = host_request
             .headers
             .iter()
             .map(|(k, v)| {
@@ -65,12 +75,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect();
 
+        if self.state.forward_trace_context_headers {
+            let invocation_context = self.state.invocation_context.get_stack(span.span_id());
+            let trace_context_headers =
+                TraceContextHeaders::from_invocation_context(invocation_context);
+            for (key, value) in trace_context_headers.to_raw_headers_map() {
+                headers.insert(key, value);
+            }
+        }
+
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
         match &result {
             Ok(future_incoming_response) => {
                 // We have to call state.end_function to mark the completion of the remote write operation when we get a response.
                 // For that we need to store begin_index and associate it with the response handle.
+
                 let request = SerializableHttpRequest {
                     uri,
                     method,
@@ -85,6 +105,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
                         root_handle: handle,
                         request,
+                        span_id: span.span_id().clone(),
                     },
                 );
             }
@@ -101,4 +122,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         result
     }
+}
+
+fn setup_outgoing_http_request_span(
+    span: &Arc<InvocationContextSpan>,
+    uri: &str,
+    method: &SerializableHttpMethod,
+) {
+    span.set_attribute(
+        "name".to_string(),
+        AttributeValue::String("outgoing-http-request".to_string()),
+    );
+    span.set_attribute(
+        "request.uri".to_string(),
+        AttributeValue::String(uri.to_string()),
+    );
+    span.set_attribute(
+        "request.method".to_string(),
+        AttributeValue::String(method.to_string()),
+    );
 }

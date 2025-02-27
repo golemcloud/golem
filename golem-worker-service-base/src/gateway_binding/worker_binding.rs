@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{IdempotencyKeyCompiled, WorkerNameCompiled};
+use super::{IdempotencyKeyCompiled, InvocationContextCompiled, WorkerNameCompiled};
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
+use rib::{Expr, RibByteCode, RibError, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +26,7 @@ pub struct WorkerBinding {
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
     pub response_mapping: ResponseMapping,
+    pub invocation_context: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,13 +35,14 @@ pub struct WorkerBindingCompiled {
     pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
+    pub invocation_context_compiled: Option<InvocationContextCompiled>,
 }
 
 impl WorkerBindingCompiled {
     pub fn from_raw_worker_binding(
         gateway_worker_binding: &WorkerBinding,
         export_metadata: &[AnalysedExport],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RibError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
             .worker_name
             .clone()
@@ -60,12 +62,20 @@ impl WorkerBindingCompiled {
             &gateway_worker_binding.response_mapping,
             export_metadata,
         )?;
+        let invocation_context_compiled = match &gateway_worker_binding.invocation_context {
+            Some(invocation_context) => Some(InvocationContextCompiled::from_invocation_context(
+                invocation_context,
+                export_metadata,
+            )?),
+            None => None,
+        };
 
         Ok(WorkerBindingCompiled {
             component_id: gateway_worker_binding.component_id.clone(),
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
+            invocation_context_compiled,
         })
     }
 }
@@ -85,6 +95,9 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
             response_mapping: ResponseMapping(
                 worker_binding.response_compiled.response_mapping_expr,
             ),
+            invocation_context: worker_binding
+                .invocation_context_compiled
+                .map(|compiled| compiled.invocation_context),
         }
     }
 }
@@ -107,7 +120,7 @@ impl ResponseMappingCompiled {
     pub fn from_response_mapping(
         response_mapping: &ResponseMapping,
         exports: &[AnalysedExport],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RibError> {
         let response_compiled =
             DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, exports)?;
 

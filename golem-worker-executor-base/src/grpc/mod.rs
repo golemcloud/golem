@@ -726,7 +726,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let values = worker
-            .invoke_and_await(idempotency_key, full_function_name, function_input)
+            .invoke_and_await(
+                idempotency_key,
+                full_function_name,
+                function_input,
+                request.invocation_context(),
+            )
             .await?;
 
         Ok(values)
@@ -808,7 +813,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         worker
-            .invoke(idempotency_key, full_function_name, function_input)
+            .invoke(
+                idempotency_key,
+                full_function_name,
+                function_input,
+                request.invocation_context(),
+            )
             .await?;
 
         Ok(())

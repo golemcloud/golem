@@ -47,6 +47,7 @@ humantime-serde = { workspace = true }
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
+nonempty-collections = { workspace = true }
 poem = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
