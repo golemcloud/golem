@@ -1,0 +1,33 @@
+[package]
+name = "component-name"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[dependencies]
+chrono = "~0.4.26"
+once_cell = "~1.18.0"
+rand = "0.8.5"
+wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+
+[dependencies.uuid]
+version = "~1.4.0"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.dependencies]
+
+[package.metadata.component.target.dependencies]

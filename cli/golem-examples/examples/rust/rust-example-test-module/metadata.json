@@ -1,0 +1,7 @@
+{
+  "description": "A bare-bone Hello World app focusing on testability and project structure",
+  "requiresAdapter": false,
+  "exclude": [
+    "target"
+  ]
+}

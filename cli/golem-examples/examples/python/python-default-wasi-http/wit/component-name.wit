@@ -1,0 +1,12 @@
+package pack:name;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+// See https://github.com/WebAssembly/wasi-http for an introduction to wasi-http
+
+world component-name {
+  // Always required due to a limitation of the bindings generation in componentize-py.
+  // This import will fail if removed https://github.com/bytecodealliance/componentize-py/blob/c50822c825b4333ff41a0ea3cd9e0c9bc3df49da/bundled/poll_loop.py#L15
+  import wasi:http/outgoing-handler@0.2.0;
+
+  export wasi:http/incoming-handler@0.2.0;
+}

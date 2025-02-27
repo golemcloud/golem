@@ -1,0 +1,11 @@
+See the documentation about installing common tooling: https://learn.golem.cloud/docs/rust-language-guide/setup
+
+Compile the Rust component with golem-cli:
+  golem-cli app build
+
+The result component in target/golem-components/debug/component_name.wasm is ready to be used with Golem!
+
+For compiling with the release build profile, use:
+  golem-cli app -b release build
+
+The result release component in target/golem-components/debug/component_name.wasm is ready to be used with Golem!

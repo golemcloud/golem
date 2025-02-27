@@ -1,0 +1,8 @@
+{
+  "description": "A simple stateful Golem worker written in Zig with no dependencies on external services",
+  "requiresAdapter": true,
+  "exclude": [
+    "zig-cache",
+    "zig-out"
+  ]
+}

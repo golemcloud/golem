@@ -9,6 +9,7 @@
 # - `cargo make unit-tests`: runs all unit tests
 # - `cargo make integrations-tests`: runs all integrations tests
 # - `cargo make stubgen-integrations-tests`: runs stubgen integrations tests only
+# - `cargo make template-integration-tests`: runs template tests only
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make desktop`: builds the desktop application
 # - `cargo make dev-desktop`: run the desktop application
@@ -115,6 +116,15 @@ install_crate = "clippy"
 command = "cargo"
 args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "--no-deps", "-Dwarnings"]
 
+## ** INSTALL **
+[tasks.install-golem-cli-non-ci]
+condition = { env_not_set = ["CI"] } # on CI we install from target
+description = "Install golem-cli"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path golem-cli --bin golem-cli
+'''
+
 ## ** TEST **
 [tasks.test]
 dependencies = ["unit-tests", "integration-tests"]
@@ -128,16 +138,25 @@ exec --fail-on-error cargo test --workspace --lib --all-features -- --nocapture 
 
 [tasks.integration-tests]
 description = "Run integration tests"
-dependencies = ["stubgen-integration-tests"]
+dependencies = ["stubgen-integration-tests", "template-integration-tests"]
 
 [tasks.stubgen-integration-tests]
 description = "Run stubgen integration tests"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag: --tests -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag:uses_cargo --tests -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
+[tasks.template-integration-tests]
+dependencies = ["install-golem-cli-non-ci"]
+description = "Run template integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-examples --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+## ** DESKTOP APP **
 [tasks.desktop]
 description = "Builds the desktop application"
 dependencies = ["npm-install"]

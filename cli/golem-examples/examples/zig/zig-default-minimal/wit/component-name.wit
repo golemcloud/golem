@@ -1,0 +1,10 @@
+package pack:name;
+
+interface api {
+  add: func(value: u64);
+  get: func() -> u64;
+}
+
+world component-name {
+  export api;
+}

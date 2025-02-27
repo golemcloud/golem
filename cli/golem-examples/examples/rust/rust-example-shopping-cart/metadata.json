@@ -1,0 +1,8 @@
+{
+  "description": "A stateful Golem worker representing a shopping cart, implemented in Rust",
+  "requiresAdapter": false,
+  "requiresGolemHostWIT": false,
+  "exclude": [
+    "target"
+  ]
+}

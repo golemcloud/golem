@@ -1,0 +1,12 @@
+See the documentation about installing tooling: https://learn.golem.cloud/docs/go-language-guide/setup
+
+Generate bindings from WIT:
+  wit-bindgen tiny-go --out-dir component_name ./wit
+Compile the Go code with TinyGo:
+  tinygo build -target=wasi -tags=purego -o component_name.module.wasm main.go
+Convert the result into a Component:
+  wasm-tools component embed ./wit component_name.module.wasm --output component_name.embed.wasm
+  wasm-tools component new component_name.embed.wasm -o component_name.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
+
+A Makefile is provided to automate the process:
+  make build

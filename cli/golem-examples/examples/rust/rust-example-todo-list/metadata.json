@@ -1,0 +1,8 @@
+{
+  "description": "A stateful Golem worker implemented in Rust, representing a to-do list",
+  "requiresAdapter": false,
+  "requiresGolemHostWIT": false,
+  "exclude": [
+    "target"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "description": "A stateful Golem worker written in Rust, capable of calling HTTP endpoints and using the Golem runtime APIs",
+  "requiresAdapter": false,
+  "requiresGolemHostWIT": false,
+  "requiresWASI": false,
+  "instructions": "INSTRUCTIONS-app",
+  "exclude": ["target", "src/binding"]
+}

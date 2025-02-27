@@ -1,0 +1,11 @@
+package pack:name;
+
+interface api {
+
+  hello: func() -> string;
+
+}
+
+world component-name {
+  export api;
+}

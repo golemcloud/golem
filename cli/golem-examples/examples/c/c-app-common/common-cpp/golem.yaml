@@ -1,0 +1,85 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+templates:
+  cpp:
+    profiles:
+      debug:
+        build:
+          - command: wit-bindgen c --autodrop-borrows yes --out-dir binding ./wit-generated
+            rmdirs:
+            - binding
+            mkdirs:
+            - binding
+            sources:
+            - wit-generated
+            targets:
+            - binding
+          - command: cmake -S . -B ../../golem-temp/cpp/cmake-build-debug/{{ component_name | to_snake_case }} -DCMAKE_BUILD_TYPE=Debug
+            rmdirs:
+            - ../../golem-temp/cpp/cmake-build-debug/{{ component_name | to_snake_case }}
+            sources:
+            - CMakeLists.txt
+            - ../../common-cpp
+            targets:
+            - ../../golem-temp/cpp/cmake-build-debug/{{ component_name | to_snake_case }}/CMakeCache.txt
+          - command: cmake --build ../../golem-temp/cpp/cmake-build-debug/{{ component_name | to_snake_case }}
+            sources:
+            - include
+            - src
+            - ../../common-cpp
+            targets:
+            - ../../golem-temp/cpp/cmake-build-debug/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm
+          - command: wasm-tools component new ../../golem-temp/cpp/cmake-build-debug/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm -o ../../golem-temp/cpp/adapted-components-debug/{{ component_name | to_snake_case }}.wasm --adapt ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
+            mkdirs:
+            - ../../golem-temp/cpp/adapted-components-debug
+            sources:
+            - ../../golem-temp/cpp/cmake-build-debug/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm
+            - ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
+            targets:
+            - ../../golem-temp/cpp/adapted-components-debug/{{ component_name | to_snake_case }}.wasm
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../golem-temp/cpp/adapted-components-debug/{{ component_name | to_snake_case }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
+      release:
+        build:
+          - command: wit-bindgen c --autodrop-borrows yes --out-dir binding ./wit-generated
+            rmdirs:
+              - binding
+            mkdirs:
+              - binding
+            sources:
+              - wit-generated
+            targets:
+              - binding
+          - command: cmake -S . -B ../../golem-temp/cpp/cmake-build-release/{{ component_name | to_snake_case }} -DCMAKE_BUILD_TYPE=Release
+            rmdirs:
+              - ../../golem-temp/cpp/cmake-build-release/{{ component_name | to_snake_case }}
+            sources:
+              - CMakeLists.txt
+              - ../../common-cpp
+            targets:
+              - ../../golem-temp/cpp/cmake-build-release/{{ component_name | to_snake_case }}/CMakeCache.txt
+          - command: cmake --build ../../golem-temp/cpp/cmake-build-release/{{ component_name | to_snake_case }}
+            sources:
+              - include
+              - src
+              - ../../common-cpp
+            targets:
+              - ../../golem-temp/cpp/cmake-build-release/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm
+          - command: wasm-tools component new ../../golem-temp/cpp/cmake-build-release/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm -o ../../golem-temp/cpp/adapted-components-release/{{ component_name | to_snake_case }}.wasm --adapt ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
+            mkdirs:
+              - ../../golem-temp/cpp/adapted-components-release
+            sources:
+              - ../../golem-temp/cpp/cmake-build-release/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm
+              - ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
+            targets:
+              - ../../golem-temp/cpp/adapted-components-release/{{ component_name | to_snake_case }}.wasm
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../golem-temp/cpp/adapted-components-release/{{ component_name | to_snake_case }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
+    defaultProfile: debug

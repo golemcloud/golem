@@ -1,0 +1,30 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+tempDir: build/golem-temp
+components:
+  pack:name:
+    sourceWit: wit
+    generatedWit: wit-generated
+    componentWasm: build/components/component_name.wasm
+    linkedWasm: build/linked-components/component_name_linked.wasm
+    build:
+    - command: componentize-py bindings bindings
+      rmdirs:
+      - bindings
+      sources:
+      - wit-generated
+      targets:
+      - bindings
+    - command: componentize-py componentize main -o build/components/component_name.wasm
+      mkdirs:
+      - build/components
+      sources:
+      - bindings
+      - main.py
+      targets:
+      - build/components/component_name.wasm
+    clean:
+    - bindings

@@ -1,0 +1,4 @@
+bindings
+component_name.wasm
+wit-generated
+__pycache__

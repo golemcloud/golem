@@ -38,10 +38,29 @@ jobs:
     - uses: cargo-bins/cargo-binstall@main
     - name: Install cargo-component
       run: cargo binstall --no-confirm cargo-component@0.20.0
+    - name: Install wasm-tools
+      run: cargo binstall --force --locked wasm-tools@1.223.0
+    - name: Install wit-bindgen
+      run: cargo binstall --force --locked wit-bindgen-cli@0.37.0
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Install componentize-py
+      run: pip install componentize-py==0.16.0
+    - name: Install WASI SDK
+      run: |
+        WASI_VERSION=25
+        WASI_SDK_PATH=/opt/wasi-sdk
+        wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/wasi-sdk-${WASI_VERSION}.0-x86_64-linux.tar.gz
+        tar -xvf wasi-sdk-${WASI_VERSION}.0-x86_64-linux.tar.gz
+        sudo mv wasi-sdk-${WASI_VERSION}.0-x86_64-linux ${WASI_SDK_PATH}
+        echo "WASI_SDK_PATH=${WASI_SDK_PATH}" >> $GITHUB_ENV
+    - uses: mlugg/setup-zig@v1
+    - uses: actions/setup-go@v5.3.0
+    - uses: acifani/setup-tinygo@v2.0.0
+      with:
+        tinygo-version: '0.35.0'
     - uses: Swatinem/rust-cache@v2
       with:
         shared-key: debug
@@ -49,6 +68,10 @@ jobs:
         save-if: true
     - name: Build all targets
       run: cargo make --profile ci build
+    - name: Install and setup golem-cli
+      run: |
+        mv target/debug/golem-cli /usr/local/bin
+        golem-cli profile add --set-active --component-url http://localhost:9881/ default
     - name: Unit tests
       run: cargo make --profile ci unit-tests
     - name: Integration tests
@@ -56,7 +79,7 @@ jobs:
     - name: Check formatting and clippy rules
       run: cargo make --profile ci check
     - name: Publish Test Report
-      uses: mikepenz/action-junit-report@v4
+      uses: mikepenz/action-junit-report@v5
       if: always()
       with:
         report_paths: '**/target/report-*.xml'

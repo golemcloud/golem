@@ -1,0 +1,13 @@
+{
+  "description": "A Golem worker implementing wasi:http/incoming-handler. For use with the http-handler api gateway binding type",
+  "requiresAdapter": false,
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "instructions": "INSTRUCTIONS",
+  "exclude": [
+    "component_name.wasm",
+    "bindings",
+    "wit-generated  ",
+    "__pycache__"
+  ]
+}

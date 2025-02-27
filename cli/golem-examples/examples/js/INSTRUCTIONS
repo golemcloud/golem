@@ -1,0 +1,18 @@
+See the documentation about installing tooling: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/setup
+
+Compile the JavaScript project with npm:
+  npm install
+  npm run componentize
+
+The `out/component_name.wasm` file is ready to be uploaded to Golem Cloud!
+
+Other available npm scripts:
+
+- Bundle the JavaScript sources:
+  npm run build
+
+- Clean the project:
+  npm run clean
+
+- Componentizing (includes the bundle step too):
+  npm run componentize

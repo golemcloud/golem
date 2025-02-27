@@ -1,0 +1,13 @@
+{
+  "description": "A stateful Golem worker having full access to the WASI and Golem APIs",
+  "requiresAdapter": true,
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "exclude": [
+    "component_name/component_name.c",
+    "component_name/component_name.h",
+    "component_name/component_name_component_type.o",
+    "component_name.module.wasm",
+    "component_name.wasm"
+  ]
+}

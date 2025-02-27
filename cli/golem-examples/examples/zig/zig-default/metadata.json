@@ -1,0 +1,10 @@
+{
+  "description": "A stateful Golem worker written in Zig with full access to WASI and the Golem runtime APIs",
+  "requiresAdapter": true,
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "exclude": [
+    "zig-cache",
+    "zig-out"
+  ]
+}

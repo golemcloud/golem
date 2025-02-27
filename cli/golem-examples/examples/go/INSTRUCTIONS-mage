@@ -1,0 +1,14 @@
+See the documentation about installing tooling: https://learn.golem.cloud/docs/go-language-guide/setup
+and see more details in the README.md file about other commands.
+
+Before first time build, generate RPC stubs:
+  go run mage.go updateRpcStubs
+
+Generate bindings, compile and compose components:
+  go run mage.go build
+
+Deploy components to default profile:
+  go run mage.go deploy
+
+Test the deployed components:
+  go run mage.go testIntegration

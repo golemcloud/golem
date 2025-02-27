@@ -1,0 +1,12 @@
+{
+  "description": "Composable App Common template for CPP",
+  "appCommonGroup": "default",
+  "appCommonSkipIfExists": "common-cpp/golem.yaml",
+  "adapterTarget": "common-adapters",
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "witDepsPaths": [
+    "common-wit-deps"
+  ],
+  "transform": false
+}

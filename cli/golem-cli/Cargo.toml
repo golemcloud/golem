@@ -23,12 +23,12 @@ harness = false
 
 [dependencies]
 # Workspace deps
+golem-examples = { path = "../golem-examples", version = "=0.0.0" }
 golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "=0.0.0" }
 
 # Golem deps
 golem-client = { workspace = true }
 golem-common = { workspace = true }
-golem-examples = { workspace = true }
 golem-rib = { workspace = true }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }

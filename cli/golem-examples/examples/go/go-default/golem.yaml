@@ -1,0 +1,49 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+tempDir: build/golem-temp
+components:
+  pack:name:
+    sourceWit: wit
+    generatedWit: wit-generated
+    componentWasm: build/adapted-components/component_name.wasm
+    linkedWasm: build/linked-components/component_name_linked.wasm
+    build:
+    - command: wit-bindgen tiny-go --rename-package binding --out-dir binding ./wit-generated
+      rmdirs:
+      - binding
+      mkdirs:
+      - binding
+      sources:
+      - wit-generated
+      targets:
+      - binding
+    - command: tinygo build -target=wasi -tags=purego -o build/components/component_name.wasm main.go
+      mkdirs:
+      - build/components
+      sources:
+      - component_name
+      - main.go
+      targets:
+      - build/components/component_name.wasm
+    - command: wasm-tools component embed wit-generated build/components/component_name.wasm --output build/embedded-components/component_name.wasm
+      mkdirs:
+      - build/embedded-components
+      sources:
+      - wit-generated
+      - build/components/component_name.wasm
+      targets:
+      - build/embedded-components/component_name.wasm
+    - command: wasm-tools component new build/embedded-components/component_name.wasm -o build/adapted-components/component_name.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
+      mkdirs:
+      - build/adapted-components
+      sources:
+        - adapters/tier1/wasi_snapshot_preview1.wasm
+        - build/embedded-components/component_name.wasm
+      targets:
+        - build/adapted-components/component_name.wasm
+    clean:
+      - build
+      - binding

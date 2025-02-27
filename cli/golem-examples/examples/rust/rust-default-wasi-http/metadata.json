@@ -1,0 +1,8 @@
+{
+  "description": "A Golem worker written in Rust that implements wasi:http/incoming-handler. For use with the http-handler gateway binding.",
+  "requiresAdapter": false,
+  "requiresWASI": true,
+  "exclude": [
+    "target"
+  ]
+}

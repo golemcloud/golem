@@ -1,0 +1,9 @@
+{
+  "description": "A simple stateful Golem worker written in Python with no dependencies on external services",
+  "requiresAdapter": false,
+  "exclude": [
+    "component_name.wasm",
+    "bindings",
+    "__pycache__"
+  ]
+}
