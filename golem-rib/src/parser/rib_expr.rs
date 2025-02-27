@@ -71,31 +71,6 @@ where
                                     BinaryOp::Divide => Expr::divide(acc, next),
                                 })
                             }
-                            MathOrRange::Fraction(fraction) => match fraction {
-                                Expr::Number {
-                                    number: fraction, type_annotation, inferred_type, ..
-                                } => match expr {
-                                    Expr::Number { number, .. } => {
-                                        let lhs = number.value;
-                                        let rhs = fraction.value;
-                                        let with_fraction = format!("{}.{}", lhs, rhs);
-                                        let big_decimal =
-                                            BigDecimal::from_str(with_fraction.as_str()).unwrap();
-                                        return Expr::number(
-                                            big_decimal,
-                                            type_annotation,
-                                            inferred_type
-                                        );
-                                    }
-                                    _ => {
-                                        panic!("Fraction should be used with a number")
-                                    }
-                                },
-
-                                _ => {
-                                    panic!("Fraction should be a number")
-                                }
-                            },
                             MathOrRange::Range((range_type, opt)) => match range_type {
                                 RangeType::Inclusive => match opt {
                                     Some(rhs) => Expr::range_inclusive(expr, rhs),
@@ -149,12 +124,12 @@ mod internal {
     use crate::parser::select_index::select_index;
     use crate::parser::sequence::sequence;
     use crate::parser::tuple::tuple;
+    use crate::parser::type_name::parse_basic_type;
     use crate::parser::worker_function_invoke::worker_function_invoke;
     use crate::rib_source_span::GetSourcePosition;
     use crate::{Expr, InferredType, TypeName};
     use combine::parser::char::{char, digit, spaces};
     use combine::{attempt, choice, many, many1, optional, parser, ParseError, Parser, Stream};
-    use crate::parser::type_name::parse_basic_type;
 
     // A simple expression is a composition of all parsers that doesn't involve left recursion
     pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
@@ -201,7 +176,6 @@ mod internal {
     pub(crate) enum MathOrRange {
         BinaryMath(Vec<(BinaryOp, Expr)>),
         Range((RangeType, Option<Expr>)),
-        Fraction(Expr),
     }
 
     pub fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = MathOrRange>
@@ -218,35 +192,6 @@ mod internal {
                 None => MathOrRange::Range((range_type, None)),
             }),
         )
-        .or((
-            char('.'),
-            many1(digit()),
-            optional(
-                // To keep backward compatibility
-                choice!(
-                    attempt(parse_basic_type()),
-                    attempt(
-                        char(':')
-                            .skip(spaces())
-                            .with(parse_basic_type())
-                            .skip(spaces()),
-                    )
-                ),
-            ),
-        )
-            .map(|(_, digits, type_name): (_, Vec<char>, Option<TypeName>)| {
-                let fraction = digits.into_iter().collect::<String>();
-                let big_decimal = BigDecimal::from_str(fraction.as_str()).unwrap();
-
-                let fraction = match type_name {
-                    Some(typ_name) => {
-                        Expr::untyped_number_with_type_name(big_decimal, typ_name.clone())
-                    }
-                    None => Expr::untyped_number(big_decimal),
-                };
-
-                MathOrRange::Fraction(fraction)
-            }))
         .or(many((binary_op(), simple_expr()))
             .map(|binary_op_with_expr| MathOrRange::BinaryMath(binary_op_with_expr)))
     }

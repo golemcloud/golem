@@ -79,7 +79,6 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
 
-
             outer_expr @ Expr::SelectField {
                 expr,
                 field,

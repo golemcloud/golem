@@ -2369,9 +2369,9 @@ mod interpreter_tests {
     }
 
     mod range_tests {
-        use test_r::test;
-        use crate::{compile, Expr};
         use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compile, Expr};
+        use test_r::test;
 
         #[test]
         async fn test_range() {
@@ -2393,7 +2393,6 @@ mod interpreter_tests {
             dbg!(result);
 
             assert!(false)
-
         }
     }
 

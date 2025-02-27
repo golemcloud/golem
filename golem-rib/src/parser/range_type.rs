@@ -23,7 +23,7 @@ pub enum RangeType {
     Inclusive,
     Exclusive,
 }
-pub fn range_type<Input>() -> impl Parser<Input, Output =RangeType>
+pub fn range_type<Input>() -> impl Parser<Input, Output = RangeType>
 where
     Input: Stream<Token = char>,
     RibParseError: Into<
@@ -31,18 +31,11 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    (
-        string(".."),
-        optional(string("=").skip(spaces())),
-    )
-        .map(
-            |(_,  d): (_, Option<_>)| match d {
-                Some(_) => RangeType::Inclusive,
-                None => RangeType::Exclusive,
-            },
-        )
+    (string(".."), optional(string("=").skip(spaces()))).map(|(_, d): (_, Option<_>)| match d {
+        Some(_) => RangeType::Inclusive,
+        None => RangeType::Exclusive,
+    })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -56,7 +49,6 @@ mod tests {
         let range1 = "1..2"; // no spaces on both ends
 
         let result1 = Expr::from_text(range1).unwrap();
-
 
         assert_eq!(
             result1,
