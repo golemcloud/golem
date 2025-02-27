@@ -13,123 +13,42 @@
 // limitations under the License.
 
 use combine::parser::char::{char as char_, spaces, string};
-use combine::{attempt, optional, parser, ParseError, Parser, Stream};
+use combine::{optional, ParseError, Parser, Stream};
 
-use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::identifier::identifier;
-use crate::parser::select_field::select_field;
-use crate::parser::select_index::select_index;
 use crate::rib_source_span::GetSourcePosition;
 
-
-parser! {
-    pub fn select_index_0[Input]()(Input) -> Expr
-    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
-    {
-        select_index()
-    }
+// This is range avoiding left recursion
+pub enum RangeType {
+    Inclusive,
+    Exclusive,
 }
-
-
-pub fn range<Input>() -> impl Parser<Input, Output = Expr>
+pub fn range_type<Input>() -> impl Parser<Input, Output =RangeType>
 where
-    Input: combine::Stream<Token = char>,
+    Input: Stream<Token = char>,
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
     Input::Position: GetSourcePosition,
 {
     (
-        // Following the range syntax with semantics of rust
-        // Allows space on either side of the dots, but not in between dots (or . and .=)
-        optional(
-            attempt(select_field())
-                .or(attempt(select_index_0()))
-                .or(identifier())
-                .or(internal::pos_num())
-                .skip(spaces()),
-        ),
         char_('.'),
         char_('.'),
-        optional(
-            (
-                string("=").skip(spaces()),
-                identifier().or(internal::pos_num()).skip(spaces()),
-            )
-                .map(|(_, expr)| internal::RightSide::RightInclusiveExpr { expr })
-                .or(spaces()
-                    .with(identifier().or(internal::pos_num()).skip(spaces()))
-                    .map(|expr| internal::RightSide::RightExpr { expr })),
-        ),
+        optional(string("=").skip(spaces())),
     )
         .map(
-            |(a, _, _, d): (Option<Expr>, _, _, Option<internal::RightSide>)| match (a, d) {
-                (Some(left_side), Some(right_side)) => match right_side {
-                    internal::RightSide::RightInclusiveExpr { expr: right_side } => {
-                        Expr::range_inclusive(left_side, right_side)
-                    }
-                    internal::RightSide::RightExpr { expr: right_side } => {
-                        Expr::range(left_side, right_side)
-                    }
-                },
-
-                (Some(left_side), None) => Expr::range_from(left_side),
-
-                (None, Some(right_side)) => match right_side {
-                    internal::RightSide::RightInclusiveExpr { expr: right_side } => {
-                        Expr::range_to_inclusive(right_side)
-                    }
-                    internal::RightSide::RightExpr { expr: right_side } => {
-                        Expr::range_to(right_side)
-                    }
-                },
-
-                (None, None) => Expr::range_full(),
+            |(_, _, d): (_, _, Option<_>)| match d {
+                Some(_) => RangeType::Inclusive,
+                None => RangeType::Exclusive,
             },
         )
 }
 
-mod internal {
-    use crate::parser::RibParseError;
-    use crate::rib_source_span::GetSourcePosition;
-    use crate::{Expr, InferredType};
-    use bigdecimal::{BigDecimal, FromPrimitive};
-    use combine::parser::char::digit;
-    use combine::{many1, ParseError, Parser};
-
-    pub(crate) enum RightSide {
-        RightInclusiveExpr { expr: Expr },
-        RightExpr { expr: Expr },
-    }
-
-    pub(crate) fn pos_num<Input>() -> impl Parser<Input, Output = Expr>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-        Input::Position: GetSourcePosition,
-    {
-        many1(digit()).and_then(|s: String| match s {
-            s if s.len() > 0 => s
-                .parse::<u64>()
-                .map(|num: u64| {
-                    Expr::number(BigDecimal::from_u64(num).unwrap(), None, InferredType::U64)
-                })
-                .map_err(|_| RibParseError::Message("Unable to parse number".to_string())),
-            _ => Err(RibParseError::Message("Unable to parse number".to_string())),
-        })
-    }
-}
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::range::range;
-    use crate::{Expr, InferredType, Range};
+    use crate::{Expr, InferredType};
     use bigdecimal::FromPrimitive;
-    use combine::stream::position;
-    use combine::EasyParser;
     use test_r::test;
 
     #[test]
@@ -141,11 +60,11 @@ mod tests {
         let range4 = "1.. 2"; // space on right
         let invalid_range = "1. .2";
 
-        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
-        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
-        let result3 = range().easy_parse(position::Stream::new(range3)).unwrap().0;
-        let result4 = range().easy_parse(position::Stream::new(range4)).unwrap().0;
-        let result5 = range().easy_parse(position::Stream::new(invalid_range));
+        let result1 = Expr::from_text(range1).unwrap();
+        let result2 = Expr::from_text(range2).unwrap();
+        let result3 = Expr::from_text(range3).unwrap();
+        let result4 = Expr::from_text(range4).unwrap();
+        let result5 = Expr::from_text(invalid_range);
 
         assert!(result1 == result2 && result2 == result3 && result3 == result4);
         assert!(result5.is_err());
@@ -176,11 +95,11 @@ mod tests {
         let range4 = "1..=   2"; // space on right
         let invalid_range = "1.. =2";
 
-        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
-        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
-        let result3 = range().easy_parse(position::Stream::new(range3)).unwrap().0;
-        let result4 = range().easy_parse(position::Stream::new(range4)).unwrap().0;
-        let result5 = range().easy_parse(position::Stream::new(invalid_range));
+        let result1 = Expr::from_text(range1).unwrap();
+        let result2 = Expr::from_text(range2).unwrap();
+        let result3 = Expr::from_text(range3).unwrap();
+        let result4 = Expr::from_text(range4).unwrap();
+        let result5 = Expr::from_text(invalid_range);
 
         assert!(result1 == result2 && result2 == result3 && result3 == result4);
         assert!(result5.is_err());
@@ -207,8 +126,8 @@ mod tests {
         let range1 = "1.."; // no spaces on both ends
         let range2 = "1 .."; // space on both end
 
-        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
-        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
+        let result1 = Expr::from_text(range1).unwrap();
+        let result2 = Expr::from_text(range2).unwrap();
 
         assert_eq!(result1, result2);
 
@@ -228,8 +147,8 @@ mod tests {
         let range1 = "..2"; // no spaces on both ends
         let range2 = ".. 2"; // space on both end
 
-        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
-        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
+        let result1 = Expr::from_text(range1).unwrap();
+        let result2 = Expr::from_text(range2).unwrap();
 
         assert_eq!(
             result1,
@@ -248,9 +167,9 @@ mod tests {
         let range2 = "..= 2";
         let invalid = ".. =2";
 
-        let result1 = range().easy_parse(position::Stream::new(range1)).unwrap().0;
-        let result2 = range().easy_parse(position::Stream::new(range2)).unwrap().0;
-        let result3 = range().easy_parse(position::Stream::new(invalid));
+        let result1 = Expr::from_text(range1).unwrap();
+        let result2 = Expr::from_text(range2).unwrap();
+        let result3 = Expr::from_text(invalid);
 
         assert_eq!(result1, result2);
         assert!(result3.is_err());

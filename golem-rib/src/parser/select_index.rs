@@ -33,7 +33,7 @@ where
 {
     spaces().with(
         (
-            base_expr().skip(spaces()),
+            sequence_base_expr().skip(spaces()),
             char_('[').skip(spaces()),
             pos_num().skip(spaces()),
             char_(']').skip(spaces()),
@@ -106,7 +106,7 @@ mod internal {
         })
     }
 
-    pub(crate) fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
+    pub(crate) fn sequence_base_expr<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
         RibParseError: Into<
