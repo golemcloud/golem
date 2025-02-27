@@ -91,6 +91,7 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 }
             }
 
+
             Expr::Result {
                 expr,
                 type_annotation,
@@ -121,6 +122,7 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                     queue.push_back(expr);
                 }
             }
+
 
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }

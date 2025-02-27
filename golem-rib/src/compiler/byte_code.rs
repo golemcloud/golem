@@ -597,28 +597,12 @@ mod internal {
                 )
             }
 
-            Expr::Range { range, inferred_type , ..} => {
+            range_expr @ Expr::Range { range, inferred_type , ..} => {
                 match inferred_type {
-                    InferredType::Range { from, to } => {
-                        let analysed_type_from = convert_to_analysed_type(expr, from).map_err(|e| {
-                            format!(
-                                "Invalid Rib {}. Error converting {:?} to AnalysedType: {:?}",
-                                expr, from, e
-                            )
-                        })?;
+                    InferredType::Range { .. } => {
+                        let analysed_type = convert_to_analysed_type(range_expr, inferred_type)?;
 
-                        let analysed_type_to = match to {
-                            Some(to) => Some(convert_to_analysed_type(expr, to).map_err(|e| {
-                                format!(
-                                    "Invalid Rib {}. Error converting {:?} to AnalysedType: {:?}",
-                                    expr, to, e
-                                )
-                            })?),
-                            None => None
-                        };
-
-
-                        handle_range(range, stack, analysed_type_from, analysed_type_to, instructions);
+                        handle_range(range, stack, analysed_type, instructions);
                     }
 
                     _ => {
@@ -689,23 +673,9 @@ mod internal {
     fn handle_range(
         range: &Range,
         stack: &mut Vec<ExprState>,
-        from_analysed_type: AnalysedType,
-        to_analysed_type: Option<AnalysedType>,
+        analysed_type: AnalysedType,
         instructions: &mut Vec<RibIR>,
     ) {
-        let analysed_type = match (from_analysed_type, to_analysed_type) {
-            (from_type, Some(to_type)) => record(vec![
-                field("from", option(from_type)),
-                field("to", option(to_type)),
-                field("inclusive", bool()),
-            ]),
-
-
-            (from_type, None) => record(vec![
-                field("from", option(from_type)),
-                field("inclusive", bool()),
-            ]),
-        };
 
         let from = range.from();
         let to = range.to();
@@ -1102,8 +1072,6 @@ mod compiler_tests {
         let expected_instructions = RibByteCode {
             instructions: instruction_set,
         };
-
-        dbg!(expected_instructions.clone());
 
         assert!(false);
 

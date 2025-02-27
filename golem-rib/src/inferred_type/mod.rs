@@ -81,6 +81,12 @@ pub enum InferredNumber {
     F64,
 }
 
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct RangeType {
+    from: Box<InferredType>,
+    to: Option<Box<InferredType>>,
+}
+
 impl Display for InferredNumber {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let type_name = TypeName::from(self);
@@ -500,8 +506,23 @@ impl TryFrom<InferredType> for AnalysedType {
             InferredType::Sequence(_) => {
                 Err("Cannot convert function return sequence type to analysed type".to_string())
             }
-            InferredType::Range { .. } => {
-                Err("Cannot convert range type to analysed type".to_string())
+            InferredType::Range { from, to } => {
+                let from: AnalysedType = (*from).try_into()?;
+                let to: Option<AnalysedType> = to.map(|t| (*t).try_into()).transpose()?;
+                let analysed_type = match (from, to) {
+                    (from_type, Some(to_type)) => record(vec![
+                        field("from", option(from_type)),
+                        field("to", option(to_type)),
+                        field("inclusive", bool()),
+                    ]),
+
+
+                    (from_type, None) => record(vec![
+                        field("from", option(from_type)),
+                        field("inclusive", bool()),
+                    ]),
+                };
+                Ok(analysed_type)
             }
         }
     }

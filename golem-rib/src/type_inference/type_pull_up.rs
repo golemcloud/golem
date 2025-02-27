@@ -48,6 +48,7 @@ use std::collections::VecDeque;
 //
 // At the end of this process, each expression has an assigned
 // inferred type, created by traversing in a queue and stack order.
+
 pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
@@ -1066,8 +1067,13 @@ mod internal {
                 let left = inferred_type_stack
                     .pop_front()
                     .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: Some(Box::new(right.inferred_type())),
+                };
                 let new_range = Expr::range(left, right)
-                    .with_inferred_type(inferred_type)
+                    .with_inferred_type(new_inferred_type)
                     .with_source_span(source_span.clone());
 
                 inferred_type_stack.push_front(new_range);
@@ -1079,8 +1085,14 @@ mod internal {
                 let left = inferred_type_stack
                     .pop_front()
                     .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: Some(Box::new(right.inferred_type())),
+                };
+
                 let new_range = Expr::range_inclusive(left, right)
-                    .with_inferred_type(inferred_type)
+                    .with_inferred_type(new_inferred_type)
                     .with_source_span(source_span.clone());
 
                 inferred_type_stack.push_front(new_range);
@@ -1089,8 +1101,14 @@ mod internal {
                 let left = inferred_type_stack
                     .pop_front()
                     .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: None,
+                };
+
                 let new_range = Expr::range_from(left)
-                    .with_inferred_type(inferred_type)
+                    .with_inferred_type(new_inferred_type)
                     .with_source_span(source_span.clone());
 
                 inferred_type_stack.push_front(new_range);

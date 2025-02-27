@@ -21,6 +21,7 @@ use golem_wasm_ast::analysis::{
     TypeU32, TypeU64, TypeU8, TypeVariant,
 };
 use serde::{Deserialize, Serialize};
+use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum AnalysedTypeWithUnit {
@@ -66,8 +67,23 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             InferredType::Instance { .. } => {
                 Err("Cannot convert Instance type to AnalysedType".to_string())
             }
-            InferredType::Range {..} => {
-                Err("Cannot convert Range type to AnalysedType".to_string())
+            InferredType::Range {from, to} => {
+                let from: AnalysedType = AnalysedType::try_from(from.as_ref())?;
+                let to: Option<AnalysedType> = to.as_ref().map(|t| AnalysedType::try_from(t.as_ref())).transpose()?;
+                let analysed_type = match (from, to) {
+                    (from_type, Some(to_type)) => record(vec![
+                        field("from", option(from_type)),
+                        field("to", option(to_type)),
+                        field("inclusive", bool()),
+                    ]),
+
+
+                    (from_type, None) => record(vec![
+                        field("from", option(from_type)),
+                        field("inclusive", bool()),
+                    ]),
+                };
+                Ok(AnalysedTypeWithUnit::analysed_type(analysed_type))
             }
             InferredType::Bool => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Bool(
                 TypeBool,

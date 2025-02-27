@@ -2390,8 +2390,6 @@ mod interpreter_tests {
 
             let compiled = compile(&expr, &vec![]).unwrap();
 
-            dbg!(compiled.byte_code.clone());
-
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2424,11 +2422,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            dbg!(expr.clone());
-
             let compiled = compile(&expr, &vec![]).unwrap();
-
-            dbg!(compiled.byte_code.clone());
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2455,17 +2449,13 @@ mod interpreter_tests {
         #[test]
         async fn test_range_returns_3() {
             let expr = r#"
-              let x = 1:u64..=2:u64;
+              let x = 1:u64..=10:u64;
               x
               "#;
 
             let expr = Expr::from_text(expr).unwrap();
 
-            dbg!(expr.clone());
-
             let compiled = compile(&expr, &vec![]).unwrap();
-
-            dbg!(compiled.byte_code.clone());
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2474,8 +2464,8 @@ mod interpreter_tests {
                 Value::Record(
                     vec![
                         Value::U64(1),
-                        Value::U64(2),
-                        Value::Bool(true) // non inclusive
+                        Value::U64(10),
+                        Value::Bool(true) // inclusive
                     ]
                 ),
 
@@ -2489,8 +2479,6 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), expected);
         }
     }
-
-
 
 
     mod first_class_worker_tests {
