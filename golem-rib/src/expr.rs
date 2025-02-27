@@ -669,7 +669,7 @@ impl Expr {
                 from: Box::new(from),
                 to: Box::new(to),
             },
-            inferred_type: InferredType::Unknown,
+            inferred_type: InferredType::List(Box::new(InferredType::U64)),
             source_span: SourceSpan::default(),
         }
     }
@@ -706,7 +706,7 @@ impl Expr {
                 from: Box::new(from),
                 to: Box::new(to),
             },
-            inferred_type: InferredType::Unknown,
+            inferred_type: InferredType::List(Box::new(InferredType::U64)),
             source_span: SourceSpan::default(),
         }
     }

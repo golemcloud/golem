@@ -2380,7 +2380,7 @@ mod interpreter_tests {
         // Emitting the description of the range than the evaluated range
         // Description given out as ValueAndType::Record
         #[test]
-        async fn test_range_returns() {
+        async fn test_range_returns_1() {
             let expr = r#"
               let x = 1:u64..;
               x
@@ -2413,7 +2413,85 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
+
+
+        #[test]
+        async fn test_range_returns_2() {
+            let expr = r#"
+              let x = 1:u64..2:u64;
+              x
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            dbg!(expr.clone());
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            dbg!(compiled.byte_code.clone());
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(
+                    vec![
+                        Value::U64(1),
+                        Value::U64(2),
+                        Value::Bool(false) // non inclusive
+                    ]
+                ),
+
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool())
+                ])
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_returns_3() {
+            let expr = r#"
+              let x = 1:u64..=2:u64;
+              x
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            dbg!(expr.clone());
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            dbg!(compiled.byte_code.clone());
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(
+                    vec![
+                        Value::U64(1),
+                        Value::U64(2),
+                        Value::Bool(true) // non inclusive
+                    ]
+                ),
+
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool())
+                ])
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
     }
+
+
+
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
