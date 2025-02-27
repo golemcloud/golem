@@ -53,6 +53,10 @@ pub enum InferredType {
         resource_id: u64,
         resource_mode: u8,
     },
+    Range {
+        from: Box<InferredType>,
+        to: Option<Box<InferredType>>,
+    },
     Instance {
         instance_type: Box<InstanceType>,
     },
@@ -165,6 +169,7 @@ impl InferredType {
 
                     Ok(())
                 }
+                InferredType::Range {..} => Err("used as range".to_string()),
                 InferredType::Bool => Err(format!("used as {}", "bool")),
                 InferredType::Chr => Err(format!("used as {}", "char")),
                 InferredType::Str => Err(format!("used as {}", "string")),
@@ -494,6 +499,9 @@ impl TryFrom<InferredType> for AnalysedType {
             }
             InferredType::Sequence(_) => {
                 Err("Cannot convert function return sequence type to analysed type".to_string())
+            }
+            InferredType::Range { .. } => {
+                Err("Cannot convert range type to analysed type".to_string())
             }
         }
     }

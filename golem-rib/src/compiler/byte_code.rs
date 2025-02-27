@@ -597,8 +597,38 @@ mod internal {
                 )
             }
 
-            Expr::Range { range, .. } => {
-                handle_range(range, stack, Some(u64()), Some(u64()), instructions); // TODO; get it from inferred type
+            Expr::Range { range, inferred_type , ..} => {
+                match inferred_type {
+                    InferredType::Range { from, to } => {
+                        let analysed_type_from = convert_to_analysed_type(expr, from).map_err(|e| {
+                            format!(
+                                "Invalid Rib {}. Error converting {:?} to AnalysedType: {:?}",
+                                expr, from, e
+                            )
+                        })?;
+
+                        let analysed_type_to = match to {
+                            Some(to) => Some(convert_to_analysed_type(expr, to).map_err(|e| {
+                                format!(
+                                    "Invalid Rib {}. Error converting {:?} to AnalysedType: {:?}",
+                                    expr, to, e
+                                )
+                            })?),
+                            None => None
+                        };
+
+
+                        handle_range(range, stack, analysed_type_from, analysed_type_to, instructions);
+                    }
+
+                    _ => {
+                        return Err(format!(
+                            "Range should have inferred type Range {:?}",
+                            inferred_type
+                        ));
+                    }
+                }
+
             }
 
             // Invoke is always handled by the CallType::Function branch
@@ -659,29 +689,22 @@ mod internal {
     fn handle_range(
         range: &Range,
         stack: &mut Vec<ExprState>,
-        from_analysed_type: Option<AnalysedType>,
+        from_analysed_type: AnalysedType,
         to_analysed_type: Option<AnalysedType>,
         instructions: &mut Vec<RibIR>,
     ) {
         let analysed_type = match (from_analysed_type, to_analysed_type) {
-            (Some(from_type), Some(to_type)) => record(vec![
+            (from_type, Some(to_type)) => record(vec![
                 field("from", option(from_type)),
                 field("to", option(to_type)),
                 field("inclusive", bool()),
             ]),
 
-            (None, Some(to_type)) => record(vec![
-                field("to", option(to_type)),
-                field("inclusive", bool()),
-            ]),
 
-            (Some(from_type), None) => record(vec![
+            (from_type, None) => record(vec![
                 field("from", option(from_type)),
                 field("inclusive", bool()),
             ]),
-
-            // We will keep pushing inclusive to avoid checks at run time
-            (None, None) => record(vec![field("inclusive", bool())]),
         };
 
         let from = range.from();

@@ -71,6 +71,14 @@ pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, Stri
             let unified_type = typ.try_unify()?;
             Ok(InferredType::List(Box::new(unified_type)))
         }
+        InferredType::Range { from: start, to: end } => {
+            let unified_start = start.try_unify()?;
+            let unified_end = end.clone().map(|end| end.try_unify()).transpose()?;
+            Ok(InferredType::Range {
+                from: Box::new(unified_start),
+                to:unified_end.map(Box::new),
+            })
+        }
 
         InferredType::Flags(flags) => Ok(InferredType::Flags(flags.clone())),
 
@@ -809,6 +817,16 @@ mod internal {
                 }
                 Ok(Unified(inferred_type.clone()))
             }
+            InferredType::Range { from: start, to: end } => {
+                let unified_start = validate_unified_type(start)?;
+                let unified_end = end.clone().map(|end| validate_unified_type(&end)).transpose()?;
+
+                Ok(Unified(InferredType::Range {
+                    from: Box::new(unified_start.inferred_type()),
+                    to: unified_end.map(|end| Box::new(end.inferred_type())),
+                }))
+            }
+
             instance @ InferredType::Instance { .. } => Ok(Unified(instance.clone())),
             resource @ InferredType::Resource { .. } => Ok(Unified(resource.clone())),
             InferredType::OneOf(possibilities) => Err(format!(

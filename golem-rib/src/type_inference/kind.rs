@@ -115,6 +115,7 @@ impl GetTypeKind for InferredType {
             InferredType::Unknown => TypeKind::Unknown,
             InferredType::Sequence(_) => TypeKind::Unknown,
             InferredType::Instance { .. } => TypeKind::Unknown,
+            InferredType::Range { .. } => TypeKind::Unknown,
         }
     }
 }

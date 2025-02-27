@@ -666,10 +666,13 @@ impl Expr {
     pub fn range(from: Expr, to: Expr) -> Self {
         Expr::Range {
             range: Range::Range {
-                from: Box::new(from),
-                to: Box::new(to),
+                from: Box::new(from.clone()),
+                to: Box::new(to.clone()),
             },
-            inferred_type: InferredType::List(Box::new(InferredType::U64)),
+            inferred_type: InferredType::Range {
+                from: Box::new(from.inferred_type()),
+                to: Some(Box::new(to.inferred_type())),
+            },
             source_span: SourceSpan::default(),
         }
     }
@@ -677,9 +680,12 @@ impl Expr {
     pub fn range_from(from: Expr) -> Self {
         Expr::Range {
             range: Range::RangeFrom {
-                from: Box::new(from),
+                from: Box::new(from.clone()),
             },
-            inferred_type: InferredType::List(Box::new(InferredType::U64)),
+            inferred_type: InferredType::Range {
+                from: Box::new(from.inferred_type()),
+                to: None,
+            },
             source_span: SourceSpan::default(),
         }
     }
@@ -688,10 +694,13 @@ impl Expr {
     pub fn range_inclusive(from: Expr, to: Expr) -> Self {
         Expr::Range {
             range: Range::RangeInclusive {
-                from: Box::new(from),
-                to: Box::new(to),
+                from: Box::new(from.clone()),
+                to: Box::new(to.clone()),
             },
-            inferred_type: InferredType::List(Box::new(InferredType::U64)),
+            inferred_type: InferredType::Range {
+                from: Box::new(from.inferred_type()),
+                to: Some(Box::new(to.inferred_type())),
+            },
             source_span: SourceSpan::default(),
         }
     }

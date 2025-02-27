@@ -66,6 +66,9 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             InferredType::Instance { .. } => {
                 Err("Cannot convert Instance type to AnalysedType".to_string())
             }
+            InferredType::Range {..} => {
+                Err("Cannot convert Range type to AnalysedType".to_string())
+            }
             InferredType::Bool => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Bool(
                 TypeBool,
             ))),

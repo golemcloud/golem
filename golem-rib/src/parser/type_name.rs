@@ -385,6 +385,9 @@ impl TryFrom<InferredType> for TypeName {
             InferredType::Instance { .. } => {
                 Err("Cannot convert an instance type to a type name".to_string())
             }
+            InferredType::Range { .. } => {
+                Err("Cannot convert a range type to a type name".to_string())
+            }
         }
     }
 }
