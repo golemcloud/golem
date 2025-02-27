@@ -450,7 +450,7 @@ mkdir -pv ../data
 '''
 
 [tasks.merge-openapi]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.13" }
+install_crate = "golem-openapi-client-generator"
 dependencies = [
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
