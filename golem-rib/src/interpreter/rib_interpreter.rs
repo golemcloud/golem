@@ -2397,14 +2397,12 @@ mod interpreter_tests {
                 Value::Record(
                     vec![
                         Value::U64(1),
-                        Value::Tuple(vec![]), // representing nothing for to
                         Value::Bool(false) // non inclusive
                     ]
                 ),
 
                 record(vec![
                     field("from", option(u64())),
-                    field("to", option(u64())),
                     field("inclusive", bool())
                 ])
             );

@@ -1072,9 +1072,7 @@ mod compiler_tests {
         let expected_instructions = RibByteCode {
             instructions: instruction_set,
         };
-
-        assert!(false);
-
+        
         assert_eq!(instructions, expected_instructions);
     }
 
