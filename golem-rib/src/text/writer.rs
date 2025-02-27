@@ -426,7 +426,7 @@ impl<W: Write> Writer<W> {
                 yield_expr,
                 ..
             } => {
-                self.write_display("for")?;
+                self.write_display(" for ")?;
                 self.write_display(iterated_variable.to_string())?;
                 self.write_display(" in ")?;
                 self.write_expr(iterable_expr)?;

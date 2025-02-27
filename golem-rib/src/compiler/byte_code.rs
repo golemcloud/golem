@@ -598,7 +598,7 @@ mod internal {
             }
 
             Expr::Range { range, .. } => {
-                handle_range(range, stack, Some(u64()), Some(u64())); // TODO; get it from inferred type
+                handle_range(range, stack, Some(u64()), Some(u64()), instructions); // TODO; get it from inferred type
             }
 
             // Invoke is always handled by the CallType::Function branch
@@ -661,6 +661,7 @@ mod internal {
         stack: &mut Vec<ExprState>,
         from_analysed_type: Option<AnalysedType>,
         to_analysed_type: Option<AnalysedType>,
+        instructions: &mut Vec<RibIR>,
     ) {
         let analysed_type = match (from_analysed_type, to_analysed_type) {
             (Some(from_type), Some(to_type)) => record(vec![
@@ -687,14 +688,15 @@ mod internal {
         let to = range.to();
         let inclusive = range.inclusive();
 
+
         if let Some(from) = from {
             stack.push(ExprState::from_expr(from));
-            stack.push(ExprState::from_ir(RibIR::UpdateRecord("from".to_string())));
+            instructions.push(RibIR::UpdateRecord("from".to_string()));
         }
 
         if let Some(to) = to {
             stack.push(ExprState::from_expr(to));
-            stack.push(ExprState::from_ir(RibIR::UpdateRecord("to".to_string())));
+            instructions.push(RibIR::UpdateRecord("to".to_string()));
         }
 
         stack.push(ExprState::from_ir(RibIR::PushLit(ValueAndType::new(
@@ -702,9 +704,13 @@ mod internal {
             bool(),
         ))));
 
-        stack.push(ExprState::from_ir(RibIR::CreateAndPushRecord(
+        instructions.push(RibIR::UpdateRecord("inclusive".to_string()));
+
+
+        instructions.push(RibIR::CreateAndPushRecord(
             analysed_type,
-        )));
+        ));
+
     }
 
     fn handle_list_comprehension(
@@ -1073,6 +1079,10 @@ mod compiler_tests {
         let expected_instructions = RibByteCode {
             instructions: instruction_set,
         };
+
+        dbg!(expected_instructions.clone());
+
+        assert!(false);
 
         assert_eq!(instructions, expected_instructions);
     }

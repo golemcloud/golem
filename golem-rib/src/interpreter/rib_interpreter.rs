@@ -1587,6 +1587,7 @@ mod interpreter_tests {
             )
             .unwrap();
 
+
             let result = interpreter
                 .run(compiled.byte_code)
                 .await
@@ -2368,31 +2369,49 @@ mod interpreter_tests {
         }
     }
 
-    mod range_tests {
+    mod range_interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compile, Expr};
         use test_r::test;
+        use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, tuple, u64};
+        use golem_wasm_rpc::{Value, ValueAndType};
 
+        // Simulating the behaviour in languages like rust
+        // Emitting the description of the range than the evaluated range
+        // Description given out as ValueAndType::Record
         #[test]
-        async fn test_range() {
+        async fn test_range_returns() {
             let expr = r#"
-              let x = 1..;
-
-              for i in x {
-                yield i;
-              }
+              let x = 1:u64..;
+              x
               "#;
 
             let expr = Expr::from_text(expr).unwrap();
 
             let compiled = compile(&expr, &vec![]).unwrap();
 
+            dbg!(compiled.byte_code.clone());
+
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            dbg!(result);
+            let expected = ValueAndType::new(
+                Value::Record(
+                    vec![
+                        Value::U64(1),
+                        Value::Tuple(vec![]), // representing nothing for to
+                        Value::Bool(false) // non inclusive
+                    ]
+                ),
 
-            assert!(false)
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool())
+                ])
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
         }
     }
 

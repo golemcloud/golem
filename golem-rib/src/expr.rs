@@ -679,7 +679,7 @@ impl Expr {
             range: Range::RangeFrom {
                 from: Box::new(from),
             },
-            inferred_type: InferredType::Unknown,
+            inferred_type: InferredType::List(Box::new(InferredType::U64)),
             source_span: SourceSpan::default(),
         }
     }
