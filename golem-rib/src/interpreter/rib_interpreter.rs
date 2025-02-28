@@ -2592,6 +2592,33 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_6() {
+            let expr = r#"
+              let list: list<u8> = [2, 5, 4, 6];
+              let x: u8 = 0;
+              let y: u8 = 2;
+              let result = list[x..y];
+              for i in result[x..y] {
+                yield i;
+              }
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![Value::U8(2), Value::U8(5)]),
+                list(u8()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
     }
 
     mod range_interpreter_tests {
