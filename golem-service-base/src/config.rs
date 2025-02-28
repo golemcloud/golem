@@ -93,7 +93,7 @@ impl Default for S3BlobStorageConfig {
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             use_minio_credentials: false,
             initial_component_files_bucket: "golem-initial-component-files".to_string(),
-            component_bucket: "components".to_string(),
+            component_bucket: "component-store".to_string(),
         }
     }
 }

@@ -92,7 +92,7 @@ impl FileSystemBlobStorage {
                 result.push(account_id.to_string());
             }
             BlobStorageNamespace::Components => {
-                result.push("component");
+                result.push("component_store");
             }
         }
 

@@ -361,6 +361,7 @@ pub enum BlobStorageNamespace {
         component_id: ComponentId,
         level: usize,
     },
+    // TODO: prefix with account_id and move existing data
     Components,
 }
 
