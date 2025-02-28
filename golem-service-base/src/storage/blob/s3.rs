@@ -47,14 +47,10 @@ impl S3BlobStorage {
         let region = config.region.clone();
 
         let mut config_builder =
-            aws_config::defaults(BehaviorVersion::v2024_03_28())
-                .region(Region::new(region));
+            aws_config::defaults(BehaviorVersion::v2024_03_28()).region(Region::new(region));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
-            info!(
-                "The AWS endpoint url for blob storage is {}",
-                &endpoint_url
-            );
+            info!("The AWS endpoint url for blob storage is {}", &endpoint_url);
             config_builder = config_builder.endpoint_url(endpoint_url);
         }
 
@@ -82,6 +78,7 @@ impl S3BlobStorage {
             BlobStorageNamespace::InitialComponentFiles { .. } => {
                 &self.config.initial_component_files_bucket
             }
+            BlobStorageNamespace::Components => &self.config.component_bucket,
         }
     }
 
@@ -145,6 +142,7 @@ impl S3BlobStorage {
                         .to_path_buf()
                 }
             }
+            BlobStorageNamespace::Components => Path::new(&self.config.object_prefix).to_path_buf(),
         }
     }
 
@@ -256,7 +254,10 @@ impl S3BlobStorage {
             SdkError::TimeoutError(_) => "Timeout".to_string(),
             SdkError::DispatchFailure(inner) => {
                 // normal display of the error does not expose enough useful information
-                format!("Dispatch failure: {:?}", inner.as_connector_error().unwrap())
+                format!(
+                    "Dispatch failure: {:?}",
+                    inner.as_connector_error().unwrap()
+                )
             }
             SdkError::ResponseError(_) => "Response error".to_string(),
             SdkError::ServiceError(inner) => inner.err().to_string(),
@@ -352,8 +353,10 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
-    {
+    ) -> Result<
+        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
+        String,
+    > {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -385,9 +388,7 @@ impl BlobStorage for S3BlobStorage {
                         .await
                         .map(|x| (x.map_err(|e| e.to_string()), body))
                 });
-                let pinned: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
-                    Box::pin(stream);
-                Ok(Some(pinned))
+                Ok(Some(Box::pin(stream)))
             }
             Err(SdkError::ServiceError(service_error)) => match service_error.err() {
                 NoSuchKey(_) => Ok(None),

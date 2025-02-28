@@ -91,6 +91,9 @@ impl FileSystemBlobStorage {
                 result.push("initial_component_files");
                 result.push(account_id.to_string());
             }
+            BlobStorageNamespace::Components => {
+                result.push("component");
+            }
         }
 
         result.push(path);
@@ -134,8 +137,10 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
-    {
+    ) -> Result<
+        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
+        String,
+    > {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 

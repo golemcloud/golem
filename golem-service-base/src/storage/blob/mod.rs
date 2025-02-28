@@ -43,7 +43,10 @@ pub trait BlobStorage: Debug {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>;
+    ) -> Result<
+        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
+        String,
+    >;
 
     async fn get_raw_slice(
         &self,
@@ -358,6 +361,7 @@ pub enum BlobStorageNamespace {
         component_id: ComponentId,
         level: usize,
     },
+    Components,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

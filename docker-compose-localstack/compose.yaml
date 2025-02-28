@@ -1,4 +1,8 @@
 x-aliases:
+  aws-env-vars: &aws-env-vars
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+    AWS_REGION: us-east-1
   blob-storage-env-vars: &blob-storage-env-vars
     GOLEM__BLOB_STORAGE__TYPE: S3
     GOLEM__BLOB_STORAGE__CONFIG__REGION: us-east-1
@@ -116,17 +120,11 @@ services:
       dockerfile: golem-component-service/docker/Dockerfile
     restart: on-failure
     environment:
-      <<: [*blob-storage-env-vars, *postgres-db-config]
+      <<: [*blob-storage-env-vars, *postgres-db-config, *aws-env-vars]
       ENVIRONMENT: local
       WASMTIME_BACKTRACE_DETAILS: 1
       RUST_BACKTRACE: 1
       RUST_LOG: info,h2=warn,hyper=warn,tower=warn
-      GOLEM__COMPONENT_STORE__TYPE: S3
-      GOLEM__COMPONENT_STORE__CONFIG__BUCKET_NAME: golem_components
-      GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX: ""
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
-      AWS_REGION: us-east-1
       GOLEM__COMPILATION__TYPE: Enabled
       GOLEM__COMPILATION__CONFIG__HOST: golem-component-compilation-service
       GOLEM__COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
@@ -148,7 +146,7 @@ services:
       dockerfile: golem-worker-service/docker/Dockerfile
     pull_policy: always
     environment:
-      <<: [*blob-storage-env-vars, *postgres-db-config]
+      <<: [*blob-storage-env-vars, *postgres-db-config, *aws-env-vars]
       RUST_BACKTRACE: 1
       RUST_LOG=info,h2=warn,hyper=warn,tower: warn
       GOLEM__DB__CONFIG__SCHEMA: golem_worker
@@ -179,7 +177,7 @@ services:
       context: ..
       dockerfile: golem-component-compilation-service/docker/Dockerfile
     environment:
-      <<: *blob-storage-env-vars
+      <<: [*blob-storage-env-vars, *aws-env-vars]
       RUST_BACKTRACE: 1
       RUST_LOG=info,h2=warn,hyper=warn,tower: warn
       GOLEM__COMPONENT_SERVICE__HOST: golem-component-service
@@ -202,7 +200,7 @@ services:
       context: ..
       dockerfile: golem-worker-executor/docker/Dockerfile
     environment:
-      <<: *blob-storage-env-vars
+      <<: [*blob-storage-env-vars, *aws-env-vars]
       ENVIRONMENT: local
       WASMTIME_BACKTRACE_DETAILS: 1
       RUST_BACKTRACE: 1

@@ -24,7 +24,6 @@ use golem_common::model::{
     ComponentType,
 };
 use golem_common::SafeDisplay;
-use golem_component_service_base::config::ComponentStoreLocalConfig;
 use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
@@ -74,14 +73,10 @@ fn sqlite_plugin_repo(
 }
 
 #[test_dep]
-fn object_store() -> Arc<dyn ComponentObjectStore + Send + Sync> {
-    Arc::new(
-        component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
-            root_path: "/tmp/component".to_string(),
-            object_prefix: Uuid::new_v4().to_string(),
-        })
-        .unwrap(),
-    )
+fn object_store(
+    blob_storage: &Arc<dyn BlobStorage + Send + Sync>,
+) -> Arc<dyn ComponentObjectStore + Send + Sync> {
+    Arc::new(component_object_store::BlobStorageComponentObjectStore::new(blob_storage.clone()))
 }
 
 #[test_dep]

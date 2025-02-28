@@ -200,7 +200,8 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>>, String> {
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>>, String>
+    {
         self.storage
             .get_stream(target_label, op_label, namespace, path)
             .await

@@ -168,6 +168,7 @@ without_time = false
 # 
 # [blob_storage.config]
 # compilation_cache_bucket = "golem-compiled-components"
+# component_bucket = "components"
 # compressed_oplog_buckets = ["oplog-archive-1"]
 # custom_data_bucket = "custom-data"
 # initial_component_files_bucket = "golem-initial-component-files"

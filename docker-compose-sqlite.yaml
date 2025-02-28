@@ -54,9 +54,6 @@ services:
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
       - GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem"
       - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/worker_executor_store"
-      - GOLEM__COMPONENT_STORE__TYPE="Local"
-      - GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX=""
-      - GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH=/component_store
       - GOLEM__COMPILATION__TYPE="Enabled"
       - GOLEM__COMPILATION__CONFIG__HOST=golem-component-compilation-service
       - GOLEM__COMPILATION__CONFIG__PORT=${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
