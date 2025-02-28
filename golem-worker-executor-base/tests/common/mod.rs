@@ -28,8 +28,8 @@ use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageCo
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, GolemConfig,
-    IndexedStorageConfig, KeyValueStorageConfig, MemoryConfig, ShardManagerServiceConfig,
-    WorkerServiceGrpcConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, WorkerServiceGrpcConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -318,7 +318,7 @@ pub async fn start_limited(
             key_prefix: context.redis_prefix(),
             ..Default::default()
         }),
-        indexed_storage: IndexedStorageConfig::KVStoreRedis,
+        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: Path::new("data/blobs").to_path_buf(),
         }),
@@ -328,7 +328,9 @@ pub async fn start_limited(
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
-        shard_manager_service: ShardManagerServiceConfig::SingleShard,
+        shard_manager_service: ShardManagerServiceConfig::SingleShard(
+            ShardManagerServiceSingleShardConfig {},
+        ),
         public_worker_api: WorkerServiceGrpcConfig {
             host: "localhost".to_string(),
             port: context.grpc_port(),

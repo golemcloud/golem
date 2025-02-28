@@ -23,6 +23,8 @@ type = "Enabled"
 [indexed_storage]
 type = "KVStoreRedis"
 
+[indexed_storage.config]
+
 [key_value_storage]
 type = "Redis"
 
@@ -207,6 +209,8 @@ without_time = false
 # [key_value_storage]
 # type = "InMemory"
 # 
+# [key_value_storage.config]
+# 
 # [limits]
 # epoch_interval = "10ms"
 # epoch_ticks = 1
@@ -271,6 +275,8 @@ without_time = false
 # [shard_manager_service]
 # type = "SingleShard"
 # 
+# [shard_manager_service.config]
+# 
 # [suspend]
 # suspend_after = "10s"
 # 
@@ -318,6 +324,8 @@ without_time = false
 # [blob_storage]
 # type = "InMemory"
 # 
+# [blob_storage.config]
+# 
 # [compiled_component_service]
 # type = "Enabled"
 # 
@@ -326,8 +334,12 @@ without_time = false
 # [indexed_storage]
 # type = "InMemory"
 # 
+# [indexed_storage.config]
+# 
 # [key_value_storage]
 # type = "InMemory"
+# 
+# [key_value_storage.config]
 # 
 # [limits]
 # epoch_interval = "10ms"

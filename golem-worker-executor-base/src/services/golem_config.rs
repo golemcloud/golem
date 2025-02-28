@@ -105,8 +105,7 @@ pub struct CompiledComponentServiceDisabledConfig {}
 #[serde(tag = "type", content = "config")]
 pub enum ShardManagerServiceConfig {
     Grpc(ShardManagerServiceGrpcConfig),
-    SingleShard,
-    Disabled,
+    SingleShard(ShardManagerServiceSingleShardConfig),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -115,6 +114,9 @@ pub struct ShardManagerServiceGrpcConfig {
     pub port: u16,
     pub retries: RetryConfig,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShardManagerServiceSingleShardConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceGrpcConfig {
@@ -246,18 +248,30 @@ pub struct OplogConfig {
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
     Sqlite(DbSqliteConfig),
-    InMemory,
+    InMemory(KeyValueStorageInMemoryConfig),
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyValueStorageInMemoryConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum IndexedStorageConfig {
-    KVStoreRedis,
+    KVStoreRedis(IndexedStorageKVStoreRedisConfig),
     Redis(RedisConfig),
-    KVStoreSqlite,
+    KVStoreSqlite(IndexedStorageKVStoreSqliteConfig),
     Sqlite(DbSqliteConfig),
-    InMemory,
+    InMemory(IndexedStorageInMemoryConfig),
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStorageKVStoreRedisConfig {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStorageKVStoreSqliteConfig {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStorageInMemoryConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryConfig {
@@ -322,18 +336,26 @@ impl HasConfigExamples<GolemConfig> for GolemConfig {
             (
                 "with redis indexed_storage, s3 blob storage, single shard manager service",
                 Self {
-                    key_value_storage: KeyValueStorageConfig::InMemory,
+                    key_value_storage: KeyValueStorageConfig::InMemory(
+                        KeyValueStorageInMemoryConfig {},
+                    ),
                     indexed_storage: IndexedStorageConfig::Redis(RedisConfig::default()),
                     blob_storage: BlobStorageConfig::default_s3(),
-                    shard_manager_service: ShardManagerServiceConfig::SingleShard,
+                    shard_manager_service: ShardManagerServiceConfig::SingleShard(
+                        ShardManagerServiceSingleShardConfig {},
+                    ),
                     ..Self::default()
                 },
             ),
             (
                 "with in-memory key value storage, indexed storage and blob storage",
                 Self {
-                    key_value_storage: KeyValueStorageConfig::InMemory,
-                    indexed_storage: IndexedStorageConfig::InMemory,
+                    key_value_storage: KeyValueStorageConfig::InMemory(
+                        KeyValueStorageInMemoryConfig {},
+                    ),
+                    indexed_storage: IndexedStorageConfig::InMemory(
+                        IndexedStorageInMemoryConfig {},
+                    ),
                     blob_storage: BlobStorageConfig::default_in_memory(),
                     ..Self::default()
                 },
@@ -470,7 +492,7 @@ impl KeyValueStorageConfig {
 
 impl Default for IndexedStorageConfig {
     fn default() -> Self {
-        Self::KVStoreRedis
+        Self::KVStoreRedis(IndexedStorageKVStoreRedisConfig {})
     }
 }
 
