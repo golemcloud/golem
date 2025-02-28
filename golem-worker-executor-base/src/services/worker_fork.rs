@@ -18,7 +18,7 @@ use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::Rpc;
-use crate::services::{rpc, HasOplog, HasWorkerForkService};
+use crate::services::{rdbms, rpc, HasOplog, HasRdbmsService, HasWorkerForkService};
 use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
 use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use std::sync::Arc;
@@ -74,6 +74,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub shard_service: Arc<dyn shard::ShardService + Send + Sync>,
     pub key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     pub blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+    pub rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
     pub oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     pub scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
@@ -153,6 +154,12 @@ impl<Ctx: WorkerCtx> HasWasmtimeEngine<Ctx> for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasKeyValueService for DefaultWorkerFork<Ctx> {
     fn key_value_service(&self) -> Arc<dyn key_value::KeyValueService + Send + Sync> {
         self.key_value_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasRdbmsService for DefaultWorkerFork<Ctx> {
+    fn rdbms_service(&self) -> Arc<dyn rdbms::RdbmsService + Send + Sync> {
+        self.rdbms_service.clone()
     }
 }
 
@@ -253,6 +260,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             shard_service: self.shard_service.clone(),
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
+            rdbms_service: self.rdbms_service.clone(),
             oplog_service: self.oplog_service.clone(),
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
@@ -288,6 +296,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
@@ -314,6 +323,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             oplog_service,
             scheduler_service,
             worker_activator,

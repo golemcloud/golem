@@ -35,6 +35,14 @@ wasmtime::component::bindgen!({
         "golem:rpc": golem_wasm_rpc::golem_rpc_0_1_x,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:io/poll/pollable": golem_wasm_rpc::wasi::io::poll::Pollable,
+        "wasi:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
+        "wasi:rdbms/mysql/db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
+        "wasi:rdbms/mysql/db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,
+        "wasi:rdbms/postgres/db-connection": super::durable_host::rdbms::postgres::PostgresDbConnection,
+        "wasi:rdbms/postgres/db-result-stream": super::durable_host::rdbms::postgres::DbResultStreamEntry,
+        "wasi:rdbms/postgres/db-transaction": super::durable_host::rdbms::postgres::DbTransactionEntry,
+        "wasi:rdbms/postgres/lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
+        "wasi:rdbms/postgres/lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
     },
 });
 

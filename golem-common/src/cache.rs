@@ -339,6 +339,10 @@ impl<
         }
     }
 
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.state.items.contains_key(key)
+    }
+
     pub fn create_weak_remover(&self, key: K) -> impl FnOnce() {
         let weak_state = Arc::downgrade(&self.state);
         let name = self.name;

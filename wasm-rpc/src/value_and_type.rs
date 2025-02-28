@@ -21,6 +21,7 @@ use golem_wasm_ast::analysis::{
     TypeFlags,
 };
 use std::collections::HashMap;
+use std::ops::Bound;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -284,6 +285,33 @@ impl<T: IntoValue> IntoValue for Option<T> {
 
     fn get_type() -> AnalysedType {
         option(T::get_type())
+    }
+}
+
+impl<T: IntoValue> IntoValue for Bound<T> {
+    fn into_value(self) -> Value {
+        match self {
+            Bound::Included(t) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(t.into_value())),
+            },
+            Bound::Excluded(t) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(t.into_value())),
+            },
+            Bound::Unbounded => Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            analysed_type::case("included", T::get_type()),
+            analysed_type::case("excluded", T::get_type()),
+            analysed_type::unit_case("unbounded"),
+        ])
     }
 }
 
