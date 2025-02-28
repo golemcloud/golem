@@ -55,7 +55,8 @@ use golem_worker_executor_base::services::{plugins, All, HasAll, HasConfig, HasO
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
 
@@ -70,7 +71,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
-use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
@@ -933,6 +936,32 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+impl InvocationContextManagement for TestWorkerCtx {
+    fn start_span(
+        &mut self,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        self.durable_ctx.start_span(initial_attributes)
+    }
+
+    fn start_child_span(
+        &mut self,
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        self.durable_ctx
+            .start_child_span(parent, initial_attributes)
+    }
+
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
+    }
+
+    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id)
+    }
+}
+
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     fn create_active_workers(
@@ -940,6 +969,16 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
+    }
+
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> (
+        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn PluginsObservations>,
+    ) {
+        plugins::default_configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(
@@ -955,16 +994,6 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_storage,
             plugin_observations,
         )
-    }
-
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> (
-        Arc<dyn Plugins<DefaultGolemTypes>>,
-        Arc<dyn PluginsObservations>,
-    ) {
-        plugins::default_configured(&golem_config.plugin_service)
     }
 
     async fn create_services(

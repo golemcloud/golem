@@ -49,17 +49,21 @@ pub fn invocation_context_from_request(request: &poem::Request) -> InvocationCon
                 InvocationContextSpan::external_parent(ctx.parent_id),
                 ctx.trace_states,
             );
-            ctx.push(InvocationContextSpan::new_with_attributes(
-                None,
-                request_attributes,
-            ));
+            ctx.push(
+                InvocationContextSpan::local()
+                    .with_attributes(request_attributes)
+                    .with_parent(ctx.spans.first().clone())
+                    .build(),
+            );
             ctx
         }
         None => {
             // No trace context in headers, starting a new trace
             InvocationContextStack::new(
                 TraceId::generate(),
-                InvocationContextSpan::new_with_attributes(None, request_attributes),
+                InvocationContextSpan::local()
+                    .with_attributes(request_attributes)
+                    .build(),
                 Vec::new(),
             )
         }

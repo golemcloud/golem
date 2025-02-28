@@ -29,6 +29,8 @@ message LocalInvocationSpan {
   uint64 span_id = 1;
   google.protobuf.Timestamp start = 2;
   map<string, AttributeValue> attributes = 3;
+  bool inherited = 4;
+  repeated InvocationSpan linked_context = 5;
 }
 
 message ExternalParentSpan {
