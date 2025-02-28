@@ -59,7 +59,7 @@ RUN chmod +x cloud-debugging-service
 
 COPY cloud-debugging-service/cloud-debugging-service-wrapper.sh cloud-debugging-service-wrapper.sh
 
-RUN chmod +x cloud-worker-executor-wrapper-debug.sh
+RUN chmod +x cloud-debugging-service-wrapper.sh
 
 EXPOSE 9000
 
