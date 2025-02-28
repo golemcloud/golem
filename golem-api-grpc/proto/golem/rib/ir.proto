@@ -53,8 +53,11 @@ message RibIR {
         wasm.ast.Type multiply = 41;
         wasm.ast.Type divide = 42;
         IsEmpty is_empty = 43;
+        SelectDynamic select_dynamic = 44;
     }
 }
+
+message SelectDynamic{}
 
 message VariableId {
     oneof variable_id {

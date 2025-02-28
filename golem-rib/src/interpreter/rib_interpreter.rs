@@ -160,6 +160,10 @@ impl Interpreter {
                     internal::run_select_index_instruction(&mut stack, index)?;
                 }
 
+                RibIR::SelectDynamic => {
+                    internal::run_select_dynamic_instruction(&mut stack)?;
+                }
+
                 RibIR::CreateFunctionName(site, function_type) => {
                     internal::run_create_function_name_instruction(
                         site,
@@ -819,22 +823,84 @@ mod internal {
         }
     }
 
+    pub(crate) fn run_select_dynamic_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let stack_list_value = interpreter_stack
+            .pop()
+            .ok_or("internal error: failed to get value from the stack".to_string())?;
+
+        let index_value = interpreter_stack.pop()
+            .ok_or("internal error: failed to get the index expression from the stack")?;
+
+        match stack_list_value {
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::List(items),
+                typ: AnalysedType::List(typ),
+            }) => {
+
+                match index_value.get_literal().and_then(|v| v.get_number()) {
+                    Some(CoercedNumericValue::PosInt(index)) => {
+                        let value = items
+                            .get(index as usize)
+                            .ok_or(format!("index {} not found in the list", index))?
+                            .clone();
+
+                        interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
+                        Ok(())
+                    }
+                    _ => todo!("Handle dynamic rangews here")
+                }
+            }
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::Tuple(items),
+                typ: AnalysedType::Tuple(typ),
+            }) => {
+
+                match index_value.get_literal().and_then(|v| v.get_number()) {
+                    Some(CoercedNumericValue::PosInt(u64)) => {
+                        let value = items
+                            .get(u64 as usize)
+                            .ok_or(format!("index {} not found in the tuple", 0))?
+                            .clone();
+
+                        let item_type = typ
+                            .items
+                            .get(0)
+                            .ok_or(format!("index {} not found in the tuple type", 0))?
+                            .clone();
+
+                        interpreter_stack.push_val(ValueAndType::new(value, item_type));
+                        Ok(())
+                    }
+                    _ => Err("expected a number to select an index from tuple".to_string())
+                }
+            }
+            result => Err(format!(
+                "expected a sequence value or tuple to select an index. But obtained {:?}",
+                result
+            )),
+        }
+    }
+
+
+
     pub(crate) fn run_select_index_instruction(
         interpreter_stack: &mut InterpreterStack,
         index: usize,
     ) -> Result<(), String> {
-        let record = interpreter_stack
+        let stack_value = interpreter_stack
             .pop()
-            .ok_or("Failed to get a record from the stack to select a field".to_string())?;
+            .ok_or("internal error: failed to get value from the stack".to_string())?;
 
-        match record {
+        match stack_value {
             RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::List(items),
                 typ: AnalysedType::List(typ),
             }) => {
                 let value = items
                     .get(index)
-                    .ok_or(format!("Index {} not found in the list", index))?
+                    .ok_or(format!("index {} is out of bound. list size: {}", index, items.len()))?
                     .clone();
 
                 interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
@@ -1298,7 +1364,7 @@ mod interpreter_tests {
 
     use super::*;
     use crate::{compile, Expr, InstructionId, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32, u64};
+    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32, u64, u8};
     use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -1528,7 +1594,7 @@ mod interpreter_tests {
         // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
         let expr = r#"
               let list: list<u8> = [1, 2, 3, 4, 5];
-              let index: u8 = 10;
+              let index: u8 = 4;
               list[index]
               "#;
 
@@ -1540,13 +1606,8 @@ mod interpreter_tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::List(vec![
-                Value::U64(1),
-                Value::U64(2),
-                Value::U64(3),
-                Value::U64(4),
-            ]),
-            list(u64()),
+            Value::U8(5),
+            u8(),
         );
 
         assert_eq!(result.get_val().unwrap(), expected);
@@ -2405,7 +2466,9 @@ mod interpreter_tests {
     mod range_interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compile, Expr, FunctionTypeRegistry};
-        use golem_wasm_ast::analysis::analysed_type::{bool, field, list, option, record, tuple, u64, u8};
+        use golem_wasm_ast::analysis::analysed_type::{
+            bool, field, list, option, record, tuple, u64, u8,
+        };
         use golem_wasm_rpc::{Value, ValueAndType};
         use test_r::test;
 
@@ -2662,10 +2725,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = ValueAndType::new(
-                Value::U8(10),
-                u8()
-            );
+            let expected = ValueAndType::new(Value::U8(10), u8());
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
