@@ -3,13 +3,13 @@ x-aliases:
     GOLEM__BLOB_STORAGE__TYPE: S3
     GOLEM__BLOB_STORAGE__CONFIG__REGION: us-east-1
     GOLEM__BLOB_STORAGE__CONFIG__AWS_ENDPOINT_URL: http://localstack:${LOCALSTACK_PORT}
-    GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX: golem_blobs
-    GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET: compilation_cache
-    GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET: custom_data
-    GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET: oplog_payload
-    GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS: "[oplog-archive-1]"
+    GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX: ""
+    GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET: golem-compilation-cache
+    GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET: golem-custom-data
+    GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET: golem-oplog-payload
+    GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS: "[golem-oplog-archive-1]"
     GOLEM__BLOB_STORAGE__CONFIG__USE_MINIO_CREDENTIALS: false
-    GOLEM__BLOB_STORAGE__CONFIG__INITIAL_COMPONENT_FILES_BUCKET: initial_component_files
+    GOLEM__BLOB_STORAGE__CONFIG__INITIAL_COMPONENT_FILES_BUCKET: golem-initial-component-files
     GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_ATTEMPTS: 5
     GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MIN_DELAY: 100ms
     GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_DELAY: 2s
@@ -26,7 +26,7 @@ x-aliases:
 services:
   router:
     build:
-      context: .
+      context: ..
       dockerfile: golem-router/docker/Dockerfile
     # Note that, golem_gateway_port should be changed carefully
     # as it is currently set to match the default port in golem-cli:
@@ -78,10 +78,17 @@ services:
       SERVICES: s3
     volumes:
       - localstack_data:/var/lib/localstack
+      - ./localstack:/etc/localstack/init/ready.d
+    healthcheck:
+      test: awslocal s3api wait bucket-exists --bucket signal-ready
+      interval: 5s
+      timeout: 120s
+      start_period: 5s
+      retries: 0
 
   golem-shard-manager:
     build:
-      context: .
+      context: ..
       dockerfile: golem-shard-manager/docker/Dockerfile
     environment:
       WASMTIME_BACKTRACE_DETAILS: 1
@@ -97,7 +104,7 @@ services:
 
   golem-component-service:
     build:
-      context: .
+      context: ..
       dockerfile: golem-component-service/docker/Dockerfile
     restart: on-failure
     environment:
@@ -109,7 +116,10 @@ services:
       GOLEM__COMPONENT_STORE__TYPE: S3
       GOLEM__COMPONENT_STORE__CONFIG__BUCKET_NAME: golem_components
       GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX: ""
-      AWS_ENDPOINT_URL_S3: http://localstack:${LOCALSTACK_PORT}
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:${LOCALSTACK_PORT}
       GOLEM__COMPILATION__TYPE: Enabled
       GOLEM__COMPILATION__CONFIG__HOST: golem-component-compilation-service
       GOLEM__COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
@@ -122,10 +132,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
 
   golem-worker-service:
     build:
-      context: .
+      context: ..
       dockerfile: golem-worker-service/docker/Dockerfile
     pull_policy: always
     environment:
@@ -152,10 +164,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
 
   golem-component-compilation-service:
     build:
-      context: .
+      context: ..
       dockerfile: golem-component-compilation-service/docker/Dockerfile
     environment:
       <<: *blob-storage-env-vars
@@ -171,11 +185,14 @@ services:
       - "${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}:${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}"
       - "${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}:${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}"
     depends_on:
-      - golem-component-service
+      golem-component-service:
+        condition: service_started
+      localstack:
+        condition: service_healthy
 
   golem-worker-executor:
     build:
-      context: .
+      context: ..
       dockerfile: golem-worker-executor/docker/Dockerfile
     environment:
       <<: *blob-storage-env-vars
@@ -206,7 +223,14 @@ services:
     ports:
       - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+
+networks:
+  default:
+    name: golem-localstack
 
 volumes:
   redis_data:
