@@ -296,7 +296,7 @@ mod internal {
                 instructions.push(RibIR::SelectField(field.clone()));
             }
 
-            Expr::SelectDynamic {expr, index, ..} => {
+            Expr::SelectDynamic { expr, index, .. } => {
                 stack.push(ExprState::from_expr(index.deref()));
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::SelectDynamic);

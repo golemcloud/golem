@@ -51,10 +51,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 queue.push_back(expr);
             }
 
-
             Expr::SelectDynamic {
-                expr, // LHS
-                index, // RHS
+                expr,          // LHS
+                index,         // RHS
                 inferred_type, // This is the type of the total expression
                 ..
             } => {
@@ -66,7 +65,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 let index_expr_type = index.inferred_type();
 
                 match index_expr_type {
-                    InferredType::Range {..} => {
+                    InferredType::Range { .. } => {
                         expr.add_infer_type_mut(inferred_type.clone());
                     }
                     _ => {
@@ -347,7 +346,6 @@ mod internal {
         let iterable_type = iterable_expr.inferred_type();
 
         if !iterable_expr.inferred_type().is_unknown() {
-
             let refined_iterable = ListType::refine(&iterable_type);
 
             let iterable_variable_type = match refined_iterable {

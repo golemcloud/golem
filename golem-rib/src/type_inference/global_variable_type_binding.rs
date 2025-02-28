@@ -748,7 +748,6 @@ mod internal {
         result_expr_queue.push_front((new_tuple, false));
     }
 
-
     fn handle_select_field(
         original_selection_expr: &Expr,
         field: &str,
@@ -813,9 +812,7 @@ mod internal {
         type_name: &Option<TypeName>,
         source_span: &SourceSpan,
     ) -> Result<(), RibCompilationError> {
-        let index = temp_stack
-            .pop_front()
-            .unwrap_or((index.clone(), false));
+        let index = temp_stack.pop_front().unwrap_or((index.clone(), false));
 
         let expr = temp_stack
             .pop_front()

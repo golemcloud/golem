@@ -775,7 +775,6 @@ mod internal {
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
 
-
         let inferred_type_of_index_expr = index_expr.inferred_type();
 
         let expr = inferred_type_stack
@@ -793,18 +792,22 @@ mod internal {
         dbg!(index_type.clone());
         dbg!(expression_type.clone());
 
-       let new_select_index = match index_type {
-            SelectionIndexType::Index(index_type) => {
-                Expr::select_dynamic(expr.clone(), index.clone().with_inferred_type(index_type), None)
-                    .with_inferred_type(curren_type.merge(expression_type))
-                    .with_source_span(source_span.clone())
-            }
+        let new_select_index = match index_type {
+            SelectionIndexType::Index(index_type) => Expr::select_dynamic(
+                expr.clone(),
+                index.clone().with_inferred_type(index_type),
+                None,
+            )
+            .with_inferred_type(curren_type.merge(expression_type))
+            .with_source_span(source_span.clone()),
 
-            SelectionIndexType::Range(range_index_type) => {
-                Expr::select_dynamic(expr.clone(), index.clone().with_inferred_type(range_index_type), None)
-                    .with_inferred_type(curren_type.merge(expression_type))
-                    .with_source_span(source_span.clone())
-            }
+            SelectionIndexType::Range(range_index_type) => Expr::select_dynamic(
+                expr.clone(),
+                index.clone().with_inferred_type(range_index_type),
+                None,
+            )
+            .with_inferred_type(curren_type.merge(expression_type))
+            .with_source_span(source_span.clone()),
         };
 
         inferred_type_stack.push_front(new_select_index);
@@ -1479,7 +1482,6 @@ mod internal {
         Ok(refined_record.inner_type_by_name(select_field))
     }
 
-
     #[derive(Debug, Clone)]
     pub(crate) enum SelectionIndexType {
         Range(InferredType), // Range type
@@ -1511,7 +1513,10 @@ mod internal {
         let is_number = select_index_type.contains_only_number();
 
         if is_number {
-            Ok((SelectionIndexType::Index(select_index_type.clone()), list_type))
+            Ok((
+                SelectionIndexType::Index(select_index_type.clone()),
+                list_type,
+            ))
         } else {
             let range = RangeType::refine(select_index_type).ok_or({
                 TypeMismatchError {
@@ -1534,7 +1539,10 @@ mod internal {
                 to: range.last().map(|x| Box::new(x.clone())),
             };
 
-            Ok((SelectionIndexType::Range(range_type), InferredType::List(Box::new(list_type))))
+            Ok((
+                SelectionIndexType::Range(range_type),
+                InferredType::List(Box::new(list_type)),
+            ))
         }
     }
 

@@ -29,7 +29,7 @@ use crate::rib_source_span::GetSourcePosition;
 // selection works without any issues.
 enum IndexOrRange {
     Index(usize),
-    Dynamic(Expr)
+    Dynamic(Expr),
 }
 
 pub fn select_index<Input>() -> impl Parser<Input, Output = Expr>

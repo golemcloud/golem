@@ -943,11 +943,7 @@ impl Expr {
         }
     }
 
-    pub fn select_dynamic(
-        expr: Expr,
-        index: Expr,
-        type_annotation: Option<TypeName>,
-    ) -> Self {
+    pub fn select_dynamic(expr: Expr, index: Expr, type_annotation: Option<TypeName>) -> Self {
         Expr::SelectDynamic {
             expr: Box::new(expr),
             index: Box::new(index),
@@ -2208,8 +2204,6 @@ mod protobuf {
                     }),
                 )),
 
-
-
                 Expr::Range { range, .. } => match range {
                     Range::RangeFrom { from } => {
                         Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
@@ -2261,19 +2255,20 @@ mod protobuf {
                     }),
                 )),
 
-
                 Expr::SelectDynamic {
                     expr,
                     index,
                     type_annotation,
                     ..
-                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(
-                    Box::new(golem_api_grpc::proto::golem::rib::SelectDynamicExpr {
-                        expr: Some(Box::new((*expr).into())),
-                        index:  Some(Box::new((*index).into())),
-                        type_name: type_annotation.map(|t| t.into()),
-                    }),
-                )),
+                } => Some(
+                    golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(Box::new(
+                        golem_api_grpc::proto::golem::rib::SelectDynamicExpr {
+                            expr: Some(Box::new((*expr).into())),
+                            index: Some(Box::new((*index).into())),
+                            type_name: type_annotation.map(|t| t.into()),
+                        },
+                    )),
+                ),
 
                 Expr::Sequence {
                     exprs: expressions,

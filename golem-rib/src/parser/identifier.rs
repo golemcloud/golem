@@ -26,7 +26,6 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "if", "then", "else", "match", "ok", "some", "err", "none", "let", "for", "yield", "reduce",
 ];
 
-
 pub fn identifier<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: Stream<Token = char>,

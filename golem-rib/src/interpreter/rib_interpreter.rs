@@ -830,60 +830,53 @@ mod internal {
             .pop()
             .ok_or("internal error: failed to get value from the stack".to_string())?;
 
-        let index_value = interpreter_stack.pop()
+        let index_value = interpreter_stack
+            .pop()
             .ok_or("internal error: failed to get the index expression from the stack")?;
 
         match stack_list_value {
             RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::List(items),
                 typ: AnalysedType::List(typ),
-            }) => {
+            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                Some(CoercedNumericValue::PosInt(index)) => {
+                    let value = items
+                        .get(index as usize)
+                        .ok_or(format!("index {} not found in the list", index))?
+                        .clone();
 
-                match index_value.get_literal().and_then(|v| v.get_number()) {
-                    Some(CoercedNumericValue::PosInt(index)) => {
-                        let value = items
-                            .get(index as usize)
-                            .ok_or(format!("index {} not found in the list", index))?
-                            .clone();
-
-                        interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
-                        Ok(())
-                    }
-                    _ => todo!("Handle dynamic rangews here")
+                    interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
+                    Ok(())
                 }
-            }
+                _ => todo!("Handle dynamic rangews here"),
+            },
             RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::Tuple(items),
                 typ: AnalysedType::Tuple(typ),
-            }) => {
+            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                Some(CoercedNumericValue::PosInt(u64)) => {
+                    let value = items
+                        .get(u64 as usize)
+                        .ok_or(format!("index {} not found in the tuple", 0))?
+                        .clone();
 
-                match index_value.get_literal().and_then(|v| v.get_number()) {
-                    Some(CoercedNumericValue::PosInt(u64)) => {
-                        let value = items
-                            .get(u64 as usize)
-                            .ok_or(format!("index {} not found in the tuple", 0))?
-                            .clone();
+                    let item_type = typ
+                        .items
+                        .get(0)
+                        .ok_or(format!("index {} not found in the tuple type", 0))?
+                        .clone();
 
-                        let item_type = typ
-                            .items
-                            .get(0)
-                            .ok_or(format!("index {} not found in the tuple type", 0))?
-                            .clone();
-
-                        interpreter_stack.push_val(ValueAndType::new(value, item_type));
-                        Ok(())
-                    }
-                    _ => Err("expected a number to select an index from tuple".to_string())
+                    interpreter_stack.push_val(ValueAndType::new(value, item_type));
+                    Ok(())
                 }
-            }
+                _ => Err("expected a number to select an index from tuple".to_string()),
+            },
             result => Err(format!(
                 "expected a sequence value or tuple to select an index. But obtained {:?}",
                 result
             )),
         }
     }
-
-
 
     pub(crate) fn run_select_index_instruction(
         interpreter_stack: &mut InterpreterStack,
@@ -900,7 +893,11 @@ mod internal {
             }) => {
                 let value = items
                     .get(index)
-                    .ok_or(format!("index {} is out of bound. list size: {}", index, items.len()))?
+                    .ok_or(format!(
+                        "index {} is out of bound. list size: {}",
+                        index,
+                        items.len()
+                    ))?
                     .clone();
 
                 interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
@@ -1605,10 +1602,7 @@ mod interpreter_tests {
         let mut interpreter = Interpreter::default();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected = ValueAndType::new(
-            Value::U8(5),
-            u8(),
-        );
+        let expected = ValueAndType::new(Value::U8(5), u8());
 
         assert_eq!(result.get_val().unwrap(), expected);
     }
