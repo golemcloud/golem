@@ -1297,8 +1297,8 @@ mod interpreter_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{InstructionId, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32};
+    use crate::{compile, Expr, InstructionId, VariableId};
+    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32, u64};
     use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -1520,6 +1520,36 @@ mod interpreter_tests {
 
         let result = interpreter.run(instructions).await.unwrap();
         assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_for_select_index_2() {
+        // infinite computation will respond with an error - than a stack overflow
+        // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
+        let expr = r#"
+              let list: list<u8> = [1, 2, 3, 4, 5];
+              let index: u8 = 10;
+              list[index]
+              "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let compiled = compile(&expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected = ValueAndType::new(
+            Value::List(vec![
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(4),
+            ]),
+            list(u64()),
+        );
+
+        assert_eq!(result.get_val().unwrap(), expected);
     }
 
     mod global_variable_tests {
@@ -2608,35 +2638,6 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await;
             assert!(result.is_err());
-        }
-
-        async fn test_range_with_comprehension_4() {
-            // infinite computation will respond with an error - than a stack overflow
-            // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
-            let expr = r#"
-              let list: list<u8> = [1, 2, 3, 4, 5];
-              let x = 1;
-              list[x]
-              "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiled = compile(&expr, &vec![]).unwrap();
-
-            let mut interpreter = Interpreter::default();
-            let result = interpreter.run(compiled.byte_code).await.unwrap();
-
-            let expected = ValueAndType::new(
-                Value::List(vec![
-                    Value::U64(1),
-                    Value::U64(2),
-                    Value::U64(3),
-                    Value::U64(4),
-                ]),
-                list(u64()),
-            );
-
-            assert_eq!(result.get_val().unwrap(), expected);
         }
 
         #[test]

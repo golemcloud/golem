@@ -774,11 +774,14 @@ mod internal {
         let index_expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
+
+
         let inferred_type_of_index_expr = index_expr.inferred_type();
 
         let expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
+
         let inferred_type_of_selection_expr = expr.inferred_type();
         let (index_type, expression_type) = get_inferred_type_of_selection_dynamic(
             original_selection_expr,
@@ -786,6 +789,9 @@ mod internal {
             &inferred_type_of_selection_expr,
             &inferred_type_of_index_expr,
         )?;
+
+        dbg!(index_type.clone());
+        dbg!(expression_type.clone());
 
        let new_select_index = match index_type {
             SelectionIndexType::Index(index_type) => {
@@ -1474,6 +1480,7 @@ mod internal {
     }
 
 
+    #[derive(Debug, Clone)]
     pub(crate) enum SelectionIndexType {
         Range(InferredType), // Range type
         Index(InferredType), // This should be a number type
@@ -1501,43 +1508,33 @@ mod internal {
 
         let list_type = refined_list.inner_type();
 
-        let refined_index = select_from_type.as_number();
+        let is_number = select_index_type.contains_only_number();
 
-        let index_type: SelectionIndexType = match refined_index {
-            Ok(number_type) => SelectionIndexType::Index(InferredType::from(number_type)),
-            Err(_) => {
-                let range = RangeType::refine(select_index_type).ok_or({
-                    TypeMismatchError {
-                        expr_with_wrong_type: original_selection_expr.clone(),
-                        parent_expr: None,
-                        expected_type: ExpectedType::Kind(TypeKind::Number),
-                        actual_type: ActualType::Inferred(select_index_type.clone()),
-                        field_path: Default::default(),
-                        additional_error_detail: vec![format!(
-                            "Cannot get index {} since it is neither a number type (or a range type). Found: {:?}",
-                            selected_index, select_index_type
-                        )],
-                    }
-                })?;
+        if is_number {
+            Ok((SelectionIndexType::Index(select_index_type.clone()), list_type))
+        } else {
+            let range = RangeType::refine(select_index_type).ok_or({
+                TypeMismatchError {
+                    expr_with_wrong_type: original_selection_expr.clone(),
+                    parent_expr: None,
+                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    actual_type: ActualType::Inferred(select_index_type.clone()),
+                    field_path: Default::default(),
+                    additional_error_detail: vec![format!(
+                        "Cannot get index {} since it is neither a number type (or a range type). Found: {:?}",
+                        selected_index, select_index_type
+                    )],
+                }
+            })?;
 
-                // Selecting a range results in a list type
-                let range = range.inner_types().0;
-                let range_type = InferredType::Range {
-                    from: Box::new(range[0].clone()),
-                    to: range.last().map(|x| Box::new(x.clone())),
-                };
+            // Selecting a range results in a list type
+            let range = range.inner_types().0;
+            let range_type = InferredType::Range {
+                from: Box::new(range[0].clone()),
+                to: range.last().map(|x| Box::new(x.clone())),
+            };
 
-                SelectionIndexType::Range(range_type)
-            }
-        };
-
-        match index_type {
-            SelectionIndexType::Range(_) => {
-                Ok((index_type, InferredType::List(Box::new(list_type))))
-            }
-            SelectionIndexType::Index(_) => {
-                Ok((index_type, list_type))
-            }
+            Ok((SelectionIndexType::Range(range_type), InferredType::List(Box::new(list_type))))
         }
     }
 

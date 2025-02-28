@@ -120,6 +120,39 @@ impl InferredType {
             .unwrap_or(self.get_type_kind().to_string())
     }
 
+    pub fn contains_only_number(&self) -> bool {
+        match self {
+            InferredType::S8
+            | InferredType::U8
+            | InferredType::S16
+            | InferredType::U16
+            | InferredType::S32
+            | InferredType::U32
+            | InferredType::S64
+            | InferredType::U64
+            | InferredType::F32
+            | InferredType::F64 => true,
+            InferredType::AllOf(types) => types.iter().all(|t| t.contains_only_number()),
+            InferredType::OneOf(types) => types.iter().all(|t| t.contains_only_number()),
+            InferredType::Bool => false,
+            InferredType::Chr => false,
+            InferredType::Str => false,
+            InferredType::List(_) => false,
+            InferredType::Tuple(_) => false,
+            InferredType::Record(_) => false,
+            InferredType::Flags(_) => false,
+            InferredType::Enum(_) => false,
+            InferredType::Option(_) => false,
+            InferredType::Result { .. } => false,
+            InferredType::Variant(_) => false,
+            InferredType::Resource { .. } => false,
+            InferredType::Range { .. } => false,
+            InferredType::Instance { .. } => false,
+            InferredType::Unknown => false,
+            InferredType::Sequence(_) => false,
+        }
+    }
+
     pub fn as_number(&self) -> Result<InferredNumber, String> {
         fn go(inferred_type: &InferredType, found: &mut Vec<InferredNumber>) -> Result<(), String> {
             match inferred_type {
@@ -205,6 +238,7 @@ impl InferredType {
                 InferredType::Result { .. } => Err(format!("used as {}", "result")),
                 InferredType::Variant(_) => Err(format!("used as {}", "variant")),
 
+                // It's ok to have one-of as far as there is a precise number already `found`
                 InferredType::OneOf(_) => {
                     if found.is_empty() {
                         Err("not a number.".to_string())
