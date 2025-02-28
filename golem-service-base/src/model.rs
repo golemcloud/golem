@@ -1251,6 +1251,7 @@ pub struct WorkerMetadata {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<u64, ResourceMetadata>,
     pub active_plugins: HashSet<PluginInstallationId>,
+    pub component_name: ComponentName,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -1286,6 +1287,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .into_iter()
                 .map(|id| id.try_into())
                 .collect::<Result<HashSet<_>, _>>()?,
+            component_name: ComponentName(value.component_name),
         })
     }
 }
@@ -1316,6 +1318,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
                 .into_iter()
                 .map(|id| id.into())
                 .collect(),
+            component_name: value.component_name.0,
         }
     }
 }

@@ -1281,6 +1281,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         },
                         ..initial_status
                     },
+                    component_name: component_metadata.component_name.clone(),
                 };
                 let execution_status = this
                     .worker_service()

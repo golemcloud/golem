@@ -1644,6 +1644,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             total_linear_memory_size: metadata.last_known_status.total_linear_memory_size,
             owned_resources,
             active_plugins: active_plugins.into_iter().map(|id| id.into()).collect(),
+            component_name: metadata.component_name.clone(),
         }
     }
 }

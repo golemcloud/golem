@@ -24,6 +24,7 @@ message WorkerMetadata {
   uint64 total_linear_memory_size = 13;
   map<uint64, ResourceMetadata> owned_resources = 14;
   repeated golem.common.PluginInstallationId active_plugins = 15;
+  string component_name = 16;
 }
 
 message UpdateRecord {

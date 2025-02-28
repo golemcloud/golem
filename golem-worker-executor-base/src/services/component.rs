@@ -74,6 +74,7 @@ pub struct ComponentMetadataPoly<ComponentOwner> {
     pub files: Vec<InitialComponentFile>,
     pub plugin_installations: Vec<PluginInstallation>,
     pub component_owner: ComponentOwner,
+    pub component_name: String,
 
     #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -93,6 +94,7 @@ impl From<LocalFileSystemComponentMetadata> for ComponentMetadata<DefaultGolemTy
             plugin_installations: vec![],
             component_owner: DefaultComponentOwner,
             dynamic_linking: value.dynamic_linking,
+            component_name: value.component_name,
         }
     }
 }
@@ -657,6 +659,7 @@ async fn get_metadata_via_grpc(
                             })?,
                     ),
                     component_owner: DefaultComponentOwner,
+                    component_name: component.component_name.clone(),
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);

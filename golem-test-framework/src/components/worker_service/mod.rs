@@ -1474,6 +1474,7 @@ fn http_worker_metadata_to_grpc(
                 value: Some(id.into()),
             })
             .collect(),
+        component_name: worker_metadata.component_name,
     }
 }
 

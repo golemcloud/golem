@@ -500,10 +500,15 @@ pub struct WorkerMetadata {
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
+    pub component_name: String,
 }
 
 impl WorkerMetadata {
-    pub fn default(worker_id: WorkerId, account_id: AccountId) -> WorkerMetadata {
+    pub fn default(
+        worker_id: WorkerId,
+        component_name: String,
+        account_id: AccountId,
+    ) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
             args: vec![],
@@ -512,6 +517,7 @@ impl WorkerMetadata {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
+            component_name,
         }
     }
 
@@ -2320,6 +2326,7 @@ mod tests {
                 component_version: 1,
                 ..WorkerStatusRecord::default()
             },
+            component_name: "component-name".to_string(),
         };
 
         assert!(
