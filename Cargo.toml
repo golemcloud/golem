@@ -68,7 +68,6 @@ exclude = [
     "test-components/wasi-http-incoming-request-handler-state",
     "test-components/write-stderr",
     "test-components/write-stdout",
-    "app/desktop/src-tauri"
 ]
 
 [workspace.dependencies]
