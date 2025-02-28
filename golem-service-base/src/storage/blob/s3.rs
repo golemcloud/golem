@@ -47,11 +47,12 @@ impl S3BlobStorage {
         let region = config.region.clone();
 
         let mut config_builder =
-            aws_config::defaults(BehaviorVersion::v2024_03_28()).region(Region::new(region));
+            aws_config::defaults(BehaviorVersion::v2024_03_28())
+                .region(Region::new(region));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
             info!(
-                "The AWS endpoint urls for blob storage is {}",
+                "The AWS endpoint url for blob storage is {}",
                 &endpoint_url
             );
             config_builder = config_builder.endpoint_url(endpoint_url);
@@ -455,7 +456,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<BlobMetadata>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let op_id = format!("{} - {:?}", bucket, key);
+        let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
             target_label,

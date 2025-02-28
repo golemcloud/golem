@@ -88,7 +88,7 @@ impl InitialComponentFilesService {
             .blob_storage
             .get_metadata(
                 INITIAL_COMPONENT_FILES_LABEL,
-                "put",
+                "get_metadata",
                 BlobStorageNamespace::InitialComponentFiles {
                     account_id: account_id.clone(),
                 },
