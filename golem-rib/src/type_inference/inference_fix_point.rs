@@ -18,17 +18,12 @@ pub fn type_inference_fix_point<F, E>(mut scan_and_infer: F, expr: &mut Expr) ->
 where
     F: FnMut(&mut Expr) -> Result<(), E>,
 {
-    let mut max = 1;
     loop {
         let original = expr.clone();
 
         scan_and_infer(expr)?;
 
         let terminated = internal::equivalent_exprs(&original, expr);
-
-        if max == 0 {
-            break;
-        }
 
         if terminated {
             break;
