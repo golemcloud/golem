@@ -228,11 +228,8 @@ impl InvocationContextSpan {
             current = match &*current {
                 Self::Local { state, .. } => {
                     let state = state.read().unwrap();
-                    match state.attributes.get(key) {
-                        Some(value) => {
-                            result.push(value.clone());
-                        }
-                        None => {}
+                    if let Some(value) = state.attributes.get(key) {
+                        result.push(value.clone());
                     }
                     match state.parent.as_ref() {
                         Some(parent) => parent.clone(),
@@ -627,7 +624,7 @@ mod protobuf {
                         start,
                         state: RwLock::new(LocalInvocationContextSpanState {
                             parent: None,
-                            attributes: attributes,
+                            attributes,
                         }),
                     })
                 }

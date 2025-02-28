@@ -415,7 +415,7 @@ impl InvocationContext {
             // If we already have one of the new spans, we keep the old one and update the links
             // This can happen with circular RPC invocations.
 
-            if !self.spans.contains_key(&span_id) {
+            if !self.spans.contains_key(span_id) {
                 to_update.push(new_span.clone()); // parent reference in this span may have to be replaced
                 self.spans.insert(span_id.clone(), new_span.clone());
             } else {
