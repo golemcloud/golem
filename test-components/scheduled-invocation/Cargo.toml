@@ -1,29 +1,7 @@
-[package]
-name = "golem-it-scheduled-invocation"
-version = "0.0.1"
-edition = "2021"
+[workspace]
+resolver = "2"
 
-[package.metadata.component.target]
-path = "wit"
-
-[package.metadata.component.target.dependencies]
-"golem:api" = { path = "wit/deps/golem-1.x" }
-"golem:rpc" = { path = "wit/deps/wasm-rpc" }
-"wasi:clocks" = { path = "wit/deps/clocks" }
-"wasi:io" = { path = "wit/deps/io" }
-
-[dependencies]
-time = "0.3.36"
-uuid = "1.13.1"
-
-[dependencies.wit-bindgen-rt]
-version = "0.37.0"
-features = ["bitflags"]
-
-[lib]
-path = "src/lib.rs"
-crate-type = ["cdylib"]
-required-features = []
+members = ["server", "client"]
 
 [profile.release]
 opt-level = "s"

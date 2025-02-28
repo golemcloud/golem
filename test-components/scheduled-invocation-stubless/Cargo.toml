@@ -1,9 +1,0 @@
-[workspace]
-resolver = "2"
-
-members = ["server", "client"]
-
-[profile.release]
-opt-level = "s"
-lto = true
-strip = true
