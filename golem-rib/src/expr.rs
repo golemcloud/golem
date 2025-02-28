@@ -28,6 +28,7 @@ use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::Parser;
 use combine::{eof, EasyParser};
+use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
@@ -53,6 +54,7 @@ pub enum Expr {
         inferred_type: InferredType,
         source_span: SourceSpan,
     },
+    // Kept for backward compatibility
     SelectIndex {
         expr: Box<Expr>,
         index: usize,
@@ -60,9 +62,24 @@ pub enum Expr {
         inferred_type: InferredType,
         source_span: SourceSpan,
     },
+    // Can handle x[i] (and not just x[1]) than concrete numbers
+    // or select x[i..] etc
+    // This can handle SelectIndex, but SelectIndex is kept for backward compatibility
+    SelectDynamic {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+        source_span: SourceSpan,
+    },
     Sequence {
         exprs: Vec<Expr>,
         type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+        source_span: SourceSpan,
+    },
+    Range {
+        range: Range,
         inferred_type: InferredType,
         source_span: SourceSpan,
     },
@@ -657,6 +674,47 @@ impl Expr {
         }
     }
 
+    pub fn range(from: Expr, to: Expr) -> Self {
+        Expr::Range {
+            range: Range::Range {
+                from: Box::new(from.clone()),
+                to: Box::new(to.clone()),
+            },
+            inferred_type: InferredType::Range {
+                from: Box::new(from.inferred_type()),
+                to: Some(Box::new(to.inferred_type())),
+            },
+            source_span: SourceSpan::default(),
+        }
+    }
+
+    pub fn range_from(from: Expr) -> Self {
+        Expr::Range {
+            range: Range::RangeFrom {
+                from: Box::new(from.clone()),
+            },
+            inferred_type: InferredType::Range {
+                from: Box::new(from.inferred_type()),
+                to: None,
+            },
+            source_span: SourceSpan::default(),
+        }
+    }
+
+    pub fn range_inclusive(from: Expr, to: Expr) -> Self {
+        Expr::Range {
+            range: Range::RangeInclusive {
+                from: Box::new(from.clone()),
+                to: Box::new(to.clone()),
+            },
+            inferred_type: InferredType::Range {
+                from: Box::new(from.inferred_type()),
+                to: Some(Box::new(to.inferred_type())),
+            },
+            source_span: SourceSpan::default(),
+        }
+    }
+
     pub fn let_binding(
         name: impl AsRef<str>,
         expr: Expr,
@@ -885,6 +943,16 @@ impl Expr {
         }
     }
 
+    pub fn select_dynamic(expr: Expr, index: Expr, type_annotation: Option<TypeName>) -> Self {
+        Expr::SelectDynamic {
+            expr: Box::new(expr),
+            index: Box::new(index),
+            type_annotation,
+            inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
+        }
+    }
+
     pub fn select_field_with_type_annotation(
         expr: Expr,
         field: impl AsRef<str>,
@@ -966,6 +1034,7 @@ impl Expr {
             Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
             | Expr::SelectIndex { inferred_type, .. }
+            | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -998,6 +1067,7 @@ impl Expr {
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::Call { inferred_type, .. }
+            | Expr::Range { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. } => inferred_type.clone(),
         }
     }
@@ -1013,6 +1083,7 @@ impl Expr {
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
+
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
         self.infer_function_call_types(function_type_registry)?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
@@ -1142,6 +1213,7 @@ impl Expr {
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
             | Expr::SelectIndex { inferred_type, .. }
+            | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -1173,6 +1245,7 @@ impl Expr {
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Range { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -1191,6 +1264,7 @@ impl Expr {
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
             | Expr::SelectIndex { source_span, .. }
+            | Expr::SelectDynamic { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
             | Expr::Tuple { source_span, .. }
@@ -1222,6 +1296,7 @@ impl Expr {
             | Expr::ListComprehension { source_span, .. }
             | Expr::ListReduce { source_span, .. }
             | Expr::InvokeMethodLazy { source_span, .. }
+            | Expr::Range { source_span, .. }
             | Expr::Call { source_span, .. } => source_span.clone(),
         }
     }
@@ -1238,6 +1313,7 @@ impl Expr {
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
             | Expr::SelectIndex { source_span, .. }
+            | Expr::SelectDynamic { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
             | Expr::Tuple { source_span, .. }
@@ -1266,6 +1342,7 @@ impl Expr {
             | Expr::And { source_span, .. }
             | Expr::Or { source_span, .. }
             | Expr::GetTag { source_span, .. }
+            | Expr::Range { source_span, .. }
             | Expr::ListComprehension { source_span, .. }
             | Expr::ListReduce { source_span, .. }
             | Expr::InvokeMethodLazy { source_span, .. }
@@ -1289,6 +1366,7 @@ impl Expr {
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
             | Expr::SelectIndex { inferred_type, .. }
+            | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -1320,6 +1398,7 @@ impl Expr {
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Range { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -1367,6 +1446,51 @@ impl Expr {
 
     pub fn untyped_number_with_type_name(big_decimal: BigDecimal, type_name: TypeName) -> Expr {
         Expr::number(big_decimal, Some(type_name), InferredType::number())
+    }
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Range {
+    Range { from: Box<Expr>, to: Box<Expr> },
+    RangeInclusive { from: Box<Expr>, to: Box<Expr> },
+    RangeFrom { from: Box<Expr> },
+}
+
+impl Range {
+    pub fn from(&self) -> Option<&Expr> {
+        match self {
+            Range::Range { from, .. } => Some(from),
+            Range::RangeInclusive { from, .. } => Some(from),
+            Range::RangeFrom { from } => Some(from),
+        }
+    }
+
+    pub fn to(&self) -> Option<&Expr> {
+        match self {
+            Range::Range { to, .. } => Some(to),
+            Range::RangeInclusive { to, .. } => Some(to),
+            Range::RangeFrom { .. } => None,
+        }
+    }
+
+    pub fn inclusive(&self) -> bool {
+        matches!(self, Range::RangeInclusive { .. })
+    }
+
+    pub fn get_exprs_mut(&mut self) -> Vec<&mut Box<Expr>> {
+        match self {
+            Range::Range { from, to } => vec![from, to],
+            Range::RangeInclusive { from, to } => vec![from, to],
+            Range::RangeFrom { from } => vec![from],
+        }
+    }
+
+    pub fn get_exprs(&self) -> Vec<&Expr> {
+        match self {
+            Range::Range { from, to } => vec![from.as_ref(), to.as_ref()],
+            Range::RangeInclusive { from, to } => vec![from.as_ref(), to.as_ref()],
+            Range::RangeFrom { from } => vec![from.as_ref()],
+        }
     }
 }
 
@@ -1597,11 +1721,40 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
         let expr = match expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
                 let name = expr.name;
-                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
+                let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
                 let expr_: golem_api_grpc::proto::golem::rib::Expr =
                     *expr.expr.ok_or("Missing expr")?;
                 let expr: Expr = expr_.try_into()?;
-                Expr::let_binding(name, expr, type_name)
+                Expr::let_binding(name, expr, type_annotation)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(expr) => {
+                let selection = *expr.expr.ok_or("Missing expr")?;
+                let field = *expr.index.ok_or("Missing index")?;
+                let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
+
+                Expr::select_dynamic(selection.try_into()?, field.try_into()?, type_annotation)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Range(range) => {
+                let range_expr = range.range_expr.ok_or("Missing range expr")?;
+
+                match range_expr {
+                    RangeExpr::RangeFrom(range_from) => {
+                        let from = range_from.from.ok_or("Missing from expr")?;
+                        Expr::range_from((*from).try_into()?)
+                    }
+                    RangeExpr::Range(range) => {
+                        let from = range.from.ok_or("Missing from expr")?;
+                        let to = range.to.ok_or("Missing to expr")?;
+                        Expr::range((*from).try_into()?, (*to).try_into()?)
+                    }
+                    RangeExpr::RangeInclusive(range_inclusive) => {
+                        let from = range_inclusive.from.ok_or("Missing from expr")?;
+                        let to = range_inclusive.to.ok_or("Missing to expr")?;
+                        Expr::range_inclusive((*from).try_into()?, (*to).try_into()?)
+                    }
+                }
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
@@ -1697,13 +1850,13 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
                 golem_api_grpc::proto::golem::rib::SequenceExpr { exprs, type_name },
             ) => {
-                let type_name = type_name.map(TypeName::try_from).transpose()?;
+                let type_annotation = type_name.map(TypeName::try_from).transpose()?;
 
                 let exprs: Vec<Expr> = exprs
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Expr::sequence(exprs, type_name)
+                Expr::sequence(exprs, type_annotation)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
@@ -2016,7 +2169,8 @@ impl Serialize for Expr {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::{ArmPattern, Expr, MatchArm};
+    use crate::{ArmPattern, Expr, MatchArm, Range};
+    use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
@@ -2033,6 +2187,7 @@ mod protobuf {
                         type_name: type_annotation.map(|t| t.into()),
                     }),
                 )),
+
                 Expr::SelectField {
                     expr,
                     field,
@@ -2045,6 +2200,45 @@ mod protobuf {
                         type_name: type_annotation.map(|t| t.into()),
                     }),
                 )),
+
+                Expr::Range { range, .. } => match range {
+                    Range::RangeFrom { from } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                                range_expr: Some(RangeExpr::RangeFrom(Box::new(
+                                    golem_api_grpc::proto::golem::rib::RangeFrom {
+                                        from: Some(Box::new((*from).into())),
+                                    },
+                                ))),
+                            }),
+                        ))
+                    }
+                    Range::Range { from, to } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                                range_expr: Some(RangeExpr::Range(Box::new(
+                                    golem_api_grpc::proto::golem::rib::Range {
+                                        from: Some(Box::new((*from).into())),
+                                        to: Some(Box::new((*to).into())),
+                                    },
+                                ))),
+                            }),
+                        ))
+                    }
+                    Range::RangeInclusive { from, to } => {
+                        Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
+                            Box::new(golem_api_grpc::proto::golem::rib::RangeExpr {
+                                range_expr: Some(RangeExpr::RangeInclusive(Box::new(
+                                    golem_api_grpc::proto::golem::rib::RangeInclusive {
+                                        from: Some(Box::new((*from).into())),
+                                        to: Some(Box::new((*to).into())),
+                                    },
+                                ))),
+                            }),
+                        ))
+                    }
+                },
+
                 Expr::SelectIndex {
                     expr,
                     index,
@@ -2057,6 +2251,22 @@ mod protobuf {
                         type_name: type_annotation.map(|t| t.into()),
                     }),
                 )),
+
+                Expr::SelectDynamic {
+                    expr,
+                    index,
+                    type_annotation,
+                    ..
+                } => Some(
+                    golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(Box::new(
+                        golem_api_grpc::proto::golem::rib::SelectDynamicExpr {
+                            expr: Some(Box::new((*expr).into())),
+                            index: Some(Box::new((*index).into())),
+                            type_name: type_annotation.map(|t| t.into()),
+                        },
+                    )),
+                ),
+
                 Expr::Sequence {
                     exprs: expressions,
                     type_annotation,

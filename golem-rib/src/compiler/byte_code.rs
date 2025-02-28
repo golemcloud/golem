@@ -90,15 +90,16 @@ mod protobuf {
 }
 
 mod internal {
-    use crate::compiler::desugar::desugar_pattern_match;
+    use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR, VariableId, WorkerNamePresence,
+        InferredType, InstructionId, Range, RibIR, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
+    use golem_wasm_ast::analysis::analysed_type::bool;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -294,6 +295,19 @@ mod internal {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::SelectField(field.clone()));
             }
+
+            Expr::SelectDynamic { expr, index, .. } => match index.inferred_type() {
+                InferredType::Range { .. } => {
+                    let list_comprehension = desugar_range_selection(expr, index);
+                    stack.push(ExprState::from_expr(&list_comprehension));
+                }
+                _ => {
+                    stack.push(ExprState::from_expr(index.deref()));
+                    stack.push(ExprState::from_expr(expr.deref()));
+                    instructions.push(RibIR::SelectDynamic);
+                }
+            },
+
             Expr::SelectIndex { expr, index, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::SelectIndex(*index));
@@ -596,6 +610,25 @@ mod internal {
                 )
             }
 
+            range_expr @ Expr::Range {
+                range,
+                inferred_type,
+                ..
+            } => match inferred_type {
+                InferredType::Range { .. } => {
+                    let analysed_type = convert_to_analysed_type(range_expr, inferred_type)?;
+
+                    handle_range(range, stack, analysed_type, instructions);
+                }
+
+                _ => {
+                    return Err(format!(
+                        "Range should have inferred type Range {:?}",
+                        inferred_type
+                    ));
+                }
+            },
+
             // Invoke is always handled by the CallType::Function branch
             Expr::InvokeMethodLazy { .. } => {}
 
@@ -651,6 +684,36 @@ mod internal {
         }
     }
 
+    fn handle_range(
+        range: &Range,
+        stack: &mut Vec<ExprState>,
+        analysed_type: AnalysedType,
+        instructions: &mut Vec<RibIR>,
+    ) {
+        let from = range.from();
+        let to = range.to();
+        let inclusive = range.inclusive();
+
+        if let Some(from) = from {
+            stack.push(ExprState::from_expr(from));
+            instructions.push(RibIR::UpdateRecord("from".to_string()));
+        }
+
+        if let Some(to) = to {
+            stack.push(ExprState::from_expr(to));
+            instructions.push(RibIR::UpdateRecord("to".to_string()));
+        }
+
+        stack.push(ExprState::from_ir(RibIR::PushLit(ValueAndType::new(
+            Value::Bool(inclusive),
+            bool(),
+        ))));
+
+        instructions.push(RibIR::UpdateRecord("inclusive".to_string()));
+
+        instructions.push(RibIR::CreateAndPushRecord(analysed_type));
+    }
+
     fn handle_list_comprehension(
         instruction_id: &mut InstructionId,
         stack: &mut Vec<ExprState>,
@@ -661,7 +724,7 @@ mod internal {
     ) {
         stack.push(ExprState::from_expr(iterable_expr));
 
-        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+        stack.push(ExprState::from_ir(RibIR::ToIterator));
 
         stack.push(ExprState::from_ir(RibIR::CreateSink(sink_type.clone())));
 
@@ -707,7 +770,7 @@ mod internal {
             reduce_variable.clone(),
         )));
 
-        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+        stack.push(ExprState::from_ir(RibIR::ToIterator));
 
         let loop_start_label = instruction_id.increment_mut();
 

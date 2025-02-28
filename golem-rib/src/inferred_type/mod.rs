@@ -53,6 +53,10 @@ pub enum InferredType {
         resource_id: u64,
         resource_mode: u8,
     },
+    Range {
+        from: Box<InferredType>,
+        to: Option<Box<InferredType>>,
+    },
     Instance {
         instance_type: Box<InstanceType>,
     },
@@ -77,6 +81,29 @@ pub enum InferredNumber {
     F64,
 }
 
+impl From<InferredNumber> for InferredType {
+    fn from(inferred_number: InferredNumber) -> Self {
+        match inferred_number {
+            InferredNumber::S8 => InferredType::S8,
+            InferredNumber::U8 => InferredType::U8,
+            InferredNumber::S16 => InferredType::S16,
+            InferredNumber::U16 => InferredType::U16,
+            InferredNumber::S32 => InferredType::S32,
+            InferredNumber::U32 => InferredType::U32,
+            InferredNumber::S64 => InferredType::S64,
+            InferredNumber::U64 => InferredType::U64,
+            InferredNumber::F32 => InferredType::F32,
+            InferredNumber::F64 => InferredType::F64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct RangeType {
+    from: Box<InferredType>,
+    to: Option<Box<InferredType>>,
+}
+
 impl Display for InferredNumber {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let type_name = TypeName::from(self);
@@ -91,6 +118,39 @@ impl InferredType {
         TypeName::try_from(self.clone())
             .map(|tn| tn.to_string())
             .unwrap_or(self.get_type_kind().to_string())
+    }
+
+    pub fn contains_only_number(&self) -> bool {
+        match self {
+            InferredType::S8
+            | InferredType::U8
+            | InferredType::S16
+            | InferredType::U16
+            | InferredType::S32
+            | InferredType::U32
+            | InferredType::S64
+            | InferredType::U64
+            | InferredType::F32
+            | InferredType::F64 => true,
+            InferredType::AllOf(types) => types.iter().all(|t| t.contains_only_number()),
+            InferredType::OneOf(types) => types.iter().all(|t| t.contains_only_number()),
+            InferredType::Bool => false,
+            InferredType::Chr => false,
+            InferredType::Str => false,
+            InferredType::List(_) => false,
+            InferredType::Tuple(_) => false,
+            InferredType::Record(_) => false,
+            InferredType::Flags(_) => false,
+            InferredType::Enum(_) => false,
+            InferredType::Option(_) => false,
+            InferredType::Result { .. } => false,
+            InferredType::Variant(_) => false,
+            InferredType::Resource { .. } => false,
+            InferredType::Range { .. } => false,
+            InferredType::Instance { .. } => false,
+            InferredType::Unknown => false,
+            InferredType::Sequence(_) => false,
+        }
     }
 
     pub fn as_number(&self) -> Result<InferredNumber, String> {
@@ -165,6 +225,7 @@ impl InferredType {
 
                     Ok(())
                 }
+                InferredType::Range { .. } => Err("used as range".to_string()),
                 InferredType::Bool => Err(format!("used as {}", "bool")),
                 InferredType::Chr => Err(format!("used as {}", "char")),
                 InferredType::Str => Err(format!("used as {}", "string")),
@@ -177,6 +238,7 @@ impl InferredType {
                 InferredType::Result { .. } => Err(format!("used as {}", "result")),
                 InferredType::Variant(_) => Err(format!("used as {}", "variant")),
 
+                // It's ok to have one-of as far as there is a precise number already `found`
                 InferredType::OneOf(_) => {
                     if found.is_empty() {
                         Err("not a number.".to_string())
@@ -369,18 +431,31 @@ impl InferredType {
 
             (InferredType::OneOf(existing_types), InferredType::OneOf(new_types)) => {
                 let mut one_of_types = new_types.clone();
-                one_of_types.extend(existing_types.clone());
+                if &new_types == existing_types {
+                    return InferredType::OneOf(one_of_types);
+                } else {
+                    one_of_types.extend(existing_types.clone());
+                }
 
                 InferredType::one_of(one_of_types).unwrap_or(InferredType::Unknown)
             }
 
-            (InferredType::OneOf(_), new_type) => {
-                InferredType::all_of(vec![self.clone(), new_type]).unwrap_or(InferredType::Unknown)
+            (InferredType::OneOf(existing_types), new_type) => {
+                if existing_types.contains(&new_type) {
+                    new_type
+                } else {
+                    InferredType::all_of(vec![self.clone(), new_type])
+                        .unwrap_or(InferredType::Unknown)
+                }
             }
 
             (current_type, InferredType::OneOf(newtypes)) => {
-                InferredType::all_of(vec![current_type.clone(), InferredType::OneOf(newtypes)])
-                    .unwrap_or(InferredType::Unknown)
+                if newtypes.contains(current_type) {
+                    current_type.clone()
+                } else {
+                    InferredType::all_of(vec![current_type.clone(), InferredType::OneOf(newtypes)])
+                        .unwrap_or(InferredType::Unknown)
+                }
             }
 
             (current_type, new_type) => {
@@ -494,6 +569,23 @@ impl TryFrom<InferredType> for AnalysedType {
             }
             InferredType::Sequence(_) => {
                 Err("Cannot convert function return sequence type to analysed type".to_string())
+            }
+            InferredType::Range { from, to } => {
+                let from: AnalysedType = (*from).try_into()?;
+                let to: Option<AnalysedType> = to.map(|t| (*t).try_into()).transpose()?;
+                let analysed_type = match (from, to) {
+                    (from_type, Some(to_type)) => record(vec![
+                        field("from", option(from_type)),
+                        field("to", option(to_type)),
+                        field("inclusive", bool()),
+                    ]),
+
+                    (from_type, None) => record(vec![
+                        field("from", option(from_type)),
+                        field("inclusive", bool()),
+                    ]),
+                };
+                Ok(analysed_type)
             }
         }
     }

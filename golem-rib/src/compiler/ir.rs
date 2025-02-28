@@ -35,6 +35,7 @@ pub enum RibIR {
     PushFlag(ValueAndType), // More or less like a literal, compiler can form the value directly
     SelectField(String),
     SelectIndex(usize),
+    SelectDynamic,
     EqualTo,
     GreaterThan,
     And,
@@ -59,7 +60,7 @@ pub enum RibIR {
     Divide(AnalysedType),
     Multiply(AnalysedType),
     Negate,
-    ListToIterator,
+    ToIterator,
     CreateSink(AnalysedType),
     AdvanceIterator,
     PushToSink,
@@ -393,6 +394,7 @@ mod protobuf {
                 }
                 Instruction::SelectField(value) => Ok(RibIR::SelectField(value)),
                 Instruction::SelectIndex(value) => Ok(RibIR::SelectIndex(value as usize)),
+                Instruction::SelectDynamic(_) => Ok(RibIR::SelectDynamic),
                 Instruction::EqualTo(_) => Ok(RibIR::EqualTo),
                 Instruction::GreaterThan(_) => Ok(RibIR::GreaterThan),
                 Instruction::LessThan(_) => Ok(RibIR::LessThan),
@@ -508,7 +510,7 @@ mod protobuf {
                         function_reference_type,
                     ))
                 }
-                Instruction::ListToIterator(_) => Ok(RibIR::ListToIterator),
+                Instruction::ListToIterator(_) => Ok(RibIR::ToIterator),
                 Instruction::CreateSink(create_sink) => {
                     let result = create_sink
                         .list_type
@@ -572,6 +574,9 @@ mod protobuf {
                 RibIR::EqualTo => Instruction::EqualTo(EqualTo {}),
                 RibIR::GreaterThan => Instruction::GreaterThan(GreaterThan {}),
                 RibIR::LessThan => Instruction::LessThan(LessThan {}),
+                RibIR::SelectDynamic => {
+                    Instruction::SelectDynamic(golem_api_grpc::proto::golem::rib::SelectDynamic {})
+                }
                 RibIR::GreaterThanOrEqualTo => {
                     Instruction::GreaterThanOrEqualTo(GreaterThanOrEqualTo {})
                 }
@@ -656,7 +661,7 @@ mod protobuf {
                     })
                 }
 
-                RibIR::ListToIterator => Instruction::ListToIterator(
+                RibIR::ToIterator => Instruction::ListToIterator(
                     golem_api_grpc::proto::golem::rib::ListToIterator {},
                 ),
                 RibIR::CreateSink(analysed_type) => {

@@ -34,6 +34,7 @@ mod not;
 mod number;
 mod optional;
 mod pattern_match;
+mod range_type;
 mod record;
 mod result;
 pub(crate) mod rib_expr;

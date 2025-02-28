@@ -2,6 +2,7 @@ use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list};
 use crate::InferredType;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Debug)]
 pub struct Unified(InferredType);
 
 impl Unified {
@@ -70,6 +71,18 @@ pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, Stri
         InferredType::List(typ) => {
             let unified_type = typ.try_unify()?;
             Ok(InferredType::List(Box::new(unified_type)))
+        }
+
+        InferredType::Range {
+            from: start,
+            to: end,
+        } => {
+            let unified_start = start.try_unify()?;
+            let unified_end = end.clone().map(|end| end.try_unify()).transpose()?;
+            Ok(InferredType::Range {
+                from: Box::new(unified_start),
+                to: unified_end.map(Box::new),
+            })
         }
 
         InferredType::Flags(flags) => Ok(InferredType::Flags(flags.clone())),
@@ -479,6 +492,30 @@ pub fn unify_with_required(
                     ))
                 }
             }
+            (
+                InferredType::Range {
+                    from: a_start,
+                    to: a_end,
+                },
+                InferredType::Range {
+                    from: b_start,
+                    to: b_end,
+                },
+            ) => {
+                let unified_start = a_start.unify_with_required(b_start)?;
+                let unified_end = match (a_end, b_end) {
+                    (Some(a_end), Some(b_end)) => Some(Box::new(a_end.unify_with_required(b_end)?)),
+                    (None, None) => None,
+                    (Some(end), None) => Some(end.clone()),
+                    (None, Some(end)) => Some(end.clone()),
+                };
+
+                Ok(InferredType::Range {
+                    from: Box::new(unified_start),
+                    to: unified_end,
+                })
+            }
+
             (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
                 if a_variants != b_variants {
                     return Err(format!(
@@ -809,6 +846,22 @@ mod internal {
                 }
                 Ok(Unified(inferred_type.clone()))
             }
+            InferredType::Range {
+                from: start,
+                to: end,
+            } => {
+                let unified_start = validate_unified_type(start)?;
+                let unified_end = end
+                    .clone()
+                    .map(|end| validate_unified_type(&end))
+                    .transpose()?;
+
+                Ok(Unified(InferredType::Range {
+                    from: Box::new(unified_start.inferred_type()),
+                    to: unified_end.map(|end| Box::new(end.inferred_type())),
+                }))
+            }
+
             instance @ InferredType::Instance { .. } => Ok(Unified(instance.clone())),
             resource @ InferredType::Resource { .. } => Ok(Unified(resource.clone())),
             InferredType::OneOf(possibilities) => Err(format!(

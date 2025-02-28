@@ -50,3 +50,6 @@ pub struct BoolType;
 pub struct FlagsType(pub Vec<String>);
 #[derive(Clone, PartialEq, Debug)]
 pub struct EnumType(pub Vec<String>);
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct RangeType(pub InferredType, pub Option<InferredType>);

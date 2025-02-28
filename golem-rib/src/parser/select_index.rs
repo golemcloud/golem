@@ -21,7 +21,16 @@ use internal::*;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier;
+use crate::parser::rib_expr::rib_expr;
 use crate::rib_source_span::GetSourcePosition;
+
+// Index can be handled as an expression itself
+// but this can be replaced once we are sure dynamic
+// selection works without any issues.
+enum IndexOrRange {
+    Index(usize),
+    Dynamic(Expr),
+}
 
 pub fn select_index<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -31,23 +40,36 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces().with(
-        (
-            base_expr().skip(spaces()),
-            char_('[').skip(spaces()),
-            pos_num().skip(spaces()),
-            char_(']').skip(spaces()),
-            optional(nested_indices()),
-        )
-            .map(
-                |(expr, _, number, _, possible_indices)| match possible_indices {
-                    Some(indices) => {
-                        build_select_index_from(Expr::select_index(expr, number), indices)
+    spaces()
+        .with(
+            (
+                sequence_base_expr().skip(spaces()),
+                char_('[').skip(spaces()),
+                attempt(pos_num().skip(spaces()).map(IndexOrRange::Index))
+                    .or(attempt(rib_expr().map(IndexOrRange::Dynamic))),
+                char_(']').skip(spaces()),
+                optional(nested_indices()),
+            )
+                .and_then(|(expr, _, index_or_range, _, possible_indices)| {
+                    match index_or_range {
+                        IndexOrRange::Index(index) => match possible_indices {
+                            Some(indices) => Ok(build_select_index_from(
+                                Expr::select_index(expr, index),
+                                indices,
+                            )),
+                            None => Ok(Expr::select_index(expr, index)),
+                        },
+                        IndexOrRange::Dynamic(index_dynamic) => match possible_indices {
+                            Some(_) => Err(RibParseError::Message(
+                                "nested indexing is currently only supported for literal numbers"
+                                    .to_string(),
+                            )),
+                            None => Ok(Expr::select_dynamic(expr, index_dynamic, None)),
+                        },
                     }
-                    None => Expr::select_index(expr, number),
-                },
-            ),
-    )
+                }),
+        )
+        .message("Invalid index selection")
 }
 
 mod internal {
@@ -106,7 +128,7 @@ mod internal {
         })
     }
 
-    pub(crate) fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
+    pub(crate) fn sequence_base_expr<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
         RibParseError: Into<

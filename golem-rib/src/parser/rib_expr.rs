@@ -14,15 +14,40 @@
 
 use combine::parser::char;
 use combine::parser::char::spaces;
-use combine::{parser, position};
+use combine::{attempt, choice, parser, position, Stream};
 use combine::{ParseError, Parser};
 
 use super::binary_op::BinaryOp;
 use crate::expr::Expr;
+use crate::parser::boolean::boolean_literal;
+use crate::parser::call::call;
+use crate::parser::cond::conditional;
 use crate::parser::errors::RibParseError;
+use crate::parser::flag::flag;
+use crate::parser::identifier::identifier;
+use crate::parser::let_binding::let_binding;
+use crate::parser::literal::literal;
+use crate::parser::multi_line_code_block::multi_line_block;
+use crate::parser::not::not;
+use crate::parser::number::number;
+use crate::parser::optional::option;
+use crate::parser::pattern_match::pattern_match;
+use crate::parser::range_type::RangeType;
+use crate::parser::rib_expr::internal::MathOrRange;
+use crate::parser::select_field::select_field;
+use crate::parser::select_index::select_index;
+use crate::parser::sequence::sequence;
+use crate::parser::tuple::tuple;
 use crate::rib_source_span::GetSourcePosition;
 
+use crate::parser::list_aggregation::list_aggregation;
+use crate::parser::list_comprehension::list_comprehension;
+use crate::parser::record::record;
+use crate::parser::result::result;
+use crate::parser::worker_function_invoke::worker_function_invoke;
+
 // A rib expression := (simple_expr, rib_expr_rest*)
+// A simple recursion never goes in recursion on LHS
 parser! {
     pub fn rib_expr[Input]()(Input) -> Expr
     where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
@@ -39,12 +64,12 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    position()
-        .and(
-            spaces()
-                .with(
-                    (internal::simple_expr(), internal::rib_expr_rest()).map(|(expr, rest)| {
-                        // FIXME: Respect operator precedence
+    (
+        position(),
+        spaces()
+            .with(
+                (simple_expr(), internal::rib_expr_rest()).map(|(expr, rest)| match rest {
+                    MathOrRange::BinaryMath(rest) => {
                         rest.into_iter().fold(expr, |acc, (op, next)| match op {
                             BinaryOp::GreaterThan => Expr::greater_than(acc, next),
                             BinaryOp::LessThan => Expr::less_than(acc, next),
@@ -60,12 +85,23 @@ where
                             BinaryOp::Multiply => Expr::multiply(acc, next),
                             BinaryOp::Divide => Expr::divide(acc, next),
                         })
-                    }),
-                )
-                .skip(spaces()),
-        )
-        .and(position())
-        .map(|((start, expr), end)| {
+                    }
+                    MathOrRange::Range((range_type, opt)) => match range_type {
+                        RangeType::Inclusive => match opt {
+                            Some(rhs) => Expr::range_inclusive(expr, rhs),
+                            None => panic!("Inclusive range should have a right hand side"),
+                        },
+                        RangeType::Exclusive => match opt {
+                            Some(rhs) => Expr::range(expr, rhs),
+                            None => Expr::range_from(expr),
+                        },
+                    },
+                }),
+            )
+            .skip(spaces()),
+        position(),
+    )
+        .map(|(start, expr, end)| {
             let start_pos: Input::Position = start;
             let start = start_pos.get_source_position();
             let end_pos: Input::Position = end;
@@ -75,117 +111,97 @@ where
         })
 }
 
+pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
+    Input::Position: GetSourcePosition,
+{
+    spaces()
+        .with(choice((
+            list_comprehension(),
+            list_aggregation(),
+            pattern_match(),
+            let_binding(),
+            conditional(),
+            attempt(worker_function_invoke()), // has to backtrack if there is fails at arguments parsing
+            attempt(select_field()),           // succeeds at select_field
+            attempt(flag_or_record()),
+            multi_line_block(),
+            tuple(),
+            boolean_literal(),
+            literal(),
+            not(),
+            option(),
+            result(),
+            attempt(call()),
+            attempt(select_index()),
+            sequence(),
+            identifier(),
+            number(),
+        )))
+        .skip(spaces())
+}
+
+fn flag_or_record<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
+    Input::Position: GetSourcePosition,
+{
+    choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
+}
+
+parser! {
+    pub(crate) fn simple_expr[Input]()(Input) -> Expr
+    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
+    {
+        simple_expr_()
+    }
+}
+
 mod internal {
     use crate::parser::binary_op::{binary_op, BinaryOp};
-    use crate::parser::boolean::boolean_literal;
-    use crate::parser::call::call;
-    use crate::parser::cond::conditional;
     use crate::parser::errors::RibParseError;
-    use crate::parser::flag::flag;
-    use crate::parser::identifier::identifier;
-    use crate::parser::let_binding::let_binding;
-    use crate::parser::literal::literal;
-    use crate::parser::multi_line_code_block::multi_line_block;
-    use crate::parser::not::not;
-    use crate::parser::number::number;
-    use crate::parser::optional::option;
-    use crate::parser::pattern_match::pattern_match;
-    use crate::parser::record::record;
-    use crate::parser::result::result;
-
-    use crate::parser::list_aggregation::list_aggregation;
-    use crate::parser::list_comprehension::list_comprehension;
-    use crate::parser::select_field::select_field;
-    use crate::parser::select_index::select_index;
-    use crate::parser::sequence::sequence;
-    use crate::parser::tuple::tuple;
-    use crate::parser::worker_function_invoke::worker_function_invoke;
+    use crate::parser::range_type::{range_type, RangeType};
+    use crate::parser::rib_expr::{simple_expr, simple_expr_};
     use crate::rib_source_span::GetSourcePosition;
     use crate::Expr;
-    use combine::parser::char::spaces;
-    use combine::{attempt, choice, many, parser, ParseError, Parser, Stream};
 
+    use combine::{attempt, many, optional, parser, ParseError, Parser, Stream};
     // A simple expression is a composition of all parsers that doesn't involve left recursion
-    pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
+
+    pub(crate) enum MathOrRange {
+        BinaryMath(Vec<(BinaryOp, Expr)>),
+        Range((RangeType, Option<Expr>)),
+    }
+
+    pub fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = MathOrRange>
     where
-        Input: combine::Stream<Token = char>,
+        Input: Stream<Token = char>,
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
         Input::Position: GetSourcePosition,
     {
-        spaces()
-            .with(choice((
-                list_comprehension(),
-                list_aggregation(),
-                pattern_match(),
-                attempt(worker_function_invoke()),
-                let_binding(),
-                conditional(),
-                selection_expr(),
-                flag_or_record(),
-                multi_line_block(),
-                tuple(),
-                sequence(),
-                boolean_literal(),
-                literal(),
-                not(),
-                option(),
-                result(),
-                attempt(call()),
-                identifier(),
-                number(),
-            )))
-            .skip(spaces())
+        attempt(
+            (range_type(), optional(simple_expr_())).map(|(range_type, expr)| match expr {
+                Some(expr) => MathOrRange::Range((range_type, Some(expr))),
+                None => MathOrRange::Range((range_type, None)),
+            }),
+        )
+        .or(many((binary_op(), simple_expr())).map(MathOrRange::BinaryMath))
     }
 
     parser! {
-        pub(crate) fn simple_expr[Input]()(Input) -> Expr
-        where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
-        {
-            simple_expr_()
-        }
-    }
-
-    pub fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = Vec<(BinaryOp, Expr)>>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-        Input::Position: GetSourcePosition,
-    {
-        many((binary_op(), simple_expr()))
-    }
-
-    parser! {
-        pub(crate) fn rib_expr_rest[Input]()(Input) -> Vec<(BinaryOp, Expr)>
+        pub(crate) fn rib_expr_rest[Input]()(Input) -> MathOrRange
         where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
         {
             rib_expr_rest_()
         }
-    }
-
-    fn flag_or_record<Input>() -> impl Parser<Input, Output = Expr>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-        Input::Position: GetSourcePosition,
-    {
-        choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
-    }
-
-    fn selection_expr<Input>() -> impl Parser<Input, Output = Expr>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-        Input::Position: GetSourcePosition,
-    {
-        choice((attempt(select_field()), attempt(select_index())))
-            .message("Unable to parse selection expression")
     }
 }

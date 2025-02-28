@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::{Expr, UnResolvedTypesError};
 use std::collections::VecDeque;
@@ -31,6 +45,23 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             outer_expr @ Expr::Let { expr, .. } => {
                 queue.push_back(QueuedExpr::new(expr, outer_expr));
             }
+
+            outer_expr @ Expr::Range {
+                range,
+                inferred_type,
+                ..
+            } => {
+                let exprs = range.get_exprs();
+
+                for expr in exprs {
+                    queue.push_back(QueuedExpr::new(expr, outer_expr));
+                }
+
+                if inferred_type.is_unknown() {
+                    return Err(UnResolvedTypesError::from(outer_expr, parent));
+                }
+            }
+
             outer_expr @ Expr::InvokeMethodLazy {
                 lhs,
                 args,
@@ -47,6 +78,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
+
             outer_expr @ Expr::SelectField {
                 expr,
                 field,
@@ -58,6 +90,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::from(expr, parent).at_field(field.clone()));
                 }
             }
+
             outer_expr @ Expr::SelectIndex {
                 expr,
                 index,
@@ -69,6 +102,21 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::from(expr, parent).at_index(*index));
                 }
             }
+
+            outer_expr @ Expr::SelectDynamic {
+                expr,
+                index,
+                inferred_type,
+                ..
+            } => {
+                queue.push_back(QueuedExpr::new(expr, outer_expr));
+                queue.push_back(QueuedExpr::new(index, outer_expr));
+
+                if inferred_type.un_resolved() {
+                    return Err(UnResolvedTypesError::from(expr, parent));
+                }
+            }
+
             outer_expr @ Expr::Sequence {
                 exprs,
                 inferred_type,

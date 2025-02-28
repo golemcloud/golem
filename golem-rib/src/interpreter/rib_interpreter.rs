@@ -160,6 +160,10 @@ impl Interpreter {
                     internal::run_select_index_instruction(&mut stack, index)?;
                 }
 
+                RibIR::SelectDynamic => {
+                    internal::run_select_dynamic_instruction(&mut stack)?;
+                }
+
                 RibIR::CreateFunctionName(site, function_type) => {
                     internal::run_create_function_name_instruction(
                         site,
@@ -241,8 +245,8 @@ impl Interpreter {
                 RibIR::Or => {
                     internal::run_or_instruction(&mut stack)?;
                 }
-                RibIR::ListToIterator => {
-                    internal::run_list_to_iterator_instruction(&mut stack)?;
+                RibIR::ToIterator => {
+                    internal::run_to_iterator(&mut stack)?;
                 }
                 RibIR::CreateSink(analysed_type) => {
                     internal::run_create_sink_instruction(&mut stack, &analysed_type)?
@@ -286,7 +290,7 @@ mod internal {
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{str, tuple};
+    use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -370,21 +374,127 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn run_list_to_iterator_instruction(
-        interpreter_stack: &mut InterpreterStack,
-    ) -> Result<(), String> {
-        if let Some(items) = interpreter_stack
+    pub(crate) fn run_to_iterator(interpreter_stack: &mut InterpreterStack) -> Result<(), String> {
+        let popped_up = interpreter_stack
             .pop()
-            .and_then(|v| v.get_val())
-            .and_then(|v| v.into_list_items())
-        {
-            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                items.into_iter(),
-            )));
+            .ok_or("Internal Error: Failed to get a value from the stack".to_string())?;
 
-            Ok(())
-        } else {
-            Err("Internal Error: Expected a List on the stack for ListToIterator".to_string())
+        let value_and_type = popped_up
+            .get_val()
+            .ok_or("Internal Error: Failed to get a value from the stack".to_string())?;
+
+        match (value_and_type.value, value_and_type.typ) {
+            (Value::List(items), AnalysedType::List(item_type)) => {
+                let items = items
+                    .into_iter()
+                    .map(|item| ValueAndType::new(item, (*item_type.inner).clone()))
+                    .collect::<Vec<_>>();
+
+                interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                    items.into_iter(),
+                )));
+
+                Ok(())
+            }
+            (Value::Record(fields), AnalysedType::Record(record_type)) => {
+                let mut from: Option<usize> = None;
+                let mut to: Option<usize> = None;
+                let mut inclusive = false;
+
+                let value_and_names = fields.into_iter().zip(record_type.fields);
+
+                for (value, name_and_type) in value_and_names {
+                    match name_and_type.name.as_str() {
+                        "from" => {
+                            from = Some(
+                                to_num(&value)
+                                    .ok_or(format!("cannot cast {:?} to a number", value))?,
+                            )
+                        }
+                        "to" => {
+                            to = Some(
+                                to_num(&value)
+                                    .ok_or(format!("cannot cast {:?} to a number", value))?,
+                            )
+                        }
+                        "inclusive" => {
+                            inclusive = match value {
+                                Value::Bool(b) => b,
+                                _ => return Err("inclusive field should be a boolean".to_string()),
+                            }
+                        }
+                        _ => return Err(format!("Invalid field name {}", name_and_type.name)),
+                    }
+                }
+
+                match (from, to) {
+                    (Some(from), Some(to)) => {
+                        if inclusive {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (from..=to)
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        } else {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (from..to)
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        }
+                    }
+
+                    (None, Some(to)) => {
+                        if inclusive {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (0..=to)
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        } else {
+                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                                (0..to)
+                                    .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
+                            )));
+                        }
+                    }
+
+                    // avoiding panicking with stack overflow for rib like the following
+                    // for i in 0.. {
+                    //   yield i
+                    // }
+                    (Some(_), None) => {
+                        return Err("an infinite range is being iterated. make sure range is finite to avoid infinite computation".to_string())
+                    }
+
+                    (None, None) => {
+                        interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new({
+                            let range = 0..;
+                            range
+                                .into_iter()
+                                .map(|i| ValueAndType::new(Value::U64(i as u64), u64()))
+                        })));
+                    }
+                };
+
+                Ok(())
+            }
+
+            _ => Err("Internal Error: Failed to convert to an iterator".to_string()),
+        }
+    }
+
+    fn to_num(value: &Value) -> Option<usize> {
+        match value {
+            Value::U64(u64) => Some(*u64 as usize),
+            Value::Bool(_) => None,
+            Value::U8(u8) => Some(*u8 as usize),
+            Value::U16(u16) => Some(*u16 as usize),
+            Value::U32(u32) => Some(*u32 as usize),
+            Value::S8(s8) => Some(*s8 as usize),
+            Value::S16(s16) => Some(*s16 as usize),
+            Value::S32(s32) => Some(*s32 as usize),
+            Value::S64(s64) => Some(*s64 as usize),
+            Value::F32(f32) => Some(*f32 as usize),
+            Value::F64(f64) => Some(*f64 as usize),
+            _ => None,
         }
     }
 
@@ -462,10 +572,14 @@ mod internal {
     pub(crate) fn run_sink_to_list_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let result = interpreter_stack
+        let (result, analysed_type) = interpreter_stack
             .pop_sink()
             .ok_or("Failed to retrieve items from sink")?;
-        interpreter_stack.push_list(result.into_iter().map(|vnt| vnt.value).collect(), &str());
+
+        interpreter_stack.push_list(
+            result.into_iter().map(|vnt| vnt.value).collect(),
+            &analysed_type,
+        );
 
         Ok(())
     }
@@ -704,22 +818,92 @@ mod internal {
         }
     }
 
+    pub(crate) fn run_select_dynamic_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let stack_list_value = interpreter_stack
+            .pop()
+            .ok_or("internal error: failed to get value from the stack".to_string())?;
+
+        let index_value = interpreter_stack
+            .pop()
+            .ok_or("internal error: failed to get the index expression from the stack")?;
+
+        match stack_list_value {
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::List(items),
+                typ: AnalysedType::List(typ),
+            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                Some(CoercedNumericValue::PosInt(index)) => {
+                    let value = items
+                        .get(index as usize)
+                        .ok_or(format!(
+                            "index {} is out of bound in the list of length {}",
+                            index,
+                            items.len()
+                        ))?
+                        .clone();
+
+                    interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
+                    Ok(())
+                }
+                _ => todo!("Handle dynamic rangews here"),
+            },
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::Tuple(items),
+                typ: AnalysedType::Tuple(typ),
+            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                Some(CoercedNumericValue::PosInt(index)) => {
+                    let value = items
+                        .get(index as usize)
+                        .ok_or(format!(
+                            "index {} is out of bound in a tuple of length {}",
+                            index,
+                            items.len()
+                        ))?
+                        .clone();
+
+                    let item_type = typ
+                        .items
+                        .first()
+                        .ok_or(format!(
+                            "internal error: type not found in the tuple at index {}",
+                            index
+                        ))?
+                        .clone();
+
+                    interpreter_stack.push_val(ValueAndType::new(value, item_type));
+                    Ok(())
+                }
+                _ => Err("expected a number to select an index from tuple".to_string()),
+            },
+            result => Err(format!(
+                "expected a sequence value or tuple to select an index. But obtained {:?}",
+                result
+            )),
+        }
+    }
+
     pub(crate) fn run_select_index_instruction(
         interpreter_stack: &mut InterpreterStack,
         index: usize,
     ) -> Result<(), String> {
-        let record = interpreter_stack
+        let stack_value = interpreter_stack
             .pop()
-            .ok_or("Failed to get a record from the stack to select a field".to_string())?;
+            .ok_or("internal error: failed to get value from the stack".to_string())?;
 
-        match record {
+        match stack_value {
             RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::List(items),
                 typ: AnalysedType::List(typ),
             }) => {
                 let value = items
                     .get(index)
-                    .ok_or(format!("Index {} not found in the list", index))?
+                    .ok_or(format!(
+                        "index {} is out of bound. list size: {}",
+                        index,
+                        items.len()
+                    ))?
                     .clone();
 
                 interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
@@ -2254,6 +2438,397 @@ mod interpreter_tests {
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+    }
+
+    mod select_dynamic_tests {
+        use test_r::test;
+
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compile, Expr};
+        use golem_wasm_ast::analysis::analysed_type::{list, u8};
+        use golem_wasm_rpc::{Value, ValueAndType};
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_1() {
+            // infinite computation will respond with an error - than a stack overflow
+            // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
+            let expr = r#"
+              let list: list<u8> = [1, 2, 3, 4, 5];
+              let index: u8 = 4;
+              list[index]
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(Value::U8(5), u8());
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_out_of_bound() {
+            let expr = r#"
+              let list: list<u8> = [1, 2, 3, 4, 5];
+              let index: u8 = 10;
+              list[index]
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap_err();
+
+            assert_eq!(
+                result,
+                "index 10 is out of bound in the list of length 5".to_string()
+            );
+        }
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_2() {
+            let expr = r#"
+              let list: list<u8> = [1, 2, 3, 4, 5];
+              let indices: list<u8> = [0, 1, 2, 3];
+
+              for i in indices {
+                 yield list[i];
+              }
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3), Value::U8(4)]),
+                list(u8()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_3() {
+            let expr = r#"
+              let list: list<u8> = [2, 5, 4];
+              let indices: list<u8> = [0, 1];
+
+               reduce z, index in indices from 0u8 {
+                  yield list[index] + z;
+                }
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(Value::U8(7), u8());
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        // TODO
+        #[ignore]
+        #[test]
+        async fn test_interpreter_for_select_dynamic_4() {
+            let expr = r#"
+              let list: list<u8> = [2, 5, 4];
+              list[1:u8..2:u8]
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            
+            // let compiled = compile(&expr, &vec![]).unwrap();
+            //
+            // let mut interpreter = Interpreter::default();
+            // let result = interpreter.run(compiled.byte_code).await.unwrap();
+            //
+            // let expected = ValueAndType::new(
+            //     Value::U8(7),
+            //     u8()
+            // );
+
+            // assert_eq!(result.get_val().unwrap(), expected);
+        }
+    }
+
+    mod range_interpreter_tests {
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compile, Expr};
+        use golem_wasm_ast::analysis::analysed_type::{bool, field, list, option, record, u64, u8};
+        use golem_wasm_rpc::{Value, ValueAndType};
+        use test_r::test;
+
+        // Simulating the behaviour in languages like rust
+        // Emitting the description of the range than the evaluated range
+        // Description given out as ValueAndType::Record
+        #[test]
+        async fn test_range_returns_1() {
+            let expr = r#"
+              let x = 1:u64..;
+              x
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(vec![
+                    Value::U64(1),
+                    Value::Bool(false), // non inclusive
+                ]),
+                record(vec![
+                    field("from", option(u64())),
+                    field("inclusive", bool()),
+                ]),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_returns_2() {
+            let expr = r#"
+              let x = 1:u64..2:u64;
+              x
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(vec![
+                    Value::U64(1),
+                    Value::U64(2),
+                    Value::Bool(false), // non inclusive
+                ]),
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool()),
+                ]),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_returns_3() {
+            let expr = r#"
+              let x = 1:u64..=10:u64;
+              x
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(vec![
+                    Value::U64(1),
+                    Value::U64(10),
+                    Value::Bool(true), // inclusive
+                ]),
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool()),
+                ]),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_returns_4() {
+            let expr = r#"
+              let x = 1:u64;
+              let y = x;
+              let range = x..=y;
+              let range2 = x..;
+              let range3 = x..y;
+              range;
+              range2;
+              range3
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(vec![Value::U64(1), Value::U64(1), Value::Bool(false)]),
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool()),
+                ]),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_returns_5() {
+            let expr = r#"
+              let y = 1:u64 + 10: u64;
+              1:u64..y
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(vec![Value::U64(1), Value::U64(11), Value::Bool(false)]),
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool()),
+                ]),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_with_comprehension_1() {
+            let expr = r#"
+              let range = 1:u64..=5:u64;
+              for i in range {
+                yield i;
+              }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![
+                    Value::U64(1),
+                    Value::U64(2),
+                    Value::U64(3),
+                    Value::U64(4),
+                    Value::U64(5),
+                ]),
+                list(u64()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_with_comprehension_2() {
+            let expr = r#"
+              let range = 1:u64..5:u64;
+              for i in range {
+                yield i;
+              }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![
+                    Value::U64(1),
+                    Value::U64(2),
+                    Value::U64(3),
+                    Value::U64(4),
+                ]),
+                list(u64()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_with_comprehension_3() {
+            // infinite computation will respond with an error - than a stack overflow
+            // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
+            let expr = r#"
+              let range = 1:u64..;
+              for i in range {
+                yield i;
+              }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await;
+            assert!(result.is_err());
+        }
+
+        #[test]
+        async fn test_range_with_list_reduce_1() {
+            // infinite computation will respond with an error - than a stack overflow
+            // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
+            let expr = r#"
+                let initial: u8 = 1;
+                let final: u8 = 5;
+                let x = initial..final;
+
+                reduce z, a in x from 0u8 {
+                  yield z + a;
+                }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(Value::U8(10), u8());
+
+            assert_eq!(result.get_val().unwrap(), expected);
         }
     }
 

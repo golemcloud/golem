@@ -46,10 +46,38 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 ..
             } => {
                 let field_type = inferred_type.clone();
-                let inferred_record_type = InferredType::List(Box::new(field_type));
-                expr.add_infer_type_mut(inferred_record_type);
+                let new_inferred_type = InferredType::List(Box::new(field_type));
+                expr.add_infer_type_mut(new_inferred_type);
                 queue.push_back(expr);
             }
+
+            Expr::SelectDynamic {
+                expr,          // LHS
+                index,         // RHS
+                inferred_type, // This is the type of the total expression
+                ..
+            } => {
+                let field_type = inferred_type.clone();
+
+                // How to push down here depends on the type of index
+                // If the index is not a range type then the total expression's type becomes list(field_type)
+                // If the index is range, then we push down the inferred type as it is.
+                let index_expr_type = index.inferred_type();
+
+                match index_expr_type {
+                    InferredType::Range { .. } => {
+                        expr.add_infer_type_mut(inferred_type.clone());
+                    }
+                    _ => {
+                        let new_inferred_type = InferredType::List(Box::new(field_type));
+                        expr.add_infer_type_mut(new_inferred_type);
+                    }
+                }
+
+                queue.push_back(expr);
+                queue.push_back(index)
+            }
+
             Expr::Cond {
                 cond,
                 lhs,
@@ -270,14 +298,21 @@ mod internal {
         let iterable_type: InferredType = iterable_expr.inferred_type();
 
         if !iterable_type.is_unknown() {
-            let refined_iterable = ListType::refine(&iterable_type).ok_or(
-                get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
-                    .with_additional_error_detail(
-                        "the iterable expression in list comprehension should be of type list",
-                    ),
-            )?;
+            let refined_iterable = ListType::refine(&iterable_type);
 
-            let iterable_variable_type = refined_iterable.inner_type();
+            let iterable_variable_type = match refined_iterable {
+                Some(refined_iterable) => refined_iterable.inner_type(),
+                None => {
+                    let refined_range = RangeType::refine(&iterable_type).ok_or(
+                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
+                            .with_additional_error_detail(
+                                "the iterable expression in list comprehension should be of type list or a range",
+                            ),
+                    )?;
+
+                    refined_range.inner_type()
+                }
+            };
 
             let mut queue = VecDeque::new();
             queue.push_back(yield_expr);
@@ -308,21 +343,24 @@ mod internal {
         yield_expr: &mut Expr,
         init_value_expr: &mut Expr,
     ) -> Result<(), RibCompilationError> {
-        let iterable_inferred_type = iterable_expr.inferred_type();
+        let iterable_type = iterable_expr.inferred_type();
 
         if !iterable_expr.inferred_type().is_unknown() {
-            let refined_iterable = ListType::refine(&iterable_inferred_type).ok_or(
-                get_compilation_error_for_ambiguity(
-                    &iterable_inferred_type,
-                    iterable_expr,
-                    &TypeKind::List,
-                )
-                .with_additional_error_detail(
-                    "the iterable expression in list reduction should be of type list",
-                ),
-            )?;
+            let refined_iterable = ListType::refine(&iterable_type);
 
-            let iterable_variable_type = refined_iterable.inner_type();
+            let iterable_variable_type = match refined_iterable {
+                Some(refined_iterable) => refined_iterable.inner_type(),
+                None => {
+                    let refined_range = RangeType::refine(&iterable_type).ok_or(
+                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
+                            .with_additional_error_detail(
+                                "the iterable expression in list comprehension should be of type list or a range",
+                            ),
+                    )?;
+
+                    refined_range.inner_type()
+                }
+            };
 
             let init_value_expr_type = init_value_expr.inferred_type();
             let mut queue = VecDeque::new();

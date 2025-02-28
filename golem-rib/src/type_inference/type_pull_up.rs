@@ -48,6 +48,7 @@ use std::collections::VecDeque;
 //
 // At the end of this process, each expression has an assigned
 // inferred type, created by traversing in a queue and stack order.
+
 pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
@@ -105,6 +106,22 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_select_index(
+                    expr,
+                    index,
+                    inferred_type,
+                    &mut inferred_type_stack,
+                    source_span,
+                )?;
+            }
+
+            Expr::SelectDynamic {
+                expr,
+                index,
+                inferred_type,
+                source_span,
+                ..
+            } => {
+                internal::handle_select_dynamic(
                     expr,
                     index,
                     inferred_type,
@@ -577,6 +594,18 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 &mut inferred_type_stack,
                 source_span,
             ),
+
+            Expr::Range {
+                range,
+                source_span,
+                ..
+            } => {
+                internal::handle_range(
+                    range,
+                    source_span,
+                    &mut inferred_type_stack,
+                );
+            }
         }
     }
 
@@ -597,10 +626,10 @@ mod internal {
     use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
     use crate::type_inference::kind::TypeKind;
-    use crate::type_refinement::precise_types::{ListType, RecordType};
+    use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        ActualType, ExpectedType, Expr, InferredType, MatchArm, TypeMismatchError, TypeName,
+        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
         VariableId,
     };
     use std::collections::VecDeque;
@@ -734,10 +763,58 @@ mod internal {
         Ok(())
     }
 
+    pub fn handle_select_dynamic(
+        original_selection_expr: &Expr,
+        index: &Expr,
+        curren_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+        source_span: &SourceSpan,
+    ) -> Result<(), RibCompilationError> {
+        let index_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_selection_expr.clone());
+
+        let inferred_type_of_index_expr = index_expr.inferred_type();
+
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_selection_expr.clone());
+
+        let inferred_type_of_selection_expr = expr.inferred_type();
+        let (index_type, expression_type) = get_inferred_type_of_selection_dynamic(
+            original_selection_expr,
+            index,
+            &inferred_type_of_selection_expr,
+            &inferred_type_of_index_expr,
+        )?;
+
+        let new_select_index = match index_type {
+            SelectionIndexType::Index(index_type) => Expr::select_dynamic(
+                expr.clone(),
+                index.clone().with_inferred_type(index_type),
+                None,
+            )
+            .with_inferred_type(curren_type.merge(expression_type))
+            .with_source_span(source_span.clone()),
+
+            SelectionIndexType::Range(range_index_type) => Expr::select_dynamic(
+                expr.clone(),
+                index.clone().with_inferred_type(range_index_type),
+                None,
+            )
+            .with_inferred_type(curren_type.merge(expression_type))
+            .with_source_span(source_span.clone()),
+        };
+
+        inferred_type_stack.push_front(new_select_index);
+
+        Ok(())
+    }
+
     pub fn handle_select_index(
         original_selection_expr: &Expr,
         index: &usize,
-        current_index_type: &InferredType,
+        curren_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) -> Result<(), RibCompilationError> {
@@ -751,7 +828,7 @@ mod internal {
             &inferred_type_of_selection_expr,
         )?;
         let new_select_index = Expr::select_index(expr.clone(), *index)
-            .with_inferred_type(current_index_type.merge(list_type))
+            .with_inferred_type(curren_type.merge(list_type))
             .with_source_span(source_span.clone());
 
         inferred_type_stack.push_front(new_select_index);
@@ -1037,6 +1114,68 @@ mod internal {
             result_type.clone(),
         );
         inferred_type_stack.push_front(new_binary);
+    }
+
+    pub(crate) fn handle_range(
+        range: &Range,
+        source_span: &SourceSpan,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        match range {
+            Range::Range { from, to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: Some(Box::new(right.inferred_type())),
+                };
+                let new_range = Expr::range(left, right)
+                    .with_inferred_type(new_inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeInclusive { from, to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: Some(Box::new(right.inferred_type())),
+                };
+
+                let new_range = Expr::range_inclusive(left, right)
+                    .with_inferred_type(new_inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeFrom { from } => {
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: None,
+                };
+
+                let new_range = Expr::range_from(left)
+                    .with_inferred_type(new_inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+        }
     }
 
     pub(crate) fn handle_call(
@@ -1336,6 +1475,70 @@ mod internal {
         })?;
 
         Ok(refined_record.inner_type_by_name(select_field))
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) enum SelectionIndexType {
+        Range(InferredType), // Range type
+        Index(InferredType), // This should be a number type
+    }
+
+    pub(crate) fn get_inferred_type_of_selection_dynamic(
+        original_selection_expr: &Expr,
+        selected_index: &Expr,
+        select_from_type: &InferredType,
+        select_index_type: &InferredType,
+    ) -> Result<(SelectionIndexType, InferredType), RibCompilationError> {
+        let refined_list = ListType::refine(select_from_type).ok_or({
+            TypeMismatchError {
+                expr_with_wrong_type: original_selection_expr.clone(),
+                parent_expr: None,
+                expected_type: ExpectedType::Kind(TypeKind::List),
+                actual_type: ActualType::Inferred(select_from_type.clone()),
+                field_path: Default::default(),
+                additional_error_detail: vec![format!(
+                    "Cannot get index {} since it is not a list type. Found: {:?}",
+                    selected_index, select_from_type
+                )],
+            }
+        })?;
+
+        let list_type = refined_list.inner_type();
+
+        let is_number = select_index_type.contains_only_number();
+
+        if is_number {
+            Ok((
+                SelectionIndexType::Index(select_index_type.clone()),
+                list_type,
+            ))
+        } else {
+            let range = RangeType::refine(select_index_type).ok_or({
+                TypeMismatchError {
+                    expr_with_wrong_type: original_selection_expr.clone(),
+                    parent_expr: None,
+                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    actual_type: ActualType::Inferred(select_index_type.clone()),
+                    field_path: Default::default(),
+                    additional_error_detail: vec![format!(
+                        "Cannot get index {} since it is neither a number type (or a range type). Found: {:?}",
+                        selected_index, select_index_type
+                    )],
+                }
+            })?;
+
+            // Selecting a range results in a list type
+            let range = range.inner_types().0;
+            let range_type = InferredType::Range {
+                from: Box::new(range[0].clone()),
+                to: range.last().map(|x| Box::new(x.clone())),
+            };
+
+            Ok((
+                SelectionIndexType::Range(range_type),
+                InferredType::List(Box::new(list_type)),
+            ))
+        }
     }
 
     pub(crate) fn get_inferred_type_of_selection_index(
