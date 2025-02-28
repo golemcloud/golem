@@ -325,6 +325,7 @@ mod internal {
             component_id: get_component_id(gateway_binding_value)?,
             idempotency_key: get_idempotency_key(gateway_binding_value)?,
             response_mapping: get_response_mapping(gateway_binding_value)?,
+            invocation_context: get_invocation_context(gateway_binding_value)?,
         };
 
         Ok(binding)
@@ -443,6 +444,19 @@ mod internal {
     ) -> Result<Option<Expr>, String> {
         if let Some(key) = gateway_binding_value.get("idempotency-key") {
             let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
+            Ok(Some(
+                rib::from_string(key_expr).map_err(|err| err.to_string())?,
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(crate) fn get_invocation_context(
+        gateway_binding_value: &Value,
+    ) -> Result<Option<Expr>, String> {
+        if let Some(key) = gateway_binding_value.get("invocation-context") {
+            let key_expr = key.as_str().ok_or("invocation-context is not a string")?;
             Ok(Some(
                 rib::from_string(key_expr).map_err(|err| err.to_string())?,
             ))

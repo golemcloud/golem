@@ -16,6 +16,7 @@ pub mod api_tags;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod headers;
 pub mod metrics;
 pub mod migration;
 pub mod model;

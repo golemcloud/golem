@@ -28,6 +28,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }
+bitflags = "2.8.0"
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }

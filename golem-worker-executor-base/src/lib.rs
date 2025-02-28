@@ -423,7 +423,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
         oplog_archives.push(svc);
     }
-    let oplog_archives = NEVec::from_vec(oplog_archives);
+    let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
     let base_oplog_service: Arc<dyn OplogService + Send + Sync> = match oplog_archives {
         None => Arc::new(

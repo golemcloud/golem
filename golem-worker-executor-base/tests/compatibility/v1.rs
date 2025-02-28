@@ -22,7 +22,9 @@
 use test_r::test;
 
 use bincode::{Decode, Encode};
+use goldenfile::differs::Differ;
 use goldenfile::Mint;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload,
     PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
@@ -78,20 +80,26 @@ fn is_deserializable<T: Encode + Decode + PartialEq + Debug>(old: &Path, new: &P
     assert_eq!(old_decoded, new_decoded);
 }
 
+pub(crate) fn backward_compatible_custom<T: Encode + Decode + Debug + 'static>(
+    name: impl AsRef<str>,
+    mint: &mut Mint,
+    value: T,
+    differ: Differ,
+) {
+    let mut file = mint
+        .new_goldenfile_with_differ(format!("{}.bin", name.as_ref()), differ)
+        .unwrap();
+    let encoded = serialize(&value).unwrap();
+    file.write_all(&encoded).unwrap();
+    file.flush().unwrap();
+}
+
 pub(crate) fn backward_compatible<T: Encode + Decode + PartialEq + Debug + 'static>(
     name: impl AsRef<str>,
     mint: &mut Mint,
     value: T,
 ) {
-    let mut file = mint
-        .new_goldenfile_with_differ(
-            format!("{}.bin", name.as_ref()),
-            Box::new(is_deserializable::<T>),
-        )
-        .unwrap();
-    let encoded = serialize(&value).unwrap();
-    file.write_all(&encoded).unwrap();
-    file.flush().unwrap();
+    backward_compatible_custom(name, mint, value, Box::new(is_deserializable::<T>))
 }
 
 fn is_deserializable_wit_value(old: &Path, new: &Path) {
@@ -112,15 +120,7 @@ fn is_deserializable_wit_value(old: &Path, new: &Path) {
 /// Special case for WitValue which does not implement PartialEq at the moment, but can be converted
 /// to Value for comparison.
 fn backward_compatible_wit_value(name: impl AsRef<str>, mint: &mut Mint, value: WitValue) {
-    let mut file = mint
-        .new_goldenfile_with_differ(
-            format!("{}.bin", name.as_ref()),
-            Box::new(is_deserializable_wit_value),
-        )
-        .unwrap();
-    let encoded = serialize(&value).unwrap();
-    file.write_all(&encoded).unwrap();
-    file.flush().unwrap();
+    backward_compatible_custom(name, mint, value, Box::new(is_deserializable_wit_value))
 }
 
 #[test]
@@ -261,6 +261,33 @@ pub fn wasm_rpc_value() {
 
 #[test]
 pub fn timestamped_worker_invocation() {
+    // Special differ ignoring the invocation_context field
+    fn is_deserializable_ignoring_invocation_context(old: &Path, new: &Path) {
+        let old = std::fs::read(old).unwrap();
+        let new = std::fs::read(new).unwrap();
+
+        // Both the old and the latest binary can be deserialized
+        let mut old_decoded: TimestampedWorkerInvocation = deserialize(&old).unwrap();
+        let new_decoded: TimestampedWorkerInvocation = deserialize(&new).unwrap();
+
+        if let (
+            WorkerInvocation::ExportedFunction {
+                invocation_context: old,
+                ..
+            },
+            WorkerInvocation::ExportedFunction {
+                invocation_context: new,
+                ..
+            },
+        ) = (&mut old_decoded.invocation, &new_decoded.invocation)
+        {
+            *old = new.clone();
+        }
+
+        // And they represent the same value
+        assert_eq!(old_decoded, new_decoded);
+    }
+
     let twi1 = TimestampedWorkerInvocation {
         timestamp: Timestamp::from(1724701938466),
         invocation: WorkerInvocation::ExportedFunction {
@@ -269,6 +296,7 @@ pub fn timestamped_worker_invocation() {
             },
             full_function_name: "function-name".to_string(),
             function_input: vec![Value::Bool(true)],
+            invocation_context: InvocationContextStack::fresh(),
         },
     };
     let twi2 = TimestampedWorkerInvocation {
@@ -279,15 +307,17 @@ pub fn timestamped_worker_invocation() {
     };
 
     let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible(
+    backward_compatible_custom(
         "timestamped_worker_invocation_exported_function",
         &mut mint,
         twi1,
+        Box::new(is_deserializable_ignoring_invocation_context),
     );
-    backward_compatible(
+    backward_compatible_custom(
         "timestamped_worker_invocation_manual_update",
         &mut mint,
         twi2,
+        Box::new(is_deserializable_ignoring_invocation_context),
     );
 }
 
@@ -660,6 +690,41 @@ pub fn log_level() {
 
 #[test]
 pub fn oplog_entry() {
+    // Special differ ignoring the invocation_context field
+    fn is_deserializable_ignoring_invocation_context(old: &Path, new: &Path) {
+        let old = std::fs::read(old).unwrap();
+        let new = std::fs::read(new).unwrap();
+
+        // Both the old and the latest binary can be deserialized
+        let mut old_decoded: OplogEntry = deserialize(&old).unwrap();
+        let new_decoded: OplogEntry = deserialize(&new).unwrap();
+
+        if let (
+            OplogEntry::PendingWorkerInvocation {
+                invocation:
+                    WorkerInvocation::ExportedFunction {
+                        invocation_context: old,
+                        ..
+                    },
+                ..
+            },
+            OplogEntry::PendingWorkerInvocation {
+                invocation:
+                    WorkerInvocation::ExportedFunction {
+                        invocation_context: new,
+                        ..
+                    },
+                ..
+            },
+        ) = (&mut old_decoded, &new_decoded)
+        {
+            *old = new.clone();
+        }
+
+        // And they represent the same value
+        assert_eq!(old_decoded, new_decoded);
+    }
+
     let oe1a = OplogEntry::CreateV1 {
         timestamp: Timestamp::from(1724701938466),
         worker_id: WorkerId {
@@ -790,6 +855,7 @@ pub fn oplog_entry() {
             },
             full_function_name: "function-name".to_string(),
             function_input: vec![Value::Bool(true)],
+            invocation_context: InvocationContextStack::fresh(),
         },
     };
 
@@ -866,7 +932,12 @@ pub fn oplog_entry() {
     backward_compatible("oplog_entry_end_atomic_region", &mut mint, oe13);
     backward_compatible("oplog_entry_begin_remote_write", &mut mint, oe14);
     backward_compatible("oplog_entry_end_remote_write", &mut mint, oe15);
-    backward_compatible("oplog_entry_pending_worker_invocation", &mut mint, oe16);
+    backward_compatible_custom(
+        "oplog_entry_pending_worker_invocation",
+        &mut mint,
+        oe16,
+        Box::new(is_deserializable_ignoring_invocation_context),
+    );
     backward_compatible("oplog_entry_pending_update", &mut mint, oe17);
     backward_compatible("oplog_entry_successful_update", &mut mint, oe18);
     backward_compatible("oplog_entry_failed_update_no_details", &mut mint, oe19a);

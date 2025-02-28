@@ -321,6 +321,8 @@ pub struct GatewayBindingData {
     // For binding type - worker
     // Optional only to keep backward compatibility
     pub response: Option<String>,
+    // For binding type - worker
+    pub invocation_context: Option<String>,
 
     // CORS binding type
     //  For binding type - cors-middleware
@@ -359,11 +361,19 @@ impl GatewayBindingData {
             None
         };
 
+        let invocation_context =
+            if let Some(invocation_context) = &worker_binding.invocation_context {
+                Some(rib::to_string(invocation_context).map_err(|e| e.to_string())?)
+            } else {
+                None
+            };
+
         Ok(Self {
             binding_type: Some(binding_type),
             component_id: Some(worker_binding.component_id),
             worker_name: worker_id,
             idempotency_key,
+            invocation_context,
             response: Some(response),
             allow_origin: None,
             allow_methods: None,
@@ -395,6 +405,7 @@ impl GatewayBindingData {
             worker_name: worker_id,
             idempotency_key,
             response: None,
+            invocation_context: None,
             allow_origin: None,
             allow_methods: None,
             allow_headers: None,
@@ -708,6 +719,7 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     worker_name: None,
                     idempotency_key: None,
                     response: None,
+                    invocation_context: None,
                     allow_origin: Some(cors.get_allow_origin()),
                     allow_methods: Some(cors.get_allow_methods()),
                     allow_headers: Some(cors.get_allow_headers()),
@@ -755,11 +767,19 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     None
                 };
 
+                let invocation_context =
+                    if let Some(invocation_context) = gateway_binding_data.invocation_context {
+                        Some(rib::from_string(invocation_context).map_err(|e| e.to_string())?)
+                    } else {
+                        None
+                    };
+
                 let worker_binding = WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response_mapping: response,
+                    invocation_context,
                 };
 
                 if v == Some(GatewayBindingType::FileServer) {

@@ -32,6 +32,7 @@ pub mod router;
 pub mod to_response;
 pub mod to_response_failure;
 pub use gateway_worker_request_executor::*;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
@@ -43,6 +44,7 @@ pub struct GatewayResolvedWorkerRequest<Namespace> {
     pub function_name: String,
     pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,
+    pub invocation_context: InvocationContextStack,
     pub namespace: Namespace,
 }
 
@@ -51,6 +53,7 @@ pub struct WorkerDetail {
     pub component_id: VersionedComponentId,
     pub worker_name: Option<String>,
     pub idempotency_key: Option<IdempotencyKey>,
+    pub invocation_context: InvocationContextStack,
 }
 
 impl WorkerDetail {

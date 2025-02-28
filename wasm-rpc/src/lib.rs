@@ -79,6 +79,10 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
+pub use bindings::wasi;
+
+#[cfg(not(feature = "host-bindings"))]
+#[cfg(feature = "stub")]
 pub use bindings::golem::rpc0_1_3 as golem_rpc_0_1_x;
 
 #[cfg(not(feature = "host-bindings"))]
@@ -91,10 +95,6 @@ pub use golem_rpc_0_1_x::types::{
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
 pub use bindings::wasi::io::poll::Pollable;
-
-#[cfg(not(feature = "host-bindings"))]
-#[cfg(feature = "stub")]
-pub use bindings::wasi::clocks::wall_clock::Datetime as WasiDatetime;
 
 #[cfg(feature = "host-bindings")]
 pub use wasmtime_wasi::Pollable;
@@ -119,6 +119,9 @@ mod generated {
 }
 
 #[cfg(feature = "host-bindings")]
+pub use generated::wasi;
+
+#[cfg(feature = "host-bindings")]
 pub use generated::golem::rpc0_1_3 as golem_rpc_0_1_x;
 
 #[cfg(feature = "host-bindings")]
@@ -127,11 +130,8 @@ pub use golem_rpc_0_1_x::types::{
     WitValue,
 };
 
-#[cfg(feature = "host-bindings")]
-pub use generated::wasi::clocks::wall_clock::Datetime as WasiDatetime;
-
-impl From<WasiDatetime> for DateTime<Utc> {
-    fn from(value: WasiDatetime) -> DateTime<Utc> {
+impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
+    fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
         DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
             .expect("Received invalid datetime from wasi")
     }

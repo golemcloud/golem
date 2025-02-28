@@ -306,6 +306,7 @@ async fn create_api_definition(
                                     idempotency_key: None,
                                     binding_type: Some(GatewayBindingType::Default as i32),
                                     static_binding: None,
+                                    invocation_context: None,
                                 }),
                                 middleware: None,
                             }],

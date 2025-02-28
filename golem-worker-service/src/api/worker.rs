@@ -12,9 +12,10 @@ use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::empty_worker_metadata;
+use golem_worker_service_base::http_invocation_context::grpc_invocation_context_from_request;
 use golem_worker_service_base::service::worker::InvocationParameters;
 use payload::Binary;
-use poem::Body;
+use poem::{Body, Request};
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -133,6 +134,7 @@ impl WorkerApi {
     )]
     async fn invoke_and_await_function_without_name(
         &self,
+        request: &Request,
         component_id: Path<ComponentId>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
@@ -147,6 +149,8 @@ impl WorkerApi {
             function = function.0
         );
 
+        let invocation_context = grpc_invocation_context_from_request(request);
+
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
@@ -158,7 +162,7 @@ impl WorkerApi {
                     idempotency_key.0,
                     function.0,
                     vals,
-                    None,
+                    Some(invocation_context),
                     empty_worker_metadata(),
                 )
             }
@@ -168,7 +172,7 @@ impl WorkerApi {
                     idempotency_key.0,
                     function.0,
                     jsons,
-                    None,
+                    Some(invocation_context),
                     empty_worker_metadata(),
                 )
             }
@@ -191,6 +195,7 @@ impl WorkerApi {
     )]
     async fn invoke_and_await_function(
         &self,
+        request: &Request,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
@@ -206,6 +211,8 @@ impl WorkerApi {
             function = function.0
         );
 
+        let invocation_context = grpc_invocation_context_from_request(request);
+
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
@@ -217,7 +224,7 @@ impl WorkerApi {
                     idempotency_key.0,
                     function.0,
                     vals,
-                    None,
+                    Some(invocation_context),
                     empty_worker_metadata(),
                 )
             }
@@ -227,7 +234,7 @@ impl WorkerApi {
                     idempotency_key.0,
                     function.0,
                     jsons,
-                    None,
+                    Some(invocation_context),
                     empty_worker_metadata(),
                 )
             }
@@ -250,6 +257,7 @@ impl WorkerApi {
     )]
     async fn invoke_function_without_name(
         &self,
+        request: &Request,
         component_id: Path<ComponentId>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
@@ -264,6 +272,8 @@ impl WorkerApi {
             function = function.0
         );
 
+        let invocation_context = grpc_invocation_context_from_request(request);
+
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
@@ -274,7 +284,7 @@ impl WorkerApi {
                 idempotency_key.0,
                 function.0,
                 vals,
-                None,
+                Some(invocation_context),
                 empty_worker_metadata(),
             ),
             InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
@@ -282,7 +292,7 @@ impl WorkerApi {
                 idempotency_key.0,
                 function.0,
                 jsons,
-                None,
+                Some(invocation_context),
                 empty_worker_metadata(),
             ),
         }
@@ -304,6 +314,7 @@ impl WorkerApi {
     )]
     async fn invoke_function(
         &self,
+        request: &Request,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
@@ -323,13 +334,15 @@ impl WorkerApi {
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
 
+        let invocation_context = grpc_invocation_context_from_request(request);
+
         let response = match params {
             InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
                 vals,
-                None,
+                Some(invocation_context),
                 empty_worker_metadata(),
             ),
             InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
@@ -337,7 +350,7 @@ impl WorkerApi {
                 idempotency_key.0,
                 function.0,
                 jsons,
-                None,
+                Some(invocation_context),
                 empty_worker_metadata(),
             ),
         }

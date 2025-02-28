@@ -28,7 +28,6 @@ use golem_common::serialization::{serialize, try_deserialize};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::mem::transmute;
 use tracing::error;
 
 #[derive(Debug)]
@@ -232,18 +231,6 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         response: durability::ValueAndType,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
-        let request = unsafe {
-            transmute::<
-                durability::ValueAndType,
-                golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
-            >(request)
-        };
-        let response = unsafe {
-            transmute::<
-                durability::ValueAndType,
-                golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
-            >(response)
-        };
         DurabilityHost::persist_typed_durable_function_invocation(
             self,
             function_name,

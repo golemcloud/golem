@@ -474,10 +474,8 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
                         let mut serialized_trailers = HashMap::new();
-                        let host_fields: &Resource<wasmtime_wasi_http::types::HostFields> =
-                            unsafe { std::mem::transmute(trailers) };
 
-                        for (key, value) in get_fields(self.table(), host_fields)? {
+                        for (key, value) in get_fields(self.table(), trailers)? {
                             serialized_trailers
                                 .insert(key.as_str().to_string(), value.as_bytes().to_vec());
                         }
