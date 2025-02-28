@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test, timeout};
-
 use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::compatibility::worker_recovery::save_recovery_golden_file;
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
@@ -22,6 +20,7 @@ use axum::routing::get;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
+use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_common::model::{
     AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
@@ -33,8 +32,8 @@ use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
     worker_error_message, TestDslUnsafe,
 };
-use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
 use golem_wasm_rpc::IntoValue;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
@@ -46,6 +45,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
+use test_r::core::{DynamicTestRegistration, TestProperties};
+use test_r::{add_test, inherit_test_dep, test, test_gen, timeout};
 use tokio::time::sleep;
 use tracing::{debug, info};
 
@@ -3094,115 +3095,6 @@ async fn cancelling_pending_invocations(
     // executor.check_oplog_is_queryable(&worker_id).await;
 }
 
-/// Test scheduling an invocation for the worker itself.
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
-async fn scheduled_invocation_self(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
-
-    let component_id = executor.component("scheduled-invocation").store().await;
-
-    let worker_id = executor
-        .start_worker(&component_id, "scheduled-invocation-1")
-        .await;
-
-    executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/scheduled-invocation-api.{run}",
-            vec![],
-        )
-        .await
-        .unwrap();
-
-    let mut done = false;
-    while !done {
-        let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:it/scheduled-invocation-api.{get}",
-                vec![],
-            )
-            .await
-            .unwrap();
-
-        if result.len() == 1 && result[0] == Value::U64(1) {
-            done = true;
-        } else {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    }
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-}
-
-/// Test scheduling an invocation for a different worker.
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
-async fn scheduled_invocation_other(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
-
-    let component_id = executor.component("scheduled-invocation").store().await;
-
-    let worker_id_1 = executor
-        .start_worker(&component_id, "scheduled-invocation-2")
-        .await;
-
-    let mut worker_2_env = HashMap::new();
-    worker_2_env.insert("COMPONENT_ID".to_string(), component_id.to_string());
-    worker_2_env.insert("WORKER_NAME".to_string(), worker_id_1.worker_name.clone());
-
-    let worker_id_2 = executor
-        .start_worker_with(
-            &component_id,
-            "scheduled-invocation-3",
-            vec![],
-            worker_2_env,
-        )
-        .await;
-
-    executor
-        .invoke_and_await(
-            &worker_id_2,
-            "golem:it/scheduled-invocation-api.{run}",
-            vec![],
-        )
-        .await
-        .unwrap();
-
-    let mut done = false;
-    while !done {
-        let result = executor
-            .invoke_and_await(
-                &worker_id_1,
-                "golem:it/scheduled-invocation-api.{get}",
-                vec![],
-            )
-            .await
-            .unwrap();
-
-        if result.len() == 1 && result[0] == Value::U64(1) {
-            done = true;
-        } else {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    executor.check_oplog_is_queryable(&worker_id_2).await;
-}
-
 /// Test resolving a component_id from the name.
 #[test]
 #[tracing::instrument]
@@ -3263,4 +3155,197 @@ async fn resolve_components_from_name(
     );
 
     executor.check_oplog_is_queryable(&resolve_worker).await;
+}
+
+#[tracing::instrument]
+async fn scheduled_invocation_test(
+    server_component_name: &str,
+    client_component_name: &str,
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let server_component = executor.component(server_component_name).store().await;
+
+    let server_worker = executor.start_worker(&server_component, "worker_1").await;
+
+    let client_component = executor
+        .component(client_component_name)
+        .with_dynamic_linking(&[
+            (
+                "it:scheduled-invocation-server-client/server-client",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    target_interface_name: HashMap::from_iter(vec![(
+                        "server-api".to_string(),
+                        "it:scheduled-invocation-server-exports/server-api".to_string(),
+                    )]),
+                }),
+            ),
+            (
+                "it:scheduled-invocation-client-client/client-client",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    target_interface_name: HashMap::from_iter(vec![(
+                        "client-api".to_string(),
+                        "it:scheduled-invocation-client-exports/client-api".to_string(),
+                    )]),
+                }),
+            ),
+        ])
+        .store()
+        .await;
+
+    let client_worker = executor.start_worker(&client_component, "worker_1").await;
+
+    // first invocation: schedule increment in the future and poll
+    {
+        executor
+            .invoke_and_await(
+                &client_worker,
+                "it:scheduled-invocation-client-exports/client-api.{test1}",
+                vec![
+                    ValueAndType::new(
+                        Value::String(server_component_name.to_string()),
+                        AnalysedType::Str(TypeStr),
+                    ),
+                    ValueAndType::new(
+                        Value::String("worker_1".to_string()),
+                        AnalysedType::Str(TypeStr),
+                    ),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let mut done = false;
+        while !done {
+            let result = executor
+                .invoke_and_await(
+                    &server_worker,
+                    "it:scheduled-invocation-server-exports/server-api.{get-global-value}",
+                    vec![],
+                )
+                .await
+                .unwrap();
+
+            if result.len() == 1 && result[0] == Value::U64(1) {
+                done = true;
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    // second invocation: schedule increment in the future and cancel beforehand
+    {
+        executor
+            .invoke_and_await(
+                &client_worker,
+                "it:scheduled-invocation-client-exports/client-api.{test2}",
+                vec![
+                    ValueAndType::new(
+                        Value::String(server_component_name.to_string()),
+                        AnalysedType::Str(TypeStr),
+                    ),
+                    ValueAndType::new(
+                        Value::String("worker_1".to_string()),
+                        AnalysedType::Str(TypeStr),
+                    ),
+                ],
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let result = executor
+            .invoke_and_await(
+                &server_worker,
+                "it:scheduled-invocation-server-exports/server-api.{get-global-value}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result.as_slice(), [Value::U64(1)]));
+    }
+
+    // third invocation: schedule increment on self in the future and poll
+    {
+        executor
+            .invoke_and_await(
+                &client_worker,
+                "it:scheduled-invocation-client-exports/client-api.{test3}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let mut done = false;
+        while !done {
+            let result = executor
+                .invoke_and_await(
+                    &client_worker,
+                    "it:scheduled-invocation-client-exports/client-api.{get-global-value}",
+                    vec![],
+                )
+                .await
+                .unwrap();
+
+            if result.len() == 1 && result[0] == Value::U64(1) {
+                done = true;
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    executor.check_oplog_is_queryable(&client_worker).await;
+    executor.check_oplog_is_queryable(&server_worker).await;
+}
+
+#[test_gen]
+async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
+    add_test!(
+        r,
+        "scheduled_invocation_stubbed",
+        TestProperties {
+            timeout: Some(Duration::from_secs(120)),
+            ..Default::default()
+        },
+        move |last_unique_id: &LastUniqueId,
+              deps: &WorkerExecutorTestDependencies,
+              tracing: &Tracing| async {
+            scheduled_invocation_test(
+                "scheduled_invocation_server",
+                "scheduled_invocation_client",
+                last_unique_id,
+                deps,
+                tracing,
+            )
+            .await
+        }
+    );
+    add_test!(
+        r,
+        "scheduled_invocation_stubless",
+        TestProperties {
+            timeout: Some(Duration::from_secs(120)),
+            ..Default::default()
+        },
+        move |last_unique_id: &LastUniqueId,
+              deps: &WorkerExecutorTestDependencies,
+              tracing: &Tracing| async {
+            scheduled_invocation_test(
+                "scheduled_invocation_stubless_server",
+                "scheduled_invocation_stubless_client",
+                last_unique_id,
+                deps,
+                tracing,
+            )
+            .await
+        }
+    );
 }

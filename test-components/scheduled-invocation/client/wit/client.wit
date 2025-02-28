@@ -1,0 +1,17 @@
+package it:scheduled-invocation-client;
+
+interface client-api {
+  test1: func(component-name: string, worker-name: string) -> ();
+  test2: func(component-name: string, worker-name: string) -> ();
+  test3: func() -> ();
+
+  inc-global-by: func(value: u64);
+  get-global-value: func() -> u64;
+}
+
+world client {
+  import wasi:clocks/wall-clock@0.2.0;
+  import golem:api/host@1.1.5;
+
+  export client-api;
+}
