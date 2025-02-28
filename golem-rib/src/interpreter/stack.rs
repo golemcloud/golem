@@ -55,9 +55,11 @@ impl InterpreterStack {
             .ok_or("Internal Error: Failed to pop value from the interpreter stack".to_string())
     }
 
-    pub fn pop_sink(&mut self) -> Option<Vec<ValueAndType>> {
+    pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
         match self.pop() {
-            Some(RibInterpreterStackValue::Sink(vec, _)) => Some(vec.clone()),
+            Some(RibInterpreterStackValue::Sink(vec, analysed_type)) => {
+                Some((vec.clone(), analysed_type))
+            }
             _ => None,
         }
     }
@@ -264,11 +266,7 @@ impl InterpreterStack {
         });
     }
 
-    pub fn push_list(
-        &mut self,
-        values: Vec<Value>,
-        list_elem_type: &AnalysedType, // Expecting a list type and not inner
-    ) {
+    pub fn push_list(&mut self, values: Vec<Value>, list_elem_type: &AnalysedType) {
         self.push_val(ValueAndType {
             value: Value::List(values),
             typ: list(list_elem_type.clone()),

@@ -597,23 +597,24 @@ mod internal {
                 )
             }
 
-            range_expr @ Expr::Range { range, inferred_type , ..} => {
-                match inferred_type {
-                    InferredType::Range { .. } => {
-                        let analysed_type = convert_to_analysed_type(range_expr, inferred_type)?;
+            range_expr @ Expr::Range {
+                range,
+                inferred_type,
+                ..
+            } => match inferred_type {
+                InferredType::Range { .. } => {
+                    let analysed_type = convert_to_analysed_type(range_expr, inferred_type)?;
 
-                        handle_range(range, stack, analysed_type, instructions);
-                    }
-
-                    _ => {
-                        return Err(format!(
-                            "Range should have inferred type Range {:?}",
-                            inferred_type
-                        ));
-                    }
+                    handle_range(range, stack, analysed_type, instructions);
                 }
 
-            }
+                _ => {
+                    return Err(format!(
+                        "Range should have inferred type Range {:?}",
+                        inferred_type
+                    ));
+                }
+            },
 
             // Invoke is always handled by the CallType::Function branch
             Expr::InvokeMethodLazy { .. } => {}
@@ -676,11 +677,9 @@ mod internal {
         analysed_type: AnalysedType,
         instructions: &mut Vec<RibIR>,
     ) {
-
         let from = range.from();
         let to = range.to();
         let inclusive = range.inclusive();
-
 
         if let Some(from) = from {
             stack.push(ExprState::from_expr(from));
@@ -699,11 +698,7 @@ mod internal {
 
         instructions.push(RibIR::UpdateRecord("inclusive".to_string()));
 
-
-        instructions.push(RibIR::CreateAndPushRecord(
-            analysed_type,
-        ));
-
+        instructions.push(RibIR::CreateAndPushRecord(analysed_type));
     }
 
     fn handle_list_comprehension(

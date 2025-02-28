@@ -690,7 +690,6 @@ impl Expr {
         }
     }
 
-
     pub fn range_inclusive(from: Expr, to: Expr) -> Self {
         Expr::Range {
             range: Range::RangeInclusive {
@@ -1450,7 +1449,7 @@ impl Range {
 
     pub fn inclusive(&self) -> bool {
         match self {
-            Range::RangeInclusive { .. }  => true,
+            Range::RangeInclusive { .. } => true,
             _ => false,
         }
     }

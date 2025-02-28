@@ -457,12 +457,12 @@ mod internal {
                         }
                     }
 
-                    (Some(from), None) => {
-                        interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                            (from..)
-                                .into_iter()
-                                .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
-                        )));
+                    // avoiding panicking with stack overflow for rib like the following
+                    // for i in 0.. {
+                    //   yield i
+                    // }
+                    (Some(_), None) => {
+                        return Err("an infinite range is being iterated. make sure range is finite to avoid infinite computation".to_string())
                     }
 
                     (None, None) => {
@@ -573,10 +573,14 @@ mod internal {
     pub(crate) fn run_sink_to_list_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let result = interpreter_stack
+        let (result, analysed_type) = interpreter_stack
             .pop_sink()
             .ok_or("Failed to retrieve items from sink")?;
-        interpreter_stack.push_list(result.into_iter().map(|vnt| vnt.value).collect(), &str());
+
+        interpreter_stack.push_list(
+            result.into_iter().map(|vnt| vnt.value).collect(),
+            &analysed_type,
+        );
 
         Ok(())
     }
@@ -1587,7 +1591,6 @@ mod interpreter_tests {
             )
             .unwrap();
 
-
             let result = interpreter
                 .run(compiled.byte_code)
                 .await
@@ -2372,9 +2375,11 @@ mod interpreter_tests {
     mod range_interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compile, Expr, FunctionTypeRegistry};
-        use test_r::test;
-        use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, tuple, u64};
+        use golem_wasm_ast::analysis::analysed_type::{
+            bool, field, list, option, record, tuple, u64,
+        };
         use golem_wasm_rpc::{Value, ValueAndType};
+        use test_r::test;
 
         // Simulating the behaviour in languages like rust
         // Emitting the description of the range than the evaluated range
@@ -2394,22 +2399,18 @@ mod interpreter_tests {
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = ValueAndType::new(
-                Value::Record(
-                    vec![
-                        Value::U64(1),
-                        Value::Bool(false) // non inclusive
-                    ]
-                ),
-
+                Value::Record(vec![
+                    Value::U64(1),
+                    Value::Bool(false), // non inclusive
+                ]),
                 record(vec![
                     field("from", option(u64())),
-                    field("inclusive", bool())
-                ])
+                    field("inclusive", bool()),
+                ]),
             );
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
-
 
         #[test]
         async fn test_range_returns_2() {
@@ -2426,19 +2427,16 @@ mod interpreter_tests {
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = ValueAndType::new(
-                Value::Record(
-                    vec![
-                        Value::U64(1),
-                        Value::U64(2),
-                        Value::Bool(false) // non inclusive
-                    ]
-                ),
-
+                Value::Record(vec![
+                    Value::U64(1),
+                    Value::U64(2),
+                    Value::Bool(false), // non inclusive
+                ]),
                 record(vec![
                     field("from", option(u64())),
                     field("to", option(u64())),
-                    field("inclusive", bool())
-                ])
+                    field("inclusive", bool()),
+                ]),
             );
 
             assert_eq!(result.get_val().unwrap(), expected);
@@ -2459,19 +2457,16 @@ mod interpreter_tests {
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = ValueAndType::new(
-                Value::Record(
-                    vec![
-                        Value::U64(1),
-                        Value::U64(10),
-                        Value::Bool(true) // inclusive
-                    ]
-                ),
-
+                Value::Record(vec![
+                    Value::U64(1),
+                    Value::U64(10),
+                    Value::Bool(true), // inclusive
+                ]),
                 record(vec![
                     field("from", option(u64())),
                     field("to", option(u64())),
-                    field("inclusive", bool())
-                ])
+                    field("inclusive", bool()),
+                ]),
             );
 
             assert_eq!(result.get_val().unwrap(), expected);
@@ -2498,19 +2493,12 @@ mod interpreter_tests {
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = ValueAndType::new(
-                Value::Record(
-                    vec![
-                        Value::U64(1),
-                        Value::U64(1),
-                        Value::Bool(false)
-                    ]
-                ),
-
+                Value::Record(vec![Value::U64(1), Value::U64(1), Value::Bool(false)]),
                 record(vec![
                     field("from", option(u64())),
                     field("to", option(u64())),
-                    field("inclusive", bool())
-                ])
+                    field("inclusive", bool()),
+                ]),
             );
 
             assert_eq!(result.get_val().unwrap(), expected);
@@ -2531,25 +2519,97 @@ mod interpreter_tests {
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = ValueAndType::new(
-                Value::Record(
-                    vec![
-                        Value::U64(1),
-                        Value::U64(11),
-                        Value::Bool(false)
-                    ]
-                ),
-
+                Value::Record(vec![Value::U64(1), Value::U64(11), Value::Bool(false)]),
                 record(vec![
                     field("from", option(u64())),
                     field("to", option(u64())),
-                    field("inclusive", bool())
-                ])
+                    field("inclusive", bool()),
+                ]),
             );
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
-    }
 
+        #[test]
+        async fn test_range_with_comprehension_1() {
+            let expr = r#"
+              let range = 1:u64..=5:u64;
+              for i in range {
+                yield i;
+              }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![
+                    Value::U64(1),
+                    Value::U64(2),
+                    Value::U64(3),
+                    Value::U64(4),
+                    Value::U64(5),
+                ]),
+                list(u64()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_with_comprehension_2() {
+            let expr = r#"
+              let range = 1:u64..5:u64;
+              for i in range {
+                yield i;
+              }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![
+                    Value::U64(1),
+                    Value::U64(2),
+                    Value::U64(3),
+                    Value::U64(4),
+                ]),
+                list(u64()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_with_comprehension_3() {
+            let expr = r#"
+              let range = 1:u64..;
+              for i in range {
+                yield i;
+              }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await;
+            assert!(result.is_err());
+        }
+    }
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;

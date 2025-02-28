@@ -23,6 +23,7 @@ pub enum TypeKind {
     Variant,
     Unknown,
     Ambiguous { possibilities: Vec<TypeKind> },
+    Range,
 }
 
 impl Display for TypeKind {
@@ -42,6 +43,7 @@ impl Display for TypeKind {
             TypeKind::Resource => write!(f, "resource"),
             TypeKind::Variant => write!(f, "variant"),
             TypeKind::Unknown => write!(f, "unknown"),
+            TypeKind::Range => write!(f, "range"),
             TypeKind::Ambiguous { possibilities } => {
                 write!(f, "conflicting types: ")?;
                 for (i, kind) in possibilities.iter().enumerate() {
@@ -115,7 +117,7 @@ impl GetTypeKind for InferredType {
             InferredType::Unknown => TypeKind::Unknown,
             InferredType::Sequence(_) => TypeKind::Unknown,
             InferredType::Instance { .. } => TypeKind::Unknown,
-            InferredType::Range { .. } => TypeKind::Unknown,
+            InferredType::Range { .. } => TypeKind::Range,
         }
     }
 }

@@ -73,12 +73,15 @@ pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, Stri
             Ok(InferredType::List(Box::new(unified_type)))
         }
 
-        InferredType::Range { from: start, to: end } => {
+        InferredType::Range {
+            from: start,
+            to: end,
+        } => {
             let unified_start = start.try_unify()?;
             let unified_end = end.clone().map(|end| end.try_unify()).transpose()?;
             Ok(InferredType::Range {
                 from: Box::new(unified_start),
-                to:unified_end.map(Box::new),
+                to: unified_end.map(Box::new),
             })
         }
 
@@ -489,7 +492,16 @@ pub fn unify_with_required(
                     ))
                 }
             }
-            (InferredType::Range { from: a_start, to: a_end }, InferredType::Range { from: b_start, to: b_end }) => {
+            (
+                InferredType::Range {
+                    from: a_start,
+                    to: a_end,
+                },
+                InferredType::Range {
+                    from: b_start,
+                    to: b_end,
+                },
+            ) => {
                 let unified_start = a_start.unify_with_required(b_start)?;
                 let unified_end = match (a_end, b_end) {
                     (Some(a_end), Some(b_end)) => Some(Box::new(a_end.unify_with_required(b_end)?)),
@@ -834,9 +846,15 @@ mod internal {
                 }
                 Ok(Unified(inferred_type.clone()))
             }
-            InferredType::Range { from: start, to: end } => {
+            InferredType::Range {
+                from: start,
+                to: end,
+            } => {
                 let unified_start = validate_unified_type(start)?;
-                let unified_end = end.clone().map(|end| validate_unified_type(&end)).transpose()?;
+                let unified_end = end
+                    .clone()
+                    .map(|end| validate_unified_type(&end))
+                    .transpose()?;
 
                 Ok(Unified(InferredType::Range {
                     from: Box::new(unified_start.inferred_type()),

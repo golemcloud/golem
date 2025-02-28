@@ -270,14 +270,21 @@ mod internal {
         let iterable_type: InferredType = iterable_expr.inferred_type();
 
         if !iterable_type.is_unknown() {
-            let refined_iterable = ListType::refine(&iterable_type).ok_or(
-                get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
-                    .with_additional_error_detail(
-                        "the iterable expression in list comprehension should be of type list",
-                    ),
-            )?;
+            let refined_iterable = ListType::refine(&iterable_type);
 
-            let iterable_variable_type = refined_iterable.inner_type();
+            let iterable_variable_type = match refined_iterable {
+                Some(refined_iterable) => refined_iterable.inner_type(),
+                None => {
+                    let refined_range = RangeType::refine(&iterable_type).ok_or(
+                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
+                            .with_additional_error_detail(
+                                "the iterable expression in list comprehension should be of type list or a range",
+                            ),
+                    )?;
+
+                    refined_range.inner_type()
+                }
+            };
 
             let mut queue = VecDeque::new();
             queue.push_back(yield_expr);
