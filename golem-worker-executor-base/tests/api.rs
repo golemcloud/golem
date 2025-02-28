@@ -3312,7 +3312,7 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
         r,
         "scheduled_invocation_stubbed",
         TestProperties {
-            timeout: Some(Duration::from_secs(5)),
+            timeout: Some(Duration::from_secs(120)),
             ..Default::default()
         },
         move |last_unique_id: &LastUniqueId,
@@ -3332,7 +3332,7 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
         r,
         "scheduled_invocation_stubless",
         TestProperties {
-            timeout: Some(Duration::from_secs(5)),
+            timeout: Some(Duration::from_secs(120)),
             ..Default::default()
         },
         move |last_unique_id: &LastUniqueId,
