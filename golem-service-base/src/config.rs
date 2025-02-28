@@ -77,7 +77,7 @@ pub struct S3BlobStorageConfig {
     pub compressed_oplog_buckets: Vec<String>,
     pub use_minio_credentials: bool,
     pub initial_component_files_bucket: String,
-    pub component_bucket: String,
+    pub components_bucket: String,
 }
 
 impl Default for S3BlobStorageConfig {
@@ -93,7 +93,7 @@ impl Default for S3BlobStorageConfig {
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             use_minio_credentials: false,
             initial_component_files_bucket: "golem-initial-component-files".to_string(),
-            component_bucket: "component-store".to_string(),
+            components_bucket: "component-store".to_string(),
         }
     }
 }

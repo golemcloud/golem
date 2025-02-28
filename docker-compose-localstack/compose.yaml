@@ -14,6 +14,7 @@ x-aliases:
     GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS: "[golem-oplog-archive-1]"
     GOLEM__BLOB_STORAGE__CONFIG__USE_MINIO_CREDENTIALS: false
     GOLEM__BLOB_STORAGE__CONFIG__INITIAL_COMPONENT_FILES_BUCKET: golem-initial-component-files
+    GOLEM__BLOB_STORAGE__CONFIG__COMPONENTS_BUCKET: golem-component-store
     GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_ATTEMPTS: 5
     GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MIN_DELAY: 100ms
     GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_DELAY: 2s
@@ -97,6 +98,7 @@ services:
           - golem-oplog-payload.s3.localstack
           - golem-oplog-archive-1.s3.localstack
           - golem-initial-component-files.s3.localstack
+          - golem-component-store.s3.localstack
 
   golem-shard-manager:
     build:

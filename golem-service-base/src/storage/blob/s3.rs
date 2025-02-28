@@ -78,7 +78,7 @@ impl S3BlobStorage {
             BlobStorageNamespace::InitialComponentFiles { .. } => {
                 &self.config.initial_component_files_bucket
             }
-            BlobStorageNamespace::Components => &self.config.component_bucket,
+            BlobStorageNamespace::Components => &self.config.components_bucket,
         }
     }
 
@@ -250,8 +250,8 @@ impl S3BlobStorage {
 
     fn error_string<T: Error>(error: &SdkError<T>) -> String {
         match error {
-            SdkError::ConstructionFailure(_) => "Construction failure".to_string(),
-            SdkError::TimeoutError(_) => "Timeout".to_string(),
+            SdkError::ConstructionFailure(inner) => format!("Construction failure: {inner:?}"),
+            SdkError::TimeoutError(inner) => format!("Timeout: {inner:?}"),
             SdkError::DispatchFailure(inner) => {
                 // normal display of the error does not expose enough useful information
                 format!(
@@ -259,7 +259,7 @@ impl S3BlobStorage {
                     inner.as_connector_error().unwrap()
                 )
             }
-            SdkError::ResponseError(_) => "Response error".to_string(),
+            SdkError::ResponseError(inner) => format!("Response error: {inner:?}"),
             SdkError::ServiceError(inner) => inner.err().to_string(),
             _ => error.to_string(),
         }
