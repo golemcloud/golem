@@ -2371,7 +2371,7 @@ mod interpreter_tests {
 
     mod range_interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{compile, Expr};
+        use crate::{compile, Expr, FunctionTypeRegistry};
         use test_r::test;
         use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, tuple, u64};
         use golem_wasm_rpc::{Value, ValueAndType};
@@ -2502,6 +2502,39 @@ mod interpreter_tests {
                     vec![
                         Value::U64(1),
                         Value::U64(1),
+                        Value::Bool(false)
+                    ]
+                ),
+
+                record(vec![
+                    field("from", option(u64())),
+                    field("to", option(u64())),
+                    field("inclusive", bool())
+                ])
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_range_returns_5() {
+            let expr = r#"
+              let y = 1:u64 + 10: u64;
+              1:u64..y
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::Record(
+                    vec![
+                        Value::U64(1),
+                        Value::U64(11),
                         Value::Bool(false)
                     ]
                 ),

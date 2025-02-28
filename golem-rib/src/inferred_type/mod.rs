@@ -358,6 +358,7 @@ impl InferredType {
             (InferredType::Unknown, new_type) => new_type,
 
             (InferredType::AllOf(existing_types), InferredType::AllOf(new_types)) => {
+
                 let mut all_types = new_types.clone();
                 all_types.extend(existing_types.clone());
 
@@ -380,18 +381,30 @@ impl InferredType {
 
             (InferredType::OneOf(existing_types), InferredType::OneOf(new_types)) => {
                 let mut one_of_types = new_types.clone();
-                one_of_types.extend(existing_types.clone());
+                if &new_types == existing_types {
+                    return InferredType::OneOf(one_of_types)
+                } else {
+                    one_of_types.extend(existing_types.clone());
+                }
 
                 InferredType::one_of(one_of_types).unwrap_or(InferredType::Unknown)
             }
 
-            (InferredType::OneOf(_), new_type) => {
-                InferredType::all_of(vec![self.clone(), new_type]).unwrap_or(InferredType::Unknown)
+            (InferredType::OneOf(existing_types), new_type) => {
+                if existing_types.contains(&new_type){
+                    new_type
+                } else {
+                    InferredType::all_of(vec![self.clone(), new_type]).unwrap_or(InferredType::Unknown)
+                }
             }
 
             (current_type, InferredType::OneOf(newtypes)) => {
-                InferredType::all_of(vec![current_type.clone(), InferredType::OneOf(newtypes)])
-                    .unwrap_or(InferredType::Unknown)
+                if newtypes.contains(&current_type){
+                    current_type.clone()
+                } else {
+                    InferredType::all_of(vec![current_type.clone(), InferredType::OneOf(newtypes)])
+                        .unwrap_or(InferredType::Unknown)
+                }
             }
 
             (current_type, new_type) => {
