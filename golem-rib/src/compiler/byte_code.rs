@@ -90,7 +90,7 @@ mod protobuf {
 }
 
 mod internal {
-    use crate::compiler::desugar::desugar_pattern_match;
+    use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
         InferredType, InstructionId, Range, RibIR, VariableId, WorkerNamePresence,
@@ -296,10 +296,18 @@ mod internal {
                 instructions.push(RibIR::SelectField(field.clone()));
             }
 
-            Expr::SelectDynamic { expr, index, .. } => {
-                stack.push(ExprState::from_expr(index.deref()));
-                stack.push(ExprState::from_expr(expr.deref()));
-                instructions.push(RibIR::SelectDynamic);
+            Expr::SelectDynamic { expr, index, ..} => {
+                match index.inferred_type() {
+                    InferredType::Range { .. } => {
+                        let list_comprehension = desugar_range_selection(expr, index);
+                        stack.push(ExprState::from_expr(&list_comprehension));
+                    }
+                    _ => {
+                        stack.push(ExprState::from_expr(index.deref()));
+                        stack.push(ExprState::from_expr(expr.deref()));
+                        instructions.push(RibIR::SelectDynamic);
+                    }
+                }
             }
 
             Expr::SelectIndex { expr, index, .. } => {
