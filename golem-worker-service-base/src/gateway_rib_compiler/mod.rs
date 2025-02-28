@@ -26,7 +26,7 @@ pub struct DefaultWorkerServiceRibCompiler;
 impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
     fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, RibError> {
         rib::compile_with_restricted_global_variables(
-            rib,
+            rib.clone(),
             &export_metadata.to_vec(),
             Some(vec!["request".to_string()]),
             &vec![

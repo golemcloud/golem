@@ -40,7 +40,7 @@ impl HttpHandlerBindingCompiled {
             .worker_name
             .clone()
             .map(|worker_name_expr| {
-                WorkerNameCompiled::from_worker_name(&worker_name_expr, export_metadata)
+                WorkerNameCompiled::from_worker_name(worker_name_expr, export_metadata)
             })
             .transpose()?;
 

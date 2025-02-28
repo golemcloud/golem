@@ -2363,7 +2363,7 @@ mod type_inference_tests {
             let expr = Expr::from_text(rib_expr).unwrap();
 
             let inferred_expr =
-                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
+                InferredExpr::from_expr(expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
 
             let expected = expr_block(
                 vec![
@@ -2445,7 +2445,7 @@ mod type_inference_tests {
             let expr = Expr::from_text(rib_expr).unwrap();
 
             let inferred_expr =
-                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
+                InferredExpr::from_expr(expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
 
             let expected = expr_block(
                 vec![

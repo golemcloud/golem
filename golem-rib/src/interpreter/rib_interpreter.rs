@@ -1653,7 +1653,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(rib_expr).unwrap();
 
             let compiled = compiler::compile_with_restricted_global_variables(
-                &expr,
+                expr,
                 &vec![],
                 None,
                 &type_spec,
@@ -1724,7 +1724,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(rib_expr).unwrap();
 
             let compiled = compiler::compile_with_restricted_global_variables(
-                &expr,
+                expr,
                 &vec![],
                 None,
                 &type_spec,
@@ -1764,7 +1764,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -1797,7 +1797,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -1826,7 +1826,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -1853,7 +1853,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -1887,7 +1887,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -1918,7 +1918,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -1962,7 +1962,7 @@ mod interpreter_tests {
             let mut expr = Expr::from_text(expr).unwrap();
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), 0u64.into_value_and_type());
@@ -1983,7 +1983,7 @@ mod interpreter_tests {
             let mut expr = Expr::from_text(expr).unwrap();
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "1 foo bar".into_value_and_type());
@@ -2006,7 +2006,7 @@ mod interpreter_tests {
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
 
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "1 foo bar".into_value_and_type());
@@ -2026,7 +2026,7 @@ mod interpreter_tests {
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let compiled = compiler::compile(expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "1 bar".into_value_and_type());
@@ -2054,7 +2054,7 @@ mod interpreter_tests {
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(
@@ -2084,7 +2084,7 @@ mod interpreter_tests {
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(
@@ -2119,7 +2119,7 @@ mod interpreter_tests {
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = internal::get_value_and_type(
@@ -2157,7 +2157,7 @@ mod interpreter_tests {
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected =
@@ -2188,7 +2188,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter = Interpreter::default();
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
@@ -2219,7 +2219,7 @@ mod interpreter_tests {
             );
 
             let component_metadata = internal::get_metadata_with_resource_with_params();
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
@@ -2252,7 +2252,7 @@ mod interpreter_tests {
             );
 
             let component_metadata = internal::get_metadata_with_resource_with_params();
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
@@ -2273,7 +2273,7 @@ mod interpreter_tests {
 
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = Interpreter::default();
 
@@ -2299,7 +2299,7 @@ mod interpreter_tests {
 
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = Interpreter::default();
 
@@ -2325,7 +2325,7 @@ mod interpreter_tests {
 
             let component_metadata = internal::get_metadata_with_resource_without_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = Interpreter::default();
 
@@ -2361,7 +2361,7 @@ mod interpreter_tests {
             );
 
             let component_metadata = internal::get_metadata_with_resource_without_params();
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
@@ -2381,7 +2381,7 @@ mod interpreter_tests {
 
             let component_metadata = internal::get_metadata_with_resource_without_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = Interpreter::default();
 
@@ -2415,7 +2415,7 @@ mod interpreter_tests {
             );
 
             let component_metadata = internal::get_metadata_with_resource_without_params();
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
@@ -2432,7 +2432,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_without_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter = Interpreter::default();
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
@@ -2461,7 +2461,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2481,7 +2481,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap_err();
@@ -2505,7 +2505,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2531,7 +2531,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2541,28 +2541,28 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), expected);
         }
 
-        // TODO
-        #[ignore]
         #[test]
         async fn test_interpreter_for_select_dynamic_4() {
             let expr = r#"
               let list: list<u8> = [2, 5, 4];
-              list[1:u8..2:u8]
+              let x: u8 = 0;
+              let y: u8 = 2;
+              list[x..=y]
               "#;
 
             let expr = Expr::from_text(expr).unwrap();
 
-            // let compiled = compile(&expr, &vec![]).unwrap();
-            //
-            // let mut interpreter = Interpreter::default();
-            // let result = interpreter.run(compiled.byte_code).await.unwrap();
-            //
-            // let expected = ValueAndType::new(
-            //     Value::U8(7),
-            //     u8()
-            // );
+            let compiled = compile(expr, &vec![]).unwrap();
 
-            // assert_eq!(result.get_val().unwrap(), expected);
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![Value::U8(2), Value::U8(5), Value::U8(4)]),
+                list(u8()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
         }
     }
 
@@ -2585,7 +2585,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2613,7 +2613,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2643,7 +2643,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2679,7 +2679,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2705,7 +2705,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2734,7 +2734,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2765,7 +2765,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2797,7 +2797,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await;
@@ -2821,7 +2821,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiled = compile(&expr, &vec![]).unwrap();
+            let compiled = compile(expr, &vec![]).unwrap();
 
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2852,7 +2852,7 @@ mod interpreter_tests {
 
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -2871,7 +2871,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata)
+            let compiled = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -2887,7 +2887,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata)
+            let compiled = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -2907,7 +2907,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compilation_error = compiler::compile(&expr, &component_metadata)
+            let compilation_error = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -2929,7 +2929,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -2949,7 +2949,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -2969,7 +2969,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compilation_error = compiler::compile(&expr, &component_metadata)
+            let compilation_error = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -2989,7 +2989,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3009,7 +3009,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3029,7 +3029,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3049,7 +3049,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3069,7 +3069,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata)
+            let compiled = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -3089,7 +3089,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3109,7 +3109,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3128,7 +3128,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata)
+            let compiled = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -3153,7 +3153,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3174,7 +3174,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3195,7 +3195,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata)
+            let compiled = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -3213,7 +3213,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata)
+            let compiled = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -3235,7 +3235,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3257,7 +3257,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let error_message = compiler::compile(&expr, &component_metadata)
+            let error_message = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -3284,7 +3284,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3309,7 +3309,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3338,7 +3338,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3368,7 +3368,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
@@ -3388,7 +3388,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut input = HashMap::new();
 
@@ -3427,7 +3427,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut input = HashMap::new();
 
@@ -3461,7 +3461,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let error = compiler::compile(&expr, &component_metadata)
+            let error = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -3478,7 +3478,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let error = compiler::compile(&expr, &component_metadata)
+            let error = compiler::compile(expr, &component_metadata)
                 .unwrap_err()
                 .to_string();
 
@@ -3501,7 +3501,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut rib_interpreter = internal::dynamic_test_interpreter(None);
 
@@ -3550,7 +3550,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
             let mut input = HashMap::new();
 

@@ -75,7 +75,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_message = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_message = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 32
@@ -111,7 +111,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -136,7 +136,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -161,7 +161,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -190,7 +190,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 51
@@ -214,7 +214,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 21
@@ -237,7 +237,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -262,7 +262,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -288,7 +288,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 3, column 30
@@ -313,7 +313,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
