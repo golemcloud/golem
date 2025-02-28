@@ -1,5 +1,4 @@
 use crate::call_type::CallType;
-use crate::parser::call::call;
 use crate::parser::identifier::identifier;
 use crate::parser::rib_expr::rib_expr;
 use crate::parser::RibParseError;

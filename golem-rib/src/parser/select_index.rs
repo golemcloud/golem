@@ -40,41 +40,36 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces().with(
-        (
-            sequence_base_expr().skip(spaces()),
-            char_('[').skip(spaces()),
-            attempt(pos_num().skip(spaces()).map(IndexOrRange::Index)).or(
-                attempt(identifier().map(IndexOrRange::Dynamic))
-            ),
-            char_(']').skip(spaces()),
-            optional(nested_indices()),
-        )
-            .and_then(
-                |(expr, _, index_or_range, _, possible_indices)| {
+    spaces()
+        .with(
+            (
+                sequence_base_expr().skip(spaces()),
+                char_('[').skip(spaces()),
+                attempt(pos_num().skip(spaces()).map(IndexOrRange::Index))
+                    .or(attempt(rib_expr().map(IndexOrRange::Dynamic))),
+                char_(']').skip(spaces()),
+                optional(nested_indices()),
+            )
+                .and_then(|(expr, _, index_or_range, _, possible_indices)| {
                     match index_or_range {
-                        IndexOrRange::Index(index) => {
-                            match possible_indices {
-                                Some(indices) => {
-                                    Ok(build_select_index_from(Expr::select_index(expr, index), indices))
-                                }
-                                None => Ok(Expr::select_index(expr, index)),
-                            }
-                        }
-                        IndexOrRange::Dynamic(index_dynamic) => {
-                            match possible_indices {
-                                Some(_) => {
-                                    return Err(RibParseError::Message(
-                                        "nested indexing is currently only supported for literal numbers".to_string(),
-                                    ));
-                                }
-                                None => Ok(Expr::select_dynamic(expr, index_dynamic, None)),
-                            }
-                        }
+                        IndexOrRange::Index(index) => match possible_indices {
+                            Some(indices) => Ok(build_select_index_from(
+                                Expr::select_index(expr, index),
+                                indices,
+                            )),
+                            None => Ok(Expr::select_index(expr, index)),
+                        },
+                        IndexOrRange::Dynamic(index_dynamic) => match possible_indices {
+                            Some(_) => Err(RibParseError::Message(
+                                "nested indexing is currently only supported for literal numbers"
+                                    .to_string(),
+                            )),
+                            None => Ok(Expr::select_dynamic(expr, index_dynamic, None)),
+                        },
                     }
-                },
-            ),
-    ).message("Invalid index selection")
+                }),
+        )
+        .message("Invalid index selection")
 }
 
 mod internal {

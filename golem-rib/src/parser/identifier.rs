@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bigdecimal::BigDecimal;
 use combine::parser::char::{char, digit, spaces};
 use combine::parser::char::{char as char_, letter};
 use combine::{many, optional, ParseError, Parser, Stream};

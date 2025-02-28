@@ -287,11 +287,10 @@ mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
-    use std::fmt::format;
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{bool, str, tuple, u64};
+    use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -433,13 +432,11 @@ mod internal {
                         if inclusive {
                             interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
                                 (from..=to)
-                                    .into_iter()
                                     .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
                             )));
                         } else {
                             interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
                                 (from..to)
-                                    .into_iter()
                                     .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
                             )));
                         }
@@ -449,13 +446,11 @@ mod internal {
                         if inclusive {
                             interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
                                 (0..=to)
-                                    .into_iter()
                                     .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
                             )));
                         } else {
                             interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
                                 (0..to)
-                                    .into_iter()
                                     .map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
                             )));
                         }
@@ -870,7 +865,7 @@ mod internal {
 
                     let item_type = typ
                         .items
-                        .get(0)
+                        .first()
                         .ok_or(format!(
                             "internal error: type not found in the tuple at index {}",
                             index
@@ -1371,8 +1366,8 @@ mod interpreter_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{compile, Expr, InstructionId, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32, u64, u8};
+    use crate::{InstructionId, VariableId};
+    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32};
     use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -2541,21 +2536,40 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = ValueAndType::new(
-                Value::U8(7),
-                u8()
-            );
+            let expected = ValueAndType::new(Value::U8(7), u8());
 
             assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        // TODO
+        #[ignore]
+        #[test]
+        async fn test_interpreter_for_select_dynamic_4() {
+            let expr = r#"
+              let list: list<u8> = [2, 5, 4];
+              list[1:u8..2:u8]
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            
+            // let compiled = compile(&expr, &vec![]).unwrap();
+            //
+            // let mut interpreter = Interpreter::default();
+            // let result = interpreter.run(compiled.byte_code).await.unwrap();
+            //
+            // let expected = ValueAndType::new(
+            //     Value::U8(7),
+            //     u8()
+            // );
+
+            // assert_eq!(result.get_val().unwrap(), expected);
         }
     }
 
     mod range_interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{compile, Expr, FunctionTypeRegistry};
-        use golem_wasm_ast::analysis::analysed_type::{
-            bool, field, list, option, record, tuple, u64, u8,
-        };
+        use crate::{compile, Expr};
+        use golem_wasm_ast::analysis::analysed_type::{bool, field, list, option, record, u64, u8};
         use golem_wasm_rpc::{Value, ValueAndType};
         use test_r::test;
 

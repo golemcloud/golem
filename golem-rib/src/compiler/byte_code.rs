@@ -95,11 +95,11 @@ mod internal {
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
         InferredType, InstructionId, Range, RibIR, VariableId, WorkerNamePresence,
     };
-    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags, TypeRecord};
+    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
-    use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, u64};
+    use golem_wasm_ast::analysis::analysed_type::bool;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -296,19 +296,17 @@ mod internal {
                 instructions.push(RibIR::SelectField(field.clone()));
             }
 
-            Expr::SelectDynamic { expr, index, ..} => {
-                match index.inferred_type() {
-                    InferredType::Range { .. } => {
-                        let list_comprehension = desugar_range_selection(expr, index);
-                        stack.push(ExprState::from_expr(&list_comprehension));
-                    }
-                    _ => {
-                        stack.push(ExprState::from_expr(index.deref()));
-                        stack.push(ExprState::from_expr(expr.deref()));
-                        instructions.push(RibIR::SelectDynamic);
-                    }
+            Expr::SelectDynamic { expr, index, .. } => match index.inferred_type() {
+                InferredType::Range { .. } => {
+                    let list_comprehension = desugar_range_selection(expr, index);
+                    stack.push(ExprState::from_expr(&list_comprehension));
                 }
-            }
+                _ => {
+                    stack.push(ExprState::from_expr(index.deref()));
+                    stack.push(ExprState::from_expr(expr.deref()));
+                    instructions.push(RibIR::SelectDynamic);
+                }
+            },
 
             Expr::SelectIndex { expr, index, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));

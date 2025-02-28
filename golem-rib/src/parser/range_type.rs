@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{char as char_, spaces, string};
+use combine::parser::char::{spaces, string};
 use combine::{optional, ParseError, Parser, Stream};
 
 use crate::parser::errors::RibParseError;

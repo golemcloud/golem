@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, Range};
+use crate::Expr;
 use std::collections::VecDeque;
 
 pub(crate) fn bind_type_annotations(expr: &mut Expr) {

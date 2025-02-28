@@ -14,16 +14,17 @@
 
 use crate::{Expr, InferredType, MatchArm, VariableId};
 
-pub fn desugar_range_selection(
-    select_from: &Expr,
-    range_expr: &Expr,
-) -> Expr {
+pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Expr {
     let iterable_expr = VariableId::list_comprehension_identifier("i");
 
     Expr::list_comprehension(
         VariableId::list_comprehension_identifier("i"),
         range_expr.clone(),
-        Expr::select_dynamic(select_from.clone(), Expr::identifier_with_variable_id(iterable_expr, None), None),
+        Expr::select_dynamic(
+            select_from.clone(),
+            Expr::identifier_with_variable_id(iterable_expr, None),
+            None,
+        ),
     )
 }
 

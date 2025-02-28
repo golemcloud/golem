@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bigdecimal::BigDecimal;
 use combine::parser::char;
 use combine::parser::char::spaces;
 use combine::{attempt, choice, parser, position, Stream};
 use combine::{ParseError, Parser};
-use std::str::FromStr;
 
 use super::binary_op::BinaryOp;
 use crate::expr::Expr;
@@ -173,7 +171,7 @@ mod internal {
     use crate::parser::rib_expr::{simple_expr, simple_expr_};
     use crate::rib_source_span::GetSourcePosition;
     use crate::Expr;
-    use combine::parser::char::char;
+
     use combine::{attempt, many, optional, parser, ParseError, Parser, Stream};
     // A simple expression is a composition of all parsers that doesn't involve left recursion
 
@@ -196,8 +194,7 @@ mod internal {
                 None => MathOrRange::Range((range_type, None)),
             }),
         )
-        .or(many((binary_op(), simple_expr()))
-            .map(|binary_op_with_expr| MathOrRange::BinaryMath(binary_op_with_expr)))
+        .or(many((binary_op(), simple_expr())).map(MathOrRange::BinaryMath))
     }
 
     parser! {

@@ -597,13 +597,12 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
 
             Expr::Range {
                 range,
-                inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_range(
                     range,
                     source_span,
-                    inferred_type.clone(),
                     &mut inferred_type_stack,
                 );
             }
@@ -627,7 +626,7 @@ mod internal {
     use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
     use crate::type_inference::kind::TypeKind;
-    use crate::type_refinement::precise_types::{ListType, NumberType, RangeType, RecordType};
+    use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
         ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
@@ -788,9 +787,6 @@ mod internal {
             &inferred_type_of_selection_expr,
             &inferred_type_of_index_expr,
         )?;
-
-        dbg!(index_type.clone());
-        dbg!(expression_type.clone());
 
         let new_select_index = match index_type {
             SelectionIndexType::Index(index_type) => Expr::select_dynamic(
@@ -1123,7 +1119,6 @@ mod internal {
     pub(crate) fn handle_range(
         range: &Range,
         source_span: &SourceSpan,
-        inferred_type: InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
         match range {

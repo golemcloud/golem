@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use combine::{
-    between, many1, not_followed_by, parser,
+    between, many1, parser,
     parser::char::{char as char_, letter, spaces},
     position, sep_by1, ParseError, Parser, Stream,
 };
 
-use super::rib_expr::{rib_expr, simple_expr};
+use super::rib_expr::simple_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::{GetSourcePosition, SourceSpan};

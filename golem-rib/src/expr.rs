@@ -30,7 +30,7 @@ use combine::Parser;
 use combine::{eof, EasyParser};
 use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -1474,10 +1474,7 @@ impl Range {
     }
 
     pub fn inclusive(&self) -> bool {
-        match self {
-            Range::RangeInclusive { .. } => true,
-            _ => false,
-        }
+        matches!(self, Range::RangeInclusive { .. })
     }
 
     pub fn get_exprs_mut(&mut self) -> Vec<&mut Box<Expr>> {

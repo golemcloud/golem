@@ -19,7 +19,7 @@ use std::str::FromStr;
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::{parse_basic_type, parse_type_name, TypeName};
+use crate::parser::type_name::{parse_basic_type, TypeName};
 use crate::rib_source_span::GetSourcePosition;
 
 pub fn number<Input>() -> impl Parser<Input, Output = Expr>

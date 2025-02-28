@@ -450,7 +450,7 @@ impl InferredType {
             }
 
             (current_type, InferredType::OneOf(newtypes)) => {
-                if newtypes.contains(&current_type) {
+                if newtypes.contains(current_type) {
                     current_type.clone()
                 } else {
                     InferredType::all_of(vec![current_type.clone(), InferredType::OneOf(newtypes)])
