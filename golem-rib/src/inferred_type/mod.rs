@@ -81,6 +81,23 @@ pub enum InferredNumber {
     F64,
 }
 
+impl From<InferredNumber> for InferredType {
+    fn from(inferred_number: InferredNumber) -> Self {
+        match inferred_number {
+            InferredNumber::S8 => InferredType::S8,
+            InferredNumber::U8 => InferredType::U8,
+            InferredNumber::S16 => InferredType::S16,
+            InferredNumber::U16 => InferredType::U16,
+            InferredNumber::S32 => InferredType::S32,
+            InferredNumber::U32 => InferredType::U32,
+            InferredNumber::S64 => InferredType::S64,
+            InferredNumber::U64 => InferredType::U64,
+            InferredNumber::F32 => InferredType::F32,
+            InferredNumber::F64 => InferredType::F64,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RangeType {
     from: Box<InferredType>,

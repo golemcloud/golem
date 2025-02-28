@@ -142,6 +142,24 @@ impl<W: Write> Writer<W> {
                     Ok(())
                 }
             }
+            Expr::SelectDynamic {
+                expr,
+                index,
+                type_annotation,
+                ..
+            } => {
+                self.write_expr(expr)?;
+                self.write_str("[")?;
+                self.write_expr(index)?;
+                self.write_str("]")?;
+                if let Some(type_name) = type_annotation {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
+            }
+
             Expr::SelectIndex {
                 expr,
                 index,

@@ -9,6 +9,10 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Let { expr, .. } => queue.push_back(&mut *expr),
         Expr::SelectField { expr, .. } => queue.push_back(&mut *expr),
         Expr::SelectIndex { expr, .. } => queue.push_back(&mut *expr),
+        Expr::SelectDynamic { expr, index, .. } => {
+            queue.push_back(&mut *expr);
+            queue.push_back(&mut *index);
+        }
         Expr::Sequence { exprs, .. } => queue.extend(exprs.iter_mut()),
         Expr::Record { exprs, .. } => queue.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr)),
         Expr::Tuple { exprs, .. } => queue.extend(exprs.iter_mut()),
@@ -172,6 +176,10 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Let { expr, .. } => queue.push_back(expr),
         Expr::SelectField { expr, .. } => queue.push_back(expr),
         Expr::SelectIndex { expr, .. } => queue.push_back(expr),
+        Expr::SelectDynamic { expr, index, .. } => {
+            queue.push_back(expr);
+            queue.push_back(index);
+        }
         Expr::Sequence { exprs, .. } => queue.extend(exprs.iter()),
         Expr::Record { exprs, .. } => queue.extend(exprs.iter().map(|(_, expr)| expr.deref())),
         Expr::Tuple { exprs, .. } => queue.extend(exprs.iter()),
@@ -352,6 +360,10 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Let { expr, .. } => queue.push_front(&mut *expr),
         Expr::SelectField { expr, .. } => queue.push_front(&mut *expr),
         Expr::SelectIndex { expr, .. } => queue.push_front(&mut *expr),
+        Expr::SelectDynamic { expr, index, .. } => {
+            queue.push_front(&mut *expr);
+            queue.push_front(&mut *index);
+        }
         Expr::Sequence { exprs, .. } => {
             for expr in exprs.iter_mut() {
                 queue.push_front(expr);

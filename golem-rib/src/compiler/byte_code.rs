@@ -295,6 +295,26 @@ mod internal {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::SelectField(field.clone()));
             }
+
+            Expr::SelectDynamic {expr, index, ..} => {
+                let index_as_number = index.inferred_type().as_number();
+
+                match index_as_number {
+                    Ok(_) => {
+                        stack.push(ExprState::from_expr(index.deref()));
+                        stack.push(ExprState::from_expr(expr.deref()));
+                        instructions.push(RibIR::SelectIndex(0)); // Fix this TODO
+                    }
+
+                    Err(_) => {
+                        stack.push(ExprState::from_expr(index.deref()));
+                        stack.push(ExprState::from_expr(expr.deref()));
+                        instructions.push(RibIR::SelectField("range".to_string())); // Fix this TODO
+                    }
+                }
+
+            }
+
             Expr::SelectIndex { expr, index, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::SelectIndex(*index));

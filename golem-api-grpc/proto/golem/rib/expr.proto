@@ -44,6 +44,7 @@ message Expr {
     DivideExpr divide = 35;
     LazyInvokeMethodExpr lazy_invoke_method = 36;
     RangeExpr range = 37;
+    SelectDynamicExpr select_dynamic = 38;
   }
 }
 
@@ -83,6 +84,12 @@ message SelectFieldExpr {
 
 message SelectIndexExpr {
   uint64 index = 1;
+  Expr expr = 2;
+  optional TypeName type_name = 3;
+}
+
+message SelectDynamicExpr {
+  Expr index = 1;
   Expr expr = 2;
   optional TypeName type_name = 3;
 }

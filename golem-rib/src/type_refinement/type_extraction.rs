@@ -55,6 +55,15 @@ pub trait ExtractInnerTypes {
     fn inner_types(&self) -> Vec<InferredType>;
 }
 
+impl ExtractInnerTypes for RangeType {
+    fn inner_types(&self) -> Vec<InferredType> {
+       match &self.1 {
+           Some(typ) => vec![self.0.clone(), typ.clone()],
+           None => vec![self.0.clone()],
+       }
+    }
+}
+
 impl ExtractInnerTypes for TupleType {
     fn inner_types(&self) -> Vec<InferredType> {
         self.0.clone()

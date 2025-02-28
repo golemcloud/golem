@@ -176,6 +176,23 @@ mod internal {
                     )?;
                 }
 
+                Expr::SelectDynamic {
+                    expr,
+                    index,
+                    type_annotation,
+                    inferred_type,
+                    source_span,
+                } => {
+                    handle_select_dynamic(
+                        expr,
+                        index,
+                        inferred_type,
+                        &mut temp_stack,
+                        type_annotation,
+                        source_span,
+                    )?;
+                }
+
                 Expr::Result {
                     expr: Ok(_),
                     type_annotation,
@@ -731,6 +748,7 @@ mod internal {
         result_expr_queue.push_front((new_tuple, false));
     }
 
+
     fn handle_select_field(
         original_selection_expr: &Expr,
         field: &str,
@@ -783,6 +801,35 @@ mod internal {
                 false,
             ));
         }
+
+        Ok(())
+    }
+
+    pub fn handle_select_dynamic(
+        original_selection_expr: &Expr,
+        index: &Expr,
+        current_index_type: &InferredType,
+        temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
+        source_span: &SourceSpan,
+    ) -> Result<(), RibCompilationError> {
+        let index = temp_stack
+            .pop_front()
+            .unwrap_or((index.clone(), false));
+
+        let expr = temp_stack
+            .pop_front()
+            .unwrap_or((original_selection_expr.clone(), false));
+
+        let new_select_index = Expr::SelectDynamic {
+            expr: Box::new(expr.0.clone()),
+            index: Box::new(index.0.clone()),
+            type_annotation: type_name.clone(),
+            inferred_type: current_index_type.clone(),
+            source_span: source_span.clone(),
+        };
+
+        temp_stack.push_front((new_select_index, false));
 
         Ok(())
     }

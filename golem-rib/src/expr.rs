@@ -54,9 +54,20 @@ pub enum Expr {
         inferred_type: InferredType,
         source_span: SourceSpan,
     },
+    // Kept for backward compatibility
     SelectIndex {
         expr: Box<Expr>,
         index: usize,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+        source_span: SourceSpan,
+    },
+    // Can handle x[i] (and not just x[1]) than concrete numbers
+    // or select x[i..] etc
+    // This can handle SelectIndex, but SelectIndex is kept for backward compatibility
+    SelectDynamic {
+        expr: Box<Expr>,
+        index: Box<Expr>,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
         source_span: SourceSpan,
@@ -932,6 +943,20 @@ impl Expr {
         }
     }
 
+    pub fn select_dynamic(
+        expr: Expr,
+        index: Expr,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
+        Expr::SelectDynamic {
+            expr: Box::new(expr),
+            index: Box::new(index),
+            type_annotation,
+            inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
+        }
+    }
+
     pub fn select_field_with_type_annotation(
         expr: Expr,
         field: impl AsRef<str>,
@@ -1013,6 +1038,7 @@ impl Expr {
             Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
             | Expr::SelectIndex { inferred_type, .. }
+            | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -1191,6 +1217,7 @@ impl Expr {
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
             | Expr::SelectIndex { inferred_type, .. }
+            | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -1241,6 +1268,7 @@ impl Expr {
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
             | Expr::SelectIndex { source_span, .. }
+            | Expr::SelectDynamic { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
             | Expr::Tuple { source_span, .. }
@@ -1289,6 +1317,7 @@ impl Expr {
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
             | Expr::SelectIndex { source_span, .. }
+            | Expr::SelectDynamic { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
             | Expr::Tuple { source_span, .. }
@@ -1341,6 +1370,7 @@ impl Expr {
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
             | Expr::SelectIndex { inferred_type, .. }
+            | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -1698,11 +1728,19 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
         let expr = match expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
                 let name = expr.name;
-                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
+                let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
                 let expr_: golem_api_grpc::proto::golem::rib::Expr =
                     *expr.expr.ok_or("Missing expr")?;
                 let expr: Expr = expr_.try_into()?;
-                Expr::let_binding(name, expr, type_name)
+                Expr::let_binding(name, expr, type_annotation)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(expr) => {
+                let selection = *expr.expr.ok_or("Missing expr")?;
+                let field = *expr.index.ok_or("Missing index")?;
+                let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
+
+                Expr::select_dynamic(selection.try_into()?, field.try_into()?, type_annotation)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Range(range) => {
@@ -1819,13 +1857,13 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
                 golem_api_grpc::proto::golem::rib::SequenceExpr { exprs, type_name },
             ) => {
-                let type_name = type_name.map(TypeName::try_from).transpose()?;
+                let type_annotation = type_name.map(TypeName::try_from).transpose()?;
 
                 let exprs: Vec<Expr> = exprs
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Expr::sequence(exprs, type_name)
+                Expr::sequence(exprs, type_annotation)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
@@ -2170,6 +2208,8 @@ mod protobuf {
                     }),
                 )),
 
+
+
                 Expr::Range { range, .. } => match range {
                     Range::RangeFrom { from } => {
                         Some(golem_api_grpc::proto::golem::rib::expr::Expr::Range(
@@ -2220,6 +2260,21 @@ mod protobuf {
                         type_name: type_annotation.map(|t| t.into()),
                     }),
                 )),
+
+
+                Expr::SelectDynamic {
+                    expr,
+                    index,
+                    type_annotation,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(
+                    Box::new(golem_api_grpc::proto::golem::rib::SelectDynamicExpr {
+                        expr: Some(Box::new((*expr).into())),
+                        index:  Some(Box::new((*index).into())),
+                        type_name: type_annotation.map(|t| t.into()),
+                    }),
+                )),
+
                 Expr::Sequence {
                     exprs: expressions,
                     type_annotation,

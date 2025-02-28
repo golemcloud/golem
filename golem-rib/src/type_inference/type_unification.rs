@@ -418,6 +418,25 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 }
             }
 
+            Expr::SelectDynamic {
+                expr,
+                index,
+                inferred_type,
+                ..
+            } => {
+                queue.push(expr);
+                queue.push(index);
+                let unified_inferred_type = inferred_type.unify();
+
+                match unified_inferred_type {
+                    Ok(unified_type) => *inferred_type = unified_type,
+                    Err(e) => {
+                        errors.push(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("cannot determine the type of dynamic field selection: {}", e)));
+                    }
+                }
+            }
+
             Expr::Let { expr, .. } => {
                 queue.push(expr);
             }
