@@ -282,6 +282,7 @@ fn golem_def_with_response(
                 binding_type: Some(GatewayBindingType::Default),
                 max_age: None,
                 allow_credentials: None,
+                invocation_context: None,
             },
         }],
     }

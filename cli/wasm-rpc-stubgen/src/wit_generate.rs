@@ -21,6 +21,7 @@ use crate::stub::{
 use crate::wit_encode::EncodedWitDir;
 use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, fs, naming};
+use crate::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
 use semver::Version;
@@ -62,14 +63,24 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
 
         // Common used types
         stub_interface.use_type(
-            "golem:rpc/types@0.1.3",
+            format!("wasi:io/poll@{WASI_WIT_VERSION}"),
+            "pollable",
+            Some(Ident::new("wasi-io-pollable")),
+        );
+        stub_interface.use_type(
+            format!("wasi:clocks/wall-clock@{WASI_WIT_VERSION}"),
+            "datetime",
+            Some(Ident::new("wasi-clocks-datetime")),
+        );
+        stub_interface.use_type(
+            format!("golem:rpc/types@{GOLEM_RPC_WIT_VERSION}"),
             "uri",
             Some(Ident::new("golem-rpc-uri")),
         );
         stub_interface.use_type(
-            "wasi:io/poll@0.2.0",
-            "pollable",
-            Some(Ident::new("wasi-io-pollable")),
+            format!("golem:rpc/types@{GOLEM_RPC_WIT_VERSION}"),
+            "cancellation-token",
+            Some(Ident::new("golem-rpc-cancellation-token")),
         );
 
         // Used or inlined type defs
@@ -147,6 +158,31 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                         ))));
                     }
                     stub_functions.push(async_function);
+                }
+
+                // Scheduled
+                {
+                    let mut scheduled_function = {
+                        let function_name = naming::wit::schedule_function_name(function);
+                        if is_static {
+                            ResourceFunc::static_(function_name)
+                        } else {
+                            ResourceFunc::method(function_name)
+                        }
+                    };
+
+                    let mut params: Params = function.params.to_encoder(def)?;
+                    params.push(
+                        Ident::new("scheduled-for"),
+                        Type::named(Ident::new("wasi-clocks-datetime")),
+                    );
+                    scheduled_function.set_params(params);
+
+                    let results: Results =
+                        Results::anon(Type::named("golem-rpc-cancellation-token"));
+                    scheduled_function.set_results(results);
+
+                    stub_functions.push(scheduled_function);
                 }
             }
 

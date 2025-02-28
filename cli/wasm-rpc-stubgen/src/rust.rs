@@ -20,6 +20,7 @@ use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
+use std::collections::HashSet;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
     Enum, Flags, Handle, Record, Result_, Tuple, Type, TypeDef, TypeDefKind, TypeOwner, Variant,
@@ -129,10 +130,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     naming::rust::result_wrapper_interface_ident(function, interface);
 
                 let subscribe = quote! {
-                    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+                    fn subscribe(&self) -> golem_wasm_rpc::Pollable {
                         let pollable = self.future_invoke_result.subscribe();
                         let pollable = unsafe {
-                            bindings::wasi::io::poll::Pollable::from_handle(
+                            golem_wasm_rpc::Pollable::from_handle(
                                 pollable.take_handle()
                             )
                         };
@@ -208,7 +209,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             )?
         } else {
             quote! {
-                fn new(location: crate::bindings::golem::rpc::types::Uri) -> Self {
+                fn new(location: golem_wasm_rpc::Uri) -> Self {
                     let location = golem_wasm_rpc::Uri { value: location.value };
                     Self {
                         rpc: WasmRpc::new(&location)
@@ -327,6 +328,7 @@ fn generate_function_stub_source(
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
     let mut params = Vec::new();
+    let mut param_names = HashSet::new();
     let mut input_values = Vec::new();
 
     if mode != FunctionMode::Static && mode != FunctionMode::Constructor {
@@ -334,7 +336,7 @@ fn generate_function_stub_source(
     }
 
     if mode == FunctionMode::Constructor {
-        params.push(quote! { location: crate::bindings::golem::rpc::types::Uri });
+        params.push(quote! { location: golem_wasm_rpc::Uri });
     }
 
     if mode == FunctionMode::Method {
@@ -344,11 +346,14 @@ fn generate_function_stub_source(
     }
 
     for param in &function.params {
-        let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
+        let rust_param_name = to_rust_ident(&param.name);
+        let param_name = Ident::new(&rust_param_name, Span::call_site());
         let param_typ = type_to_rust_ident(&param.typ, def)?;
         params.push(quote! {
             #param_name: #param_typ
         });
+        param_names.insert(rust_param_name);
+
         let param_name_access = quote! { #param_name };
 
         input_values.push(wit_value_builder(
@@ -468,9 +473,36 @@ fn generate_function_stub_source(
         quote! {}
     };
 
+    let scheduled = if mode != FunctionMode::Constructor {
+        let scheduled_function_name = format!("schedule-{}", function.name);
+        let function_name = Ident::new(&to_rust_ident(&scheduled_function_name), Span::call_site());
+
+        let schedule_for_param_name = new_param_name("schedule_for", &mut param_names);
+        let schedule_for_param = Ident::new(&schedule_for_param_name, Span::call_site());
+
+        quote! {
+            fn #function_name(
+                #(#params),*,
+                #schedule_for_param: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime
+            ) -> golem_wasm_rpc::golem_rpc_0_1_x::types::CancellationToken {
+                #init
+                #rpc.schedule_cancelable_invocation(
+                    #schedule_for_param,
+                    #remote_function_name,
+                    &[
+                        #(#input_values),*
+                    ],
+                )
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         #blocking
         #non_blocking
+        #scheduled
     })
 }
 
@@ -516,6 +548,29 @@ fn get_output_values_source(
         }
     }
     Ok(output_values)
+}
+
+fn new_param_name(name: &str, used_names: &mut HashSet<String>) -> String {
+    let unique_name = if !used_names.contains(name) {
+        name.to_string()
+    } else {
+        let mut counter = 1;
+        let mut make_candidate = || {
+            counter += 1;
+            format!("{name}_{counter}")
+        };
+
+        let mut candiate = make_candidate();
+        while used_names.contains(&candiate) {
+            candiate = make_candidate();
+        }
+
+        candiate
+    };
+
+    used_names.insert(unique_name.clone());
+
+    unique_name
 }
 
 fn get_result_type_source(

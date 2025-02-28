@@ -150,6 +150,10 @@ pub mod wit {
     pub fn blocking_function_name(function: &FunctionStub) -> String {
         format!("blocking-{}", function.name)
     }
+
+    pub fn schedule_function_name(function: &FunctionStub) -> String {
+        format!("schedule-{}", function.name)
+    }
 }
 
 pub mod rust {

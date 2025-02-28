@@ -16,7 +16,7 @@ use crate::fs::PathExtra;
 use crate::log::{log_action, log_warn_action, LogColorize};
 use crate::stub::StubDefinition;
 use crate::wit_resolve::ResolvedWitDir;
-use crate::{fs, naming};
+use crate::{fs, naming, GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION, WIT_BINDGEN_VERSION};
 use anyhow::{anyhow, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
@@ -24,7 +24,7 @@ use cargo_toml::{
 };
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use toml::Value;
 use toml_edit::{DocumentMut, InlineTable};
@@ -39,6 +39,7 @@ struct MetadataRoot {
 struct ComponentMetadata {
     package: Option<String>,
     target: Option<ComponentTarget>,
+    bindings: Option<Bindings>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -67,6 +68,11 @@ impl Default for ComponentTarget {
 #[derive(Serialize, Deserialize)]
 struct WitDependency {
     path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Bindings {
+    with: HashMap<String, String>,
 }
 
 pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
@@ -128,6 +134,25 @@ pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         }
     }
 
+    let bindings = {
+        let mut with = HashMap::new();
+
+        with.insert(
+            format!("wasi:io/poll@{WASI_WIT_VERSION}"),
+            "golem_wasm_rpc::wasi::io::poll".to_string(),
+        );
+        with.insert(
+            format!("wasi:clocks/wall-clock@{WASI_WIT_VERSION}"),
+            "golem_wasm_rpc::wasi::clocks::wall_clock".to_string(),
+        );
+        with.insert(
+            format!("golem:rpc/types@{GOLEM_RPC_WIT_VERSION}"),
+            "golem_wasm_rpc::golem_rpc_0_1_x::types".to_string(),
+        );
+
+        Bindings { with }
+    };
+
     let metadata = MetadataRoot {
         component: Some(ComponentMetadata {
             package: Some(format_package_name_without_version(
@@ -138,6 +163,7 @@ pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
                 path: "wit".to_string(),
                 dependencies: wit_dependencies,
             }),
+            bindings: Some(bindings),
         }),
     };
 
@@ -175,7 +201,7 @@ pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     };
 
     let dep_wit_bindgen = Dependency::Detailed(Box::new(DependencyDetail {
-        version: Some("0.26.0".to_string()),
+        version: Some(WIT_BINDGEN_VERSION.to_string()),
         features: vec!["bitflags".to_string()],
         ..Default::default()
     }));
@@ -249,26 +275,6 @@ pub fn is_cargo_workspace_toml(path: &Path) -> anyhow::Result<bool> {
     } else {
         Ok(false)
     }
-}
-
-pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<()> {
-    let mut manifest = Manifest::from_path(path)?;
-    if let Some(workspace) = manifest.workspace.as_mut() {
-        for member in members {
-            if !workspace.members.contains(member) {
-                workspace.members.push(member.to_string());
-            }
-        }
-    }
-
-    let cargo_toml = toml::to_string(&manifest)?;
-
-    log_action(
-        "Writing",
-        format!("updated Cargo.toml to {:?}", path.log_color_highlight()),
-    );
-    fs::write(path, cargo_toml)?;
-    Ok(())
 }
 
 pub fn add_cargo_package_component_deps(

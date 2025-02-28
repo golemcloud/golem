@@ -18,16 +18,16 @@ exclude = [
 golem-wit = { git = "https://github.com/golemcloud/golem-wit.git", tag = "v1.1.11" }
 
 # Golem dep
-golem-client = "=1.1.20"
-golem-common = "=1.1.20"
-golem-rib = "=1.1.20"
-golem-service-base = "=1.1.20"
-golem-test-framework = "=1.1.20"
-golem-wasm-ast = { version = "=1.1.20", default-features = false, features = ["analysis"] }
-golem-wasm-rpc = { version = "=1.1.20", default-features = false, features = ["host"] }
+golem-client = "=1.1.21"
+golem-common = "=1.1.21"
+golem-rib = "=1.1.21"
+golem-service-base = "=1.1.21"
+golem-test-framework = "=1.1.21"
+golem-wasm-ast = { version = "=1.1.21", default-features = false, features = ["analysis"] }
+golem-wasm-rpc = { version = "=1.1.21", default-features = false, features = ["host"] }
 
 # Golem cloud deps
-golem-cloud-client = "=1.1.4"
+golem-cloud-client = "=1.1.6"
 
 # External deps
 anyhow = "1.0.95"

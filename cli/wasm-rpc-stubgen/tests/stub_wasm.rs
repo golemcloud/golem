@@ -440,6 +440,7 @@ fn assert_has_stub(
 
     let async_fun_name = format!("[method]{resource_name}.{function_name}");
     let blocking_fun_name = format!("[method]{resource_name}.blocking-{function_name}");
+    let scheduled_fun_name = format!("[method]{resource_name}.schedule-{function_name}");
 
     let async_fun = exported_interface
         .functions
@@ -451,6 +452,11 @@ fn assert_has_stub(
         .iter()
         .find(|f| f.name == blocking_fun_name)
         .unwrap_or_else(|| panic!("missing blocking function {blocking_fun_name}"));
+    let scheduled_fun = exported_interface
+        .functions
+        .iter()
+        .find(|f| f.name == scheduled_fun_name)
+        .unwrap_or_else(|| panic!("missing scheduled function {scheduled_fun_name}"));
 
     let async_parameter_types = async_fun
         .parameters
@@ -459,6 +465,12 @@ fn assert_has_stub(
         .cloned()
         .collect::<Vec<_>>();
     let blocking_parameter_types = blocking_fun
+        .parameters
+        .iter()
+        .map(|p| &p.typ)
+        .cloned()
+        .collect::<Vec<_>>();
+    let scheduled_parameter_types = scheduled_fun
         .parameters
         .iter()
         .map(|p| &p.typ)
@@ -474,8 +486,19 @@ fn assert_has_stub(
     ]
     .concat();
 
+    let scheduled_function_parameters = [
+        parameters_with_self.clone(),
+        // schedule_for parameter
+        vec![record(vec![
+            field("seconds", u64()),
+            field("nanoseconds", u32()),
+        ])],
+    ]
+    .concat();
+
     assert_eq!(async_parameter_types, parameters_with_self);
     assert_eq!(blocking_parameter_types, parameters_with_self);
+    assert_eq!(scheduled_parameter_types, scheduled_function_parameters);
 
     if let Some(return_type) = return_type {
         assert_eq!(async_fun.results.len(), 1);
@@ -495,6 +518,15 @@ fn assert_has_stub(
         assert_eq!(async_fun.results.len(), 0);
         assert_eq!(blocking_fun.results.len(), 0);
     }
+
+    assert_eq!(scheduled_fun.results.len(), 1);
+    assert!(matches!(
+        scheduled_fun.results[0].typ,
+        AnalysedType::Handle(TypeHandle {
+            mode: AnalysedResourceMode::Owned,
+            ..
+        })
+    ));
 }
 
 fn assert_valid_polling_resource(

@@ -21,16 +21,16 @@ test = false
 golem-cli = { path = "../golem-cli", version = "=0.0.0" }
 
 # Golem - git deps
-golem-common = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
-golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-common = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
+golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.21" }
 
 # External deps
 anyhow = { workspace = true }

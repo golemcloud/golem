@@ -173,6 +173,7 @@ fn golem_def_with_response(
                 expose_headers: None,
                 max_age: None,
                 allow_credentials: None,
+                invocation_context: None,
             },
         }],
         security: None,

@@ -585,20 +585,36 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
     async fn revert(
         &self,
-        _worker_urn: WorkerUrn,
-        _target: RevertWorkerTarget,
+        worker_urn: WorkerUrn,
+        target: RevertWorkerTarget,
     ) -> Result<(), GolemError> {
-        // TODO: add to cloud (client)
-        todo!()
+        self.client
+            .revert_worker(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+                &convert_revert_worker_target(target),
+            )
+            .await
+            .map_err(CloudGolemError::from)?;
+
+        Ok(())
     }
 
     async fn cancel_invocation(
         &self,
-        _worker_urn: WorkerUrn,
-        _idempotency_key: IdempotencyKey,
+        worker_urn: WorkerUrn,
+        idempotency_key: IdempotencyKey,
     ) -> Result<bool, GolemError> {
-        // TODO: add to cloud (client)
-        todo!()
+        let response = self
+            .client
+            .cancel_invocation(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+                &idempotency_key.0,
+            )
+            .await
+            .map_err(CloudGolemError::from)?;
+        Ok(response.canceled)
     }
 }
 
@@ -613,4 +629,25 @@ fn get_worker_golem_error(status: u16, body: Vec<u8>) -> GolemError {
         _ => Ok(Error::unexpected(status, body.into())),
     };
     CloudGolemError::from(error.unwrap_or_else(Error::from)).into()
+}
+
+fn convert_revert_worker_target(
+    value: golem_client::model::RevertWorkerTarget,
+) -> golem_cloud_client::model::RevertWorkerTarget {
+    match value {
+        golem_client::model::RevertWorkerTarget::RevertLastInvocations(inner) => {
+            golem_cloud_client::model::RevertWorkerTarget::RevertLastInvocations(
+                golem_cloud_client::model::RevertLastInvocations {
+                    number_of_invocations: inner.number_of_invocations,
+                },
+            )
+        }
+        golem_client::model::RevertWorkerTarget::RevertToOplogIndex(inner) => {
+            golem_cloud_client::model::RevertWorkerTarget::RevertToOplogIndex(
+                golem_cloud_client::model::RevertToOplogIndex {
+                    last_oplog_index: inner.last_oplog_index,
+                },
+            )
+        }
+    }
 }
