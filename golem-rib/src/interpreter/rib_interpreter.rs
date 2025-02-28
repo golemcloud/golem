@@ -2522,6 +2522,32 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_3() {
+            let expr = r#"
+              let list: list<u8> = [2, 5, 4];
+              let indices: list<u8> = [0, 1];
+
+               reduce z, index in indices from 0u8 {
+                  yield list[index] + z;
+                }
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::U8(7),
+                u8()
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
     }
 
     mod range_interpreter_tests {
