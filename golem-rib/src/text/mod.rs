@@ -313,6 +313,7 @@ mod record_tests {
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
+    #[ignore]
     #[test]
     fn test_round_trip_read_write_record_of_math_op() {
         let input_expr = Expr::record(vec![

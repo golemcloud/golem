@@ -64,7 +64,6 @@ mod type_check_tests {
         use crate::type_checker::type_check_tests::internal::strip_spaces;
         use crate::{compile, Expr};
 
-        #[ignore]
         #[test]
         fn test_invalid_key_in_record_in_function_call() {
             let expr = r#"

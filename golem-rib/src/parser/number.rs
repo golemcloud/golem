@@ -92,7 +92,10 @@ mod tests {
         assert_eq!(result, Ok(Expr::untyped_number(BigDecimal::from(-123))));
     }
 
-    //TODO
+    // TODO;
+    // Refactoring code to avoid left recursion resulted in early consumption
+    // of number on the left
+    // Grammer needs to be fixed
     #[ignore]
     #[test]
     fn test_float_number() {
@@ -122,6 +125,8 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 
+    // TODO;
+    // We will have to compromise left side recursion to support literal float numbers
     #[ignore]
     #[test]
     fn test_number_with_binding_float() {

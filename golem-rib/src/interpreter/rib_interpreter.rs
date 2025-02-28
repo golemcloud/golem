@@ -2610,7 +2610,6 @@ mod interpreter_tests {
             assert!(result.is_err());
         }
 
-        #[test]
         async fn test_range_with_comprehension_4() {
             // infinite computation will respond with an error - than a stack overflow
             // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not

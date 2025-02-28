@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use combine::{
-    between, many1, parser,
+    between, many1, not_followed_by, parser,
     parser::char::{char as char_, letter, spaces},
-    sep_by1, ParseError, Parser, Stream,
+    position, sep_by1, ParseError, Parser, Stream,
 };
 
-use super::rib_expr::rib_expr;
+use super::rib_expr::{rib_expr, simple_expr};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::rib_source_span::GetSourcePosition;
+use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -91,11 +91,21 @@ where
     (
         field_key().skip(spaces()),
         char_(':').skip(spaces()),
-        rib_expr(),
+        position(),
+        simple_expr(),
+        position(),
     )
-        .map(|(var, _, expr)| Field {
-            key: var,
-            value: expr,
+        .map(|(var, _, start, expr, end)| {
+            let start: Input::Position = start;
+            let start = start.get_source_position();
+            let end: Input::Position = end;
+            let end = end.get_source_position();
+            let span = SourceSpan::new(start, end);
+
+            Field {
+                key: var,
+                value: expr.with_source_span(span),
+            }
         })
 }
 
