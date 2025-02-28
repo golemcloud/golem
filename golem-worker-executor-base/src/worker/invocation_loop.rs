@@ -491,7 +491,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.owned_worker_id.worker_id(),
         );
 
-        let span_ids = invocation_context.span_ids();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
         self.store
             .data_mut()
             .set_current_invocation_context(invocation_context)
@@ -518,10 +518,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         )
         .await;
 
-        // TODO: we should not close "inherited" spans here, just the ones created for this particular invocation (but also the one(s) from API Gateway)
-        // TODO: it's ok if we close a request span and some child spans remain open; spans can outlive parents, and the contextual information remains there through the direct parent link
-        for span_id in span_ids {
+        for span_id in local_span_ids {
             self.store.data_mut().finish_span(&span_id)?;
+        }
+        for span_id in inherited_span_ids {
+            self.store.data_mut().remove_span(&span_id)?;
         }
 
         result

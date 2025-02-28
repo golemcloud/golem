@@ -951,6 +951,10 @@ impl InvocationContextManagement for TestWorkerCtx {
             .start_child_span(parent, initial_attributes)
     }
 
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
+    }
+
     fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
         self.durable_ctx.finish_span(span_id)
     }
@@ -963,6 +967,16 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
+    }
+
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> (
+        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn PluginsObservations>,
+    ) {
+        plugins::default_configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(
@@ -978,16 +992,6 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_storage,
             plugin_observations,
         )
-    }
-
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> (
-        Arc<dyn Plugins<DefaultGolemTypes>>,
-        Arc<dyn PluginsObservations>,
-    ) {
-        plugins::default_configured(&golem_config.plugin_service)
     }
 
     async fn create_services(

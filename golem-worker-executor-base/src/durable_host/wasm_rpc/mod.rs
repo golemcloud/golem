@@ -160,7 +160,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await,
             };
-            let stack = self.state.invocation_context.get_stack(span.span_id());
+            let stack = self
+                .state
+                .invocation_context
+                .clone_as_inherited_stack(span.span_id());
             let result = self
                 .rpc()
                 .invoke_and_await(
@@ -301,7 +304,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await,
             };
-            let stack = self.state.invocation_context.get_stack(span.span_id());
+            let stack = self
+                .state
+                .invocation_context
+                .clone_as_inherited_stack(span.span_id());
             let result = self
                 .rpc()
                 .invoke(
@@ -400,7 +406,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let result = if self.state.is_live() {
             let rpc = self.rpc();
 
-            let stack = self.state.invocation_context.get_stack(span.span_id());
+            let stack = self
+                .state
+                .invocation_context
+                .clone_as_inherited_stack(span.span_id());
             let handle = wasmtime_wasi::runtime::spawn(async move {
                 Ok(rpc
                     .invoke_and_await(
@@ -520,7 +529,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let stack = self
                 .state
                 .invocation_context
-                .get_stack(&self.state.current_span_id);
+                .clone_as_inherited_stack(&self.state.current_span_id);
             let action = ScheduledAction::Invoke {
                 owned_worker_id: remote_worker_id,
                 idempotency_key,
@@ -703,7 +712,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     .unwrap();
                 entry.span_id().clone()
             };
-            let stack = self.state.invocation_context.get_stack(&span_id);
+            let stack = self
+                .state
+                .invocation_context
+                .clone_as_inherited_stack(&span_id);
 
             let entry = self.table().get_mut(&this)?;
             let entry = entry

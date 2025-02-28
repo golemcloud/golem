@@ -448,6 +448,11 @@ pub trait InvocationContextManagement {
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError>;
+
+    /// Removes an inherited span without finishing it
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
+
+    /// Removes and finishes a local span
     fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
 }
 

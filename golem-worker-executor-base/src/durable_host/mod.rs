@@ -1253,20 +1253,51 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         warn!("start_child_span in {parent}");
+
+        let current_span_id = &self.state.current_span_id;
         let span = self
             .state
             .invocation_context
-            .start_span(parent, None)
+            .start_span(current_span_id, None)
             .map_err(GolemError::runtime)?;
+
+        if current_span_id != parent
+            && !self
+                .state
+                .invocation_context
+                .has_in_stack(current_span_id, parent)
+        {
+            // The parent span is not in the current invocation stack. This can happen if it was created in a previous
+            // invocation and stored in some global state.
+            // To preserve the current invocation context stack but also have the information from the desired parent
+            // span, we add a _link_ to the newly created span.
+
+            self.state
+                .invocation_context
+                .add_link(span.span_id(), parent)
+                .map_err(GolemError::runtime)?;
+        };
 
         for (name, value) in initial_attributes {
             span.set_attribute(name.clone(), value.clone());
         }
 
+        // TODO: write an open span entry to the oplog, or read the persisted span in replay mode
+
         Ok(span)
     }
 
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        let _ = self
+            .state
+            .invocation_context
+            .finish_span(span_id)
+            .map_err(GolemError::runtime);
+        Ok(())
+    }
+
     fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        // TODO: if live mode write a close span entry to the oplog
         let _ = self
             .state
             .invocation_context
@@ -1336,7 +1367,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .set_current_idempotency_key(idempotency_key)
                             .await;
 
-                        let span_ids = invocation_context.span_ids();
+                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
                         store
                             .as_context_mut()
                             .data_mut()
@@ -1353,9 +1384,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .instrument(span)
                         .await;
 
-                        // TODO: we should not close "inherited" spans here, just the ones created for this particular invocation (but also the one(s) from API Gateway)
-                        for span_id in span_ids {
+                        for span_id in local_span_ids {
                             store.as_context_mut().data_mut().finish_span(&span_id)?;
+                        }
+                        for span_id in inherited_span_ids {
+                            store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
 
                         match invoke_result {

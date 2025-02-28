@@ -107,6 +107,82 @@ impl Display for AttributeValue {
 pub struct LocalInvocationContextSpanState {
     parent: Option<Arc<InvocationContextSpan>>,
     attributes: HashMap<String, AttributeValue>,
+    linked_context: Option<Arc<InvocationContextSpan>>,
+}
+
+pub struct LocalInvocationContextSpanBuilder {
+    span_id: Option<SpanId>,
+    start: Timestamp,
+    parent: Option<Arc<InvocationContextSpan>>,
+    attributes: HashMap<String, AttributeValue>,
+    linked_context: Option<Arc<InvocationContextSpan>>,
+    inherited: bool,
+}
+
+impl LocalInvocationContextSpanBuilder {
+    fn new() -> Self {
+        Self {
+            span_id: None,
+            start: Timestamp::now_utc(),
+            parent: None,
+            attributes: HashMap::new(),
+            linked_context: None,
+            inherited: false,
+        }
+    }
+
+    pub fn span_id(mut self, span_id: Option<SpanId>) -> Self {
+        self.span_id = span_id;
+        self
+    }
+
+    pub fn with_span_id(mut self, span_id: SpanId) -> Self {
+        self.span_id = Some(span_id);
+        self
+    }
+
+    pub fn with_start(mut self, start: Timestamp) -> Self {
+        self.start = start;
+        self
+    }
+
+    pub fn parent(mut self, parent: Option<Arc<InvocationContextSpan>>) -> Self {
+        self.parent = parent;
+        self
+    }
+
+    pub fn with_parent(mut self, parent: Arc<InvocationContextSpan>) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+
+    pub fn with_attributes(mut self, attributes: HashMap<String, AttributeValue>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    pub fn with_inherited(mut self, inherited: bool) -> Self {
+        self.inherited = inherited;
+        self
+    }
+
+    pub fn with_linked_context(mut self, linked_context: Arc<InvocationContextSpan>) -> Self {
+        self.linked_context = Some(linked_context);
+        self
+    }
+
+    pub fn build(self) -> Arc<InvocationContextSpan> {
+        Arc::new(InvocationContextSpan::Local {
+            span_id: self.span_id.unwrap_or(SpanId::generate()),
+            start: self.start,
+            state: RwLock::new(LocalInvocationContextSpanState {
+                parent: self.parent,
+                attributes: self.attributes,
+                linked_context: self.linked_context,
+            }),
+            inherited: self.inherited,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -115,6 +191,7 @@ pub enum InvocationContextSpan {
         span_id: SpanId,
         start: Timestamp,
         state: RwLock<LocalInvocationContextSpanState>,
+        inherited: bool,
     },
     ExternalParent {
         span_id: SpanId,
@@ -122,57 +199,12 @@ pub enum InvocationContextSpan {
 }
 
 impl InvocationContextSpan {
-    pub fn new(span_id: Option<SpanId>) -> Arc<Self> {
-        let span_id = span_id.unwrap_or(SpanId::generate());
-        Arc::new(Self::Local {
-            span_id,
-            start: Timestamp::now_utc(),
-            state: RwLock::new(LocalInvocationContextSpanState {
-                parent: None,
-                attributes: HashMap::new(),
-            }),
-        })
-    }
-
-    fn new_with_parent(span_id: Option<SpanId>, parent: Arc<InvocationContextSpan>) -> Arc<Self> {
-        let span_id = span_id.unwrap_or(SpanId::generate());
-        Arc::new(Self::Local {
-            span_id,
-            start: Timestamp::now_utc(),
-            state: RwLock::new(LocalInvocationContextSpanState {
-                parent: Some(parent),
-                attributes: HashMap::new(),
-            }),
-        })
-    }
-
-    pub fn new_at(span_id: Option<SpanId>, start: Timestamp) -> Arc<Self> {
-        let span_id = span_id.unwrap_or(SpanId::generate());
-        Arc::new(Self::Local {
-            span_id,
-            start,
-            state: RwLock::new(LocalInvocationContextSpanState {
-                parent: None,
-                attributes: HashMap::new(),
-            }),
-        })
+    pub fn local() -> LocalInvocationContextSpanBuilder {
+        LocalInvocationContextSpanBuilder::new()
     }
 
     pub fn external_parent(span_id: SpanId) -> Arc<Self> {
         Arc::new(Self::ExternalParent { span_id })
-    }
-
-    pub fn new_with_attributes(
-        span_id: Option<SpanId>,
-        attributes: HashMap<String, AttributeValue>,
-        parent: Option<Arc<Self>>,
-    ) -> Arc<Self> {
-        let span_id = span_id.unwrap_or(SpanId::generate());
-        Arc::new(Self::Local {
-            span_id,
-            start: Timestamp::now_utc(),
-            state: RwLock::new(LocalInvocationContextSpanState { parent, attributes }),
-        })
     }
 
     pub fn span_id(&self) -> &SpanId {
@@ -192,8 +224,32 @@ impl InvocationContextSpan {
         }
     }
 
+    pub fn inherited(&self) -> bool {
+        match self {
+            Self::Local { inherited, .. } => *inherited,
+            Self::ExternalParent { .. } => true,
+        }
+    }
+
     pub fn start_span(self: &Arc<Self>, span_id: Option<SpanId>) -> Arc<Self> {
-        Self::new_with_parent(span_id, self.clone())
+        Self::local()
+            .with_parent(self.clone())
+            .span_id(span_id)
+            .build()
+    }
+
+    pub fn add_link(&self, linked_span: Arc<InvocationContextSpan>) {
+        match self {
+            Self::Local { state, .. } => {
+                state.write().unwrap().attributes.insert(
+                    "linked_span".to_string(),
+                    AttributeValue::String(linked_span.span_id().to_string()),
+                );
+            }
+            _ => {
+                panic!("Cannot add link to external parent span")
+            }
+        }
     }
 
     pub fn get_attribute(self: &Arc<Self>, key: &str, inherit: bool) -> Option<AttributeValue> {
@@ -302,6 +358,55 @@ impl InvocationContextSpan {
             }
         }
     }
+
+    pub fn as_inherited(&self) -> Arc<InvocationContextSpan> {
+        match self {
+            Self::Local {
+                span_id,
+                start,
+                state,
+                ..
+            } => {
+                let state = state.read().unwrap();
+                Arc::new(Self::Local {
+                    span_id: span_id.clone(),
+                    start: *start,
+                    state: RwLock::new(LocalInvocationContextSpanState {
+                        parent: state.parent.clone(),
+                        attributes: state.attributes.clone(),
+                        linked_context: state
+                            .linked_context
+                            .as_ref()
+                            .map(|link| link.as_inherited()),
+                    }),
+                    inherited: true,
+                })
+            }
+            Self::ExternalParent { span_id } => Arc::new(Self::ExternalParent {
+                span_id: span_id.clone(),
+            }),
+        }
+    }
+
+    pub fn to_chain(self: &Arc<Self>) -> NEVec<Arc<InvocationContextSpan>> {
+        let mut current = self.clone();
+        let mut result = NEVec::new(current.clone());
+        loop {
+            current = match &*current {
+                Self::Local { state, .. } => {
+                    let state = state.read().unwrap();
+                    match state.parent.as_ref() {
+                        Some(parent) => {
+                            result.push(parent.clone());
+                            parent.clone()
+                        }
+                        None => break result,
+                    }
+                }
+                _ => break result,
+            }
+        }
+    }
 }
 
 impl PartialEq for InvocationContextSpan {
@@ -312,16 +417,19 @@ impl PartialEq for InvocationContextSpan {
                     span_id: span_id1,
                     start: start1,
                     state: state1,
+                    inherited: inherited1,
                 },
                 Self::Local {
                     span_id: span_id2,
                     start: start2,
                     state: state2,
+                    inherited: inherited2,
                 },
             ) => {
                 span_id1 == span_id2
                     && start1 == start2
                     && *state1.read().unwrap() == *state2.read().unwrap()
+                    && inherited1 == inherited2
             }
             (
                 Self::ExternalParent { span_id: span_id1 },
@@ -339,13 +447,16 @@ impl Encode for InvocationContextSpan {
                 span_id,
                 start,
                 state,
+                inherited,
             } => {
                 let state = state.read().unwrap();
                 0u8.encode(encoder)?;
                 span_id.encode(encoder)?;
                 start.encode(encoder)?;
                 state.parent.encode(encoder)?;
-                state.attributes.encode(encoder)
+                state.attributes.encode(encoder)?;
+                state.linked_context.encode(encoder)?;
+                inherited.encode(encoder)
             }
             Self::ExternalParent { span_id } => {
                 1u8.encode(encoder)?;
@@ -364,11 +475,18 @@ impl Decode for InvocationContextSpan {
                 let start = Timestamp::decode(decoder)?;
                 let parent = Option::<Arc<InvocationContextSpan>>::decode(decoder)?;
                 let attributes = HashMap::decode(decoder)?;
-                let state = RwLock::new(LocalInvocationContextSpanState { parent, attributes });
+                let linked_context = Option::<Arc<InvocationContextSpan>>::decode(decoder)?;
+                let inherited = bool::decode(decoder)?;
+                let state = RwLock::new(LocalInvocationContextSpanState {
+                    parent,
+                    attributes,
+                    linked_context,
+                });
                 Ok(Self::Local {
                     span_id,
                     start,
                     state,
+                    inherited,
                 })
             }
             1 => {
@@ -391,11 +509,18 @@ impl<'de> BorrowDecode<'de> for InvocationContextSpan {
                 let start = Timestamp::borrow_decode(decoder)?;
                 let parent = Option::<Arc<InvocationContextSpan>>::borrow_decode(decoder)?;
                 let attributes = HashMap::borrow_decode(decoder)?;
-                let state = RwLock::new(LocalInvocationContextSpanState { parent, attributes });
+                let linked_context = Option::<Arc<InvocationContextSpan>>::borrow_decode(decoder)?;
+                let state = RwLock::new(LocalInvocationContextSpanState {
+                    parent,
+                    attributes,
+                    linked_context,
+                });
+                let inherited = bool::borrow_decode(decoder)?;
                 Ok(Self::Local {
                     span_id,
                     start,
                     state,
+                    inherited,
                 })
             }
             1 => {
@@ -419,7 +544,7 @@ pub struct InvocationContextStack {
 impl InvocationContextStack {
     pub fn fresh() -> Self {
         let trace_id = TraceId::generate();
-        let root = InvocationContextSpan::new(None);
+        let root = InvocationContextSpan::local().build();
         Self {
             trace_id,
             spans: NEVec::new(root),
@@ -443,11 +568,31 @@ impl InvocationContextStack {
         self.spans.insert(0, span);
     }
 
-    pub fn span_ids(&self) -> HashSet<SpanId> {
-        self.spans
-            .iter()
-            .map(|span| span.span_id().clone())
-            .collect()
+    /// Returns the span IDs in this stack, partitioned by local and inherited ones
+    /// Return value is (local, inherited)
+    pub fn span_ids(&self) -> (HashSet<SpanId>, HashSet<SpanId>) {
+        (
+            self.spans
+                .iter()
+                .filter_map(|span| {
+                    if !span.inherited() {
+                        Some(span.span_id().clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            self.spans
+                .iter()
+                .filter_map(|span| {
+                    if span.inherited() {
+                        Some(span.span_id().clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )
     }
 }
 
@@ -567,6 +712,7 @@ mod protobuf {
                     state,
                     span_id,
                     start,
+                    inherited,
                     ..
                 } => {
                     let value_state = state.read().unwrap();
@@ -574,6 +720,15 @@ mod protobuf {
                     for (key, value) in &value_state.attributes {
                         attributes.insert(key.clone(), value.clone().into());
                     }
+
+                    let linked_context_stack = match &value_state.linked_context {
+                        Some(linked_context) => {
+                            let chain = linked_context.to_chain();
+                            chain.iter().map(|span| (&**span).into()).collect()
+                        }
+                        None => Vec::new(),
+                    };
+
                     Self {
                         span: Some(
                             golem_api_grpc::proto::golem::worker::invocation_span::Span::Local(
@@ -581,6 +736,8 @@ mod protobuf {
                                     span_id: span_id.0.get(),
                                     start: Some((*start).into()),
                                     attributes,
+                                    inherited: *inherited,
+                                    linked_context: linked_context_stack,
                                 },
                             ),
                         ),
@@ -619,13 +776,35 @@ mod protobuf {
                     for (key, value) in value.attributes {
                         attributes.insert(key, value.try_into()?);
                     }
+
+                    let linked_context_chain = value
+                        .linked_context
+                        .into_iter()
+                        .map(|span| span.try_into())
+                        .collect::<Result<Vec<InvocationContextSpan>, String>>()?
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect();
+                    let linked_context = match NEVec::try_from_vec(linked_context_chain) {
+                        Some(linked_context_chain) => {
+                            for idx in 0..(linked_context_chain.len().get() - 1) {
+                                linked_context_chain[idx]
+                                    .replace_parent(Some(linked_context_chain[idx + 1].clone()));
+                            }
+                            Some(linked_context_chain.first().clone())
+                        }
+                        None => None,
+                    };
+
                     Ok(Self::Local {
                         span_id,
                         start,
                         state: RwLock::new(LocalInvocationContextSpanState {
                             parent: None,
                             attributes,
+                            linked_context,
                         }),
+                        inherited: value.inherited,
                     })
                 }
                 Some(

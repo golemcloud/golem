@@ -607,6 +607,10 @@ impl InvocationContextManagement for Context {
             .start_child_span(parent, initial_attributes)
     }
 
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
+    }
+
     fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
         self.durable_ctx.finish_span(span_id)
     }

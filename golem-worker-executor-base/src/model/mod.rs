@@ -372,7 +372,7 @@ pub struct InvocationContext {
 impl InvocationContext {
     pub fn new(trace_id: Option<TraceId>) -> Self {
         let trace_id = trace_id.unwrap_or(TraceId::generate());
-        let root = InvocationContextSpan::new(None);
+        let root = InvocationContextSpan::local().build();
         let mut spans = HashMap::new();
         spans.insert(root.span_id().clone(), root.clone());
         Self {
@@ -435,6 +435,23 @@ impl InvocationContext {
         self.root = self.spans.get(root_span_id).unwrap().clone();
     }
 
+    /// Checks whether the span given by `look_for` is a member of the invocation context stack
+    /// starting from the span given by `current_span_id`.
+    pub fn has_in_stack(&self, current_span_id: &SpanId, look_for: &SpanId) -> bool {
+        let mut current = self.span(current_span_id).unwrap().clone();
+        loop {
+            if current.span_id() == look_for {
+                break true;
+            }
+            match current.parent() {
+                Some(parent) => {
+                    current = parent;
+                }
+                None => break false,
+            }
+        }
+    }
+
     pub fn start_span(
         &mut self,
         current_span_id: &SpanId,
@@ -458,6 +475,13 @@ impl InvocationContext {
             .map(|parent| parent.span_id().clone());
         self.spans.remove(span_id);
         Ok(parent_id)
+    }
+
+    pub fn add_link(&self, span_id: &SpanId, target_span_id: &SpanId) -> Result<(), String> {
+        let span = self.span(span_id)?;
+        let target_span = self.span(target_span_id)?;
+        span.add_link(target_span.clone());
+        Ok(())
     }
 
     pub fn get_attribute(
@@ -509,6 +533,38 @@ impl InvocationContext {
                     current = parent;
                 }
                 None => break,
+            }
+        }
+        InvocationContextStack {
+            trace_id: self.trace_id.clone(),
+            spans: NEVec::try_from_vec(result).unwrap(), // result is always non-empty
+            trace_states: self.trace_states.clone(),
+        }
+    }
+
+    /// Clones every element of the stack belonging to the given current span id, and sets
+    /// the inherited flag to true on them, without changing the spans in this invocation context.
+    pub fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        let mut clones = HashMap::new();
+        let mut result = Vec::new();
+        let mut current = self.span(current_span_id).unwrap().clone();
+        loop {
+            let clone = current.as_inherited();
+            clones.insert(clone.span_id().clone(), clone.clone());
+            result.push(clone);
+
+            match current.parent() {
+                Some(parent) => {
+                    current = parent;
+                }
+                None => break,
+            }
+        }
+        for span in &result {
+            if let Some(parent) = span.parent() {
+                let parent_id = parent.span_id();
+                let parent_clone = clones.get(parent_id).unwrap();
+                span.replace_parent(Some(parent_clone.clone()));
             }
         }
         InvocationContextStack {

@@ -330,7 +330,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .transpose()
             .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Span ID: {err}")))?;
 
-        let span = InvocationContextSpan::new_with_attributes(span_id, request_attributes, parent);
+        let span = InvocationContextSpan::local()
+            .span_id(span_id)
+            .parent(parent)
+            .with_attributes(request_attributes)
+            .build();
 
         for (key, value) in record {
             if key != "span_id" && key != "span-id" && key != "trace_id" && key != "trace-id" {
