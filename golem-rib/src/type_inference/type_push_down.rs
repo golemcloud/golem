@@ -60,8 +60,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 let field_type = inferred_type.clone();
 
                 // How to push down here depends on the type of index
-                // If the index is not a range type then the total expression's type becomes list(field_type)
-                // If the index is range, then we push down the inferred type as it is.
+                // If the index is not a range type then the left hand side expression's type becomes list(field_type) similar to
+                // select-index, If the index is range,
+                // since the field type is infact the same as LHS
                 let index_expr_type = index.inferred_type();
 
                 match index_expr_type {
@@ -69,6 +70,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                         expr.add_infer_type_mut(inferred_type.clone());
                     }
                     _ => {
+                        // Similar to selectIndex
                         let new_inferred_type = InferredType::List(Box::new(field_type));
                         expr.add_infer_type_mut(new_inferred_type);
                     }

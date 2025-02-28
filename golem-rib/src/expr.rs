@@ -944,11 +944,12 @@ impl Expr {
     }
 
     pub fn select_dynamic(expr: Expr, index: Expr, type_annotation: Option<TypeName>) -> Self {
+        let inferred_type = expr.inferred_type();
         Expr::SelectDynamic {
             expr: Box::new(expr),
             index: Box::new(index),
             type_annotation,
-            inferred_type: InferredType::Unknown,
+            inferred_type,
             source_span: SourceSpan::default(),
         }
     }

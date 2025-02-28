@@ -759,50 +759,65 @@ mod internal {
 
     pub fn handle_select_dynamic(
         original_selection_expr: &Expr,
-        index: &Expr,
+        original_index_expr: &Expr,
         curren_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) -> Result<(), RibCompilationError> {
-        let index_expr = inferred_type_stack
+        let new_index_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_index_expr.clone());
+
+        let inferred_type_of_index_expr = new_index_expr.inferred_type();
+
+        let new_selection_expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
 
-        let inferred_type_of_index_expr = index_expr.inferred_type();
+        let inferred_type_of_selection_expr = new_selection_expr.inferred_type();
 
-        let expr = inferred_type_stack
-            .pop_front()
-            .unwrap_or(original_selection_expr.clone());
+        // If selection expression is not yet known in this stage
+        if !inferred_type_of_selection_expr.is_unknown() {
+            let (index_type, expression_type) = get_inferred_type_of_selection_dynamic(
+                original_selection_expr,
+                original_index_expr,
+                &inferred_type_of_selection_expr,
+                &inferred_type_of_index_expr,
+            )?;
 
-        let inferred_type_of_selection_expr = expr.inferred_type();
-        let (index_type, expression_type) = get_inferred_type_of_selection_dynamic(
-            original_selection_expr,
-            index,
-            &inferred_type_of_selection_expr,
-            &inferred_type_of_index_expr,
-        )?;
+            let new_select_index = match index_type {
+                SelectionIndexType::Index(index_type) => Expr::select_dynamic(
+                    new_selection_expr.clone(),
+                    original_index_expr.clone().with_inferred_type(index_type),
+                    None,
+                )
+                    .with_inferred_type(curren_type.merge(expression_type))
+                    .with_source_span(source_span.clone()),
 
-        let new_select_index = match index_type {
-            SelectionIndexType::Index(index_type) => Expr::select_dynamic(
-                expr.clone(),
-                index.clone().with_inferred_type(index_type),
+                SelectionIndexType::Range(range_index_type) => Expr::select_dynamic(
+                    new_selection_expr.clone(),
+                    original_index_expr.clone().with_inferred_type(range_index_type),
+                    None,
+                )
+                    .with_inferred_type(curren_type.merge(expression_type))
+                    .with_source_span(source_span.clone()),
+            };
+
+            inferred_type_stack.push_front(new_select_index);
+
+            Ok(())
+        } else {
+            let new_select_index = Expr::select_dynamic(
+                new_selection_expr.clone(),
+                original_index_expr.clone(),
                 None,
             )
-            .with_inferred_type(curren_type.merge(expression_type))
-            .with_source_span(source_span.clone()),
+                .with_source_span(source_span.clone());
 
-            SelectionIndexType::Range(range_index_type) => Expr::select_dynamic(
-                expr.clone(),
-                index.clone().with_inferred_type(range_index_type),
-                None,
-            )
-            .with_inferred_type(curren_type.merge(expression_type))
-            .with_source_span(source_span.clone()),
-        };
+            inferred_type_stack.push_front(new_select_index);
 
-        inferred_type_stack.push_front(new_select_index);
-
-        Ok(())
+            Ok(())
+        }
     }
 
     pub fn handle_select_index(
@@ -1491,7 +1506,7 @@ mod internal {
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
-                    "Cannot get index {} since it is not a list type. Found: {:?}",
+                    "cannot get index {} since it is not a list type. Found: {:?}",
                     selected_index, select_from_type
                 )],
             }
