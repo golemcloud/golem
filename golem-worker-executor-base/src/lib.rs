@@ -296,7 +296,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
                 Arc::new(RedisKeyValueStorage::new(pool.clone()));
             (Some(pool), None, key_value_storage)
         }
-        KeyValueStorageConfig::InMemory => {
+        KeyValueStorageConfig::InMemory(_) => {
             info!("Using in-memory key-value storage");
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
@@ -316,7 +316,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
     {
-        IndexedStorageConfig::KVStoreRedis => {
+        IndexedStorageConfig::KVStoreRedis(_) => {
             info!("Using the same Redis for indexed-storage");
             let redis = redis
                 .expect("Redis must be configured as key-value storage when using KVStoreRedis");
@@ -327,7 +327,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             let pool = RedisPool::configured(redis).await?;
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
-        IndexedStorageConfig::KVStoreSqlite => {
+        IndexedStorageConfig::KVStoreSqlite(_) => {
             info!("Using the same Sqlite for indexed-storage");
             let sqlite = sqlite
                 .clone()
@@ -349,7 +349,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
                     .map_err(|err| anyhow!(err))?,
             )
         }
-        IndexedStorageConfig::InMemory => {
+        IndexedStorageConfig::InMemory(_) => {
             info!("Using in-memory indexed storage");
             Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())
         }
@@ -370,7 +370,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
                     .map_err(|err| anyhow!(err))?,
             )
         }
-        BlobStorageConfig::KVStoreSqlite => {
+        BlobStorageConfig::KVStoreSqlite(_) => {
             info!("Using the same Sqlite for blob-storage");
             let sqlite = sqlite
                 .expect("Sqlite must be configured as key-value storage when using KVStoreSqlite");
@@ -391,7 +391,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
                     .map_err(|err| anyhow!(err))?,
             )
         }
-        BlobStorageConfig::InMemory => {
+        BlobStorageConfig::InMemory(_) => {
             info!("Using in-memory blob storage");
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
