@@ -596,15 +596,9 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
             ),
 
             Expr::Range {
-                range,
-                source_span,
-                ..
+                range, source_span, ..
             } => {
-                internal::handle_range(
-                    range,
-                    source_span,
-                    &mut inferred_type_stack,
-                );
+                internal::handle_range(range, source_span, &mut inferred_type_stack);
             }
         }
     }

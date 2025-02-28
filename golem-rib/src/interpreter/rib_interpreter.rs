@@ -2551,7 +2551,7 @@ mod interpreter_tests {
               "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            
+
             // let compiled = compile(&expr, &vec![]).unwrap();
             //
             // let mut interpreter = Interpreter::default();
