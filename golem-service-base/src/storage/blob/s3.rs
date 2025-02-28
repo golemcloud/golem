@@ -254,7 +254,8 @@ impl S3BlobStorage {
             SdkError::ConstructionFailure(_) => "Construction failure".to_string(),
             SdkError::TimeoutError(_) => "Timeout".to_string(),
             SdkError::DispatchFailure(inner) => {
-                format!("Dispatch failure: {}", inner.as_connector_error().unwrap())
+                // normal display of the error does not expose enough useful information
+                format!("Dispatch failure: {:?}", inner.as_connector_error().unwrap())
             }
             SdkError::ResponseError(_) => "Response error".to_string(),
             SdkError::ServiceError(inner) => inner.err().to_string(),
