@@ -40,9 +40,9 @@ impl Default for WorkerExecutorClientCacheConfig {
 pub enum BlobStorageConfig {
     S3(S3BlobStorageConfig),
     LocalFileSystem(LocalFileSystemBlobStorageConfig),
-    KVStoreSqlite,
+    KVStoreSqlite(KVStoreSqliteBlobStorageConfig),
     Sqlite(DbSqliteConfig),
-    InMemory,
+    InMemory(InMemoryBlobStorageConfig),
 }
 
 impl Default for BlobStorageConfig {
@@ -61,7 +61,7 @@ impl BlobStorageConfig {
     }
 
     pub fn default_in_memory() -> Self {
-        Self::InMemory
+        Self::InMemory(InMemoryBlobStorageConfig {})
     }
 }
 
@@ -107,6 +107,12 @@ impl Default for LocalFileSystemBlobStorageConfig {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KVStoreSqliteBlobStorageConfig {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InMemoryBlobStorageConfig {}
 
 pub struct MergedConfigLoader<T> {
     config_file_name: PathBuf,
