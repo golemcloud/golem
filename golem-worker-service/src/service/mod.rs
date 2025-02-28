@@ -232,7 +232,7 @@ impl Services {
                         .await?,
                 )
             }
-            BlobStorageConfig::InMemory => {
+            BlobStorageConfig::InMemory(_) => {
                 Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
             }
             _ => {

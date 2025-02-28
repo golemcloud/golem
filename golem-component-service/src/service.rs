@@ -98,7 +98,7 @@ impl Services {
                     .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
                 Arc::new(SqliteBlobStorage::new(pool.clone()).await?)
             }
-            BlobStorageConfig::InMemory => {
+            BlobStorageConfig::InMemory(_) => {
                 Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
             }
             _ => {
