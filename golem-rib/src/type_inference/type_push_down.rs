@@ -315,21 +315,25 @@ mod internal {
         yield_expr: &mut Expr,
         init_value_expr: &mut Expr,
     ) -> Result<(), RibCompilationError> {
-        let iterable_inferred_type = iterable_expr.inferred_type();
+        let iterable_type = iterable_expr.inferred_type();
 
         if !iterable_expr.inferred_type().is_unknown() {
-            let refined_iterable = ListType::refine(&iterable_inferred_type).ok_or(
-                get_compilation_error_for_ambiguity(
-                    &iterable_inferred_type,
-                    iterable_expr,
-                    &TypeKind::List,
-                )
-                .with_additional_error_detail(
-                    "the iterable expression in list reduction should be of type list",
-                ),
-            )?;
 
-            let iterable_variable_type = refined_iterable.inner_type();
+            let refined_iterable = ListType::refine(&iterable_type);
+
+            let iterable_variable_type = match refined_iterable {
+                Some(refined_iterable) => refined_iterable.inner_type(),
+                None => {
+                    let refined_range = RangeType::refine(&iterable_type).ok_or(
+                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
+                            .with_additional_error_detail(
+                                "the iterable expression in list comprehension should be of type list or a range",
+                            ),
+                    )?;
+
+                    refined_range.inner_type()
+                }
+            };
 
             let init_value_expr_type = init_value_expr.inferred_type();
             let mut queue = VecDeque::new();

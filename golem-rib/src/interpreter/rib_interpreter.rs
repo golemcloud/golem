@@ -2375,9 +2375,7 @@ mod interpreter_tests {
     mod range_interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compile, Expr, FunctionTypeRegistry};
-        use golem_wasm_ast::analysis::analysed_type::{
-            bool, field, list, option, record, tuple, u64,
-        };
+        use golem_wasm_ast::analysis::analysed_type::{bool, field, list, option, record, tuple, u64, u8};
         use golem_wasm_rpc::{Value, ValueAndType};
         use test_r::test;
 
@@ -2593,6 +2591,8 @@ mod interpreter_tests {
 
         #[test]
         async fn test_range_with_comprehension_3() {
+            // infinite computation will respond with an error - than a stack overflow
+            // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
             let expr = r#"
               let range = 1:u64..;
               for i in range {
@@ -2608,6 +2608,36 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await;
             assert!(result.is_err());
+        }
+
+        #[test]
+        async fn test_range_with_list_reduce_1() {
+            // infinite computation will respond with an error - than a stack overflow
+            // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
+            let expr = r#"
+                let initial: u8 = 1;
+                let final: u8 = 5;
+                let x = initial..final;
+
+                reduce z, a in x from 0u8 {
+                  yield z + a;
+                }
+
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::U8(10),
+                u8()
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
         }
     }
 
