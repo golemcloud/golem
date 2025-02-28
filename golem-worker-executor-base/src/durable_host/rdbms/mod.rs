@@ -193,11 +193,9 @@ where
     E: From<RdbmsError>,
 {
     let interface = get_db_connection_interface::<T>();
-
     let begin_oplog_idx = ctx
         .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
         .await?;
-
     let durability = Durability::<RdbmsRequest<T>, SerializableError>::new(
         ctx,
         interface.leak(),
@@ -205,9 +203,11 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
     .await?;
+
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
-        durability.persist(ctx, (), result).await
+        let input = result.clone().ok();
+        durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
     };
@@ -415,6 +415,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
     .await?;
+
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
         durability.persist(ctx, input, result).await
@@ -455,6 +456,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
     .await?;
+
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
         durability.persist(ctx, input, result).await
@@ -479,11 +481,9 @@ where
 {
     let handle = entry.rep();
     let interface = get_db_transaction_interface::<T>();
-
     let begin_oplog_idx = ctx
         .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
         .await?;
-
     let durability = Durability::<RdbmsRequest<T>, SerializableError>::new(
         ctx,
         interface.leak(),
@@ -494,7 +494,8 @@ where
 
     let result = if durability.is_live() {
         let result = db_transaction_query_stream(statement, params, ctx, entry);
-        durability.persist(ctx, (), result).await
+        let input = result.clone().ok();
+        durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
     };
@@ -532,6 +533,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
     .await?;
+
     let result = if durability.is_live() {
         let result = db_transaction_rollback(ctx, entry).await;
         durability.persist(ctx, (), result).await
@@ -563,6 +565,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
     .await?;
+
     let result = if durability.is_live() {
         let result = db_transaction_commit(ctx, entry).await;
         durability.persist(ctx, (), result).await

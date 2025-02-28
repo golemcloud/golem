@@ -1069,28 +1069,28 @@ fn encode_host_function_request_as_value(
         }
         "rdbms::mysql::db-connection::query"
         | "rdbms::mysql::db-connection::execute"
+        | "rdbms::mysql::db-connection::query-stream"
         | "rdbms::mysql::db-transaction::query"
-        | "rdbms::mysql::db-transaction::execute" => {
+        | "rdbms::mysql::db-transaction::execute"
+        | "rdbms::mysql::db-transaction::query-stream" => {
             let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
         "rdbms::mysql::db-transaction::rollback"
         | "rdbms::mysql::db-transaction::commit"
-        | "rdbms::mysql::db-connection::query-stream"
-        | "rdbms::mysql::db-transaction::query-stream"
         | "rdbms::mysql::db-result-stream::get-columns"
         | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
         "rdbms::postgres::db-connection::query"
         | "rdbms::postgres::db-connection::execute"
+        | "rdbms::postgres::db-connection::query-stream"
         | "rdbms::postgres::db-transaction::query"
-        | "rdbms::postgres::db-transaction::execute" => {
+        | "rdbms::postgres::db-transaction::execute"
+        | "rdbms::postgres::db-transaction::query-stream" => {
             let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
         "rdbms::postgres::db-transaction::rollback"
         | "rdbms::postgres::db-transaction::commit"
-        | "rdbms::postgres::db-connection::query-stream"
-        | "rdbms::postgres::db-transaction::query-stream"
         | "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
         _ => Err(format!("Unsupported host function name: {}", function_name)),

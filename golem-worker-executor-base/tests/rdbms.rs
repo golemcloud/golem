@@ -1222,7 +1222,6 @@ fn check_test_result(worker_id: &WorkerId, result: Result<ValueAndType, Error>, 
         .get("value")
         .and_then(|v| v.as_array())
         .and_then(|v| v.first())
-        .and_then(|v| v.as_object())
         .cloned();
 
     if test.has_expected() {
