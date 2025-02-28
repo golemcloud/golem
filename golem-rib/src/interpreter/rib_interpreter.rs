@@ -842,7 +842,11 @@ mod internal {
                 Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
                         .get(index as usize)
-                        .ok_or(format!("index {} not found in the list", index))?
+                        .ok_or(format!(
+                            "index {} is out of bound in the list of length {}",
+                            index,
+                            items.len()
+                        ))?
                         .clone();
 
                     interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
@@ -854,16 +858,23 @@ mod internal {
                 value: Value::Tuple(items),
                 typ: AnalysedType::Tuple(typ),
             }) => match index_value.get_literal().and_then(|v| v.get_number()) {
-                Some(CoercedNumericValue::PosInt(u64)) => {
+                Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
-                        .get(u64 as usize)
-                        .ok_or(format!("index {} not found in the tuple", 0))?
+                        .get(index as usize)
+                        .ok_or(format!(
+                            "index {} is out of bound in a tuple of length {}",
+                            index,
+                            items.len()
+                        ))?
                         .clone();
 
                     let item_type = typ
                         .items
                         .get(0)
-                        .ok_or(format!("index {} not found in the tuple type", 0))?
+                        .ok_or(format!(
+                            "internal error: type not found in the tuple at index {}",
+                            index
+                        ))?
                         .clone();
 
                     interpreter_stack.push_val(ValueAndType::new(value, item_type));
@@ -1583,28 +1594,6 @@ mod interpreter_tests {
 
         let result = interpreter.run(instructions).await.unwrap();
         assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
-    }
-
-    #[test]
-    async fn test_interpreter_for_select_index_2() {
-        // infinite computation will respond with an error - than a stack overflow
-        // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
-        let expr = r#"
-              let list: list<u8> = [1, 2, 3, 4, 5];
-              let index: u8 = 4;
-              list[index]
-              "#;
-
-        let expr = Expr::from_text(expr).unwrap();
-
-        let compiled = compile(&expr, &vec![]).unwrap();
-
-        let mut interpreter = Interpreter::default();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
-
-        let expected = ValueAndType::new(Value::U8(5), u8());
-
-        assert_eq!(result.get_val().unwrap(), expected);
     }
 
     mod global_variable_tests {
@@ -2454,6 +2443,58 @@ mod interpreter_tests {
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+    }
+
+    mod select_dynamic_tests {
+        use test_r::test;
+
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compile, Expr};
+        use golem_wasm_ast::analysis::analysed_type::u8;
+        use golem_wasm_rpc::{Value, ValueAndType};
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_1() {
+            // infinite computation will respond with an error - than a stack overflow
+            // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
+            let expr = r#"
+              let list: list<u8> = [1, 2, 3, 4, 5];
+              let index: u8 = 4;
+              list[index]
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(Value::U8(5), u8());
+
+            assert_eq!(result.get_val().unwrap(), expected);
+        }
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_out_of_bound() {
+            let expr = r#"
+              let list: list<u8> = [1, 2, 3, 4, 5];
+              let index: u8 = 10;
+              list[index]
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap_err();
+
+            assert_eq!(
+                result,
+                "index 10 is out of bound in the list of length 5".to_string()
+            );
         }
     }
 
