@@ -2451,7 +2451,7 @@ mod interpreter_tests {
 
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compile, Expr};
-        use golem_wasm_ast::analysis::analysed_type::u8;
+        use golem_wasm_ast::analysis::analysed_type::{list, u8};
         use golem_wasm_rpc::{Value, ValueAndType};
 
         #[test]
@@ -2495,6 +2495,32 @@ mod interpreter_tests {
                 result,
                 "index 10 is out of bound in the list of length 5".to_string()
             );
+        }
+
+        #[test]
+        async fn test_interpreter_for_select_dynamic_2() {
+            let expr = r#"
+              let list: list<u8> = [1, 2, 3, 4, 5];
+              let indices: list<u8> = [0, 1, 2, 3];
+
+              for i in indices {
+                 yield list[i];
+              }
+              "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let compiled = compile(&expr, &vec![]).unwrap();
+
+            let mut interpreter = Interpreter::default();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+            let expected = ValueAndType::new(
+                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3), Value::U8(4)]),
+                list(u8()),
+            );
+
+            assert_eq!(result.get_val().unwrap(), expected);
         }
     }
 
