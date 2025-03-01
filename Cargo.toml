@@ -52,6 +52,7 @@ exclude = [
     "test-components/rust-echo",
     "test-components/rust-service",
     "test-components/scheduled-invocation",
+    "test-components/scheduled-invocation-linked",
     "test-components/shopping-cart",
     "test-components/shopping-cart-resource",
     "test-components/stdio-cc",
