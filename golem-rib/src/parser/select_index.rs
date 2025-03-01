@@ -48,10 +48,9 @@ where
 {
     spaces()
         .with(
-            attempt(pos_num().skip(spaces()).map(IndexOrRange::Index))
-                .or(attempt(rib_expr().map(IndexOrRange::Dynamic)))
+            attempt(rib_expr().map(IndexOrRange::Dynamic)
                 .map(|index_or_range| index_or_range),
-        )
+        ))
         .message("Invalid index selection")
 }
 
@@ -168,6 +167,7 @@ mod tests {
     use test_r::test;
 
     use crate::expr::*;
+    use crate::parser::select_index::select_index2;
 
     #[test]
     fn test_select_index() {

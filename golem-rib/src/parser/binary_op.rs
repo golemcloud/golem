@@ -40,6 +40,7 @@ where
     ))
 }
 
+#[derive(Clone, Debug)]
 pub enum BinaryOp {
     GreaterThan,
     LessThan,

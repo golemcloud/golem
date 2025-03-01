@@ -9,13 +9,19 @@ use crate::{
 use std::fmt;
 use std::fmt::{Debug, Display};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RibCompilationError {
     pub cause: String,
     pub expr: Expr,
     pub immediate_parent: Option<Expr>,
     pub additional_error_details: Vec<String>,
     pub help_messages: Vec<String>,
+}
+
+impl Debug for RibCompilationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}", self)
+    }
 }
 
 impl RibCompilationError {

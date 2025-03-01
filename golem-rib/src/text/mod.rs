@@ -1251,6 +1251,7 @@ mod let_tests {
 
 #[cfg(test)]
 mod selection_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -1293,7 +1294,7 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_index_from_sequence() {
-        let input_expr = Expr::select_index(
+        let input_expr = Expr::select_dynamic(
             Expr::sequence(
                 vec![
                     Expr::identifier_global("request", None),
@@ -1301,7 +1302,8 @@ mod selection_tests {
                 ],
                 None,
             ),
-            1,
+            Expr::untyped_number(BigDecimal::from(1)),
+            None
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[request, request][1]".to_string();

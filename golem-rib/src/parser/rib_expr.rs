@@ -69,8 +69,8 @@ where
         position(),
         spaces()
             .with(
-                (simple_expr(), internal::rib_expr_rest()).map(|(expr, rest)| match rest {
-                    RibRest::All(index_expressions, binary_expressions) => {
+                (simple_expr(), internal::rib_expr_rest()).and_then(|(expr, rest)| match rest {
+                    RibRest::All(index_expressions, range_info_opt, binary_expressions) => {
                         let new_expr =
                             index_expressions
                                 .into_iter()
@@ -81,37 +81,48 @@ where
                                     }
                                 });
 
-                        binary_expressions
-                            .into_iter()
-                            .fold(new_expr, |acc, (op, next)| match op {
-                                BinaryOp::GreaterThan => Expr::greater_than(acc, next),
-                                BinaryOp::LessThan => Expr::less_than(acc, next),
-                                BinaryOp::LessThanOrEqualTo => {
-                                    Expr::less_than_or_equal_to(acc, next)
-                                }
-                                BinaryOp::GreaterThanOrEqualTo => {
-                                    Expr::greater_than_or_equal_to(acc, next)
-                                }
-                                BinaryOp::EqualTo => Expr::equal_to(acc, next),
-                                BinaryOp::And => Expr::and(acc, next),
-                                BinaryOp::Or => Expr::or(acc, next),
-                                BinaryOp::Add => Expr::plus(acc, next),
-                                BinaryOp::Subtract => Expr::minus(acc, next),
-                                BinaryOp::Multiply => Expr::multiply(acc, next),
-                                BinaryOp::Divide => Expr::divide(acc, next),
-                            })
-                    }
+                        let with_range = match range_info_opt {
+                            Some(range_info) => match range_info.expr {
+                                Some(rhs) => match range_info.range_type {
+                                    RangeType::Inclusive => Expr::range_inclusive(new_expr, rhs),
+                                    RangeType::Exclusive => Expr::range(new_expr, rhs),
+                                },
+                                None => match range_info.range_type {
+                                    RangeType::Inclusive => {
+                                        return Err(RibParseError::Message(
+                                            "Exclusive range should have a right hand side"
+                                                .to_string(),
+                                        ))
+                                    }
+                                    RangeType::Exclusive => Expr::range_from(new_expr),
+                                },
+                            },
+                            None => new_expr,
+                        };
 
-                    RibRest::Range((range_type, opt)) => match range_type {
-                        RangeType::Inclusive => match opt {
-                            Some(rhs) => Expr::range_inclusive(expr, rhs),
-                            None => panic!("Inclusive range should have a right hand side"),
-                        },
-                        RangeType::Exclusive => match opt {
-                            Some(rhs) => Expr::range(expr, rhs),
-                            None => Expr::range_from(expr),
-                        },
-                    },
+                        let with_binary =
+                            binary_expressions
+                                .into_iter()
+                                .fold(with_range, |acc, (op, next)| match op {
+                                    BinaryOp::GreaterThan => Expr::greater_than(acc, next),
+                                    BinaryOp::LessThan => Expr::less_than(acc, next),
+                                    BinaryOp::LessThanOrEqualTo => {
+                                        Expr::less_than_or_equal_to(acc, next)
+                                    }
+                                    BinaryOp::GreaterThanOrEqualTo => {
+                                        Expr::greater_than_or_equal_to(acc, next)
+                                    }
+                                    BinaryOp::EqualTo => Expr::equal_to(acc, next),
+                                    BinaryOp::And => Expr::and(acc, next),
+                                    BinaryOp::Or => Expr::or(acc, next),
+                                    BinaryOp::Add => Expr::plus(acc, next),
+                                    BinaryOp::Subtract => Expr::minus(acc, next),
+                                    BinaryOp::Multiply => Expr::multiply(acc, next),
+                                    BinaryOp::Divide => Expr::divide(acc, next),
+                                });
+
+                        Ok(with_binary)
+                    }
                 }),
             )
             .skip(spaces()),
@@ -201,8 +212,19 @@ mod internal {
     // A simple expression is a composition of all parsers that doesn't involve left recursion
 
     pub(crate) enum RibRest {
-        All(Vec<IndexOrRange>, Vec<(BinaryOp, Expr)>),
-        Range((RangeType, Option<Expr>)),
+        All(Vec<IndexOrRange>, Option<RangeInfo>, Vec<(BinaryOp, Expr)>),
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct RangeInfo {
+        pub(crate) range_type: RangeType,
+        pub(crate) expr: Option<Expr>,
+    }
+
+    impl RangeInfo {
+        pub fn new(range_type: RangeType, expr: Option<Expr>) -> Self {
+            Self { range_type, expr }
+        }
     }
 
     pub fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = RibRest>
@@ -214,12 +236,6 @@ mod internal {
         Input::Position: GetSourcePosition,
     {
         attempt(
-            (range_type(), optional(simple_expr_())).map(|(range_type, expr)| match expr {
-                Some(expr) => RibRest::Range((range_type, Some(expr))),
-                None => RibRest::Range((range_type, None)),
-            }),
-        )
-        .or(attempt(
             (
                 many((char('['), select_index2(), char(']').skip(spaces()))).map(
                     |collections: Vec<(char, IndexOrRange, char)>| {
@@ -228,11 +244,17 @@ mod internal {
                             .map(|(_, index_or_range, _)| index_or_range)
                             .collect::<Vec<_>>()
                     },
-                ),
+                ).skip(spaces()),
+                optional(
+                    (range_type().skip(spaces()), optional(simple_expr_())).map(|(range_type, expr)| match expr {
+                        Some(expr) => RangeInfo::new(range_type, Some(expr)),
+                        None => RangeInfo::new(range_type, None),
+                    }),
+                ).skip(spaces()),
                 many((binary_op(), rib_expr())),
             )
-                .map(|(indices, binary_math)| RibRest::All(indices, binary_math)),
-        ))
+                .map(|(indices, opt, binary_math)| RibRest::All(indices, opt, binary_math)),
+        )
     }
 
     parser! {

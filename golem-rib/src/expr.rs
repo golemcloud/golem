@@ -1163,6 +1163,7 @@ impl Expr {
         self.identify_instance_creation(function_type_registry)?;
         *self = self.bind_global_variable_types(type_spec)?;
         self.bind_type_annotations();
+        self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
@@ -1193,6 +1194,10 @@ impl Expr {
 
     pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibCompilationError> {
         type_inference::infer_worker_function_invokes(self)
+    }
+
+    pub fn bind_default_types_to_index_expressions(&mut self) {
+        type_inference::bind_default_types_to_index_expressions(self);
     }
 
     // Make sure the bindings in the arm pattern of a pattern match are given variable-ids.

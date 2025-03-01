@@ -19,6 +19,7 @@ use crate::parser::errors::RibParseError;
 use crate::rib_source_span::GetSourcePosition;
 
 // This is range avoiding left recursion
+#[derive(Clone, Debug)]
 pub enum RangeType {
     Inclusive,
     Exclusive,
