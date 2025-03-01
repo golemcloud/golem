@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use crate::{Expr, InferredType};
+use std::collections::VecDeque;
 
 // All select indices with literal numbers don't need to explicit
 // type annotation, and will be automatically inferred as u64
@@ -9,11 +9,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::SelectDynamic {
-                expr,
-                index,
-                ..
-            } => {
+            Expr::SelectDynamic { expr, index, .. } => {
                 let existing = index.inferred_type();
                 if existing.is_unknown() || existing.is_one_of() {
                     if let Expr::Number { inferred_type, .. } = &mut **index {

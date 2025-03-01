@@ -237,20 +237,21 @@ mod internal {
     {
         attempt(
             (
-                many((char('['), select_index2(), char(']').skip(spaces()))).map(
-                    |collections: Vec<(char, IndexOrRange, char)>| {
+                many((char('['), select_index2(), char(']').skip(spaces())))
+                    .map(|collections: Vec<(char, IndexOrRange, char)>| {
                         collections
                             .into_iter()
                             .map(|(_, index_or_range, _)| index_or_range)
                             .collect::<Vec<_>>()
-                    },
-                ).skip(spaces()),
-                optional(
-                    (range_type().skip(spaces()), optional(simple_expr_())).map(|(range_type, expr)| match expr {
+                    })
+                    .skip(spaces()),
+                optional((range_type().skip(spaces()), optional(simple_expr_())).map(
+                    |(range_type, expr)| match expr {
                         Some(expr) => RangeInfo::new(range_type, Some(expr)),
                         None => RangeInfo::new(range_type, None),
-                    }),
-                ).skip(spaces()),
+                    },
+                ))
+                .skip(spaces()),
                 many((binary_op(), rib_expr())),
             )
                 .map(|(indices, opt, binary_math)| RibRest::All(indices, opt, binary_math)),

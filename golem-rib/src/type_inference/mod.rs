@@ -20,6 +20,7 @@ pub use global_input_inference::*;
 pub use global_variable_type_binding::*;
 pub use identifier_inference::*;
 pub use identify_instance_creation::*;
+pub use index_selection_type_binding::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
 pub use instance_type_binding::*;
@@ -36,7 +37,6 @@ pub use variable_binding_list_reduce::*;
 pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
 pub use worker_function_invocation::*;
-pub use index_selection_type_binding::*;
 
 mod call_arguments_inference;
 mod enum_resolution;
@@ -46,6 +46,7 @@ mod global_input_inference;
 mod global_variable_type_binding;
 mod identifier_inference;
 mod identify_instance_creation;
+mod index_selection_type_binding;
 mod inference_fix_point;
 mod inferred_expr;
 mod instance_type_binding;
@@ -63,7 +64,6 @@ mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
 mod worker_function_invocation;
-mod index_selection_type_binding;
 
 #[cfg(test)]
 mod type_inference_tests {
@@ -1167,7 +1167,7 @@ mod type_inference_tests {
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
-        fn  test_select_index_type_inference() {
+        fn test_select_index_type_inference() {
             let rib_expr = r#"
           let x: list<u64> = [1, 2, 3];
           x[0]

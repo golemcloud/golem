@@ -254,8 +254,16 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                Expr::select_index(Expr::identifier_global("foo", None), 1),
-                Expr::select_index(Expr::identifier_global("bar", None), 2),
+                Expr::select_dynamic(
+                    Expr::identifier_global("foo", None),
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    None
+                ),
+                Expr::select_dynamic(
+                    Expr::identifier_global("bar", None),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                    None
+                ),
             ))
         );
     }

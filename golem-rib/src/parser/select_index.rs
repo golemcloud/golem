@@ -47,8 +47,9 @@ where
     Input::Position: GetSourcePosition,
 {
     spaces()
-        .with(
-            attempt(rib_expr().map(IndexOrRange::Dynamic)
+        .with(attempt(
+            rib_expr()
+                .map(IndexOrRange::Dynamic)
                 .map(|index_or_range| index_or_range),
         ))
         .message("Invalid index selection")
@@ -164,6 +165,7 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::*;
@@ -185,9 +187,14 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_index(
-                Expr::select_index(Expr::identifier_global("foo", None), 0),
-                1
+            Ok(Expr::select_dynamic(
+                Expr::select_dynamic(
+                    Expr::identifier_global("foo", None),
+                    Expr::untyped_number(BigDecimal::from(0)),
+                    None
+                ),
+                Expr::untyped_number(BigDecimal::from(1)),
+                None
             ))
         );
     }
@@ -208,15 +215,17 @@ mod tests {
 
     #[test]
     fn test_select_dynamic_index_2() {
-        let input = "foo[1 .. 2]";
+        let input = "foo[1..2]";
         let result = Expr::from_text(input);
         assert_eq!(
             result,
             Ok(Expr::select_dynamic(
                 Expr::identifier_global("foo", None),
-                Expr::identifier_global("bar", None),
+                Expr::range(
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2))
+                ),
                 None
-            ))
-        );
+        )));
     }
 }
