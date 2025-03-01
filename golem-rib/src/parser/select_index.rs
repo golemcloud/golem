@@ -177,7 +177,11 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_index(Expr::identifier_global("foo", None), 0))
+            Ok(Expr::select_dynamic(
+                Expr::identifier_global("foo", None),
+                Expr::untyped_number(BigDecimal::from(0)),
+                None
+            ))
         );
     }
 
@@ -226,6 +230,7 @@ mod tests {
                     Expr::untyped_number(BigDecimal::from(2))
                 ),
                 None
-        )));
+            ))
+        );
     }
 }

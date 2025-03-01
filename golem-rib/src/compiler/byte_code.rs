@@ -303,7 +303,6 @@ mod internal {
                 ..
             } => match index.inferred_type() {
                 InferredType::Range { .. } => {
-                    dbg!(inferred_type);
                     let list_comprehension = desugar_range_selection(expr, index);
                     stack.push(ExprState::from_expr(&list_comprehension));
                 }

@@ -1162,7 +1162,7 @@ mod type_inference_tests {
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::type_inference::type_inference_tests::internal::{
-            expr_block, identifier, let_binding, number, select_index, sequence,
+            expr_block, identifier, let_binding, number, select_dynamic, select_index, sequence,
         };
         use crate::{Expr, InferredType, Number, VariableId};
 
@@ -1212,13 +1212,19 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    select_index(
+                    select_dynamic(
                         Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
-                        0,
+                        Box::new(number(
+                            Number {
+                                value: BigDecimal::from(0),
+                            },
+                            None,
+                            InferredType::U64,
+                        )),
                         None,
                         InferredType::U64,
                     ),
@@ -1460,7 +1466,7 @@ mod type_inference_tests {
         use crate::type_inference::type_inference_tests::internal;
         use crate::type_inference::type_inference_tests::internal::{
             call, expr_block, identifier, let_binding, number, option, pattern_match, record,
-            select_field, select_index, sequence,
+            select_dynamic, select_field, select_index, sequence,
         };
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,
@@ -1876,7 +1882,7 @@ mod type_inference_tests {
 
               match some(y) {
                  some(y) => y[0],
-                 none => 0u64
+                 none => 0: u64
               }
             "#;
 
@@ -1997,13 +2003,19 @@ mod type_inference_tests {
                                         InferredType::List(Box::new(InferredType::U64)),
                                     )))],
                                 ),
-                                select_index(
+                                select_dynamic(
                                     Box::new(identifier(
                                         VariableId::match_identifier("y".to_string(), 3),
                                         None,
                                         InferredType::List(Box::new(InferredType::U64)),
                                     )),
-                                    0,
+                                    Box::new(number(
+                                        Number {
+                                            value: BigDecimal::from(0),
+                                        },
+                                        None,
+                                        InferredType::U64,
+                                    )),
                                     None,
                                     InferredType::U64,
                                 ),
@@ -2704,6 +2716,21 @@ mod type_inference_tests {
             inferred_type: InferredType,
         ) -> Expr {
             Expr::SelectIndex {
+                expr,
+                index,
+                type_annotation,
+                inferred_type,
+                source_span: SourceSpan::default(),
+            }
+        }
+
+        pub(crate) fn select_dynamic(
+            expr: Box<Expr>,
+            index: Box<Expr>,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::SelectDynamic {
                 expr,
                 index,
                 type_annotation,

@@ -162,11 +162,19 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "field".to_string(),
-                Expr::select_index(Expr::identifier_global("request", None), 1),
+                Expr::select_dynamic(
+                    Expr::identifier_global("request", None),
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    None,
+                ),
             ),
             (
                 "field".to_string(),
-                Expr::select_index(Expr::identifier_global("request", None), 2),
+                Expr::select_dynamic(
+                    Expr::identifier_global("request", None),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                    None,
+                ),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -554,8 +562,16 @@ mod sequence_tests {
     fn test_round_trip_read_write_sequence_of_select_index() {
         let input_expr = Expr::sequence(
             vec![
-                Expr::select_index(Expr::identifier_global("request", None), 1),
-                Expr::select_index(Expr::identifier_global("request", None), 2),
+                Expr::select_dynamic(
+                    Expr::identifier_global("request", None),
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    None,
+                ),
+                Expr::select_dynamic(
+                    Expr::identifier_global("request", None),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                    None,
+                ),
             ],
             None,
         );
@@ -862,8 +878,16 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_select_index() {
         let input_expr = Expr::tuple(vec![
-            Expr::select_dynamic(Expr::identifier_global("request", None), Expr::untyped_number(BigDecimal::from(1)), None),
-            Expr::select_dynamic(Expr::identifier_global("request", None), Expr::untyped_number(BigDecimal::from(2)), None),
+            Expr::select_dynamic(
+                Expr::identifier_global("request", None),
+                Expr::untyped_number(BigDecimal::from(1)),
+                None,
+            ),
+            Expr::select_dynamic(
+                Expr::identifier_global("request", None),
+                Expr::untyped_number(BigDecimal::from(2)),
+                None,
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "(request[1], request[2])".to_string();
