@@ -168,4 +168,32 @@ mod tests {
             ))
         );
     }
+
+    #[test]
+    fn test_select_dynamic_index_1() {
+        let input = "foo[bar]";
+        let result = Expr::from_text(input);
+        assert_eq!(
+            result,
+            Ok(Expr::select_dynamic(
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None),
+                None
+            ))
+        );
+    }
+
+    #[test]
+    fn test_select_dynamic_index_2() {
+        let input = "foo[1 .. 2]";
+        let result = Expr::from_text(input);
+        assert_eq!(
+            result,
+            Ok(Expr::select_dynamic(
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None),
+                None
+            ))
+        );
+    }
 }
