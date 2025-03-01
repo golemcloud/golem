@@ -2634,6 +2634,7 @@ mod type_inference_tests {
                 rhs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 
@@ -2647,6 +2648,7 @@ mod type_inference_tests {
                 match_arms,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
         pub(crate) fn literal(value: String, inferred_type: InferredType) -> Expr {
@@ -2654,6 +2656,7 @@ mod type_inference_tests {
                 value,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
         pub(crate) fn tuple(exprs: Vec<Expr>, inferred_type: InferredType) -> Expr {
@@ -2661,6 +2664,7 @@ mod type_inference_tests {
                 exprs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
         pub(crate) fn option(
@@ -2731,6 +2735,7 @@ mod type_inference_tests {
                 rhs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
         pub(crate) fn greater_than(
@@ -2743,6 +2748,7 @@ mod type_inference_tests {
                 rhs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 
@@ -2756,6 +2762,7 @@ mod type_inference_tests {
                 rhs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 
@@ -2769,6 +2776,7 @@ mod type_inference_tests {
                 rhs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 
@@ -2782,6 +2790,7 @@ mod type_inference_tests {
                 rhs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 
@@ -2795,6 +2804,7 @@ mod type_inference_tests {
                 rhs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 
@@ -2803,6 +2813,7 @@ mod type_inference_tests {
                 exprs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
         pub(crate) fn call(
@@ -2817,6 +2828,7 @@ mod type_inference_tests {
                 args,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
         pub(crate) fn number(
@@ -2848,6 +2860,7 @@ mod type_inference_tests {
                 exprs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 
@@ -2871,6 +2884,7 @@ mod type_inference_tests {
                 exprs,
                 inferred_type,
                 source_span: SourceSpan::default(),
+                type_annotation: None,
             }
         }
 

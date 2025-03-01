@@ -61,6 +61,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 exprs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_tuple(exprs, inferred_type, &mut inferred_type_stack, source_span);
             }
@@ -192,6 +193,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_if_else(
                     cond,
@@ -209,6 +211,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 match_arms,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_pattern_match(
                     predicate,
@@ -229,6 +232,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 exprs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_multiple(
                     exprs,
@@ -251,6 +255,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -262,6 +267,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -271,6 +277,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -282,6 +290,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -291,6 +300,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -302,6 +313,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -310,6 +322,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -321,6 +335,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -330,6 +345,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -341,6 +358,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -350,6 +368,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -361,6 +381,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -370,6 +391,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -381,6 +404,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -390,6 +414,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -401,6 +427,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -410,6 +437,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -421,6 +450,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -459,6 +489,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 exprs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_record(
                     exprs,
@@ -480,6 +511,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 lhs,
                 rhs,
                 source_span,
+                type_annotation,
                 ..
             } => {
                 internal::handle_comparison_op(
@@ -492,6 +524,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -500,6 +533,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 lhs,
                 rhs,
                 source_span,
+                type_annotation,
                 ..
             } => {
                 internal::handle_comparison_op(
@@ -512,6 +546,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -522,6 +557,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 args,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_call(
                     call_type,
@@ -537,6 +573,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 expr,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_unwrap(expr, inferred_type, &mut inferred_type_stack, source_span);
             }
@@ -549,6 +586,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 expr,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_get_tag(
                     expr,
@@ -584,6 +622,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 yield_expr,
                 inferred_type,
                 source_span,
+                ..
             } => internal::handle_list_reduce(
                 reduce_variable,
                 iterated_variable,
@@ -791,16 +830,18 @@ mod internal {
                     original_index_expr.clone().with_inferred_type(index_type),
                     None,
                 )
-                    .with_inferred_type(curren_type.merge(expression_type))
-                    .with_source_span(source_span.clone()),
+                .with_inferred_type(curren_type.merge(expression_type))
+                .with_source_span(source_span.clone()),
 
                 SelectionIndexType::Range(range_index_type) => Expr::select_dynamic(
                     new_selection_expr.clone(),
-                    original_index_expr.clone().with_inferred_type(range_index_type),
+                    original_index_expr
+                        .clone()
+                        .with_inferred_type(range_index_type),
                     None,
                 )
-                    .with_inferred_type(curren_type.merge(expression_type))
-                    .with_source_span(source_span.clone()),
+                .with_inferred_type(curren_type.merge(expression_type))
+                .with_source_span(source_span.clone()),
             };
 
             inferred_type_stack.push_front(new_select_index);
@@ -812,7 +853,7 @@ mod internal {
                 original_index_expr.clone(),
                 None,
             )
-                .with_source_span(source_span.clone());
+            .with_source_span(source_span.clone());
 
             inferred_type_stack.push_front(new_select_index);
 

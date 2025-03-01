@@ -296,7 +296,12 @@ mod internal {
                 instructions.push(RibIR::SelectField(field.clone()));
             }
 
-            Expr::SelectDynamic { expr, index, inferred_type, .. } => match index.inferred_type() {
+            Expr::SelectDynamic {
+                expr,
+                index,
+                inferred_type,
+                ..
+            } => match index.inferred_type() {
                 InferredType::Range { .. } => {
                     dbg!(inferred_type);
                     let list_comprehension = desugar_range_selection(expr, index);

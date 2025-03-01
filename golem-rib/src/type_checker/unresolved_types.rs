@@ -778,10 +778,7 @@ mod unresolved_types_tests {
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
         "#;
 
-        assert_eq!(
-            error_msg,
-            strip_spaces(error)
-        );
+        assert_eq!(error_msg, strip_spaces(error));
     }
 
     #[test]

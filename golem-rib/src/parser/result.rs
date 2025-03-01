@@ -23,7 +23,7 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 
 use super::rib_expr::rib_expr;
-use crate::parser::type_name::parse_type_name;
+use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::char as char_;
 
@@ -35,31 +35,22 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    (
-        choice((
-            attempt(string("ok").skip(char('(')))
-                .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::ok(expr, None))),
-            attempt(string("err").skip(char('('))).with(
-                (rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::err(expr, None)),
-            ),
+    (choice((
+        attempt(string("ok").skip(char('(')))
+            .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::ok(expr, None))),
+        attempt(string("err").skip(char('(')))
+            .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::err(expr, None))),
+    )))
+    .and_then(|expr| match expr {
+        Expr::Result { expr: Ok(expr), .. } => Ok(Expr::ok(*expr, None)),
+        Expr::Result {
+            expr: Err(expr), ..
+        } => Ok(Expr::err(*expr, None)),
+        _ => Err(RibParseError::Message(
+            "Invalid syntax for Result type".to_string(),
         )),
-        optional(
-            char_(':')
-                .skip(spaces())
-                .with(parse_type_name())
-                .skip(spaces()),
-        ),
-    )
-        .and_then(|(expr, type_name)| match expr {
-            Expr::Result { expr: Ok(expr), .. } => Ok(Expr::ok(*expr, type_name)),
-            Expr::Result {
-                expr: Err(expr), ..
-            } => Ok(Expr::err(*expr, type_name)),
-            _ => Err(RibParseError::Message(
-                "Invalid syntax for Result type".to_string(),
-            )),
-        })
-        .message("Invalid syntax for Result type")
+    })
+    .message("Invalid syntax for Result type")
 }
 
 #[cfg(test)]

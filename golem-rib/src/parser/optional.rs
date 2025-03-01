@@ -24,7 +24,7 @@ use std::ops::Deref;
 use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::parse_type_name;
+use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::char as char_;
 
@@ -36,40 +36,21 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    (
-        choice((
-            attempt(string("some").skip(char('('))).with(
-                rib_expr()
-                    .skip(spaces())
-                    .skip(char(')'))
-                    .map(|expr| Expr::option(Some(expr))),
-            ),
-            (attempt(
-                string("none").skip(not_followed_by(alpha_num().or(char('-')).or(char('_')))),
-            )
-            .map(|_| Expr::option(None))),
-        )),
-        optional(
-            char_(':')
+    (choice((
+        attempt(string("some").skip(char('('))).with(
+            rib_expr()
                 .skip(spaces())
-                .with(parse_type_name())
-                .skip(spaces()),
+                .skip(char(')'))
+                .map(|expr| Expr::option(Some(expr))),
         ),
-    )
-        .and_then(|(expr, type_name)| match expr {
-            Expr::Option { expr, .. } => {
-                if let Some(type_name) = type_name {
-                    Ok(Expr::option_with_type_annotation(
-                        expr.map(|x| x.deref().clone()),
-                        type_name,
-                    ))
-                } else {
-                    Ok(Expr::option(expr.map(|x| x.deref().clone())))
-                }
-            }
-            _ => Err(RibParseError::Message("Unable to parse option".to_string())),
-        })
-        .message("Invalid syntax for Option type")
+        (attempt(string("none").skip(not_followed_by(alpha_num().or(char('-')).or(char('_')))))
+            .map(|_| Expr::option(None))),
+    )))
+    .and_then(|expr| match expr {
+        Expr::Option { expr, .. } => Ok(Expr::option(expr.map(|x| x.deref().clone()))),
+        _ => Err(RibParseError::Message("Unable to parse option".to_string())),
+    })
+    .message("Invalid syntax for Option type")
 }
 
 #[cfg(test)]

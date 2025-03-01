@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use combine::parser::char;
-use combine::parser::char::spaces;
-use combine::{attempt, choice, parser, position, Stream};
+use combine::parser::char::{char, spaces};
+use combine::{attempt, choice, optional, parser, position, Stream};
 use combine::{ParseError, Parser};
 
 use super::binary_op::BinaryOp;
@@ -44,6 +44,7 @@ use crate::parser::list_aggregation::list_aggregation;
 use crate::parser::list_comprehension::list_comprehension;
 use crate::parser::record::record;
 use crate::parser::result::result;
+use crate::parser::type_name::type_name;
 use crate::parser::worker_function_invoke::worker_function_invoke;
 
 // A rib expression := (simple_expr, rib_expr_rest*)
@@ -119,30 +120,37 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(choice((
-            list_comprehension(),
-            list_aggregation(),
-            pattern_match(),
-            let_binding(),
-            conditional(),
-            attempt(worker_function_invoke()), // has to backtrack if there is fails at arguments parsing
-            attempt(select_field()),           // succeeds at select_field
-            attempt(flag_or_record()),
-            multi_line_block(),
-            tuple(),
-            boolean_literal(),
-            literal(),
-            not(),
-            option(),
-            result(),
-            attempt(call()),
-            attempt(select_index()),
-            sequence(),
-            identifier(),
-            number(),
-        )))
-        .skip(spaces())
+    (
+        spaces()
+            .with(choice((
+                list_comprehension(),
+                list_aggregation(),
+                pattern_match(),
+                let_binding(),
+                conditional(),
+                attempt(worker_function_invoke()), // has to backtrack if there is fails at arguments parsing
+                attempt(select_field()),           // succeeds at select_field
+                attempt(flag_or_record()),
+                multi_line_block(),
+                tuple(),
+                boolean_literal(),
+                literal(),
+                not(),
+                option(),
+                result(),
+                attempt(call()),
+                attempt(select_index()),
+                sequence(),
+                identifier(),
+                number(),
+            )))
+            .skip(spaces()),
+        optional(optional(char(':').skip(spaces())).with(type_name())),
+    )
+        .map(|(expr, type_name)| match type_name {
+            Some(type_name) => expr.with_type_annotation(type_name),
+            None => expr,
+        })
 }
 
 fn flag_or_record<Input>() -> impl Parser<Input, Output = Expr>

@@ -1652,13 +1652,9 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile_with_restricted_global_variables(
-                expr,
-                &vec![],
-                None,
-                &type_spec,
-            )
-            .unwrap();
+            let compiled =
+                compiler::compile_with_restricted_global_variables(expr, &vec![], None, &type_spec)
+                    .unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -1723,13 +1719,9 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(rib_expr).unwrap();
 
-            let compiled = compiler::compile_with_restricted_global_variables(
-                expr,
-                &vec![],
-                None,
-                &type_spec,
-            )
-            .unwrap();
+            let compiled =
+                compiler::compile_with_restricted_global_variables(expr, &vec![], None, &type_spec)
+                    .unwrap();
 
             let result = interpreter
                 .run(compiled.byte_code)
@@ -2585,10 +2577,8 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = ValueAndType::new(
-                Value::List(vec![Value::U8(5), Value::U8(4)]),
-                list(u8()),
-            );
+            let expected =
+                ValueAndType::new(Value::List(vec![Value::U8(5), Value::U8(4)]), list(u8()));
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
@@ -2612,10 +2602,8 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = ValueAndType::new(
-                Value::List(vec![Value::U8(2), Value::U8(5)]),
-                list(u8()),
-            );
+            let expected =
+                ValueAndType::new(Value::List(vec![Value::U8(2), Value::U8(5)]), list(u8()));
 
             assert_eq!(result.get_val().unwrap(), expected);
         }

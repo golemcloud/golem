@@ -39,7 +39,7 @@ mod internal {
     use crate::parser::errors::RibParseError;
     use crate::parser::identifier::identifier_text;
     use crate::parser::select_index::select_index;
-    use crate::parser::type_name::parse_type_name;
+    use crate::parser::type_name::type_name;
     use crate::rib_source_span::GetSourcePosition;
     use combine::{
         attempt,
@@ -66,14 +66,8 @@ mod internal {
                     attempt(select_index()),
                     attempt(identifier_text().map(|x| Expr::identifier_global(x, None))),
                 )),
-                optional(
-                    char_(':')
-                        .skip(spaces())
-                        .with(parse_type_name())
-                        .skip(spaces()),
-                ),
             )
-                .and_then(|(base, _, opt, optional)| {
+                .and_then(|(base, _, opt)| {
                     let expr = build_selector(base, opt);
 
                     match expr {
@@ -82,13 +76,7 @@ mod internal {
                             expr,
                             type_annotation: inner_typ,
                             ..
-                        }) => {
-                            if let Some(typ) = optional {
-                                Ok(Expr::select_field(expr.deref().clone(), field, Some(typ)))
-                            } else {
-                                Ok(Expr::select_field(expr.deref().clone(), field, inner_typ))
-                            }
-                        }
+                        }) => Ok(Expr::select_field(expr.deref().clone(), field, inner_typ)),
 
                         Some(Expr::SelectIndex {
                             expr,
@@ -96,23 +84,13 @@ mod internal {
                             type_annotation: inner_typ,
                             inferred_type,
                             source_span,
-                        }) => {
-                            if let Some(typ) = optional {
-                                Ok(Expr::select_index_with_type_annotation(
-                                    expr.deref().clone(),
-                                    index,
-                                    typ,
-                                ))
-                            } else {
-                                Ok(Expr::SelectIndex {
-                                    expr,
-                                    index,
-                                    type_annotation: inner_typ,
-                                    inferred_type,
-                                    source_span,
-                                })
-                            }
-                        }
+                        }) => Ok(Expr::SelectIndex {
+                            expr,
+                            index,
+                            type_annotation: inner_typ,
+                            inferred_type,
+                            source_span,
+                        }),
 
                         _ => Err(RibParseError::Message("Invalid Select Index".to_string())),
                     }

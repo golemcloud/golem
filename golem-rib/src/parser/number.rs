@@ -32,43 +32,15 @@ where
     Input::Position: GetSourcePosition,
 {
     spaces()
-        .with(
-            (
-                many1(digit().or(char('-'))),
-                optional(
-                    // To keep backward compatibility
-                    choice!(
-                        attempt(parse_basic_type()),
-                        attempt(
-                            char(':')
-                                .skip(spaces())
-                                .with(parse_basic_type())
-                                .skip(spaces()),
-                        )
-                    ),
-                ),
-            )
-                .and_then(|(s, typ_name): (Vec<char>, Option<TypeName>)| {
-                    let primitive = s.into_iter().collect::<String>();
-                    let big_decimal = BigDecimal::from_str(primitive.as_str());
+        .with(many1(digit().or(char('-'))).and_then(|s: Vec<char>| {
+            let primitive = s.into_iter().collect::<String>();
+            let big_decimal = BigDecimal::from_str(primitive.as_str());
 
-                    match big_decimal {
-                        Ok(big_decimal) => {
-                            if let Some(typ_name) = typ_name {
-                                Ok(Expr::untyped_number_with_type_name(
-                                    big_decimal,
-                                    typ_name.clone(),
-                                ))
-                            } else {
-                                Ok(Expr::untyped_number(big_decimal))
-                            }
-                        }
-                        Err(_) => {
-                            Err(RibParseError::Message("Unable to parse number".to_string()).into())
-                        }
-                    }
-                }),
-        )
+            match big_decimal {
+                Ok(big_decimal) => Ok(Expr::untyped_number(big_decimal)),
+                Err(_) => Err(RibParseError::Message("Unable to parse number".to_string()).into()),
+            }
+        }))
         .message("Unable to parse number")
 }
 

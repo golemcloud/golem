@@ -25,7 +25,8 @@ pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Expr {
             Expr::identifier_with_variable_id(iterable_expr, None),
             None,
         ),
-    ).with_inferred_type(select_from.inferred_type())
+    )
+    .with_inferred_type(select_from.inferred_type())
 }
 
 pub fn desugar_pattern_match(

@@ -19,7 +19,7 @@ use combine::{sep_by, ParseError};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
-use crate::parser::type_name::parse_type_name;
+use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::char as char_;
 
@@ -33,20 +33,12 @@ where
 {
     spaces()
         .with(
-            (
-                between(
-                    char('['),
-                    char(']'),
-                    sep_by(rib_expr(), char(',').skip(spaces())),
-                ),
-                optional(
-                    char_(':')
-                        .skip(spaces())
-                        .with(parse_type_name())
-                        .skip(spaces()),
-                ),
-            )
-                .map(|(exprs, type_name)| Expr::sequence(exprs, type_name)),
+            (between(
+                char('['),
+                char(']'),
+                sep_by(rib_expr(), char(',').skip(spaces())),
+            ))
+            .map(|exprs| Expr::sequence(exprs, None)),
         )
         .message("Invalid syntax for sequence type")
 }

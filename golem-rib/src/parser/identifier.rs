@@ -18,7 +18,7 @@ use combine::{many, optional, ParseError, Parser, Stream};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::parse_type_name;
+use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
 
 const RESERVED_KEYWORDS: &[&str] = &[
@@ -34,16 +34,8 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    (
-        identifier_text(),
-        optional(
-            char(':')
-                .skip(spaces())
-                .with(parse_type_name())
-                .skip(spaces()),
-        ),
-    )
-        .map(|(variable, typ)| Expr::identifier_global(variable, typ))
+    (identifier_text())
+        .map(|variable| Expr::identifier_global(variable, None))
         .message("Invalid identifier")
 }
 pub fn identifier_text<Input>() -> impl Parser<Input, Output = String>

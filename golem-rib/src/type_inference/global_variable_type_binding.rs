@@ -151,8 +151,15 @@ mod internal {
                     exprs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
-                    handle_tuple(exprs, inferred_type, &mut temp_stack, source_span);
+                    handle_tuple(
+                        exprs,
+                        inferred_type,
+                        &mut temp_stack,
+                        source_span,
+                        type_annotation,
+                    );
                 }
 
                 expr @ Expr::Flags { .. } => {
@@ -261,8 +268,17 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
-                    handle_if_else(cond, lhs, rhs, inferred_type, &mut temp_stack, source_span);
+                    handle_if_else(
+                        cond,
+                        lhs,
+                        rhs,
+                        inferred_type,
+                        &mut temp_stack,
+                        source_span,
+                        type_annotation,
+                    );
                 }
 
                 //
@@ -271,7 +287,7 @@ mod internal {
                     match_arms,
                     inferred_type,
                     source_span,
-                    ..
+                    type_annotation,
                 } => {
                     handle_pattern_match(
                         predicate,
@@ -279,30 +295,47 @@ mod internal {
                         inferred_type,
                         &mut temp_stack,
                         source_span,
+                        type_annotation,
                     );
                 }
 
                 Expr::Concat {
-                    exprs, source_span, ..
+                    exprs,
+                    source_span,
+                    type_annotation,
+                    ..
                 } => {
-                    handle_concat(exprs, &mut temp_stack, source_span);
+                    handle_concat(exprs, &mut temp_stack, source_span, type_annotation);
                 }
 
                 Expr::ExprBlock {
                     exprs,
                     inferred_type,
                     source_span,
-                    ..
+                    type_annotation,
                 } => {
-                    handle_multiple(exprs, inferred_type, &mut temp_stack, source_span);
+                    handle_multiple(
+                        exprs,
+                        inferred_type,
+                        &mut temp_stack,
+                        source_span,
+                        type_annotation,
+                    );
                 }
 
                 Expr::Not {
                     inferred_type,
                     source_span,
+                    type_annotation,
                     ..
                 } => {
-                    handle_not(expr, inferred_type, &mut temp_stack, source_span);
+                    handle_not(
+                        expr,
+                        inferred_type,
+                        &mut temp_stack,
+                        source_span,
+                        type_annotation,
+                    );
                 }
 
                 Expr::GreaterThan {
@@ -310,6 +343,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::GreaterThan {
@@ -317,6 +351,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -326,6 +361,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::GreaterThanOrEqualTo {
@@ -333,6 +369,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -342,6 +379,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::LessThanOrEqualTo {
@@ -349,6 +387,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -357,6 +396,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Plus {
@@ -364,6 +404,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -373,6 +414,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Minus {
@@ -380,6 +422,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -389,6 +432,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Multiply {
@@ -396,6 +440,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -405,6 +450,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Divide {
@@ -412,6 +458,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -421,6 +468,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::EqualTo {
@@ -428,6 +476,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -437,6 +486,7 @@ mod internal {
                     rhs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::LessThan {
@@ -444,6 +494,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         }
                     });
                 }
@@ -483,8 +534,15 @@ mod internal {
                     exprs,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
-                    handle_record(exprs, inferred_type, &mut temp_stack, source_span);
+                    handle_record(
+                        exprs,
+                        inferred_type,
+                        &mut temp_stack,
+                        source_span,
+                        type_annotation,
+                    );
                 }
                 Expr::Literal { .. } => {
                     temp_stack.push_front((expr.clone(), false));
@@ -499,6 +557,7 @@ mod internal {
                     lhs,
                     rhs,
                     source_span,
+                    type_annotation,
                     ..
                 } => {
                     handle_comparison_op(
@@ -511,6 +570,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         },
                     );
                 }
@@ -519,6 +579,7 @@ mod internal {
                     lhs,
                     rhs,
                     source_span,
+                    type_annotation,
                     ..
                 } => {
                     handle_comparison_op(
@@ -531,6 +592,7 @@ mod internal {
                             rhs: b,
                             inferred_type: c,
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         },
                     );
                 }
@@ -542,6 +604,7 @@ mod internal {
                     args,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => handle_invoke_method(
                     lhs,
                     method,
@@ -550,6 +613,7 @@ mod internal {
                     inferred_type,
                     &mut temp_stack,
                     source_span,
+                    type_annotation,
                 ),
 
                 Expr::Call {
@@ -558,6 +622,7 @@ mod internal {
                     args,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => {
                     handle_call(
                         call_type,
@@ -566,6 +631,7 @@ mod internal {
                         inferred_type,
                         &mut temp_stack,
                         source_span,
+                        type_annotation,
                     );
                 }
 
@@ -573,6 +639,7 @@ mod internal {
                     expr,
                     inferred_type,
                     source_span,
+                    ..
                 } => {
                     handle_unwrap(expr, inferred_type, &mut temp_stack, source_span);
                 }
@@ -585,6 +652,7 @@ mod internal {
                     expr,
                     inferred_type,
                     source_span,
+                    ..
                 } => {
                     handle_get_tag(expr, inferred_type, &mut temp_stack, source_span);
                 }
@@ -615,6 +683,7 @@ mod internal {
                     yield_expr,
                     inferred_type,
                     source_span,
+                    type_annotation,
                 } => handle_list_reduce(
                     reduce_variable,
                     iterated_variable,
@@ -624,15 +693,22 @@ mod internal {
                     inferred_type,
                     &mut temp_stack,
                     source_span,
+                    type_annotation,
                 ),
 
                 Expr::Range {
                     range,
                     inferred_type,
                     source_span,
-                    ..
+                    type_annotation,
                 } => {
-                    handle_range(range, source_span, inferred_type.clone(), &mut temp_stack);
+                    handle_range(
+                        range,
+                        source_span,
+                        inferred_type.clone(),
+                        &mut temp_stack,
+                        type_annotation,
+                    );
                 }
             }
         }
@@ -693,6 +769,7 @@ mod internal {
         reduce_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let new_yield_expr = temp_stack
             .pop_front()
@@ -718,6 +795,7 @@ mod internal {
                 new_yield_expr,
                 new_reduce_type,
             )
+            .with_type_annotation_opt(type_annotation.clone())
             .with_source_span(source_span.clone()),
             false,
         ))
@@ -728,6 +806,7 @@ mod internal {
         current_tuple_type: &InferredType,
         result_expr_queue: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_name: &Option<TypeName>,
     ) {
         let mut new_tuple_elems = vec![];
 
@@ -744,7 +823,8 @@ mod internal {
         // Reform tuple
         let new_tuple = Expr::tuple(new_tuple_elems)
             .with_inferred_type(current_tuple_type.clone())
-            .with_source_span(source_span.clone());
+            .with_source_span(source_span.clone())
+            .with_type_annotation_opt(type_name.clone());
         result_expr_queue.push_front((new_tuple, false));
     }
 
@@ -923,6 +1003,7 @@ mod internal {
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let else_expr = temp_stack
             .pop_front()
@@ -940,6 +1021,7 @@ mod internal {
             rhs: Box::new(else_expr.0.clone()),
             inferred_type: current_inferred_type.clone(),
             source_span: source_span.clone(),
+            type_annotation: type_annotation.clone(),
         };
 
         temp_stack.push_front((new_expr, false));
@@ -951,6 +1033,7 @@ mod internal {
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let mut new_resolutions = vec![];
         let mut new_arm_patterns = vec![];
@@ -996,6 +1079,7 @@ mod internal {
             match_arms: new_match_arms,
             inferred_type: current_inferred_type.clone(),
             source_span: source_span.clone(),
+            type_annotation: type_annotation.clone(),
         };
 
         temp_stack.push_front((new_expr, false));
@@ -1005,6 +1089,7 @@ mod internal {
         exprs: &Vec<Expr>,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let mut new_exprs = vec![];
         for expr in exprs {
@@ -1018,6 +1103,7 @@ mod internal {
             exprs: new_exprs,
             inferred_type: InferredType::Str,
             source_span: source_span.clone(),
+            type_annotation: type_annotation.clone(),
         };
         temp_stack.push_front((new_concat, false));
     }
@@ -1027,6 +1113,7 @@ mod internal {
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let mut new_exprs = vec![];
         for _ in current_expr_list {
@@ -1044,6 +1131,7 @@ mod internal {
             exprs: new_exprs,
             inferred_type: current_inferred_type.clone(),
             source_span: source_span.clone(),
+            type_annotation: type_annotation.clone(),
         };
         temp_stack.push_front((new_multiple, false));
     }
@@ -1053,6 +1141,7 @@ mod internal {
         current_not_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let expr = temp_stack
             .pop_front()
@@ -1062,6 +1151,7 @@ mod internal {
             expr: Box::new(expr),
             inferred_type: current_not_type.clone(),
             source_span: source_span.clone(),
+            type_annotation: type_annotation.clone(),
         };
         temp_stack.push_front((new_not, false));
     }
@@ -1131,6 +1221,7 @@ mod internal {
         inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let mut new_arg_exprs = vec![];
 
@@ -1165,6 +1256,7 @@ mod internal {
                         instance_type: new_instance_type,
                     },
                     source_span: source_span.clone(),
+                    type_annotation: type_annotation.clone(),
                 };
 
                 temp_stack.push_front((new_call, false));
@@ -1176,6 +1268,7 @@ mod internal {
                     args: new_arg_exprs,
                     inferred_type: inferred_type.clone(),
                     source_span: source_span.clone(),
+                    type_annotation: type_annotation.clone(),
                 };
 
                 temp_stack.push_front((new_call, false));
@@ -1188,6 +1281,7 @@ mod internal {
                 args: new_arg_exprs,
                 inferred_type: inferred_type.clone(),
                 source_span: source_span.clone(),
+                type_annotation: type_annotation.clone(),
             };
 
             temp_stack.push_front((new_call, false));
@@ -1201,6 +1295,7 @@ mod internal {
         inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let mut new_arg_exprs = vec![];
 
@@ -1237,6 +1332,7 @@ mod internal {
                         args: new_arg_exprs,
                         inferred_type: inferred_type.clone(),
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     };
                     temp_stack.push_front((new_call, false));
                 } else {
@@ -1246,6 +1342,7 @@ mod internal {
                         args: new_arg_exprs,
                         inferred_type: inferred_type.clone(),
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     };
 
                     temp_stack.push_front((new_call, false));
@@ -1323,6 +1420,7 @@ mod internal {
                         args: new_arg_exprs,
                         inferred_type: new_inferred_type,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     }
                 } else {
                     Expr::Call {
@@ -1334,6 +1432,7 @@ mod internal {
                         args: new_arg_exprs,
                         inferred_type: new_inferred_type,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     }
                 };
 
@@ -1347,6 +1446,7 @@ mod internal {
                     args: new_arg_exprs,
                     inferred_type: inferred_type.clone(),
                     source_span: source_span.clone(),
+                    type_annotation: type_annotation.clone(),
                 };
                 temp_stack.push_front((new_call, false));
             }
@@ -1358,6 +1458,7 @@ mod internal {
                     args: new_arg_exprs,
                     inferred_type: inferred_type.clone(),
                     source_span: source_span.clone(),
+                    type_annotation: type_annotation.clone(),
                 };
                 temp_stack.push_front((new_call, false));
             }
@@ -1441,6 +1542,7 @@ mod internal {
         source_span: &SourceSpan,
         inferred_type: InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_annotation: &Option<TypeName>,
     ) {
         match range {
             Range::Range { from, to } => {
@@ -1454,7 +1556,8 @@ mod internal {
                     .unwrap_or(from.deref().clone());
                 let new_range = Expr::range(left, right)
                     .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
+                    .with_source_span(source_span.clone())
+                    .with_type_annotation_opt(type_annotation.clone());
 
                 temp_stack.push_front((new_range, false));
             }
@@ -1469,7 +1572,8 @@ mod internal {
                     .unwrap_or(from.deref().clone());
                 let new_range = Expr::range_inclusive(left, right)
                     .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
+                    .with_source_span(source_span.clone())
+                    .with_type_annotation_opt(type_annotation.clone());
 
                 temp_stack.push_front((new_range, false));
             }
@@ -1480,7 +1584,8 @@ mod internal {
                     .unwrap_or(from.deref().clone());
                 let new_range = Expr::range_from(left)
                     .with_inferred_type(inferred_type)
-                    .with_source_span(source_span.clone());
+                    .with_source_span(source_span.clone())
+                    .with_type_annotation_opt(type_annotation.clone());
 
                 temp_stack.push_front((new_range, false));
             }
@@ -1492,6 +1597,7 @@ mod internal {
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
     ) {
         let mut new_exprs = vec![];
 
@@ -1507,7 +1613,8 @@ mod internal {
 
         let new_record = Expr::record(new_exprs.to_vec())
             .with_inferred_type(current_inferred_type.clone())
-            .with_source_span(source_span.clone());
+            .with_source_span(source_span.clone())
+            .with_type_annotation_opt(type_annotation.clone());
         temp_stack.push_front((new_record, false));
     }
 }

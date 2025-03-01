@@ -446,6 +446,7 @@ mod function_parameters_inference_tests {
             exprs: vec![let_binding, call_expr],
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
+            type_annotation: None,
         };
 
         assert_eq!(expr, expected);
