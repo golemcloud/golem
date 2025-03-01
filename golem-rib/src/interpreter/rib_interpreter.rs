@@ -847,7 +847,7 @@ mod internal {
                     interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
                     Ok(())
                 }
-                _ => todo!("Handle dynamic rangews here"),
+                _ => Err("internal error: range selection not supported at byte code level. missing desugar phase".to_string()),
             },
             RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::Tuple(items),
