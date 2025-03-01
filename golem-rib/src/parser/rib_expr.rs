@@ -190,7 +190,7 @@ mod internal {
     use crate::parser::binary_op::{binary_op, BinaryOp};
     use crate::parser::errors::RibParseError;
     use crate::parser::range_type::{range_type, RangeType};
-    use crate::parser::rib_expr::{simple_expr, simple_expr_};
+    use crate::parser::rib_expr::{rib_expr, simple_expr, simple_expr_};
     use crate::rib_source_span::GetSourcePosition;
     use crate::Expr;
 
@@ -229,7 +229,7 @@ mod internal {
                             .collect::<Vec<_>>()
                     },
                 ),
-                many((binary_op(), simple_expr())),
+                many((binary_op(), rib_expr())),
             )
                 .map(|(indices, binary_math)| RibRest::All(indices, binary_math)),
         ))

@@ -27,6 +27,8 @@ use crate::rib_source_span::GetSourcePosition;
 // Index can be handled as an expression itself
 // but this can be replaced once we are sure dynamic
 // selection works without any issues.
+
+#[derive(Clone, Debug)]
 pub enum IndexOrRange {
     Index(usize),
     Dynamic(Expr),

@@ -18,7 +18,7 @@ use combine::{
     position, sep_by1, ParseError, Parser, Stream,
 };
 
-use super::rib_expr::simple_expr;
+use super::rib_expr::{rib_expr, simple_expr};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::{GetSourcePosition, SourceSpan};
@@ -92,7 +92,7 @@ where
         field_key().skip(spaces()),
         char_(':').skip(spaces()),
         position(),
-        simple_expr(),
+        rib_expr(),
         position(),
     )
         .map(|(var, _, start, expr, end)| {
