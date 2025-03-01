@@ -23,7 +23,7 @@ use golem_common::model::invocation_context::SpanId;
 use golem_common::model::OwnedWorkerId;
 use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore};
-use golem_wasm_rpc::{HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
+use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
@@ -336,6 +336,38 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             )
             .await?;
         }
+        DynamicRpcCall::ScheduledFunctionCall {
+            target_function_name,
+            ..
+        } => {
+            // scheduled function call
+            let handle = match params[0] {
+                    Val::Resource(handle) => handle,
+                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
+                };
+            let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
+
+            // function should have at least one parameter for the scheduled_for datetime.
+            if !(!params.is_empty() && !param_types.is_empty()) {
+                Err(anyhow!(
+                    "Function did not have any parameters. Expected at least scheduled_for"
+                ))?
+            };
+
+            let scheduled_for = val_to_datetime(params.last().unwrap().clone())?;
+
+            let cancellation_token = schedule_remote_invocation(
+                scheduled_for,
+                target_function_name,
+                &params[..params.len() - 1],
+                &param_types[..param_types.len() - 1],
+                &mut store,
+                handle,
+            )
+            .await?;
+
+            results[0] = Val::Resource(cancellation_token.try_into_resource_any(store)?);
+        }
         DynamicRpcCall::AsyncFunctionCall {
             target_function_name,
             ..
@@ -559,6 +591,29 @@ async fn remote_invoke<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
     Ok(())
 }
 
+async fn schedule_remote_invocation<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
+    scheduled_for: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
+    target_function_name: &ParsedFunctionName,
+    params: &[Val],
+    param_types: &[Type],
+    store: &mut StoreContextMut<'_, Ctx>,
+    handle: Resource<WasmRpcEntry>,
+) -> anyhow::Result<Resource<CancellationTokenEntry>> {
+    let wit_value_params = encode_parameters(params, param_types, store)
+        .await
+        .context(format!("Encoding parameters of {target_function_name}"))?;
+
+    store
+        .data_mut()
+        .schedule_cancelable_invocation(
+            handle,
+            scheduled_for,
+            target_function_name.to_string(),
+            wit_value_params,
+        )
+        .await
+}
+
 async fn value_result_to_wasmtime_vals<Ctx: ResourceStore + Send>(
     value_result: Value,
     results: &mut [Val],
@@ -584,6 +639,34 @@ async fn value_result_to_wasmtime_vals<Ctx: ResourceStore + Send>(
     }
 
     Ok(())
+}
+
+fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wall_clock::Datetime> {
+    let fields = match val {
+        Val::Record(inner) => inner.into_iter().collect::<HashMap<String, _>>(),
+        _ => Err(anyhow!("did not find a record value"))?,
+    };
+
+    let seconds = match fields
+        .get("seconds")
+        .ok_or(anyhow!("did not find seconds field"))?
+    {
+        Val::U64(value) => *value,
+        _ => Err(anyhow!("seconds field has invalid type"))?,
+    };
+
+    let nanoseconds = match fields
+        .get("nanoseconds")
+        .ok_or(anyhow!("did not find nanoseconds field"))?
+    {
+        Val::U32(value) => *value,
+        _ => Err(anyhow!("nanoseconds field has invalid type"))?,
+    };
+
+    Ok(golem_wasm_rpc::wasi::clocks::wall_clock::Datetime {
+        seconds,
+        nanoseconds,
+    })
 }
 
 async fn create_rpc_target<Ctx: WorkerCtx>(
@@ -645,6 +728,9 @@ enum DynamicRpcCall {
     BlockingFunctionCall {
         target_function_name: ParsedFunctionName,
     },
+    ScheduledFunctionCall {
+        target_function_name: ParsedFunctionName,
+    },
     FireAndForgetFunctionCall {
         target_function_name: ParsedFunctionName,
     },
@@ -703,13 +789,20 @@ impl DynamicRpcCall {
                 Some(stub) => {
                     let method_name = stub_name.function.resource_method_name().unwrap(); // safe because of stub_name.is_method()
                     let blocking = method_name.starts_with("blocking-");
+                    let scheduled = method_name.starts_with("schedule-");
+
                     let target_method_name = if blocking {
                         method_name
                             .strip_prefix("blocking-")
                             .unwrap_or(&method_name)
+                    } else if scheduled {
+                        method_name
+                            .strip_prefix("schedule-")
+                            .unwrap_or(&method_name)
                     } else {
                         &method_name
                     };
+
                     let target_function = match stub {
                         DynamicRpcResource::Stub => ParsedFunctionReference::Function {
                             function: target_method_name.to_string(),
@@ -730,6 +823,10 @@ impl DynamicRpcCall {
 
                     if blocking {
                         Ok(Some(DynamicRpcCall::BlockingFunctionCall {
+                            target_function_name,
+                        }))
+                    } else if scheduled {
+                        Ok(Some(DynamicRpcCall::ScheduledFunctionCall {
                             target_function_name,
                         }))
                     } else if !result_types.is_empty() {
