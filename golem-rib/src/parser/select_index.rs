@@ -27,9 +27,30 @@ use crate::rib_source_span::GetSourcePosition;
 // Index can be handled as an expression itself
 // but this can be replaced once we are sure dynamic
 // selection works without any issues.
-enum IndexOrRange {
+pub enum IndexOrRange {
     Index(usize),
     Dynamic(Expr),
+}
+
+// TODO: Index or dynamic doesn't need to exist, but introduced temporarily to reduce
+// test failures
+pub struct IndexExpression(pub IndexOrRange);
+
+pub fn select_index2<Input>() -> impl Parser<Input, Output = IndexOrRange>
+where
+    Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
+    Input::Position: GetSourcePosition,
+{
+    spaces()
+        .with(
+            attempt(pos_num().skip(spaces()).map(IndexOrRange::Index))
+                .or(attempt(rib_expr().map(IndexOrRange::Dynamic)))
+                .map(|index_or_range| index_or_range),
+        )
+        .message("Invalid index selection")
 }
 
 pub fn select_index<Input>() -> impl Parser<Input, Output = Expr>

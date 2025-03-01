@@ -33,9 +33,9 @@ use crate::parser::number::number;
 use crate::parser::optional::option;
 use crate::parser::pattern_match::pattern_match;
 use crate::parser::range_type::RangeType;
-use crate::parser::rib_expr::internal::MathOrRange;
+use crate::parser::rib_expr::internal::RibRest;
 use crate::parser::select_field::select_field;
-use crate::parser::select_index::select_index;
+use crate::parser::select_index::{select_index, IndexOrRange};
 use crate::parser::sequence::sequence;
 use crate::parser::tuple::tuple;
 use crate::rib_source_span::GetSourcePosition;
@@ -70,24 +70,39 @@ where
         spaces()
             .with(
                 (simple_expr(), internal::rib_expr_rest()).map(|(expr, rest)| match rest {
-                    MathOrRange::BinaryMath(rest) => {
-                        rest.into_iter().fold(expr, |acc, (op, next)| match op {
-                            BinaryOp::GreaterThan => Expr::greater_than(acc, next),
-                            BinaryOp::LessThan => Expr::less_than(acc, next),
-                            BinaryOp::LessThanOrEqualTo => Expr::less_than_or_equal_to(acc, next),
-                            BinaryOp::GreaterThanOrEqualTo => {
-                                Expr::greater_than_or_equal_to(acc, next)
-                            }
-                            BinaryOp::EqualTo => Expr::equal_to(acc, next),
-                            BinaryOp::And => Expr::and(acc, next),
-                            BinaryOp::Or => Expr::or(acc, next),
-                            BinaryOp::Add => Expr::plus(acc, next),
-                            BinaryOp::Subtract => Expr::minus(acc, next),
-                            BinaryOp::Multiply => Expr::multiply(acc, next),
-                            BinaryOp::Divide => Expr::divide(acc, next),
-                        })
+                    RibRest::All(index_expressions, binary_expressions) => {
+                        let new_expr =
+                            index_expressions
+                                .into_iter()
+                                .fold(expr, |acc, index_or_range| match index_or_range {
+                                    IndexOrRange::Index(index) => Expr::select_index(acc, index),
+                                    IndexOrRange::Dynamic(expr) => {
+                                        Expr::select_dynamic(acc, expr, None)
+                                    }
+                                });
+
+                        binary_expressions
+                            .into_iter()
+                            .fold(new_expr, |acc, (op, next)| match op {
+                                BinaryOp::GreaterThan => Expr::greater_than(acc, next),
+                                BinaryOp::LessThan => Expr::less_than(acc, next),
+                                BinaryOp::LessThanOrEqualTo => {
+                                    Expr::less_than_or_equal_to(acc, next)
+                                }
+                                BinaryOp::GreaterThanOrEqualTo => {
+                                    Expr::greater_than_or_equal_to(acc, next)
+                                }
+                                BinaryOp::EqualTo => Expr::equal_to(acc, next),
+                                BinaryOp::And => Expr::and(acc, next),
+                                BinaryOp::Or => Expr::or(acc, next),
+                                BinaryOp::Add => Expr::plus(acc, next),
+                                BinaryOp::Subtract => Expr::minus(acc, next),
+                                BinaryOp::Multiply => Expr::multiply(acc, next),
+                                BinaryOp::Divide => Expr::divide(acc, next),
+                            })
                     }
-                    MathOrRange::Range((range_type, opt)) => match range_type {
+
+                    RibRest::Range((range_type, opt)) => match range_type {
                         RangeType::Inclusive => match opt {
                             Some(rhs) => Expr::range_inclusive(expr, rhs),
                             None => panic!("Inclusive range should have a right hand side"),
@@ -139,7 +154,6 @@ where
                 option(),
                 result(),
                 attempt(call()),
-                attempt(select_index()),
                 sequence(),
                 identifier(),
                 number(),
@@ -180,15 +194,18 @@ mod internal {
     use crate::rib_source_span::GetSourcePosition;
     use crate::Expr;
 
+    use crate::parser::select_index::{select_index2, IndexOrRange};
+    use combine::parser::char::char;
+    use combine::parser::char::spaces;
     use combine::{attempt, many, optional, parser, ParseError, Parser, Stream};
     // A simple expression is a composition of all parsers that doesn't involve left recursion
 
-    pub(crate) enum MathOrRange {
-        BinaryMath(Vec<(BinaryOp, Expr)>),
+    pub(crate) enum RibRest {
+        All(Vec<IndexOrRange>, Vec<(BinaryOp, Expr)>),
         Range((RangeType, Option<Expr>)),
     }
 
-    pub fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = MathOrRange>
+    pub fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = RibRest>
     where
         Input: Stream<Token = char>,
         RibParseError: Into<
@@ -198,15 +215,28 @@ mod internal {
     {
         attempt(
             (range_type(), optional(simple_expr_())).map(|(range_type, expr)| match expr {
-                Some(expr) => MathOrRange::Range((range_type, Some(expr))),
-                None => MathOrRange::Range((range_type, None)),
+                Some(expr) => RibRest::Range((range_type, Some(expr))),
+                None => RibRest::Range((range_type, None)),
             }),
         )
-        .or(many((binary_op(), simple_expr())).map(MathOrRange::BinaryMath))
+        .or(attempt(
+            (
+                many((char('['), select_index2(), char(']').skip(spaces()))).map(
+                    |collections: Vec<(char, IndexOrRange, char)>| {
+                        collections
+                            .into_iter()
+                            .map(|(_, index_or_range, _)| index_or_range)
+                            .collect::<Vec<_>>()
+                    },
+                ),
+                many((binary_op(), simple_expr())),
+            )
+                .map(|(indices, binary_math)| RibRest::All(indices, binary_math)),
+        ))
     }
 
     parser! {
-        pub(crate) fn rib_expr_rest[Input]()(Input) -> MathOrRange
+        pub(crate) fn rib_expr_rest[Input]()(Input) -> RibRest
         where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
         {
             rib_expr_rest_()
