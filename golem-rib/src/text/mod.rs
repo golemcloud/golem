@@ -1044,8 +1044,6 @@ mod simple_values_test {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
-    // TODO
-    #[ignore]
     #[test]
     fn test_round_trip_read_write_number_float() {
         let input_expr = Expr::untyped_number(BigDecimal::from_str("1.1").unwrap());
@@ -1543,8 +1541,6 @@ mod match_tests {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
-    // TODO
-    #[ignore]
     #[test]
     fn test_round_trip_match_expr_of_math_op() {
         let input_expr = Expr::pattern_match(
@@ -1574,8 +1570,7 @@ mod match_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str =
-            "match request {  ok(foo) => 1.1 > 2 > 3, err(msg) => 1 < 2 } ".to_string();
+        let expected_str = "match request {  ok(foo) => 1.1 > 2, err(msg) => 1 < 2 } ".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

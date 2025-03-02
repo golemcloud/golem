@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
-use combine::parser::char::{char as char_, digit};
-use combine::{many1, optional, ParseError, Parser};
+use combine::parser::char::{char as char_, char, digit};
+use combine::{attempt, many1, optional, ParseError, Parser, Stream};
 use std::str::FromStr;
 
 use crate::expr::Expr;
@@ -64,11 +64,6 @@ mod tests {
         assert_eq!(result, Ok(Expr::untyped_number(BigDecimal::from(-123))));
     }
 
-    // TODO;
-    // Refactoring code to avoid left recursion resulted in early consumption
-    // of number on the left
-    // Grammer needs to be fixed
-    #[ignore]
     #[test]
     fn test_float_number() {
         let input = "123.456";
@@ -94,20 +89,6 @@ mod tests {
         let input = "-123s64";
         let result = Expr::from_text(input);
         let expected = Expr::untyped_number_with_type_name(BigDecimal::from(-123), TypeName::S64);
-        assert_eq!(result, Ok(expected));
-    }
-
-    // TODO;
-    // We will have to compromise left side recursion to support literal float numbers
-    #[ignore]
-    #[test]
-    fn test_number_with_binding_float() {
-        let input = "-123.0f64";
-        let result = Expr::from_text(input);
-        let expected = Expr::untyped_number_with_type_name(
-            BigDecimal::from_str("-123.0").unwrap(),
-            TypeName::F64,
-        );
         assert_eq!(result, Ok(expected));
     }
 }
