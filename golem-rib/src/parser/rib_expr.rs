@@ -506,20 +506,20 @@ where
         )),
     )
         .map(
-            |(left, right): (Vec<char>, Option<(char, Option<char>, Vec<char>)>)| {
-                let left_str = left.into_iter().collect::<String>(); // Collect digits into a string
-                match right {
-                    Some((e, s, right)) => {
-                        let right_str = right.into_iter().collect::<String>(); // Collect exponent part
+            |(fraction_part, exponent_opt): (Vec<char>, Option<(char, Option<char>, Vec<char>)>)| {
+                let fraction_str = fraction_part.into_iter().collect::<String>();
+                match exponent_opt {
+                    Some((exp_marker, sign_opt, exponent_digits)) => {
+                        let exponent_str = exponent_digits.into_iter().collect::<String>();
                         Fraction(format!(
                             "{}{}{}{}",
-                            left_str,
-                            e,
-                            s.unwrap_or_default(),
-                            right_str
+                            fraction_str,
+                            exp_marker,
+                            sign_opt.unwrap_or_default(),
+                            exponent_str
                         ))
                     }
-                    None => Fraction(left_str.to_string()),
+                    None => Fraction(fraction_str),
                 }
             },
         )
