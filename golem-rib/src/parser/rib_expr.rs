@@ -520,7 +520,7 @@ fn index_expr(base_expr: Expr, index_expr: IndexExpr) -> Expr {
         .exprs
         .into_iter()
         .fold(base_expr, |acc, index_expr| {
-            Expr::select_dynamic(acc, index_expr, None)
+            Expr::select_index(acc, index_expr)
         })
 }
 
@@ -581,10 +581,9 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_dynamic(
+            Ok(Expr::select_index(
                 Expr::identifier_global("foo", None),
                 Expr::untyped_number(BigDecimal::from(0)),
-                None
             ))
         );
     }
@@ -595,14 +594,12 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_dynamic(
-                Expr::select_dynamic(
+            Ok(Expr::select_index(
+                Expr::select_index(
                     Expr::identifier_global("foo", None),
                     Expr::untyped_number(BigDecimal::from(0)),
-                    None
                 ),
                 Expr::untyped_number(BigDecimal::from(1)),
-                None
             ))
         );
     }
@@ -613,10 +610,9 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_dynamic(
+            Ok(Expr::select_index(
                 Expr::identifier_global("foo", None),
                 Expr::identifier_global("bar", None),
-                None
             ))
         );
     }
@@ -627,13 +623,12 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_dynamic(
+            Ok(Expr::select_index(
                 Expr::identifier_global("foo", None),
                 Expr::range(
                     Expr::untyped_number(BigDecimal::from(1)),
                     Expr::untyped_number(BigDecimal::from(2))
                 ),
-                None
             ))
         );
     }
@@ -734,18 +729,16 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_dynamic(
+            Ok(Expr::select_index(
                 Expr::select_field(
-                    Expr::select_dynamic(
+                    Expr::select_index(
                         Expr::identifier_global("foo", None),
                         Expr::untyped_number(BigDecimal::from(0)),
-                        None
                     ),
                     "bar",
                     None
                 ),
                 Expr::untyped_number(BigDecimal::from(1)),
-                None
             ))
         );
     }
@@ -756,19 +749,18 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_dynamic(
+            Ok(Expr::select_index(
                 Expr::select_field(
-                    Expr::select_dynamic(
+                    Expr::select_index(
                         Expr::identifier_global("foo", None),
                         Expr::untyped_number(BigDecimal::from(0)),
-                        None
                     ),
                     "bar",
                     None
                 ),
                 Expr::untyped_number(BigDecimal::from(1)),
-                Some(TypeName::U32)
-            ))
+            )
+            .with_type_annotation(TypeName::U32))
         );
     }
 
@@ -779,10 +771,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::select_dynamic(
+                Expr::select_index(
                     Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                     Expr::untyped_number(BigDecimal::from(0)),
-                    None
                 ),
                 "baz",
                 None

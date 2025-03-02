@@ -317,7 +317,7 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::select_dynamic(
+        let expected = Expr::select_index(
             Expr::select_field(
                 Expr::select_field(
                     Expr::identifier_with_variable_id(VariableId::Global("foo".to_string()), None),
@@ -328,8 +328,8 @@ mod type_binding_tests {
                 None,
             ),
             Expr::number(BigDecimal::from(1), None, InferredType::number()),
-            Some(TypeName::U32),
         )
+        .with_type_annotation(TypeName::U32)
         .with_inferred_type(InferredType::U32);
 
         assert_eq!(expr, expected);

@@ -988,16 +988,6 @@ impl Expr {
         }
     }
 
-    pub fn select_dynamic(expr: Expr, index: Expr, type_annotation: Option<TypeName>) -> Self {
-        Expr::SelectDynamic {
-            expr: Box::new(expr),
-            index: Box::new(index),
-            type_annotation,
-            inferred_type: InferredType::Unknown,
-            source_span: SourceSpan::default(),
-        }
-    }
-
     pub fn select_field_with_type_annotation(
         expr: Expr,
         field: impl AsRef<str>,
@@ -1913,7 +1903,8 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let field = *expr.index.ok_or("Missing index")?;
                 let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
 
-                Expr::select_dynamic(selection.try_into()?, field.try_into()?, type_annotation)
+                Expr::select_index(selection.try_into()?, field.try_into()?)
+                    .with_type_annotation_opt(type_annotation)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Range(range) => {

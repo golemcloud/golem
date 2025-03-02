@@ -20,10 +20,9 @@ pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Expr {
     Expr::list_comprehension(
         VariableId::list_comprehension_identifier("i"),
         range_expr.clone(),
-        Expr::select_dynamic(
+        Expr::select_index(
             select_from.clone(),
             Expr::identifier_with_variable_id(iterable_expr, None),
-            None,
         ),
     )
     .with_inferred_type(select_from.inferred_type())
@@ -437,7 +436,7 @@ mod internal {
                 // However there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (index, arm_pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = Expr::select_dynamic(
+                    let new_pred = Expr::select_index(
                         pred_expr.clone(),
                         Expr::Number {
                             number: Number {
@@ -447,7 +446,6 @@ mod internal {
                             inferred_type: InferredType::U64,
                             source_span: SourceSpan::default(),
                         },
-                        None,
                     );
                     let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::Unknown);
 

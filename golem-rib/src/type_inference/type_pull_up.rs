@@ -809,20 +809,18 @@ mod internal {
             )?;
 
             let new_select_index = match index_type {
-                SelectionIndexType::Index(index_type) => Expr::select_dynamic(
+                SelectionIndexType::Index(index_type) => Expr::select_index(
                     new_selection_expr.clone(),
                     original_index_expr.clone().with_inferred_type(index_type),
-                    None,
                 )
                 .with_inferred_type(curren_type.merge(expression_type))
                 .with_source_span(source_span.clone()),
 
-                SelectionIndexType::Range(range_index_type) => Expr::select_dynamic(
+                SelectionIndexType::Range(range_index_type) => Expr::select_index(
                     new_selection_expr.clone(),
                     original_index_expr
                         .clone()
                         .with_inferred_type(range_index_type),
-                    None,
                 )
                 .with_inferred_type(curren_type.merge(expression_type))
                 .with_source_span(source_span.clone()),
@@ -832,12 +830,9 @@ mod internal {
 
             Ok(())
         } else {
-            let new_select_index = Expr::select_dynamic(
-                new_selection_expr.clone(),
-                original_index_expr.clone(),
-                None,
-            )
-            .with_source_span(source_span.clone());
+            let new_select_index =
+                Expr::select_index(new_selection_expr.clone(), original_index_expr.clone())
+                    .with_source_span(source_span.clone());
 
             inferred_type_stack.push_front(new_select_index);
 
