@@ -326,11 +326,7 @@ mod test {
             ))
         );
     }
-
-    // TODO; Supporting this feature results in a Left Recursion
-    // It's better to disallow this than to fail with stack, until we fix the grammer of Rib itself
-    // Users always have a workout to pre-define this
-    #[ignore]
+    
     #[test]
     fn test_binary_op_in_record() {
         let input = "{foo: bar > baz, baz: bar == foo}";
