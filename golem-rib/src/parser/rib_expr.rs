@@ -75,52 +75,52 @@ where
                 } => {
                     let with_index = index_expr(expr, index_expressions);
 
-                    let with_field = field_expr.into_iter().fold(with_index, |acc, field_expr| {
-                        match field_expr.base {
-                            // if the base is a call, we consider it as a method call
-                            FractionOrExpr::Expr(Expr::Call {
-                                call_type,
-                                generic_type_parameter,
-                                args,
-                                ..
-                            }) => {
-                                let base = Expr::invoke_worker_function(
-                                    acc,
-                                    call_type.function_name().unwrap().to_string(),
+                    let with_field =
+                        field_expr
+                            .into_iter()
+                            .fold(with_index, |acc, field_expr| match field_expr.base {
+                                FractionOrExpr::Expr(Expr::Call {
+                                    call_type,
                                     generic_type_parameter,
                                     args,
-                                );
-                                index_expr(base, field_expr.index_expr)
-                                    .with_type_annotation_opt(field_expr.type_name)
-                            }
+                                    ..
+                                }) => {
+                                    let base = Expr::invoke_worker_function(
+                                        acc,
+                                        call_type.function_name().unwrap().to_string(),
+                                        generic_type_parameter,
+                                        args,
+                                    );
+                                    index_expr(base, field_expr.index_expr)
+                                        .with_type_annotation_opt(field_expr.type_name)
+                                }
 
-                            FractionOrExpr::Expr(expr) => {
-                                let selection = build_selection(acc, expr).unwrap();
-                                index_expr(selection, field_expr.index_expr)
-                                    .with_type_annotation_opt(field_expr.type_name)
-                            }
+                                FractionOrExpr::Expr(expr) => {
+                                    let selection = build_selection(acc, expr).unwrap();
+                                    index_expr(selection, field_expr.index_expr)
+                                        .with_type_annotation_opt(field_expr.type_name)
+                                }
 
-                            FractionOrExpr::Fraction(fraction) => match acc {
-                                Expr::Number { number, .. } => {
-                                    let combined = fraction
-                                        .combine_with_integer(number.value)
-                                        .map_err(|e| RibParseError::Message(e))
-                                        .unwrap();
+                                FractionOrExpr::Fraction(fraction) => match acc {
+                                    Expr::Number { number, .. } => {
+                                        let combined = fraction
+                                            .combine_with_integer(number.value)
+                                            .map_err(|e| RibParseError::Message(e))
+                                            .unwrap();
 
-                                    match field_expr.type_name {
-                                        Some(type_name) => {
-                                            Expr::untyped_number_with_type_name(combined, type_name)
+                                        match field_expr.type_name {
+                                            Some(type_name) => Expr::untyped_number_with_type_name(
+                                                combined, type_name,
+                                            ),
+                                            None => Expr::untyped_number(combined),
                                         }
-                                        None => Expr::untyped_number(combined),
                                     }
-                                }
 
-                                _ => {
-                                    panic!("Fraction can only be applied to numbers")
-                                }
-                            },
-                        }
-                    });
+                                    _ => {
+                                        panic!("Fraction can only be applied to numbers")
+                                    }
+                                },
+                            });
 
                     let with_range = match range_info_opt {
                         Some(range_info) => match range_info.base.expr {
@@ -179,6 +179,14 @@ where
         .skip(spaces())
 }
 
+parser! {
+    fn simple_expr[Input]()(Input) -> Expr
+    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
+    {
+        with_position(simple_expr_())
+    }
+}
+
 fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: Stream<Token = char>,
@@ -188,7 +196,6 @@ where
     Input::Position: GetSourcePosition,
 {
     (
-        position(),
         spaces()
             .with(choice((
                 list_comprehension(),
@@ -211,19 +218,10 @@ where
             )))
             .skip(spaces()),
         optional(optional(char(':').skip(spaces())).with(type_name())).skip(spaces()),
-        position(),
     )
-        .map(|(start, expr, type_name, end)| {
-            let start_pos: Input::Position = start;
-            let start = start_pos.get_source_position();
-            let end_pos: Input::Position = end;
-            let end = end_pos.get_source_position();
-            let span = SourceSpan::new(start, end);
-
-            match type_name {
-                Some(type_name) => expr.with_type_annotation(type_name).with_source_span(span),
-                None => expr.with_source_span(span),
-            }
+        .map(|(expr, type_name)| match type_name {
+            Some(type_name) => expr.with_type_annotation(type_name),
+            None => expr,
         })
 }
 
@@ -256,14 +254,6 @@ where
     Input::Position: GetSourcePosition,
 {
     choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
-}
-
-parser! {
-    fn simple_expr[Input]()(Input) -> Expr
-    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
-    {
-        simple_expr_()
-    }
 }
 
 struct RibRest {
