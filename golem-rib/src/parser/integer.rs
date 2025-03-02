@@ -31,22 +31,21 @@ where
     Input::Position: GetSourcePosition,
 {
     let digits = many1(digit());
-    
 
     (optional(char_('-')), digits).map(|(sign, num_str): (Option<char>, String)| {
-            let num = BigDecimal::from_str(&num_str).unwrap(); // Convert to BigDecimal
+        let num = BigDecimal::from_str(&num_str).unwrap(); // Convert to BigDecimal
 
-            let big_decimal = if sign.is_some() { -num } else { num };
+        let big_decimal = if sign.is_some() { -num } else { num };
 
-            Expr::untyped_number(big_decimal)
-        })
+        Expr::untyped_number(big_decimal)
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-    use crate::TypeName;
     use super::*;
+    use crate::TypeName;
+    use test_r::test;
 
     #[test]
     fn test_number() {

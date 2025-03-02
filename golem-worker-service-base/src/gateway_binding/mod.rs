@@ -268,8 +268,6 @@ impl IdempotencyKeyCompiled {
         idempotency_key: &Expr,
         exports: &[AnalysedExport],
     ) -> Result<Self, RibError> {
-
-
         let idempotency_key_compiled =
             DefaultWorkerServiceRibCompiler::compile(idempotency_key, exports)?;
 

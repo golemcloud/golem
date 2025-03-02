@@ -47,7 +47,8 @@ use crate::parser::type_name::type_name;
 use crate::TypeName;
 
 // A rib expression := (simple_expr, rib_expr_rest*)
-// A simple recursion never goes in recursion on LHS
+// A simple_expr never has any expression that starts with rib_expression
+// (ex: select_field, select_index, +, -, *,/, etc)
 parser! {
     pub fn rib_expr[Input]()(Input) -> Expr
     where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
@@ -66,114 +67,107 @@ where
 {
     spaces()
         .with(
-            (simple_expr(), rib_expr_rest()).and_then(|(expr, rest)| match rest {
-                RibRest {
-                    indices: index_expressions,
-                    field_selection: field_expr,
-                    range_info: range_info_opt,
-                    binary_ops: binary_expressions,
-                } => {
-                    let with_index = index_expr(expr, index_expressions);
+            (simple_expr(), rib_expr_rest()).and_then(|(expr, rest): (Expr, RibRest)| {
+                let with_index = index_expr(expr, rest.indices);
 
-                    let with_field =
-                        field_expr
-                            .into_iter()
-                            .fold(with_index, |acc, field_expr| match field_expr.base {
-                                FractionOrExpr::Expr(Expr::Call {
-                                    call_type,
+                let with_field =
+                    rest.field_selection
+                        .into_iter()
+                        .fold(with_index, |acc, field_expr| match field_expr.base {
+                            FractionOrExpr::Expr(Expr::Call {
+                                call_type,
+                                generic_type_parameter,
+                                args,
+                                ..
+                            }) => {
+                                let base = Expr::invoke_worker_function(
+                                    acc,
+                                    call_type.function_name().unwrap().to_string(),
                                     generic_type_parameter,
                                     args,
-                                    ..
-                                }) => {
-                                    let base = Expr::invoke_worker_function(
-                                        acc,
-                                        call_type.function_name().unwrap().to_string(),
-                                        generic_type_parameter,
-                                        args,
-                                    );
-                                    index_expr(base, field_expr.index_expr)
-                                        .with_type_annotation_opt(field_expr.type_name)
-                                }
+                                );
+                                index_expr(base, field_expr.index_expr)
+                                    .with_type_annotation_opt(field_expr.type_name)
+                            }
 
-                                FractionOrExpr::Expr(expr) => {
-                                    let selection = build_selection(acc, expr).unwrap();
-                                    index_expr(selection, field_expr.index_expr)
-                                        .with_type_annotation_opt(field_expr.type_name)
-                                }
+                            FractionOrExpr::Expr(expr) => {
+                                let selection = build_selection(acc, expr).unwrap();
+                                index_expr(selection, field_expr.index_expr)
+                                    .with_type_annotation_opt(field_expr.type_name)
+                            }
 
-                                FractionOrExpr::Fraction(fraction) => match acc {
-                                    Expr::Number { number, .. } => {
-                                        let combined = fraction
-                                            .combine_with_integer(number.value)
-                                            .map_err(RibParseError::Message)
-                                            .unwrap();
+                            FractionOrExpr::Fraction(fraction) => match acc {
+                                Expr::Number { number, .. } => {
+                                    let combined = fraction
+                                        .combine_with_integer(number.value)
+                                        .map_err(RibParseError::Message)
+                                        .unwrap();
 
-                                        match field_expr.type_name {
-                                            Some(type_name) => Expr::untyped_number_with_type_name(
-                                                combined, type_name,
-                                            ),
-                                            None => Expr::untyped_number(combined),
+                                    match field_expr.type_name {
+                                        Some(type_name) => {
+                                            Expr::untyped_number_with_type_name(combined, type_name)
                                         }
+                                        None => Expr::untyped_number(combined),
                                     }
+                                }
 
-                                    _ => {
-                                        panic!("Fraction can only be applied to numbers")
-                                    }
-                                },
-                            });
-
-                    let with_range = match range_info_opt {
-                        Some(range_info) => match range_info.base.expr {
-                            Some(rhs) => match range_info.base.range_type {
-                                RangeType::Inclusive => index_expr(
-                                    Expr::range_inclusive(with_field, rhs),
-                                    range_info.index_expr,
-                                ),
-                                RangeType::Exclusive => {
-                                    index_expr(Expr::range(with_field, rhs), range_info.index_expr)
+                                _ => {
+                                    panic!("Fraction can only be applied to numbers")
                                 }
                             },
-                            None => match range_info.base.range_type {
-                                RangeType::Inclusive => {
-                                    return Err(RibParseError::Message(
-                                        "Exclusive range should have a right hand side".to_string(),
-                                    ))
-                                }
-                                RangeType::Exclusive => {
-                                    index_expr(Expr::range_from(with_field), range_info.index_expr)
-                                }
-                            },
+                        });
+
+                let with_range = match rest.range_info {
+                    Some(range_info) => match range_info.base.expr {
+                        Some(rhs) => match range_info.base.range_type {
+                            RangeType::Inclusive => index_expr(
+                                Expr::range_inclusive(with_field, rhs),
+                                range_info.index_expr,
+                            ),
+                            RangeType::Exclusive => {
+                                index_expr(Expr::range(with_field, rhs), range_info.index_expr)
+                            }
                         },
-                        None => with_field,
-                    };
+                        None => match range_info.base.range_type {
+                            RangeType::Inclusive => {
+                                return Err(RibParseError::Message(
+                                    "Exclusive range should have a right hand side".to_string(),
+                                ))
+                            }
+                            RangeType::Exclusive => {
+                                index_expr(Expr::range_from(with_field), range_info.index_expr)
+                            }
+                        },
+                    },
+                    None => with_field,
+                };
 
-                    let with_binary =
-                        binary_expressions
-                            .into_iter()
-                            .fold(with_range, |acc, (op, next)| {
-                                let next = index_expr(next.base, next.index_expr);
+                let with_binary =
+                    rest.binary_ops
+                        .into_iter()
+                        .fold(with_range, |acc, (op, next)| {
+                            let next = index_expr(next.base, next.index_expr);
 
-                                match op {
-                                    BinaryOp::GreaterThan => Expr::greater_than(acc, next),
-                                    BinaryOp::LessThan => Expr::less_than(acc, next),
-                                    BinaryOp::LessThanOrEqualTo => {
-                                        Expr::less_than_or_equal_to(acc, next)
-                                    }
-                                    BinaryOp::GreaterThanOrEqualTo => {
-                                        Expr::greater_than_or_equal_to(acc, next)
-                                    }
-                                    BinaryOp::EqualTo => Expr::equal_to(acc, next),
-                                    BinaryOp::And => Expr::and(acc, next),
-                                    BinaryOp::Or => Expr::or(acc, next),
-                                    BinaryOp::Add => Expr::plus(acc, next),
-                                    BinaryOp::Subtract => Expr::minus(acc, next),
-                                    BinaryOp::Multiply => Expr::multiply(acc, next),
-                                    BinaryOp::Divide => Expr::divide(acc, next),
+                            match op {
+                                BinaryOp::GreaterThan => Expr::greater_than(acc, next),
+                                BinaryOp::LessThan => Expr::less_than(acc, next),
+                                BinaryOp::LessThanOrEqualTo => {
+                                    Expr::less_than_or_equal_to(acc, next)
                                 }
-                            });
+                                BinaryOp::GreaterThanOrEqualTo => {
+                                    Expr::greater_than_or_equal_to(acc, next)
+                                }
+                                BinaryOp::EqualTo => Expr::equal_to(acc, next),
+                                BinaryOp::And => Expr::and(acc, next),
+                                BinaryOp::Or => Expr::or(acc, next),
+                                BinaryOp::Add => Expr::plus(acc, next),
+                                BinaryOp::Subtract => Expr::minus(acc, next),
+                                BinaryOp::Multiply => Expr::multiply(acc, next),
+                                BinaryOp::Divide => Expr::divide(acc, next),
+                            }
+                        });
 
-                    Ok(with_binary)
-                }
+                Ok(with_binary)
             }),
         )
         .skip(spaces())
@@ -307,9 +301,7 @@ where
                     (
                         fraction()
                             .map(FractionOrExpr::Fraction)
-                            .or(simple_expr()
-                                .skip(spaces())
-                                .map(FractionOrExpr::Expr)),
+                            .or(simple_expr().skip(spaces()).map(FractionOrExpr::Expr)),
                         select_index_expression().skip(spaces()),
                         optional(type_annotation()).skip(spaces()),
                     )

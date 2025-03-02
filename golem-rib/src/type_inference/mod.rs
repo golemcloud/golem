@@ -1162,7 +1162,7 @@ mod type_inference_tests {
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::type_inference::type_inference_tests::internal::{
-            expr_block, identifier, let_binding, number, select_dynamic, select_index, sequence,
+            expr_block, identifier, let_binding, number, select_dynamic, sequence,
         };
         use crate::{Expr, InferredType, Number, VariableId};
 
@@ -1466,7 +1466,7 @@ mod type_inference_tests {
         use crate::type_inference::type_inference_tests::internal;
         use crate::type_inference::type_inference_tests::internal::{
             call, expr_block, identifier, let_binding, number, option, pattern_match, record,
-            select_dynamic, select_field, select_index, sequence,
+            select_dynamic, select_field, sequence,
         };
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,

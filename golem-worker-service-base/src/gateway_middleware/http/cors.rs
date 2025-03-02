@@ -123,7 +123,7 @@ impl HttpCors {
     }
 
     pub fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<HttpCors, String> {
-        let compiled_expr = rib::compile(&expr.0, &vec![])
+        let compiled_expr = rib::compile(expr.0.clone(), &vec![])
             .map_err(|err| format!("Rib compilation for cors-preflight response. {}", err))?;
 
         let rib_input = RibInput::default();
