@@ -921,20 +921,6 @@ impl Expr {
         }
     }
 
-    pub fn option_with_type_annotation(expr: Option<Expr>, type_annotation: TypeName) -> Self {
-        let inferred_type = match &expr {
-            Some(expr) => expr.inferred_type(),
-            None => InferredType::Unknown,
-        };
-
-        Expr::Option {
-            expr: expr.map(Box::new),
-            type_annotation: Some(type_annotation),
-            inferred_type: InferredType::Option(Box::new(inferred_type)),
-            source_span: SourceSpan::default(),
-        }
-    }
-
     pub fn or(left: Expr, right: Expr) -> Self {
         Expr::Or {
             lhs: Box::new(left),
@@ -2146,18 +2132,11 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let type_name = expr.type_name;
                 let type_name = type_name.map(TypeName::try_from).transpose()?;
 
-                match type_name {
-                    Some(type_name) => match expr.expr {
-                        Some(expr) => {
-                            Expr::option_with_type_annotation(Some((*expr).try_into()?), type_name)
-                        }
-                        None => Expr::option_with_type_annotation(None, type_name),
-                    },
-
-                    None => match expr.expr {
-                        Some(expr) => Expr::option(Some((*expr).try_into()?)),
-                        None => Expr::option(None),
-                    },
+                match expr.expr {
+                    Some(expr) => {
+                        Expr::option(Some((*expr).try_into()?)).with_type_annotation_opt(type_name)
+                    }
+                    None => Expr::option(None).with_type_annotation_opt(type_name),
                 }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {

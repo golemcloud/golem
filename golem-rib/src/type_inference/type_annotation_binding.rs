@@ -167,14 +167,12 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::option_with_type_annotation(
-            Some(Expr::number(
-                BigDecimal::from(1),
-                None,
-                InferredType::number(),
-            )),
-            TypeName::Option(Box::new(TypeName::U64)),
-        )
+        let expected = Expr::option(Some(Expr::number(
+            BigDecimal::from(1),
+            None,
+            InferredType::number(),
+        )))
+        .with_type_annotation(TypeName::Option(Box::new(TypeName::U64)))
         .with_inferred_type(InferredType::Option(Box::new(InferredType::U64)));
 
         assert_eq!(expr, expected);

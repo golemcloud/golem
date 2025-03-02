@@ -74,10 +74,8 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::option_with_type_annotation(
-                Some(Expr::identifier_global("foo", None)),
-                TypeName::Option(Box::new(TypeName::Str))
-            ))
+            Ok(Expr::option(Some(Expr::identifier_global("foo", None)))
+                .with_type_annotation(TypeName::Option(Box::new(TypeName::Str))))
         );
     }
 
@@ -94,10 +92,7 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::option_with_type_annotation(
-                None,
-                TypeName::Option(Box::new(TypeName::Str))
-            ))
+            Ok(Expr::option(None).with_type_annotation(TypeName::Option(Box::new(TypeName::Str))))
         );
     }
 
@@ -119,13 +114,13 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::option_with_type_annotation(
-                Some(Expr::option_with_type_annotation(
-                    Some(Expr::identifier_global("foo", None)),
-                    TypeName::Option(Box::new(TypeName::Str))
-                )),
-                TypeName::Option(Box::new(TypeName::Option(Box::new(TypeName::Str))))
+            Ok(Expr::option(Some(
+                Expr::option(Some(Expr::identifier_global("foo", None)),)
+                    .with_type_annotation(TypeName::Option(Box::new(TypeName::Str)))
             ))
+            .with_type_annotation(TypeName::Option(Box::new(TypeName::Option(
+                Box::new(TypeName::Str)
+            )))))
         );
     }
 
