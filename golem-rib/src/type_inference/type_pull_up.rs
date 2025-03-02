@@ -99,14 +99,14 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 )?;
             }
 
-            Expr::SelectDynamic {
+            Expr::SelectIndex {
                 expr,
                 index,
                 inferred_type,
                 source_span,
                 ..
             } => {
-                internal::handle_select_dynamic(
+                internal::handle_select_index(
                     expr,
                     index,
                     inferred_type,
@@ -780,7 +780,7 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn handle_select_dynamic(
+    pub(crate) fn handle_select_index(
         original_selection_expr: &Expr,
         original_index_expr: &Expr,
         curren_type: &InferredType,

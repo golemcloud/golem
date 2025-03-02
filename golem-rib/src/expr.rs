@@ -54,7 +54,7 @@ pub enum Expr {
         inferred_type: InferredType,
         source_span: SourceSpan,
     },
-    SelectDynamic {
+    SelectIndex {
         expr: Box<Expr>,
         index: Box<Expr>,
         type_annotation: Option<TypeName>,
@@ -318,12 +318,12 @@ impl Expr {
     /// Example of a Rib expression:
     ///
     /// ```rib
-    ///   let result = worker.response;
-    ///   let error_message = "invalid response from worker";
+    ///   let shopping-cart-worker = instance("my-worker");
+    ///   let result = shopping-cart-worker.add-to-cart({product-name: "apple", quantity: 2});
     ///
     ///   match result {
-    ///     some(record) => record,
-    ///     none => "Error: ${error_message}"
+    ///     ok(id) => "product-id-${id}",
+    ///     err(error_msg) => "Error: ${error_msg}"
     ///   }
     /// ```
     ///
@@ -989,7 +989,7 @@ impl Expr {
     }
 
     pub fn select_index(expr: Expr, index: Expr) -> Self {
-        Expr::SelectDynamic {
+        Expr::SelectIndex {
             expr: Box::new(expr),
             index: Box::new(index),
             type_annotation: None,
@@ -1003,7 +1003,7 @@ impl Expr {
         index: Expr,
         type_annotation: TypeName,
     ) -> Self {
-        Expr::SelectDynamic {
+        Expr::SelectIndex {
             expr: Box::new(expr),
             index: Box::new(index),
             type_annotation: Some(type_annotation),
@@ -1056,7 +1056,7 @@ impl Expr {
         match self {
             Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
-            | Expr::SelectDynamic { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -1238,7 +1238,7 @@ impl Expr {
             Expr::Identifier { inferred_type, .. }
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
-            | Expr::SelectDynamic { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -1288,7 +1288,7 @@ impl Expr {
             Expr::Identifier { source_span, .. }
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
-            | Expr::SelectDynamic { source_span, .. }
+            | Expr::SelectIndex { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
             | Expr::Tuple { source_span, .. }
@@ -1352,7 +1352,7 @@ impl Expr {
             | Expr::SelectField {
                 type_annotation, ..
             }
-            | Expr::SelectDynamic {
+            | Expr::SelectIndex {
                 type_annotation, ..
             }
             | Expr::Sequence {
@@ -1470,7 +1470,7 @@ impl Expr {
             Expr::Identifier { source_span, .. }
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
-            | Expr::SelectDynamic { source_span, .. }
+            | Expr::SelectIndex { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
             | Expr::Tuple { source_span, .. }
@@ -1522,7 +1522,7 @@ impl Expr {
             Expr::Identifier { inferred_type, .. }
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
-            | Expr::SelectDynamic { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
             | Expr::Tuple { inferred_type, .. }
@@ -2394,7 +2394,7 @@ mod protobuf {
                     }
                 },
 
-                Expr::SelectDynamic {
+                Expr::SelectIndex {
                     expr,
                     index,
                     type_annotation,

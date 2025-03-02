@@ -397,7 +397,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 }
             }
 
-            Expr::SelectDynamic {
+            Expr::SelectIndex {
                 expr,
                 index,
                 inferred_type,

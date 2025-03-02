@@ -166,14 +166,14 @@ mod internal {
                     temp_stack.push_front((expr.clone(), false));
                 }
 
-                Expr::SelectDynamic {
+                Expr::SelectIndex {
                     expr,
                     index,
                     type_annotation,
                     inferred_type,
                     source_span,
                 } => {
-                    handle_select_dynamic(
+                    handle_select_index(
                         expr,
                         index,
                         inferred_type,
@@ -867,7 +867,7 @@ mod internal {
         Ok(())
     }
 
-    pub fn handle_select_dynamic(
+    pub fn handle_select_index(
         original_selection_expr: &Expr,
         index: &Expr,
         current_index_type: &InferredType,
@@ -881,7 +881,7 @@ mod internal {
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
 
-        let new_select_index = Expr::SelectDynamic {
+        let new_select_index = Expr::SelectIndex {
             expr: Box::new(expr.0.clone()),
             index: Box::new(index.0.clone()),
             type_annotation: type_name.clone(),

@@ -40,7 +40,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 queue.push_back(expr);
             }
 
-            Expr::SelectDynamic {
+            Expr::SelectIndex {
                 expr,          // LHS
                 index,         // RHS
                 inferred_type, // This is the type of the total expression

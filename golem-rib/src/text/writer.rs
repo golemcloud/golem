@@ -142,7 +142,7 @@ impl<W: Write> Writer<W> {
                     Ok(())
                 }
             }
-            Expr::SelectDynamic {
+            Expr::SelectIndex {
                 expr,
                 index,
                 type_annotation,

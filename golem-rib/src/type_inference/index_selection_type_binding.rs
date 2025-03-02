@@ -9,7 +9,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::SelectDynamic { expr, index, .. } => {
+            Expr::SelectIndex { expr, index, .. } => {
                 let existing = index.inferred_type();
                 if existing.is_unknown() || existing.is_one_of() {
                     if let Expr::Number { inferred_type, .. } = &mut **index {

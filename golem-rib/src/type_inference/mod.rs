@@ -2715,7 +2715,7 @@ mod type_inference_tests {
             type_annotation: Option<TypeName>,
             inferred_type: InferredType,
         ) -> Expr {
-            Expr::SelectDynamic {
+            Expr::SelectIndex {
                 expr,
                 index,
                 type_annotation,

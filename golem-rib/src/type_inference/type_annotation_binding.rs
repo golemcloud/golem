@@ -54,7 +54,7 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 queue.push_back(expr);
             }
 
-            Expr::SelectDynamic {
+            Expr::SelectIndex {
                 expr,
                 index,
                 type_annotation,

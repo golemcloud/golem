@@ -91,7 +91,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
 
-            outer_expr @ Expr::SelectDynamic {
+            outer_expr @ Expr::SelectIndex {
                 expr,
                 index,
                 inferred_type,
