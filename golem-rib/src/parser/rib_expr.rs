@@ -29,7 +29,7 @@ use crate::parser::let_binding::let_binding;
 use crate::parser::literal::literal;
 use crate::parser::multi_line_code_block::multi_line_block;
 use crate::parser::not::not;
-use crate::parser::number::number;
+use crate::parser::number::integer;
 use crate::parser::optional::option;
 use crate::parser::pattern_match::pattern_match;
 use crate::parser::range_type::RangeType;
@@ -205,7 +205,7 @@ where
                 attempt(call()),
                 sequence(),
                 identifier(),
-                number(),
+                integer(),
             )))
             .skip(spaces()),
         optional(optional(char(':').skip(spaces())).with(type_name())).skip(spaces()),

@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
-use combine::parser::char::{char, digit, spaces};
-use combine::{attempt, choice, many1, optional, ParseError, Parser};
+use combine::parser::char::{char as char_, digit};
+use combine::{many1, optional, ParseError, Parser};
 use std::str::FromStr;
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::{parse_basic_type, TypeName};
+use crate::parser::type_name::TypeName;
 use crate::rib_source_span::GetSourcePosition;
 
-pub fn number<Input>() -> impl Parser<Input, Output = Expr>
+pub fn integer<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
@@ -31,17 +31,17 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(many1(digit().or(char('-'))).and_then(|s: Vec<char>| {
-            let primitive = s.into_iter().collect::<String>();
-            let big_decimal = BigDecimal::from_str(primitive.as_str());
+    let digits = many1(digit());
+    let signed_number =
+        (optional(char_('-')), digits).map(|(sign, num_str): (Option<char>, String)| {
+            let num = BigDecimal::from_str(&num_str).unwrap(); // Convert to BigDecimal
 
-            match big_decimal {
-                Ok(big_decimal) => Ok(Expr::untyped_number(big_decimal)),
-                Err(_) => Err(RibParseError::Message("Unable to parse number".to_string()).into()),
-            }
-        }))
-        .message("Unable to parse number")
+            let big_decimal = if sign.is_some() { -num } else { num };
+
+            Expr::untyped_number(big_decimal)
+        });
+
+    signed_number
 }
 
 #[cfg(test)]
