@@ -91,18 +91,6 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
 
-            outer_expr @ Expr::SelectIndex {
-                expr,
-                index,
-                inferred_type,
-                ..
-            } => {
-                queue.push_back(QueuedExpr::new(expr, outer_expr));
-                if inferred_type.un_resolved() {
-                    return Err(UnResolvedTypesError::from(expr, parent).at_index(*index));
-                }
-            }
-
             outer_expr @ Expr::SelectDynamic {
                 expr,
                 index,

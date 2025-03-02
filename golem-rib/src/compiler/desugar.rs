@@ -48,7 +48,9 @@ pub fn desugar_pattern_match(
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+    use crate::rib_source_span::SourceSpan;
+    use crate::{ArmPattern, Expr, InferredType, MatchArm, Number, VariableId};
+    use bigdecimal::{BigDecimal, FromPrimitive};
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -435,7 +437,18 @@ mod internal {
                 // However there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (index, arm_pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = Expr::select_index(pred_expr.clone(), index);
+                    let new_pred = Expr::select_dynamic(
+                        pred_expr.clone(),
+                        Expr::Number {
+                            number: Number {
+                                value: BigDecimal::from_usize(index).unwrap(),
+                            },
+                            type_annotation: None,
+                            inferred_type: InferredType::U64,
+                            source_span: SourceSpan::default(),
+                        },
+                        None,
+                    );
                     let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::Unknown);
 
                     let branch = get_conditions(
@@ -483,7 +496,17 @@ mod internal {
                 // However there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (index, arm_pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = Expr::select_index(pred_expr.clone(), index);
+                    let new_pred = Expr::select_index(
+                        pred_expr.clone(),
+                        Expr::Number {
+                            number: Number {
+                                value: BigDecimal::from_usize(index).unwrap(),
+                            },
+                            type_annotation: None,
+                            inferred_type: InferredType::U64,
+                            source_span: SourceSpan::default(),
+                        },
+                    );
                     let new_pred_type = inferred_type.clone();
 
                     let branch = get_conditions(

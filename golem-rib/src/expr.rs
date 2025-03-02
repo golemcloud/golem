@@ -54,17 +54,6 @@ pub enum Expr {
         inferred_type: InferredType,
         source_span: SourceSpan,
     },
-    // Kept for backward compatibility
-    SelectIndex {
-        expr: Box<Expr>,
-        index: usize,
-        type_annotation: Option<TypeName>,
-        inferred_type: InferredType,
-        source_span: SourceSpan,
-    },
-    // Can handle x[i] (and not just x[1]) than concrete numbers
-    // or select x[i..] etc
-    // This can handle SelectIndex, but SelectIndex is kept for backward compatibility
     SelectDynamic {
         expr: Box<Expr>,
         index: Box<Expr>,
@@ -407,10 +396,6 @@ impl Expr {
 
     pub fn is_match_expr(&self) -> bool {
         matches!(self, Expr::PatternMatch { .. })
-    }
-
-    pub fn is_select_index(&self) -> bool {
-        matches!(self, Expr::SelectIndex { .. })
     }
 
     pub fn is_boolean(&self) -> bool {
@@ -1027,10 +1012,10 @@ impl Expr {
         }
     }
 
-    pub fn select_index(expr: Expr, index: usize) -> Self {
-        Expr::SelectIndex {
+    pub fn select_index(expr: Expr, index: Expr) -> Self {
+        Expr::SelectDynamic {
             expr: Box::new(expr),
-            index,
+            index: Box::new(index),
             type_annotation: None,
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
@@ -1039,12 +1024,12 @@ impl Expr {
 
     pub fn select_index_with_type_annotation(
         expr: Expr,
-        index: usize,
+        index: Expr,
         type_annotation: TypeName,
     ) -> Self {
-        Expr::SelectIndex {
+        Expr::SelectDynamic {
             expr: Box::new(expr),
-            index,
+            index: Box::new(index),
             type_annotation: Some(type_annotation),
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
@@ -1095,7 +1080,6 @@ impl Expr {
         match self {
             Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
-            | Expr::SelectIndex { inferred_type, .. }
             | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
@@ -1278,7 +1262,6 @@ impl Expr {
             Expr::Identifier { inferred_type, .. }
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
-            | Expr::SelectIndex { inferred_type, .. }
             | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
@@ -1329,7 +1312,6 @@ impl Expr {
             Expr::Identifier { source_span, .. }
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
-            | Expr::SelectIndex { source_span, .. }
             | Expr::SelectDynamic { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
@@ -1392,9 +1374,6 @@ impl Expr {
                 type_annotation, ..
             }
             | Expr::SelectField {
-                type_annotation, ..
-            }
-            | Expr::SelectIndex {
                 type_annotation, ..
             }
             | Expr::SelectDynamic {
@@ -1515,7 +1494,6 @@ impl Expr {
             Expr::Identifier { source_span, .. }
             | Expr::Let { source_span, .. }
             | Expr::SelectField { source_span, .. }
-            | Expr::SelectIndex { source_span, .. }
             | Expr::SelectDynamic { source_span, .. }
             | Expr::Sequence { source_span, .. }
             | Expr::Record { source_span, .. }
@@ -1568,7 +1546,6 @@ impl Expr {
             Expr::Identifier { inferred_type, .. }
             | Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
-            | Expr::SelectIndex { inferred_type, .. }
             | Expr::SelectDynamic { inferred_type, .. }
             | Expr::Sequence { inferred_type, .. }
             | Expr::Record { inferred_type, .. }
@@ -2165,10 +2142,13 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let index = expr.index as usize;
                 let expr = *expr.expr.ok_or("Missing expr")?;
 
+                let index_expr =
+                    Expr::untyped_number(BigDecimal::from_usize(index).ok_or("Invalid index")?);
+
                 if let Some(type_name) = type_name {
-                    Expr::select_index_with_type_annotation(expr.try_into()?, index, type_name)
+                    Expr::select_index_with_type_annotation(expr.try_into()?, index_expr, type_name)
                 } else {
-                    Expr::select_index(expr.try_into()?, index)
+                    Expr::select_index(expr.try_into()?, index_expr)
                 }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => {
@@ -2443,19 +2423,6 @@ mod protobuf {
                         ))
                     }
                 },
-
-                Expr::SelectIndex {
-                    expr,
-                    index,
-                    type_annotation,
-                    ..
-                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
-                    Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
-                        expr: Some(Box::new((*expr).into())),
-                        index: index as u64,
-                        type_name: type_annotation.map(|t| t.into()),
-                    }),
-                )),
 
                 Expr::SelectDynamic {
                     expr,

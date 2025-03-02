@@ -166,23 +166,6 @@ mod internal {
                     temp_stack.push_front((expr.clone(), false));
                 }
 
-                Expr::SelectIndex {
-                    expr,
-                    index,
-                    type_annotation,
-                    inferred_type,
-                    source_span,
-                } => {
-                    handle_select_index(
-                        expr,
-                        index,
-                        inferred_type,
-                        &mut temp_stack,
-                        type_annotation,
-                        source_span,
-                    )?;
-                }
-
                 Expr::SelectDynamic {
                     expr,
                     index,
@@ -906,30 +889,6 @@ mod internal {
             source_span: source_span.clone(),
         };
 
-        temp_stack.push_front((new_select_index, false));
-
-        Ok(())
-    }
-
-    pub fn handle_select_index(
-        original_selection_expr: &Expr,
-        index: &usize,
-        current_index_type: &InferredType,
-        temp_stack: &mut VecDeque<(Expr, bool)>,
-        type_name: &Option<TypeName>,
-        source_span: &SourceSpan,
-    ) -> Result<(), RibCompilationError> {
-        let expr = temp_stack
-            .pop_front()
-            .unwrap_or((original_selection_expr.clone(), false));
-
-        let new_select_index = Expr::SelectIndex {
-            expr: Box::new(expr.0.clone()),
-            index: *index,
-            type_annotation: type_name.clone(),
-            inferred_type: current_index_type.clone(),
-            source_span: source_span.clone(),
-        };
         temp_stack.push_front((new_select_index, false));
 
         Ok(())

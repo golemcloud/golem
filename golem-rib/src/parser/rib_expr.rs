@@ -395,22 +395,6 @@ fn build_selection(base: Expr, next: Expr) -> Result<Expr, RibParseError> {
                 source_span,
             })
         }
-        Expr::SelectIndex {
-            expr: second,
-            index: last_index,
-            type_annotation: type_name,
-            inferred_type,
-            source_span,
-        } => {
-            let inner_select = build_selection(base, *second)?;
-            Ok(Expr::SelectIndex {
-                expr: Box::new(inner_select),
-                index: last_index,
-                type_annotation: type_name,
-                inferred_type,
-                source_span,
-            })
-        }
         Expr::SelectDynamic {
             expr: second,
             index: last_index,

@@ -160,7 +160,7 @@ impl Interpreter {
                     internal::run_select_index_instruction(&mut stack, index)?;
                 }
 
-                RibIR::SelectDynamic => {
+                RibIR::SelectIndexV1 => {
                     internal::run_select_dynamic_instruction(&mut stack)?;
                 }
 
@@ -786,6 +786,7 @@ mod internal {
         Ok(())
     }
 
+    // Kept for backward compatibility with byte code
     pub(crate) fn run_select_field_instruction(
         field_name: String,
         interpreter_stack: &mut InterpreterStack,
@@ -865,7 +866,7 @@ mod internal {
 
                     let item_type = typ
                         .items
-                        .first()
+                        .get(index as usize)
                         .ok_or(format!(
                             "internal error: type not found in the tuple at index {}",
                             index

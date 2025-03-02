@@ -160,23 +160,6 @@ impl<W: Write> Writer<W> {
                 }
             }
 
-            Expr::SelectIndex {
-                expr,
-                index,
-                type_annotation,
-                ..
-            } => {
-                self.write_expr(expr)?;
-                self.write_display("[")?;
-                self.write_display(index)?;
-                self.write_display("]")?;
-                if let Some(type_name) = type_annotation {
-                    self.write_str(": ")?;
-                    self.write_display(type_name)
-                } else {
-                    Ok(())
-                }
-            }
             Expr::Sequence {
                 exprs,
                 type_annotation,

@@ -40,17 +40,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 queue.push_back(expr);
             }
 
-            Expr::SelectIndex {
-                expr,
-                inferred_type,
-                ..
-            } => {
-                let field_type = inferred_type.clone();
-                let new_inferred_type = InferredType::List(Box::new(field_type));
-                expr.add_infer_type_mut(new_inferred_type);
-                queue.push_back(expr);
-            }
-
             Expr::SelectDynamic {
                 expr,          // LHS
                 index,         // RHS

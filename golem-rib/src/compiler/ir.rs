@@ -34,8 +34,8 @@ pub enum RibIR {
     PushErrResult(AnalysedType),
     PushFlag(ValueAndType), // More or less like a literal, compiler can form the value directly
     SelectField(String),
-    SelectIndex(usize),
-    SelectDynamic,
+    SelectIndex(usize), // Kept for backward compatibility. Cannot read old SelectIndex(usize) as a SelectIndexV1
+    SelectIndexV1,
     EqualTo,
     GreaterThan,
     And,
@@ -394,7 +394,7 @@ mod protobuf {
                 }
                 Instruction::SelectField(value) => Ok(RibIR::SelectField(value)),
                 Instruction::SelectIndex(value) => Ok(RibIR::SelectIndex(value as usize)),
-                Instruction::SelectDynamic(_) => Ok(RibIR::SelectDynamic),
+                Instruction::SelectDynamic(_) => Ok(RibIR::SelectIndexV1),
                 Instruction::EqualTo(_) => Ok(RibIR::EqualTo),
                 Instruction::GreaterThan(_) => Ok(RibIR::GreaterThan),
                 Instruction::LessThan(_) => Ok(RibIR::LessThan),
@@ -574,7 +574,7 @@ mod protobuf {
                 RibIR::EqualTo => Instruction::EqualTo(EqualTo {}),
                 RibIR::GreaterThan => Instruction::GreaterThan(GreaterThan {}),
                 RibIR::LessThan => Instruction::LessThan(LessThan {}),
-                RibIR::SelectDynamic => {
+                RibIR::SelectIndexV1 => {
                     Instruction::SelectDynamic(golem_api_grpc::proto::golem::rib::SelectDynamic {})
                 }
                 RibIR::GreaterThanOrEqualTo => {

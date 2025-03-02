@@ -8,7 +8,6 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
     match expr {
         Expr::Let { expr, .. } => queue.push_back(&mut *expr),
         Expr::SelectField { expr, .. } => queue.push_back(&mut *expr),
-        Expr::SelectIndex { expr, .. } => queue.push_back(&mut *expr),
         Expr::SelectDynamic { expr, index, .. } => {
             queue.push_back(&mut *expr);
             queue.push_back(&mut *index);
@@ -175,7 +174,6 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
     match expr {
         Expr::Let { expr, .. } => queue.push_back(expr),
         Expr::SelectField { expr, .. } => queue.push_back(expr),
-        Expr::SelectIndex { expr, .. } => queue.push_back(expr),
         Expr::SelectDynamic { expr, index, .. } => {
             queue.push_back(expr);
             queue.push_back(index);
@@ -359,7 +357,6 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
     match expr {
         Expr::Let { expr, .. } => queue.push_front(&mut *expr),
         Expr::SelectField { expr, .. } => queue.push_front(&mut *expr),
-        Expr::SelectIndex { expr, .. } => queue.push_front(&mut *expr),
         Expr::SelectDynamic { expr, index, .. } => {
             queue.push_front(&mut *expr);
             queue.push_front(&mut *index);

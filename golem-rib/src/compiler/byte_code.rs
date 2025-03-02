@@ -279,6 +279,7 @@ mod internal {
                 let desugared_pattern_match =
                     desugar_pattern_match(predicate.deref(), match_arms, inferred_type.clone())
                         .ok_or("Desugar pattern match failed".to_string())?;
+
                 stack.push(ExprState::from_expr(&desugared_pattern_match));
             }
             Expr::Cond { cond, lhs, rhs, .. } => {
@@ -304,14 +305,10 @@ mod internal {
                 _ => {
                     stack.push(ExprState::from_expr(index.deref()));
                     stack.push(ExprState::from_expr(expr.deref()));
-                    instructions.push(RibIR::SelectDynamic);
+                    instructions.push(RibIR::SelectIndexV1);
                 }
             },
 
-            Expr::SelectIndex { expr, index, .. } => {
-                stack.push(ExprState::from_expr(expr.deref()));
-                instructions.push(RibIR::SelectIndex(*index));
-            }
             Expr::Option {
                 expr: Some(inner_expr),
                 inferred_type,
@@ -838,9 +835,9 @@ mod compiler_tests {
 
     use super::*;
     use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{list, str};
+    use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
-    use golem_wasm_rpc::IntoValueAndType;
+    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     #[test]
     fn test_instructions_for_literal() {
@@ -1231,7 +1228,8 @@ mod compiler_tests {
         let sequence = Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None)
             .with_inferred_type(InferredType::List(Box::new(InferredType::Str)));
 
-        let expr = Expr::select_index(sequence, 1).with_inferred_type(InferredType::Str);
+        let expr = Expr::select_index(sequence, Expr::untyped_number(BigDecimal::from(1)))
+            .with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
@@ -1239,10 +1237,11 @@ mod compiler_tests {
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
+            RibIR::PushLit(ValueAndType::new(Value::U64(1), u64())),
             RibIR::PushLit("bar".into_value_and_type()),
             RibIR::PushLit("foo".into_value_and_type()),
             RibIR::PushList(list(str()), 2),
-            RibIR::SelectIndex(1),
+            RibIR::SelectIndexV1,
         ];
 
         let expected_instructions = RibByteCode {

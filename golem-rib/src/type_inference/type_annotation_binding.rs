@@ -54,18 +54,6 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 queue.push_back(expr);
             }
 
-            Expr::SelectIndex {
-                expr,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-                queue.push_back(expr);
-            }
-
             Expr::SelectDynamic {
                 expr,
                 index,
