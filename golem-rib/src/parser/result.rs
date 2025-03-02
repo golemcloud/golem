@@ -14,7 +14,7 @@
 
 use combine::parser::char::spaces;
 use combine::{
-    attempt, choice, optional,
+    attempt, choice,
     parser::char::{char, string},
     ParseError, Parser,
 };
@@ -23,9 +23,7 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 
 use super::rib_expr::rib_expr;
-use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
-use combine::parser::char::char as char_;
 
 pub fn result<Input>() -> impl Parser<Input, Output = Expr>
 where

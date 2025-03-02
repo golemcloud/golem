@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{char, digit, spaces};
+use combine::parser::char::digit;
 use combine::parser::char::{char as char_, letter};
-use combine::{many, optional, ParseError, Parser, Stream};
+use combine::{many, ParseError, Parser, Stream};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
 
 const RESERVED_KEYWORDS: &[&str] = &[

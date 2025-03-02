@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
-use combine::parser::char::{char as char_, char, digit};
-use combine::{attempt, many1, optional, ParseError, Parser, Stream};
+use combine::parser::char::{char as char_, digit};
+use combine::{many1, optional, ParseError, Parser};
 use std::str::FromStr;
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::TypeName;
 use crate::rib_source_span::GetSourcePosition;
 
 pub fn integer<Input>() -> impl Parser<Input, Output = Expr>
@@ -32,16 +31,15 @@ where
     Input::Position: GetSourcePosition,
 {
     let digits = many1(digit());
-    let signed_number =
-        (optional(char_('-')), digits).map(|(sign, num_str): (Option<char>, String)| {
+    
+
+    (optional(char_('-')), digits).map(|(sign, num_str): (Option<char>, String)| {
             let num = BigDecimal::from_str(&num_str).unwrap(); // Convert to BigDecimal
 
             let big_decimal = if sign.is_some() { -num } else { num };
 
             Expr::untyped_number(big_decimal)
-        });
-
-    signed_number
+        })
 }
 
 #[cfg(test)]

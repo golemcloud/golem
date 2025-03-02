@@ -105,7 +105,7 @@ where
                                     Expr::Number { number, .. } => {
                                         let combined = fraction
                                             .combine_with_integer(number.value)
-                                            .map_err(|e| RibParseError::Message(e))
+                                            .map_err(RibParseError::Message)
                                             .unwrap();
 
                                         match field_expr.type_name {
@@ -274,11 +274,6 @@ struct WithIndex<T> {
     type_name: Option<TypeName>,
 }
 
-struct FractionWithType {
-    fraction: Fraction,
-    type_name: Option<TypeName>,
-}
-
 #[derive(Clone, Debug)]
 struct RangeInfo {
     range_type: RangeType,
@@ -311,10 +306,10 @@ where
                 char('.').skip(spaces()).with(
                     (
                         fraction()
-                            .map(|x| FractionOrExpr::Fraction(x))
+                            .map(FractionOrExpr::Fraction)
                             .or(simple_expr()
                                 .skip(spaces())
-                                .map(|x| FractionOrExpr::Expr(x))),
+                                .map(FractionOrExpr::Expr)),
                         select_index_expression().skip(spaces()),
                         optional(type_annotation()).skip(spaces()),
                     )
@@ -532,7 +527,7 @@ where
                             right_str
                         ))
                     }
-                    None => Fraction(format!("{}", left_str)),
+                    None => Fraction(left_str.to_string()),
                 }
             },
         )

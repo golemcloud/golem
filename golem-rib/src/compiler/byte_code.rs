@@ -299,7 +299,7 @@ mod internal {
             Expr::SelectDynamic {
                 expr,
                 index,
-                inferred_type,
+                
                 ..
             } => match index.inferred_type() {
                 InferredType::Range { .. } => {

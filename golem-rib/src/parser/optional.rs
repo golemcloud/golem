@@ -15,7 +15,7 @@
 use combine::parser::char::alpha_num;
 use combine::parser::char::spaces;
 use combine::{
-    attempt, choice, not_followed_by, optional,
+    attempt, choice, not_followed_by,
     parser::char::{char, string},
     ParseError, Parser,
 };
@@ -24,9 +24,7 @@ use std::ops::Deref;
 use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
-use combine::parser::char::char as char_;
 
 pub fn option<Input>() -> impl Parser<Input, Output = Expr>
 where
