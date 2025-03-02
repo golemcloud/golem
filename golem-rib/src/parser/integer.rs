@@ -45,7 +45,7 @@ where
 #[cfg(test)]
 mod tests {
     use test_r::test;
-
+    use crate::TypeName;
     use super::*;
 
     #[test]
