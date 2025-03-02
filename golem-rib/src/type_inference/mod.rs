@@ -2709,20 +2709,6 @@ mod type_inference_tests {
             }
         }
 
-        pub(crate) fn select_index(
-            expr: Box<Expr>,
-            index: usize,
-            type_annotation: Option<TypeName>,
-            inferred_type: InferredType,
-        ) -> Expr {
-            Expr::SelectIndex {
-                expr,
-                index,
-                type_annotation,
-                inferred_type,
-                source_span: SourceSpan::default(),
-            }
-        }
 
         pub(crate) fn select_dynamic(
             expr: Box<Expr>,
