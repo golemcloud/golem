@@ -2709,7 +2709,6 @@ mod type_inference_tests {
             }
         }
 
-
         pub(crate) fn select_dynamic(
             expr: Box<Expr>,
             index: Box<Expr>,

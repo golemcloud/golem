@@ -489,6 +489,12 @@ impl Fraction {
     }
 }
 
+/// Represents an optional exponent part of a number.
+/// - `char` → The exponent marker (`e` or `E`).
+/// - `Option<char>` → An optional sign (`+` or `-`).
+/// - `Vec<char>` → The sequence of digits forming the exponent value.
+type Exponent = (char, Option<char>, Vec<char>);
+
 fn fraction<Input>() -> impl Parser<Input, Output = Fraction>
 where
     Input: Stream<Token = char>,
@@ -506,7 +512,7 @@ where
         )),
     )
         .map(
-            |(fraction_part, exponent_opt): (Vec<char>, Option<(char, Option<char>, Vec<char>)>)| {
+            |(fraction_part, exponent_opt): (Vec<char>, Option<Exponent>)| {
                 let fraction_str = fraction_part.into_iter().collect::<String>();
                 match exponent_opt {
                     Some((exp_marker, sign_opt, exponent_digits)) => {
