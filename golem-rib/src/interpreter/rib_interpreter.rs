@@ -2941,7 +2941,7 @@ mod interpreter_tests {
                 .unwrap_err()
                 .to_string();
 
-            assert_eq!(compiled, "error in the following rib found at line 2, column 37\n`instance`\ncause: `instance` is a reserved keyword\nhelp: use `instance()` instead of `instance` to create an ephemeral worker instance.\nhelp: for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name\n".to_string());
+            assert_eq!(compiled, "error in the following rib found at line 2, column 28\n`instance`\ncause: `instance` is a reserved keyword\nhelp: use `instance()` instead of `instance` to create an ephemeral worker instance.\nhelp: for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name\n".to_string());
         }
 
         #[test]

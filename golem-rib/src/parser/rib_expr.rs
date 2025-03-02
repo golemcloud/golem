@@ -36,7 +36,7 @@ use crate::parser::range_type::RangeType;
 use crate::parser::rib_expr::internal::{index_expr, RibRest};
 use crate::parser::sequence::sequence;
 use crate::parser::tuple::tuple;
-use crate::rib_source_span::GetSourcePosition;
+use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 
 use crate::parser::list_aggregation::list_aggregation;
 use crate::parser::list_comprehension::list_comprehension;
@@ -100,7 +100,6 @@ where
 
                                     // If it's any other expresion
                                     expr => {
-                                        dbg!(expr.clone());
                                         let selection = internal::build_selection(acc, expr);
                                         index_expr(selection, field_expr.index_expr)
                                             .with_type_annotation_opt(field_expr.type_name)
@@ -187,6 +186,7 @@ where
     Input::Position: GetSourcePosition,
 {
     (
+        position(),
         spaces()
             .with(choice((
                 list_comprehension(),
@@ -208,11 +208,20 @@ where
                 number(),
             )))
             .skip(spaces()),
-        optional(optional(char(':').skip(spaces())).with(type_name())),
+        optional(optional(char(':').skip(spaces())).with(type_name())).skip(spaces()),
+        position(),
     )
-        .map(|(expr, type_name)| match type_name {
-            Some(type_name) => expr.with_type_annotation(type_name),
-            None => expr,
+        .map(|(start, expr, type_name, end)| {
+            let start_pos: Input::Position = start;
+            let start = start_pos.get_source_position();
+            let end_pos: Input::Position = end;
+            let end = end_pos.get_source_position();
+            let span = SourceSpan::new(start, end);
+
+            match type_name {
+                Some(type_name) => expr.with_type_annotation(type_name).with_source_span(span),
+                None => expr.with_source_span(span),
+            }
         })
 }
 
@@ -240,13 +249,13 @@ mod internal {
     use crate::parser::errors::RibParseError;
     use crate::parser::range_type::{range_type, RangeType};
     use crate::parser::rib_expr::{rib_expr, simple_expr, simple_expr_};
+    use crate::parser::type_name::type_name;
     use crate::rib_source_span::GetSourcePosition;
     use crate::{Expr, TypeName};
-    use std::ops::Index;
-    use crate::parser::type_name::type_name;
     use combine::parser::char::char;
     use combine::parser::char::spaces;
     use combine::{attempt, many, optional, parser, ParseError, Parser, Stream};
+    use std::ops::Index;
     // A simple expression is a composition of all parsers that doesn't involve left recursion
 
     pub(crate) struct RibRest {
@@ -295,7 +304,7 @@ mod internal {
                         (
                             simple_expr().skip(spaces()),
                             select_index_expression().skip(spaces()),
-                            optional(type_annotation()),
+                            optional(type_annotation()).skip(spaces()),
                         )
                             .map(|(field_expr, indices, type_name)| {
                                 WithIndex {
@@ -319,23 +328,28 @@ mod internal {
                         })
                         .skip(spaces()),
                 ),
-                many((binary_op(), (simple_expr(), select_index_expression()))).map(
-                    |binary_math: Vec<(BinaryOp, (Expr, IndexExpr))>| {
-                        binary_math
-                            .into_iter()
-                            .map(|(op, (expr, index_expr))| {
-                                (
-                                    op,
-                                    WithIndex {
-                                        index_expr,
-                                        base: expr,
-                                        type_name: None,
-                                    },
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                    },
-                ),
+                many((
+                    binary_op(),
+                    (
+                        rib_expr().skip(spaces()),
+                        select_index_expression().skip(spaces()),
+                    ),
+                ))
+                .map(|binary_math: Vec<(BinaryOp, (Expr, IndexExpr))>| {
+                    binary_math
+                        .into_iter()
+                        .map(|(op, (expr, index_expr))| {
+                            (
+                                op,
+                                WithIndex {
+                                    index_expr,
+                                    base: expr,
+                                    type_name: None,
+                                },
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }),
             )
                 .map(
                     |(indices, field_selection, range_info, binary_ops)| RibRest {

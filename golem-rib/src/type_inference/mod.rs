@@ -2612,7 +2612,6 @@ mod type_inference_tests {
         }
     }
     mod internal {
-        use bigdecimal::BigDecimal;
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::generic_type_parameter::GenericTypeParameter;
@@ -2622,6 +2621,7 @@ mod type_inference_tests {
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             Number, ParsedFunctionSite, VariableId,
         };
+        use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{

@@ -326,7 +326,7 @@ mod test {
             ))
         );
     }
-    
+
     #[test]
     fn test_binary_op_in_record() {
         let input = "{foo: bar > baz, baz: bar == foo}";
