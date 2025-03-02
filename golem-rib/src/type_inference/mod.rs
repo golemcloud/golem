@@ -2612,7 +2612,7 @@ mod type_inference_tests {
         }
     }
     mod internal {
-
+        use bigdecimal::BigDecimal;
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::generic_type_parameter::GenericTypeParameter;
@@ -3658,7 +3658,7 @@ mod type_inference_tests {
                             },
                             MatchArm {
                                 arm_pattern: ArmPattern::constructor("none", vec![]),
-                                arm_resolution_expr: Box::new(select_index(
+                                arm_resolution_expr: Box::new(select_dynamic(
                                     Box::new(select_field(
                                         Box::new(select_field(
                                             Box::new(identifier(
@@ -3713,7 +3713,11 @@ mod type_inference_tests {
                                         None,
                                         InferredType::List(Box::new(InferredType::Str)),
                                     )),
-                                    1,
+                                    Box::new(Expr::number(
+                                        BigDecimal::from(1),
+                                        None,
+                                        InferredType::U64,
+                                    )),
                                     None,
                                     InferredType::Str,
                                 )),

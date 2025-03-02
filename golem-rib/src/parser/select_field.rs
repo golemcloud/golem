@@ -32,20 +32,14 @@ parser! {
 
 mod internal {
     use combine::parser::char::{char, digit, letter};
-    use combine::{many1, optional, ParseError};
+    use combine::{many1, ParseError};
     use std::ops::Deref;
 
     use super::*;
     use crate::parser::errors::RibParseError;
     use crate::parser::identifier::identifier_text;
-    use crate::parser::select_index::select_index;
-    use crate::parser::type_name::type_name;
     use crate::rib_source_span::GetSourcePosition;
-    use combine::{
-        attempt,
-        parser::char::{char as char_, spaces},
-        Parser,
-    };
+    use combine::{attempt, parser::char::spaces, Parser};
 
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
@@ -63,7 +57,6 @@ mod internal {
                 char('.').skip(spaces()),
                 choice((
                     attempt(select_field()),
-                    attempt(select_index()),
                     attempt(identifier_text().map(|x| Expr::identifier_global(x, None))),
                 )),
             )
@@ -103,7 +96,7 @@ mod internal {
     // This implies the last expression after a dot could be an index selection or a field selection
     // and with `inner select` we accumulate the selection towards the left side.
     // We also propagate any type name in between towards the outer.
-    fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
+    pub(crate) fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         match nest {
             Expr::Identifier { variable_id, .. } => {
                 Some(Expr::select_field(base, variable_id.name().as_str(), None))
@@ -153,7 +146,6 @@ mod internal {
         Input::Position: GetSourcePosition,
     {
         choice((
-            attempt(select_index()),
             attempt(record()),
             attempt(field_name().map(|s| Expr::identifier_global(s.as_str(), None))),
         ))
@@ -278,25 +270,23 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_field_selection_with_double_type_annotation() {
-        let input = "foo.bar: u32.baz: u32";
-        let result = Expr::from_text(input);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_recursive_select_index_in_select_field() {
         let input = "foo[0].bar[1]";
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_index(
+            Ok(Expr::select_dynamic(
                 Expr::select_field(
-                    Expr::select_index(Expr::identifier_global("foo", None), 0),
+                    Expr::select_dynamic(
+                        Expr::identifier_global("foo", None),
+                        Expr::untyped_number(BigDecimal::from(0)),
+                        None
+                    ),
                     "bar",
                     None
                 ),
-                1
+                Expr::untyped_number(BigDecimal::from(1)),
+                None
             ))
         );
     }
@@ -307,14 +297,18 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_index_with_type_annotation(
+            Ok(Expr::select_dynamic(
                 Expr::select_field(
-                    Expr::select_index(Expr::identifier_global("foo", None), 0),
+                    Expr::select_dynamic(
+                        Expr::identifier_global("foo", None),
+                        Expr::untyped_number(BigDecimal::from(0)),
+                        None
+                    ),
                     "bar",
                     None
                 ),
-                1,
-                TypeName::U32
+                Expr::untyped_number(BigDecimal::from(1)),
+                Some(TypeName::U32)
             ))
         );
     }
@@ -326,9 +320,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::select_index(
+                Expr::select_dynamic(
                     Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-                    0
+                    Expr::untyped_number(BigDecimal::from(0)),
+                    None
                 ),
                 "baz",
                 None

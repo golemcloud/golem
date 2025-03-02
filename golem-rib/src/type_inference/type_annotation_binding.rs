@@ -66,6 +66,20 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 queue.push_back(expr);
             }
 
+            Expr::SelectDynamic {
+                expr,
+                index,
+                type_annotation,
+                inferred_type,
+                ..
+            } => {
+                if let Some(type_name) = type_annotation {
+                    *inferred_type = type_name.clone().into();
+                }
+                queue.push_back(expr);
+                queue.push_back(index);
+            }
+
             Expr::Identifier {
                 type_annotation,
                 inferred_type,
@@ -315,7 +329,7 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::select_index_with_type_annotation(
+        let expected = Expr::select_dynamic(
             Expr::select_field(
                 Expr::select_field(
                     Expr::identifier_with_variable_id(VariableId::Global("foo".to_string()), None),
@@ -325,8 +339,8 @@ mod type_binding_tests {
                 "baz",
                 None,
             ),
-            1,
-            TypeName::U32,
+            Expr::number(BigDecimal::from(1), None, InferredType::number()),
+            Some(TypeName::U32),
         )
         .with_inferred_type(InferredType::U32);
 
