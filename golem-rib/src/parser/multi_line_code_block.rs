@@ -91,8 +91,8 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
-            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
+            Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None),
+            Expr::let_binding("y", Expr::number(BigDecimal::from(2)), None),
             Expr::call_worker_function(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 None,
@@ -126,8 +126,8 @@ mod tests {
         let expected = Expr::cond(
             Expr::boolean(true),
             Expr::expr_block(vec![
-                Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
-                Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
+                Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None),
+                Expr::let_binding("y", Expr::number(BigDecimal::from(2)), None),
                 Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     None,
@@ -141,7 +141,7 @@ mod tests {
                     vec![Expr::identifier_global("y", None)],
                 ),
             ]),
-            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(1)),
         );
 
         assert_eq!(expr, expected);
@@ -172,8 +172,8 @@ mod tests {
                     )))],
                 ),
                 Expr::expr_block(vec![
-                    Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
-                    Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
+                    Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None),
+                    Expr::let_binding("y", Expr::number(BigDecimal::from(2)), None),
                     Expr::call_worker_function(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         None,
@@ -212,7 +212,7 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding(
                 "foo",
-                Expr::option(Some(Expr::untyped_number(BigDecimal::from(1)))),
+                Expr::option(Some(Expr::number(BigDecimal::from(1)))),
                 None,
             ),
             Expr::pattern_match(
@@ -225,8 +225,8 @@ mod tests {
                         )))],
                     ),
                     Expr::expr_block(vec![
-                        Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
-                        Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
+                        Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None),
+                        Expr::let_binding("y", Expr::number(BigDecimal::from(2)), None),
                         Expr::call_worker_function(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             None,

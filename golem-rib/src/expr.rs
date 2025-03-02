@@ -974,39 +974,11 @@ impl Expr {
         }
     }
 
-    pub fn select_field_with_type_annotation(
-        expr: Expr,
-        field: impl AsRef<str>,
-        type_annotation: TypeName,
-    ) -> Self {
-        Expr::SelectField {
-            expr: Box::new(expr),
-            field: field.as_ref().to_string(),
-            type_annotation: Some(type_annotation),
-            inferred_type: InferredType::Unknown,
-            source_span: SourceSpan::default(),
-        }
-    }
-
     pub fn select_index(expr: Expr, index: Expr) -> Self {
         Expr::SelectIndex {
             expr: Box::new(expr),
             index: Box::new(index),
             type_annotation: None,
-            inferred_type: InferredType::Unknown,
-            source_span: SourceSpan::default(),
-        }
-    }
-
-    pub fn select_index_with_type_annotation(
-        expr: Expr,
-        index: Expr,
-        type_annotation: TypeName,
-    ) -> Self {
-        Expr::SelectIndex {
-            expr: Box::new(expr),
-            index: Box::new(index),
-            type_annotation: Some(type_annotation),
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
         }
@@ -1583,7 +1555,7 @@ impl Expr {
         type_inference::visit_children_bottom_up_mut(self, queue);
     }
 
-    pub fn number(
+    pub fn number_inferred(
         big_decimal: BigDecimal,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
@@ -1596,12 +1568,8 @@ impl Expr {
         }
     }
 
-    pub fn untyped_number(big_decimal: BigDecimal) -> Expr {
-        Expr::number(big_decimal, None, InferredType::number())
-    }
-
-    pub fn untyped_number_with_type_name(big_decimal: BigDecimal, type_name: TypeName) -> Expr {
-        Expr::number(big_decimal, Some(type_name), InferredType::number())
+    pub fn number(big_decimal: BigDecimal) -> Expr {
+        Expr::number_inferred(big_decimal, None, InferredType::number())
     }
 }
 
@@ -2096,11 +2064,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     return Err("Missing number".to_string());
                 };
 
-                if let Some(type_name) = type_name {
-                    Expr::untyped_number_with_type_name(big_decimal, type_name.clone())
-                } else {
-                    Expr::untyped_number(big_decimal)
-                }
+                Expr::number(big_decimal).with_type_annotation_opt(type_name)
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
                 let expr = *expr;
@@ -2120,13 +2084,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let expr = *expr.expr.ok_or("Missing expr")?;
 
                 let index_expr =
-                    Expr::untyped_number(BigDecimal::from_usize(index).ok_or("Invalid index")?);
+                    Expr::number(BigDecimal::from_usize(index).ok_or("Invalid index")?);
 
-                if let Some(type_name) = type_name {
-                    Expr::select_index_with_type_annotation(expr.try_into()?, index_expr, type_name)
-                } else {
-                    Expr::select_index(expr.try_into()?, index_expr)
-                }
+                Expr::select_index(expr.try_into()?, index_expr).with_type_annotation_opt(type_name)
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => {
                 let type_name = expr.type_name;
@@ -2970,8 +2930,8 @@ mod tests {
 
     fn expected() -> Expr {
         Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
-            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
+            Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None),
+            Expr::let_binding("y", Expr::number(BigDecimal::from(2)), None),
             Expr::let_binding(
                 "result",
                 Expr::greater_than(

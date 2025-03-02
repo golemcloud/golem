@@ -124,14 +124,8 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_of_number() {
         let input_expr = Expr::record(vec![
-            (
-                "field".to_string(),
-                Expr::untyped_number(BigDecimal::from(1)),
-            ),
-            (
-                "field".to_string(),
-                Expr::untyped_number(BigDecimal::from(2)),
-            ),
+            ("field".to_string(), Expr::number(BigDecimal::from(1))),
+            ("field".to_string(), Expr::number(BigDecimal::from(2))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: 1, field: 2}".to_string();
@@ -164,14 +158,14 @@ mod record_tests {
                 "field".to_string(),
                 Expr::select_index(
                     Expr::identifier_global("request", None),
-                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(1)),
                 ),
             ),
             (
                 "field".to_string(),
                 Expr::select_index(
                     Expr::identifier_global("request", None),
-                    Expr::untyped_number(BigDecimal::from(2)),
+                    Expr::number(BigDecimal::from(2)),
                 ),
             ),
         ]);
@@ -325,15 +319,15 @@ mod record_tests {
             (
                 "a".to_string(),
                 Expr::greater_than(
-                    Expr::untyped_number(BigDecimal::from(1)),
-                    Expr::untyped_number(BigDecimal::from(2)),
+                    Expr::number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(2)),
                 ),
             ),
             (
                 "b".to_string(),
                 Expr::less_than(
-                    Expr::untyped_number(BigDecimal::from(1)),
-                    Expr::untyped_number(BigDecimal::from(2)),
+                    Expr::number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(2)),
                 ),
             ),
         ]);
@@ -562,11 +556,11 @@ mod sequence_tests {
             vec![
                 Expr::select_index(
                     Expr::identifier_global("request", None),
-                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(1)),
                 ),
                 Expr::select_index(
                     Expr::identifier_global("request", None),
-                    Expr::untyped_number(BigDecimal::from(2)),
+                    Expr::number(BigDecimal::from(2)),
                 ),
             ],
             None,
@@ -688,12 +682,12 @@ mod sequence_tests {
         let input_expr = Expr::sequence(
             vec![
                 Expr::greater_than(
-                    Expr::untyped_number(BigDecimal::from(1)),
-                    Expr::untyped_number(BigDecimal::from(2)),
+                    Expr::number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(2)),
                 ),
                 Expr::less_than(
-                    Expr::untyped_number(BigDecimal::from(1)),
-                    Expr::untyped_number(BigDecimal::from(2)),
+                    Expr::number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(2)),
                 ),
             ],
             None,
@@ -876,11 +870,11 @@ mod tuple_tests {
         let input_expr = Expr::tuple(vec![
             Expr::select_index(
                 Expr::identifier_global("request", None),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
             ),
             Expr::select_index(
                 Expr::identifier_global("request", None),
-                Expr::untyped_number(BigDecimal::from(2)),
+                Expr::number(BigDecimal::from(2)),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -984,12 +978,12 @@ mod tuple_tests {
     fn test_round_trip_read_write_tuple_of_math_op() {
         let input_expr = Expr::tuple(vec![
             Expr::greater_than(
-                Expr::untyped_number(BigDecimal::from(1)),
-                Expr::untyped_number(BigDecimal::from(2)),
+                Expr::number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(2)),
             ),
             Expr::less_than(
-                Expr::untyped_number(BigDecimal::from(1)),
-                Expr::untyped_number(BigDecimal::from(2)),
+                Expr::number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(2)),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1040,7 +1034,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_float() {
-        let input_expr = Expr::untyped_number(BigDecimal::from_str("1.1").unwrap());
+        let input_expr = Expr::number(BigDecimal::from_str("1.1").unwrap());
         let expr_str = to_string(&input_expr).unwrap();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!(input_expr, output_expr);
@@ -1048,7 +1042,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_u64() {
-        let input_expr = Expr::untyped_number(BigDecimal::from(1));
+        let input_expr = Expr::number(BigDecimal::from(1));
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "1".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1057,7 +1051,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_i64() {
-        let input_expr = Expr::untyped_number(BigDecimal::from(-1));
+        let input_expr = Expr::number(BigDecimal::from(-1));
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "-1".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1139,12 +1133,12 @@ mod let_tests {
         let input_expr = Expr::expr_block(vec![
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
                 Some(TypeName::U8),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
-                Expr::untyped_number(BigDecimal::from(2)),
+                Expr::number(BigDecimal::from(2)),
                 Some(TypeName::U8),
             ),
         ]);
@@ -1159,12 +1153,12 @@ mod let_tests {
         let input_expr = Expr::expr_block(vec![
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
                 Some(TypeName::U16),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
-                Expr::untyped_number(BigDecimal::from(2)),
+                Expr::number(BigDecimal::from(2)),
                 Some(TypeName::U16),
             ),
         ]);
@@ -1179,12 +1173,12 @@ mod let_tests {
         let input_expr = Expr::expr_block(vec![
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
                 Some(TypeName::U32),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
-                Expr::untyped_number(BigDecimal::from(2)),
+                Expr::number(BigDecimal::from(2)),
                 Some(TypeName::U32),
             ),
         ]);
@@ -1287,7 +1281,7 @@ mod selection_tests {
     fn test_round_trip_read_write_select_index_from_request() {
         let input_expr = Expr::select_index(
             Expr::identifier_global("request", None),
-            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(1)),
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "request[1]".to_string();
@@ -1321,7 +1315,7 @@ mod selection_tests {
                 ],
                 None,
             ),
-            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(1)),
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[request, request][1]".to_string();
@@ -1544,8 +1538,8 @@ mod match_tests {
                         vec![ArmPattern::literal(Expr::identifier_global("foo", None))],
                     ),
                     Expr::greater_than(
-                        Expr::untyped_number(BigDecimal::from_str("1.1").unwrap()),
-                        Expr::untyped_number(BigDecimal::from(2)),
+                        Expr::number(BigDecimal::from_str("1.1").unwrap()),
+                        Expr::number(BigDecimal::from(2)),
                     ),
                 ),
                 MatchArm::new(
@@ -1554,8 +1548,8 @@ mod match_tests {
                         vec![ArmPattern::literal(Expr::identifier_global("msg", None))],
                     ),
                     Expr::less_than(
-                        Expr::untyped_number(BigDecimal::from(1)),
-                        Expr::untyped_number(BigDecimal::from(2)),
+                        Expr::number(BigDecimal::from(1)),
+                        Expr::number(BigDecimal::from(2)),
                     ),
                 ),
             ],
@@ -1943,7 +1937,7 @@ mod if_cond_tests {
         let input_expr = Expr::cond(
             Expr::equal_to(
                 Expr::select_field(Expr::identifier_global("worker", None), "response", None),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
             ),
             Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
             Expr::literal("failed"),

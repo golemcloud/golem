@@ -684,7 +684,11 @@ mod desugar_tests {
                         Expr::literal("none"),
                     )
                     .with_inferred_type(InferredType::Bool),
-                    Expr::number(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+                    Expr::number_inferred(
+                        BigDecimal::from(1),
+                        Some(TypeName::U64),
+                        InferredType::U64,
+                    ),
                     Expr::throw("No match found"),
                 )
                 .with_inferred_type(InferredType::U64),

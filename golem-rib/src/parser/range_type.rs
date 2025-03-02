@@ -54,12 +54,12 @@ mod tests {
         assert_eq!(
             result1,
             Expr::range(
-                Expr::number(
+                Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
                     InferredType::number()
                 ),
-                Expr::number(
+                Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
                     InferredType::number()
@@ -88,12 +88,12 @@ mod tests {
         assert_eq!(
             result1,
             Expr::range_inclusive(
-                Expr::number(
+                Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
                     InferredType::number()
                 ),
-                Expr::number(
+                Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
                     InferredType::number()
@@ -115,7 +115,7 @@ mod tests {
 
         assert_eq!(
             result1,
-            Expr::range_from(Expr::number(
+            Expr::range_from(Expr::number_inferred(
                 bigdecimal::BigDecimal::from_u64(1).unwrap(),
                 None,
                 InferredType::number()

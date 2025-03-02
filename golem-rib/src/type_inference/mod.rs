@@ -2386,9 +2386,9 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(sequence(
                             vec![
-                                Expr::number(BigDecimal::from(1), None, InferredType::U64),
-                                Expr::number(BigDecimal::from(2), None, InferredType::U64),
-                                Expr::number(BigDecimal::from(3), None, InferredType::U64),
+                                Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+                                Expr::number_inferred(BigDecimal::from(2), None, InferredType::U64),
+                                Expr::number_inferred(BigDecimal::from(3), None, InferredType::U64),
                             ],
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
@@ -2403,7 +2403,11 @@ mod type_inference_tests {
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
                         ),
-                        Expr::number(BigDecimal::from(0), Some(TypeName::U64), InferredType::U64),
+                        Expr::number_inferred(
+                            BigDecimal::from(0),
+                            Some(TypeName::U64),
+                            InferredType::U64,
+                        ),
                         expr_block(
                             vec![
                                 let_binding(
@@ -3698,7 +3702,7 @@ mod type_inference_tests {
                                         None,
                                         InferredType::List(Box::new(InferredType::Str)),
                                     )),
-                                    Box::new(Expr::number(
+                                    Box::new(Expr::number_inferred(
                                         BigDecimal::from(1),
                                         None,
                                         InferredType::U64,

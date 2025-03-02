@@ -178,14 +178,8 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::untyped_number(BigDecimal::from(1))
-                )]),
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::untyped_number(BigDecimal::from(2))
-                )]),
+                Expr::record(vec![("foo".to_string(), Expr::number(BigDecimal::from(1)))]),
+                Expr::record(vec![("foo".to_string(), Expr::number(BigDecimal::from(2)))]),
             ))
         );
     }
@@ -199,15 +193,15 @@ mod test {
             Ok(Expr::equal_to(
                 Expr::sequence(
                     vec![
-                        Expr::untyped_number(BigDecimal::from(1)),
-                        Expr::untyped_number(BigDecimal::from(2))
+                        Expr::number(BigDecimal::from(1)),
+                        Expr::number(BigDecimal::from(2))
                     ],
                     None
                 ),
                 Expr::sequence(
                     vec![
-                        Expr::untyped_number(BigDecimal::from(3)),
-                        Expr::untyped_number(BigDecimal::from(4))
+                        Expr::number(BigDecimal::from(3)),
+                        Expr::number(BigDecimal::from(4))
                     ],
                     None
                 ),
@@ -223,12 +217,12 @@ mod test {
             result,
             Ok(Expr::equal_to(
                 Expr::tuple(vec![
-                    Expr::untyped_number(BigDecimal::from(1)),
-                    Expr::untyped_number(BigDecimal::from(2))
+                    Expr::number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(2))
                 ]),
                 Expr::tuple(vec![
-                    Expr::untyped_number(BigDecimal::from(3)),
-                    Expr::untyped_number(BigDecimal::from(4))
+                    Expr::number(BigDecimal::from(3)),
+                    Expr::number(BigDecimal::from(4))
                 ]),
             ))
         );
@@ -256,11 +250,11 @@ mod test {
             Ok(Expr::equal_to(
                 Expr::select_index(
                     Expr::identifier_global("foo", None),
-                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(1)),
                 ),
                 Expr::select_index(
                     Expr::identifier_global("bar", None),
-                    Expr::untyped_number(BigDecimal::from(2)),
+                    Expr::number(BigDecimal::from(2)),
                 ),
             ))
         );

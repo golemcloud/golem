@@ -1583,12 +1583,9 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_select_index() {
         let identifier = Expr::identifier_global("foo", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
-        let expr = Expr::select_index(
-            identifier.clone(),
-            Expr::untyped_number(BigDecimal::from(0)),
-        );
+        let expr = Expr::select_index(identifier.clone(), Expr::number(BigDecimal::from(0)));
         let new_expr = expr.pull_types_up().unwrap();
-        let expected = Expr::select_index(identifier, Expr::untyped_number(BigDecimal::from(0)))
+        let expected = Expr::select_index(identifier, Expr::number(BigDecimal::from(0)))
             .merge_inferred_type(InferredType::U64);
         assert_eq!(new_expr, expected);
     }
@@ -1596,8 +1593,8 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_sequence() {
         let elems = vec![
-            Expr::number(BigDecimal::from(1), None, InferredType::U64),
-            Expr::number(BigDecimal::from(2), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(2), None, InferredType::U64),
         ];
 
         let expr = Expr::sequence(elems.clone(), None).with_inferred_type(InferredType::Unknown);
@@ -1614,7 +1611,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tuple() {
         let expr = Expr::tuple(vec![
             Expr::literal("foo"),
-            Expr::number(BigDecimal::from(1), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
         ]);
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(
@@ -1628,11 +1625,11 @@ mod type_pull_up_tests {
         let elems = vec![
             (
                 "foo".to_string(),
-                Expr::number(BigDecimal::from(1), None, InferredType::U64),
+                Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
             ),
             (
                 "bar".to_string(),
-                Expr::number(BigDecimal::from(2), None, InferredType::U32),
+                Expr::number_inferred(BigDecimal::from(2), None, InferredType::U32),
             ),
         ];
         let expr = Expr::record(elems.clone()).with_inferred_type(InferredType::Record(vec![
@@ -1677,16 +1674,14 @@ mod type_pull_up_tests {
         let inner1 = Expr::identifier_global("foo", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
 
-        let select_index1 =
-            Expr::select_index(inner1.clone(), Expr::untyped_number(BigDecimal::from(0)));
-        let select_index2 = Expr::select_index(inner1, Expr::untyped_number(BigDecimal::from(1)));
+        let select_index1 = Expr::select_index(inner1.clone(), Expr::number(BigDecimal::from(0)));
+        let select_index2 = Expr::select_index(inner1, Expr::number(BigDecimal::from(1)));
 
         let inner2 = Expr::identifier_global("bar", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
 
-        let select_index3 =
-            Expr::select_index(inner2.clone(), Expr::untyped_number(BigDecimal::from(0)));
-        let select_index4 = Expr::select_index(inner2, Expr::untyped_number(BigDecimal::from(1)));
+        let select_index3 = Expr::select_index(inner2.clone(), Expr::number(BigDecimal::from(0)));
+        let select_index4 = Expr::select_index(inner2, Expr::number(BigDecimal::from(1)));
 
         let expr = Expr::cond(
             Expr::greater_than(select_index1.clone(), select_index2.clone()),
@@ -1700,13 +1695,13 @@ mod type_pull_up_tests {
                 Expr::select_index(
                     Expr::identifier_global("foo", None)
                         .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                    Expr::untyped_number(BigDecimal::from(0)),
+                    Expr::number(BigDecimal::from(0)),
                 )
                 .with_inferred_type(InferredType::U64),
                 Expr::select_index(
                     Expr::identifier_global("foo", None)
                         .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(1)),
                 )
                 .with_inferred_type(InferredType::U64),
             )
@@ -1714,13 +1709,13 @@ mod type_pull_up_tests {
             Expr::select_index(
                 Expr::identifier_global("bar", None)
                     .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                Expr::untyped_number(BigDecimal::from(0)),
+                Expr::number(BigDecimal::from(0)),
             )
             .with_inferred_type(InferredType::U64),
             Expr::select_index(
                 Expr::identifier_global("bar", None)
                     .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
             )
             .with_inferred_type(InferredType::U64),
         )
@@ -1755,9 +1750,8 @@ mod type_pull_up_tests {
         let inner = Expr::identifier_global("foo", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
 
-        let select_index1 =
-            Expr::select_index(inner.clone(), Expr::untyped_number(BigDecimal::from(0)));
-        let select_index2 = Expr::select_index(inner, Expr::untyped_number(BigDecimal::from(1)));
+        let select_index1 = Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0)));
+        let select_index2 = Expr::select_index(inner, Expr::number(BigDecimal::from(1)));
         let expr = Expr::greater_than_or_equal_to(select_index1.clone(), select_index2.clone());
 
         let new_expr = expr.pull_types_up().unwrap();
@@ -1781,12 +1775,12 @@ mod type_pull_up_tests {
             .merge_inferred_type(InferredType::List(Box::new(record_type.clone())));
 
         let select_field_from_first = Expr::select_field(
-            Expr::select_index(inner.clone(), Expr::untyped_number(BigDecimal::from(0))),
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0))),
             "bar",
             None,
         );
         let select_field_from_second = Expr::select_field(
-            Expr::select_index(inner.clone(), Expr::untyped_number(BigDecimal::from(1))),
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(1))),
             "baz",
             None,
         );
@@ -1798,7 +1792,7 @@ mod type_pull_up_tests {
         let new_expr = expr.pull_types_up().unwrap();
 
         let new_select_field_from_first = Expr::select_field(
-            Expr::select_index(inner.clone(), Expr::untyped_number(BigDecimal::from(0)))
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0)))
                 .merge_inferred_type(record_type.clone()),
             "bar",
             None,
@@ -1806,7 +1800,7 @@ mod type_pull_up_tests {
         .merge_inferred_type(InferredType::Str);
 
         let new_select_field_from_second = Expr::select_field(
-            Expr::select_index(inner.clone(), Expr::untyped_number(BigDecimal::from(1)))
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(1)))
                 .merge_inferred_type(record_type),
             "baz",
             None,
@@ -1823,8 +1817,8 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_equal_to() {
         let expr = Expr::equal_to(
-            Expr::untyped_number(BigDecimal::from(1)),
-            Expr::untyped_number(BigDecimal::from(2)),
+            Expr::number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(2)),
         );
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
@@ -1833,8 +1827,8 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_less_than() {
         let expr = Expr::less_than(
-            Expr::untyped_number(BigDecimal::from(1)),
-            Expr::untyped_number(BigDecimal::from(2)),
+            Expr::number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(2)),
         );
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
@@ -1846,7 +1840,7 @@ mod type_pull_up_tests {
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
             None,
             None,
-            vec![Expr::untyped_number(BigDecimal::from(1))],
+            vec![Expr::number(BigDecimal::from(1))],
         );
         expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
@@ -1919,7 +1913,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_unwrap() {
-        let mut number = Expr::untyped_number(BigDecimal::from(1));
+        let mut number = Expr::number(BigDecimal::from(1));
         number.with_inferred_type_mut(InferredType::F64);
         let expr = Expr::option(Some(number)).unwrap();
         let expr = expr.pull_types_up().unwrap();
@@ -1931,7 +1925,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_tag() {
-        let mut number = Expr::untyped_number(BigDecimal::from(1));
+        let mut number = Expr::number(BigDecimal::from(1));
         number.with_inferred_type_mut(InferredType::F64);
         let expr = Expr::get_tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();

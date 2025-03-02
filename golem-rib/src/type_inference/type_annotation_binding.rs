@@ -150,7 +150,7 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding(
             "x",
-            Expr::number(BigDecimal::from(1), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
             Some(TypeName::U64),
         );
 
@@ -167,7 +167,7 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::option(Some(Expr::number(
+        let expected = Expr::option(Some(Expr::number_inferred(
             BigDecimal::from(1),
             None,
             InferredType::number(),
@@ -190,7 +190,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: Some(Box::new(TypeName::Str)),
@@ -216,7 +216,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: None,
@@ -242,7 +242,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::err(
-            Expr::number(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: None,
                 error: Some(Box::new(TypeName::U64)),
@@ -267,7 +267,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: None,
                 error: None,
@@ -325,7 +325,7 @@ mod type_binding_tests {
                 "baz",
                 None,
             ),
-            Expr::number(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
         )
         .with_type_annotation(TypeName::U32)
         .with_inferred_type(InferredType::U32);
@@ -345,7 +345,7 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding_with_variable_id(
             VariableId::global("x".to_string()),
-            Expr::number(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
             Some(TypeName::U64),
         );
 
@@ -370,7 +370,7 @@ mod type_binding_tests {
             Expr::expr_block(vec![
                 Expr::let_binding_with_variable_id(
                     VariableId::global("y".to_string()),
-                    Expr::number(BigDecimal::from(1), None, InferredType::U64),
+                    Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
                     Some(TypeName::U64),
                 ),
                 Expr::identifier_with_variable_id(VariableId::global("y".to_string()), None),
@@ -401,7 +401,7 @@ mod type_binding_tests {
                     VariableId::global("a".to_string()),
                     None,
                 ))),
-                arm_resolution_expr: Box::new(Expr::number(
+                arm_resolution_expr: Box::new(Expr::number_inferred(
                     BigDecimal::from(2),
                     Some(TypeName::U64),
                     InferredType::U64,
@@ -427,8 +427,8 @@ mod type_binding_tests {
 
         let expected = Expr::cond(
             Expr::identifier_with_variable_id(VariableId::global("x".to_string()), None),
-            Expr::number(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
-            Expr::number(BigDecimal::from(2), Some(TypeName::U64), InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(2), Some(TypeName::U64), InferredType::U64),
         );
 
         assert_eq!(expr, expected);

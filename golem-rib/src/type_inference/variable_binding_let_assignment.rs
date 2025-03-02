@@ -99,7 +99,7 @@ mod name_binding_tests {
 
         let let_binding = Expr::let_binding_with_variable_id(
             VariableId::local("x", 0),
-            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(1)),
             None,
         );
 
@@ -135,13 +135,13 @@ mod name_binding_tests {
 
         let let_binding1 = Expr::let_binding_with_variable_id(
             VariableId::local("x", 0),
-            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(1)),
             None,
         );
 
         let let_binding2 = Expr::let_binding_with_variable_id(
             VariableId::local("y", 0),
-            Expr::untyped_number(BigDecimal::from(2)),
+            Expr::number(BigDecimal::from(2)),
             None,
         );
 
@@ -188,13 +188,13 @@ mod name_binding_tests {
 
         let let_binding1 = Expr::let_binding_with_variable_id(
             VariableId::local("x", 0),
-            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(1)),
             None,
         );
 
         let let_binding2 = Expr::let_binding_with_variable_id(
             VariableId::local("x", 1),
-            Expr::untyped_number(BigDecimal::from(2)),
+            Expr::number(BigDecimal::from(2)),
             None,
         );
 

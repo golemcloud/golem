@@ -103,12 +103,8 @@ where
                                         .map_err(RibParseError::Message)
                                         .unwrap();
 
-                                    match field_expr.type_name {
-                                        Some(type_name) => {
-                                            Expr::untyped_number_with_type_name(combined, type_name)
-                                        }
-                                        None => Expr::untyped_number(combined),
-                                    }
+                                    Expr::number(combined)
+                                        .with_type_annotation_opt(field_expr.type_name)
                                 }
 
                                 _ => {
@@ -536,7 +532,7 @@ mod tests {
     fn test_float_1() {
         let input = "1.234";
         let result = Expr::from_text(input);
-        let expected = Expr::untyped_number(BigDecimal::from_str("1.234").unwrap());
+        let expected = Expr::number(BigDecimal::from_str("1.234").unwrap());
         assert_eq!(result, Ok(expected));
     }
 
@@ -544,7 +540,7 @@ mod tests {
     fn test_float_2() {
         let input = "-1.234";
         let result = Expr::from_text(input);
-        let expected = Expr::untyped_number(BigDecimal::from_str("-1.234").unwrap());
+        let expected = Expr::number(BigDecimal::from_str("-1.234").unwrap());
         assert_eq!(result, Ok(expected));
     }
 
@@ -552,7 +548,7 @@ mod tests {
     fn test_float_3() {
         let input = "6.022e+23";
         let result = Expr::from_text(input);
-        let expected = Expr::untyped_number(BigDecimal::from_str("6.022e+23").unwrap());
+        let expected = Expr::number(BigDecimal::from_str("6.022e+23").unwrap());
         assert_eq!(result, Ok(expected));
     }
 
@@ -560,7 +556,7 @@ mod tests {
     fn test_float_4() {
         let input = "6.022e-23";
         let result = Expr::from_text(input);
-        let expected = Expr::untyped_number(BigDecimal::from_str("6.022e-23").unwrap());
+        let expected = Expr::number(BigDecimal::from_str("6.022e-23").unwrap());
         assert_eq!(result, Ok(expected));
     }
 
@@ -568,10 +564,8 @@ mod tests {
     fn test_float_5() {
         let input = "6.022e-23:f32";
         let result = Expr::from_text(input);
-        let expected = Expr::untyped_number_with_type_name(
-            BigDecimal::from_str("6.022e-23").unwrap(),
-            TypeName::F32,
-        );
+        let expected = Expr::number(BigDecimal::from_str("6.022e-23").unwrap())
+            .with_type_annotation(TypeName::F32);
         assert_eq!(result, Ok(expected));
     }
 
@@ -583,7 +577,7 @@ mod tests {
             result,
             Ok(Expr::select_index(
                 Expr::identifier_global("foo", None),
-                Expr::untyped_number(BigDecimal::from(0)),
+                Expr::number(BigDecimal::from(0)),
             ))
         );
     }
@@ -597,9 +591,9 @@ mod tests {
             Ok(Expr::select_index(
                 Expr::select_index(
                     Expr::identifier_global("foo", None),
-                    Expr::untyped_number(BigDecimal::from(0)),
+                    Expr::number(BigDecimal::from(0)),
                 ),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
             ))
         );
     }
@@ -626,8 +620,8 @@ mod tests {
             Ok(Expr::select_index(
                 Expr::identifier_global("foo", None),
                 Expr::range(
-                    Expr::untyped_number(BigDecimal::from(1)),
-                    Expr::untyped_number(BigDecimal::from(2))
+                    Expr::number(BigDecimal::from(1)),
+                    Expr::number(BigDecimal::from(2))
                 ),
             ))
         );
@@ -733,12 +727,12 @@ mod tests {
                 Expr::select_field(
                     Expr::select_index(
                         Expr::identifier_global("foo", None),
-                        Expr::untyped_number(BigDecimal::from(0)),
+                        Expr::number(BigDecimal::from(0)),
                     ),
                     "bar",
                     None
                 ),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
             ))
         );
     }
@@ -753,12 +747,12 @@ mod tests {
                 Expr::select_field(
                     Expr::select_index(
                         Expr::identifier_global("foo", None),
-                        Expr::untyped_number(BigDecimal::from(0)),
+                        Expr::number(BigDecimal::from(0)),
                     ),
                     "bar",
                     None
                 ),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
             )
             .with_type_annotation(TypeName::U32))
         );
@@ -773,7 +767,7 @@ mod tests {
             Ok(Expr::select_field(
                 Expr::select_index(
                     Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-                    Expr::untyped_number(BigDecimal::from(0)),
+                    Expr::number(BigDecimal::from(0)),
                 ),
                 "baz",
                 None
@@ -800,7 +794,7 @@ mod tests {
             result,
             Ok(Expr::greater_than(
                 Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-                Expr::untyped_number(BigDecimal::from(1))
+                Expr::number(BigDecimal::from(1))
             ))
         );
     }
@@ -814,7 +808,7 @@ mod tests {
             Ok(Expr::cond(
                 Expr::greater_than(
                     Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-                    Expr::untyped_number(BigDecimal::from(1))
+                    Expr::number(BigDecimal::from(1))
                 ),
                 Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                 Expr::select_field(Expr::identifier_global("foo", None), "baz", None)

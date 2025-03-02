@@ -37,7 +37,7 @@ where
 
         let big_decimal = if sign.is_some() { -num } else { num };
 
-        Expr::untyped_number(big_decimal)
+        Expr::number(big_decimal)
     })
 }
 
@@ -51,14 +51,14 @@ mod tests {
     fn test_number() {
         let input = "123";
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::untyped_number(BigDecimal::from(123))));
+        assert_eq!(result, Ok(Expr::number(BigDecimal::from(123))));
     }
 
     #[test]
     fn test_negative_number() {
         let input = "-123";
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::untyped_number(BigDecimal::from(-123))));
+        assert_eq!(result, Ok(Expr::number(BigDecimal::from(-123))));
     }
 
     #[test]
@@ -67,9 +67,7 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::untyped_number(
-                BigDecimal::from_str("123.456").unwrap()
-            ))
+            Ok(Expr::number(BigDecimal::from_str("123.456").unwrap()))
         );
     }
 
@@ -77,7 +75,7 @@ mod tests {
     fn test_number_with_binding_positive() {
         let input = "123u32";
         let result = Expr::from_text(input);
-        let expected = Expr::untyped_number_with_type_name(BigDecimal::from(123), TypeName::U32);
+        let expected = Expr::number(BigDecimal::from(123)).with_type_annotation(TypeName::U32);
         assert_eq!(result, Ok(expected));
     }
 
@@ -85,7 +83,7 @@ mod tests {
     fn test_number_with_binding_negative() {
         let input = "-123s64";
         let result = Expr::from_text(input);
-        let expected = Expr::untyped_number_with_type_name(BigDecimal::from(-123), TypeName::S64);
+        let expected = Expr::number(BigDecimal::from(-123)).with_type_annotation(TypeName::S64);
         assert_eq!(result, Ok(expected));
     }
 }
