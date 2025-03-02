@@ -161,7 +161,7 @@ impl Interpreter {
                 }
 
                 RibIR::SelectIndexV1 => {
-                    internal::run_select_dynamic_instruction(&mut stack)?;
+                    internal::run_select_index_v1_instruction(&mut stack)?;
                 }
 
                 RibIR::CreateFunctionName(site, function_type) => {
@@ -819,7 +819,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn run_select_dynamic_instruction(
+    pub(crate) fn run_select_index_v1_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         let stack_list_value = interpreter_stack
