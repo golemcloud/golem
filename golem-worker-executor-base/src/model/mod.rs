@@ -31,7 +31,7 @@ use golem_common::model::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
@@ -371,7 +371,7 @@ pub struct InvocationContext {
 impl InvocationContext {
     pub fn new(trace_id: Option<TraceId>) -> Self {
         let trace_id = trace_id.unwrap_or(TraceId::generate());
-        let root = InvocationContextSpan::new(None);
+        let root = InvocationContextSpan::local().build();
         let mut spans = HashMap::new();
         spans.insert(root.span_id().clone(), root.clone());
         Self {
@@ -391,15 +391,87 @@ impl InvocationContext {
             spans.insert(span.span_id().clone(), span);
         }
 
-        Ok((
-            Self {
-                trace_id: value.trace_id,
-                spans,
-                root,
-                trace_states: value.trace_states,
-            },
-            current_span_id,
-        ))
+        let result = Self {
+            trace_id: value.trace_id,
+            spans,
+            root,
+            trace_states: value.trace_states,
+        };
+
+        Ok((result, current_span_id))
+    }
+
+    /// Switch to the new invocation context but keep the existing open spans
+    pub fn switch_to(&mut self, new_invocation_context: InvocationContext) {
+        self.trace_id = new_invocation_context.trace_id;
+        self.trace_states = new_invocation_context.trace_states;
+
+        let root_span_id = new_invocation_context.root.span_id();
+        let mut reassigned = HashSet::new();
+        let mut to_update = Vec::new();
+        for (span_id, new_span) in &new_invocation_context.spans {
+            // If we already have one of the new spans, we keep the old one and update the links
+            // This can happen with circular RPC invocations.
+
+            if !self.spans.contains_key(span_id) {
+                to_update.push(new_span.clone()); // parent reference in this span may have to be replaced
+                self.spans.insert(span_id.clone(), new_span.clone());
+            } else {
+                reassigned.insert(span_id); // references to this span must be updated
+            }
+        }
+
+        for span in to_update {
+            if let Some(parent) = span.parent() {
+                if reassigned.contains(parent.span_id()) {
+                    let parent = self.spans.get(parent.span_id()).unwrap().clone();
+                    span.replace_parent(Some(parent));
+                }
+            }
+            if let Some(linked_context) = span.linked_context() {
+                if reassigned.contains(linked_context.span_id()) {
+                    let linked_context = self.spans.get(linked_context.span_id()).unwrap().clone();
+                    span.add_link(linked_context);
+                }
+            }
+        }
+
+        self.root = self.spans.get(root_span_id).unwrap().clone();
+    }
+
+    /// Checks whether the span given by `look_for` is a member of the invocation context stack
+    /// starting from the span given by `current_span_id`.
+    ///
+    /// Linked span contexts are also taken into account.
+    pub fn has_in_stack(&self, current_span_id: &SpanId, look_for: &SpanId) -> bool {
+        let mut linked = Vec::new();
+        let mut current = self.span(current_span_id).unwrap().clone();
+        loop {
+            let result = loop {
+                if current.span_id() == look_for {
+                    break true;
+                }
+                if let Some(linked_context) = current.linked_context() {
+                    linked.push(linked_context.clone());
+                }
+                match current.parent() {
+                    Some(parent) => {
+                        current = parent;
+                    }
+                    None => break false,
+                }
+            };
+
+            if !result {
+                if let Some(linked_context) = linked.pop() {
+                    current = linked_context;
+                } else {
+                    break false;
+                }
+            } else {
+                break result;
+            }
+        }
     }
 
     pub fn start_span(
@@ -423,6 +495,24 @@ impl InvocationContext {
         Ok(parent_id)
     }
 
+    pub fn add_link(&self, span_id: &SpanId, target_span_id: &SpanId) -> Result<(), String> {
+        let span = self.span(span_id)?;
+        let target_span = self.span(target_span_id)?;
+        span.add_link(target_span.clone());
+        Ok(())
+    }
+
+    /// Gets the attribute value for the given key for the given span.
+    ///
+    /// When `inherit` is true, the attribute is looked up in the parent spans
+    /// if it is not found in the current span. The first match is returned.
+    ///
+    /// When `inherit` is false only the current span is searched.
+    ///
+    /// For linked invocation contexts, if the attribute is not found
+    /// in the current span and `inherit` is true, the attribute is looked
+    /// up in the linked context before going up the parent chain. The linked
+    /// context's parent chain is not searched.
     pub fn get_attribute(
         &self,
         span_id: &SpanId,
@@ -462,16 +552,48 @@ impl InvocationContext {
         Ok(())
     }
 
-    pub fn get_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+    pub fn get_stack(&self, current_span_id: &SpanId) -> Result<InvocationContextStack, String> {
         let mut result = Vec::new();
-        let mut current = self.span(current_span_id).unwrap();
+        let mut current = self.span(current_span_id)?.clone();
         loop {
             result.push(current.clone());
-            match current.parent().as_ref() {
+            match current.parent() {
                 Some(parent) => {
                     current = parent;
                 }
                 None => break,
+            }
+        }
+        Ok(InvocationContextStack {
+            trace_id: self.trace_id.clone(),
+            spans: NEVec::try_from_vec(result).unwrap(), // result is always non-empty
+            trace_states: self.trace_states.clone(),
+        })
+    }
+
+    /// Clones every element of the stack belonging to the given current span id, and sets
+    /// the inherited flag to true on them, without changing the spans in this invocation context.
+    pub fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        let mut clones = HashMap::new();
+        let mut result = Vec::new();
+        let mut current = self.span(current_span_id).unwrap().clone();
+        loop {
+            let clone = current.as_inherited();
+            clones.insert(clone.span_id().clone(), clone.clone());
+            result.push(clone);
+
+            match current.parent() {
+                Some(parent) => {
+                    current = parent;
+                }
+                None => break,
+            }
+        }
+        for span in &result {
+            if let Some(parent) = span.parent() {
+                let parent_id = parent.span_id();
+                let parent_clone = clones.get(parent_id).unwrap();
+                span.replace_parent(Some(parent_clone.clone()));
             }
         }
         InvocationContextStack {
@@ -488,15 +610,138 @@ impl InvocationContext {
     }
 }
 
+impl Debug for InvocationContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "InvocationContext trace_id={}", self.trace_id)?;
+        writeln!(f, "  root span id={}", self.root.span_id())?;
+        for span in self.spans.values() {
+            writeln!(
+                f,
+                "  span {} parent={}: {}",
+                span.span_id(),
+                span.parent()
+                    .map(|parent| parent.span_id().to_string())
+                    .unwrap_or("none".to_string()),
+                span.get_attributes(true)
+                    .iter()
+                    .map(|(key, values)| format!(
+                        "{key}=[{}]",
+                        values
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use test_r::test;
 
+    use super::*;
+    use golem_common::model::ComponentId;
     use uuid::Uuid;
 
-    use golem_common::model::ComponentId;
+    fn example_trace_id_1() -> TraceId {
+        TraceId::from_string("4bf92f3577b34da6a3ce929d0e0e4736").unwrap()
+    }
 
-    use super::*;
+    fn example_trace_id_2() -> TraceId {
+        TraceId::from_string("4bf92f3577b34da6a3ce929d0e0e4737").unwrap()
+    }
+
+    fn example_span_id_1() -> SpanId {
+        SpanId::from_string("cddd89c618fb7bf3").unwrap()
+    }
+
+    fn example_span_id_2() -> SpanId {
+        SpanId::from_string("00f067aa0ba902b7").unwrap()
+    }
+
+    fn example_span_id_3() -> SpanId {
+        SpanId::from_string("d0fa4a9110f2dcab").unwrap()
+    }
+
+    fn example_span_id_4() -> SpanId {
+        SpanId::from_string("4a840260c6879c88").unwrap()
+    }
+
+    fn example_span_id_5() -> SpanId {
+        SpanId::from_string("04d81050b3163556").unwrap()
+    }
+
+    fn example_span_id_6() -> SpanId {
+        SpanId::from_string("b7027ded25941641").unwrap()
+    }
+
+    fn example_span_id_7() -> SpanId {
+        SpanId::from_string("b7027ded25941642").unwrap()
+    }
+
+    fn s(s: &str) -> AttributeValue {
+        AttributeValue::String(s.to_string())
+    }
+
+    // span1 -> span2 -> span5 -> span6
+    // span3 -> span4 /
+    fn example_stack_1() -> InvocationContextStack {
+        let timestamp = Timestamp::from(1724701930000);
+
+        let root_span = InvocationContextSpan::external_parent(example_span_id_1());
+        let trace_states = vec!["state1=x".to_string(), "state2=y".to_string()];
+
+        let span2 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_2())
+            .with_parent(root_span.clone())
+            .with_inherited(true)
+            .build();
+        span2.set_attribute("x".to_string(), AttributeValue::String("1".to_string()));
+        span2.set_attribute("y".to_string(), AttributeValue::String("2".to_string()));
+
+        let span3 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_3())
+            .build();
+        span3.set_attribute("w".to_string(), AttributeValue::String("4".to_string()));
+
+        let span4 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_4())
+            .with_parent(span3)
+            .build();
+        span4.set_attribute("y".to_string(), AttributeValue::String("22".to_string()));
+
+        let span5 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_5())
+            .with_parent(span2.clone())
+            .with_linked_context(span4)
+            .build();
+        span5.set_attribute("x".to_string(), AttributeValue::String("11".to_string()));
+        span5.set_attribute("z".to_string(), AttributeValue::String("3".to_string()));
+
+        let span6 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_6())
+            .with_parent(span5.clone())
+            .build();
+        span6.set_attribute("z".to_string(), AttributeValue::String("33".to_string()));
+        span6.set_attribute("a".to_string(), AttributeValue::String("0".to_string()));
+
+        let mut stack = InvocationContextStack::new(example_trace_id_1(), root_span, trace_states);
+        stack.push(span2);
+        stack.push(span5);
+        stack.push(span6);
+
+        stack
+    }
 
     #[test]
     fn test_hash() {
@@ -510,5 +755,187 @@ mod tests {
         let hash = ShardId::hash_worker_id(&worker_id);
         println!("hash: {:?}", hash);
         assert_eq!(hash, -6692039695739768661);
+    }
+
+    #[test]
+    fn has_in_stack() {
+        let stack = example_stack_1();
+        let (ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        assert!(ctx.has_in_stack(&current_id, &example_span_id_1()));
+        assert!(ctx.has_in_stack(&current_id, &example_span_id_2()));
+        assert!(ctx.has_in_stack(&current_id, &example_span_id_3()));
+        assert!(ctx.has_in_stack(&current_id, &example_span_id_4()));
+        assert!(ctx.has_in_stack(&current_id, &example_span_id_5()));
+        assert!(ctx.has_in_stack(&current_id, &example_span_id_6()));
+        assert!(!ctx.has_in_stack(&current_id, &example_span_id_7()));
+    }
+
+    #[test]
+    fn start_span() {
+        let stack = example_stack_1();
+        let (mut ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let span7 = ctx
+            .start_span(&current_id, Some(example_span_id_7()))
+            .unwrap();
+        assert_eq!(span7.span_id(), &example_span_id_7());
+        assert_eq!(span7.parent().unwrap().span_id(), &example_span_id_6());
+    }
+
+    #[test]
+    fn finish_span() {
+        let stack = example_stack_1();
+        let (mut ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let span7 = ctx
+            .start_span(&current_id, Some(example_span_id_7()))
+            .unwrap();
+        ctx.finish_span(span7.span_id()).unwrap();
+        assert!(ctx.get_stack(span7.span_id()).is_err());
+    }
+
+    #[test]
+    fn get_attribute_no_inherited() {
+        let stack = example_stack_1();
+        let (ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let x = ctx.get_attribute(&current_id, "x", false).unwrap();
+        let y = ctx.get_attribute(&current_id, "y", false).unwrap();
+        let z = ctx.get_attribute(&current_id, "z", false).unwrap();
+        let w = ctx.get_attribute(&current_id, "w", false).unwrap();
+        let a = ctx.get_attribute(&current_id, "a", false).unwrap();
+
+        assert_eq!(x, None);
+        assert_eq!(y, None);
+        assert_eq!(z, Some(AttributeValue::String("33".to_string())));
+        assert_eq!(w, None);
+        assert_eq!(a, Some(AttributeValue::String("0".to_string())));
+    }
+
+    #[test]
+    fn get_attribute() {
+        let stack = example_stack_1();
+        let (ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let x = ctx.get_attribute(&current_id, "x", true).unwrap();
+        let y = ctx.get_attribute(&current_id, "y", true).unwrap();
+        let z = ctx.get_attribute(&current_id, "z", true).unwrap();
+        let w = ctx.get_attribute(&current_id, "w", true).unwrap();
+        let a = ctx.get_attribute(&current_id, "a", true).unwrap();
+
+        assert_eq!(x, Some(s("11"))); // found in the parent chain
+        assert_eq!(y, Some(s("22"))); // overridden by the linked context
+        assert_eq!(z, Some(s("33"))); // found in current
+        assert_eq!(w, None); // defined in the linked context's parent span, not returned here
+        assert_eq!(a, Some(s("0"))); // found in current
+    }
+
+    #[test]
+    fn get_attribute_chain() {
+        let stack = example_stack_1();
+        let (ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let x = ctx.get_attribute_chain(&current_id, "x").unwrap();
+        let y = ctx.get_attribute_chain(&current_id, "y").unwrap();
+        let z = ctx.get_attribute_chain(&current_id, "z").unwrap();
+        let w = ctx.get_attribute_chain(&current_id, "w").unwrap();
+        let a = ctx.get_attribute_chain(&current_id, "a").unwrap();
+
+        assert_eq!(x, Some(vec![s("11"), s("1")]));
+        assert_eq!(y, Some(vec![s("22"), s("2")]));
+        assert_eq!(z, Some(vec![s("33"), s("3")]));
+        assert_eq!(w, None);
+        assert_eq!(a, Some(vec![s("0")]));
+    }
+
+    #[test]
+    fn get_attributes() {
+        let stack = example_stack_1();
+        let (ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let attributes = ctx.get_attributes(&current_id, true).unwrap();
+
+        assert_eq!(attributes.len(), 4);
+        assert_eq!(attributes.get("x").unwrap(), &[s("11"), s("1")]);
+        assert_eq!(attributes.get("y").unwrap(), &[s("22"), s("2")]);
+        assert_eq!(attributes.get("z").unwrap(), &[s("33"), s("3")]);
+        assert_eq!(attributes.get("a").unwrap(), &[s("0")]);
+    }
+
+    #[test]
+    fn get_stack() {
+        let stack = example_stack_1();
+        let (ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let stack = ctx.get_stack(&current_id).unwrap();
+
+        assert_eq!(stack.spans.len().get(), 4);
+        assert_eq!(stack.spans[0].span_id(), &example_span_id_6());
+        assert_eq!(stack.spans[1].span_id(), &example_span_id_5());
+        assert_eq!(stack.spans[2].span_id(), &example_span_id_2());
+        assert_eq!(stack.spans[3].span_id(), &example_span_id_1());
+    }
+
+    #[test]
+    fn clone_as_inherited_stack() {
+        let stack = example_stack_1();
+        let (ctx, current_id) = InvocationContext::from_stack(stack).unwrap();
+
+        let inherited_stack = ctx.clone_as_inherited_stack(&current_id);
+        let original_stack = ctx.get_stack(&current_id).unwrap();
+
+        assert_eq!(inherited_stack.spans.len().get(), 4);
+        assert_eq!(inherited_stack.spans[0].span_id(), &example_span_id_6());
+        assert!(inherited_stack.spans[0].inherited());
+        assert_eq!(inherited_stack.spans[1].span_id(), &example_span_id_5());
+        assert!(inherited_stack.spans[1].inherited());
+        assert_eq!(inherited_stack.spans[2].span_id(), &example_span_id_2());
+        assert!(inherited_stack.spans[2].inherited());
+        assert_eq!(inherited_stack.spans[3].span_id(), &example_span_id_1());
+        assert!(inherited_stack.spans[3].inherited());
+
+        assert_eq!(original_stack.spans.len().get(), 4);
+        assert!(!original_stack.spans[0].inherited());
+        assert!(!original_stack.spans[1].inherited());
+        assert!(original_stack.spans[2].inherited());
+        assert!(original_stack.spans[3].inherited());
+    }
+
+    #[test]
+    fn switch_to() {
+        let stack1 = example_stack_1();
+        let (mut ctx, _current_id) = InvocationContext::from_stack(stack1.clone()).unwrap();
+
+        let mut stack2 = InvocationContextStack::new(
+            example_trace_id_2(),
+            stack1.spans.last().clone(),
+            vec!["state3=z".to_string()],
+        );
+        let span7 = InvocationContextSpan::local()
+            .with_span_id(example_span_id_7())
+            .with_parent(stack1.spans.first().clone())
+            .build();
+        span7.set_attribute("a".to_string(), AttributeValue::String("00".to_string()));
+        stack2.push(span7);
+
+        let (ctx2, current_id2) = InvocationContext::from_stack(stack2).unwrap();
+        ctx.switch_to(ctx2);
+
+        assert_eq!(ctx.trace_id, example_trace_id_2());
+        assert_eq!(ctx.trace_states, vec!["state3=z".to_string()]);
+        assert_eq!(ctx.root.span_id(), &example_span_id_1());
+
+        let x = ctx.get_attribute_chain(&current_id2, "x").unwrap();
+        let y = ctx.get_attribute_chain(&current_id2, "y").unwrap();
+        let z = ctx.get_attribute_chain(&current_id2, "z").unwrap();
+        let w = ctx.get_attribute_chain(&current_id2, "w").unwrap();
+        let a = ctx.get_attribute_chain(&current_id2, "a").unwrap();
+
+        assert_eq!(x, Some(vec![s("11"), s("1")]));
+        assert_eq!(y, Some(vec![s("22"), s("2")]));
+        assert_eq!(z, Some(vec![s("33"), s("3")]));
+        assert_eq!(w, None);
+        assert_eq!(a, Some(vec![s("00"), s("0")]));
     }
 }
