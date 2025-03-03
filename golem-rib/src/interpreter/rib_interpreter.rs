@@ -2417,7 +2417,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_1() {
+    async fn test_interpreter_for_select_index_expr_1() {
         // infinite computation will respond with an error - than a stack overflow
         // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
         let expr = r#"
@@ -2439,7 +2439,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_out_of_bound() {
+    async fn test_interpreter_for_select_index_expr_out_of_bound() {
         let expr = r#"
               let list: list<u8> = [1, 2, 3, 4, 5];
               let index: u8 = 10;
@@ -2460,7 +2460,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_2() {
+    async fn test_interpreter_for_select_index_expr_2() {
         let expr = r#"
               let list: list<u8> = [1, 2, 3, 4, 5];
               let indices: list<u8> = [0, 1, 2, 3];
@@ -2486,7 +2486,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_3() {
+    async fn test_interpreter_for_select_index_expr_3() {
         let expr = r#"
               let list: list<u8> = [2, 5, 4];
               let indices: list<u8> = [0, 1];
@@ -2509,7 +2509,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_4() {
+    async fn test_interpreter_for_select_index_expr_4() {
         let expr = r#"
               let list: list<u8> = [2, 5, 4];
               let x: u8 = 0;
@@ -2533,7 +2533,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_5() {
+    async fn test_interpreter_for_select_index_expr_5() {
         let expr = r#"
               let list: list<u8> = [2, 5, 4];
               let x: u8 = 0;
@@ -2558,7 +2558,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_6() {
+    async fn test_interpreter_for_select_index_expr_6() {
         let expr = r#"
               let list: list<u8> = [2, 5, 4, 6];
               let x: u8 = 0;
@@ -2582,7 +2582,30 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_for_select_dynamic_7() {
+    async fn test_interpreter_for_select_index_expr_7() {
+        let expr = r#"
+              let list: list<u8> = [2, 5, 4, 6];
+              let x: u8 = 0;
+              let result = list[x..];
+              for i in result[x..] {
+                yield i;
+              }
+              "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected = ValueAndType::new(Value::List(vec![Value::U8(2), Value::U8(5)]), list(u8()));
+
+        assert_eq!(result.get_val().unwrap(), expected);
+    }
+
+    #[test]
+    async fn test_interpreter_for_select_index_expr_8() {
         let expr = r#"
               let list: list<u8> = [2, 5, 4, 6];
               let result = list[0..2];

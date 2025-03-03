@@ -50,7 +50,7 @@ pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Result<
                         Expr::minus(
                             length_identifier,
                             Expr::number(BigDecimal::from(1)).with_inferred_type(InferredType::U64),
-                        ),
+                        ).with_inferred_type(InferredType::U64),
                         None,
                     )
                     .with_inferred_type(InferredType::U64),
