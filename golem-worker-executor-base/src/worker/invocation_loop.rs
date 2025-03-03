@@ -26,13 +26,11 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack,
-};
+use golem_common::model::invocation_context::{AttributeValue, InvocationContextStack};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    TimestampedWorkerInvocation, WorkerInvocation,
+    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
@@ -490,8 +488,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &mut invocation_context,
             &idempotency_key,
             full_function_name,
+            &self.owned_worker_id.worker_id(),
         );
 
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
         self.store
             .data_mut()
             .set_current_invocation_context(invocation_context)
@@ -510,13 +510,22 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // the invocation writes the invocation start oplog entry
         self.store.data().update_pending_invocations().await;
 
-        invoke_worker(
+        let result = invoke_worker(
             full_function_name.to_string(),
             function_input.to_owned(),
             self.store,
             self.instance,
         )
-        .await
+        .await;
+
+        for span_id in local_span_ids {
+            self.store.data_mut().finish_span(&span_id)?;
+        }
+        for span_id in inherited_span_ids {
+            self.store.data_mut().remove_span(&span_id)?;
+        }
+
+        result
     }
 
     /// The logic handling a successfully finished worker invocation
@@ -841,8 +850,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_context: &mut InvocationContextStack,
         idempotency_key: &IdempotencyKey,
         full_function_name: &str,
+        worker_id: &WorkerId,
     ) {
-        let invocation_span = InvocationContextSpan::new(None);
+        let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
             "name".to_string(),
             AttributeValue::String("invoke-exported-function".to_string()),
@@ -854,6 +864,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_span.set_attribute(
             "function_name".to_string(),
             AttributeValue::String(full_function_name.to_string()),
+        );
+        invocation_span.set_attribute(
+            "worker_id".to_string(),
+            AttributeValue::String(worker_id.to_string()),
         );
         invocation_context.push(invocation_span);
     }

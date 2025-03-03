@@ -27,11 +27,12 @@ use crate::model::PersistenceLevel;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
-use crate::workerctx::{InvocationManagement, WorkerCtx};
+use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::exports::function_by_name;
+use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
@@ -70,6 +71,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     .generate_unique_local_worker_id(remote_worker_id)
                     .await?;
 
+                let span = create_rpc_connection_span(self, &remote_worker_id)?;
+
                 let remote_worker_id =
                     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
                 let demand = self.rpc().create_demand(&remote_worker_id).await;
@@ -77,6 +80,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     payload: Box::new(WasmRpcEntryPayload::Interface {
                         demand,
                         remote_worker_id,
+                        span_id: span.span_id().clone(),
                     }),
                 })?;
                 Ok(entry)
@@ -100,6 +104,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+        let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
 
@@ -131,6 +136,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         };
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
+        let span =
+            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)?;
+
         let durability = Durability::<TypeAnnotatedValue, SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
@@ -155,7 +163,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let stack = self
                 .state
                 .invocation_context
-                .get_stack(&self.state.current_span_id);
+                .clone_as_inherited_stack(span.span_id());
             let result = self
                 .rpc()
                 .invoke_and_await(
@@ -216,6 +224,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
         };
 
+        self.finish_span(span.span_id())?;
+
         match result {
             Ok(wit_value) => Ok(Ok(wit_value)),
             Err(err) => {
@@ -237,6 +247,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+        let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
 
@@ -269,6 +280,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
+        let span =
+            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)?;
+
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
@@ -293,7 +307,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let stack = self
                 .state
                 .invocation_context
-                .get_stack(&self.state.current_span_id);
+                .clone_as_inherited_stack(span.span_id());
             let result = self
                 .rpc()
                 .invoke(
@@ -311,6 +325,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         } else {
             durability.replay(self).await
         };
+
+        self.finish_span(span.span_id())?;
 
         match result {
             Ok(result) => Ok(Ok(result)),
@@ -338,6 +354,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+        let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
 
@@ -368,6 +385,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             Uuid::from_u64_pair(high_bits, low_bits)
         };
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
+
+        let span =
+            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)?;
+
         let worker_id = self.worker_id().clone();
         let request = SerializableInvokeRequest {
             remote_worker_id: remote_worker_id.worker_id(),
@@ -388,7 +409,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let stack = self
                 .state
                 .invocation_context
-                .get_stack(&self.state.current_span_id);
+                .clone_as_inherited_stack(span.span_id());
             let handle = wasmtime_wasi::runtime::spawn(async move {
                 Ok(rpc
                     .invoke_and_await(
@@ -405,7 +426,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             });
 
             let fut = self.table().push(FutureInvokeResultEntry {
-                payload: Box::new(FutureInvokeResultState::Pending { handle, request }),
+                payload: Box::new(FutureInvokeResultState::Pending {
+                    handle,
+                    request,
+                    span_id: span.span_id().clone(),
+                }),
             })?;
             Ok(fut)
         } else {
@@ -418,6 +443,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     function_name,
                     function_params,
                     idempotency_key,
+                    span_id: span.span_id().clone(),
                 }),
             })?;
             Ok(fut)
@@ -503,7 +529,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let stack = self
                 .state
                 .invocation_context
-                .get_stack(&self.state.current_span_id);
+                .clone_as_inherited_stack(&self.state.current_span_id);
             let action = ScheduledAction::Invoke {
                 owned_worker_id: remote_worker_id,
                 idempotency_key,
@@ -546,7 +572,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::wasm-rpc", "drop");
 
-        let _ = self.table().delete(rep)?;
+        let entry = self.table().delete(rep)?;
+        let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
+        if let Ok(payload) = payload {
+            self.finish_span(payload.span_id())?;
+        }
+
         Ok(())
     }
 }
@@ -592,10 +623,12 @@ enum FutureInvokeResultState {
     Pending {
         request: SerializableInvokeRequest,
         handle: AbortOnDropJoinHandle<Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>>,
+        span_id: SpanId,
     },
     Completed {
         request: SerializableInvokeRequest,
         result: Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>,
+        span_id: SpanId,
     },
     Deferred {
         remote_worker_id: OwnedWorkerId,
@@ -605,19 +638,37 @@ enum FutureInvokeResultState {
         function_name: String,
         function_params: Vec<WitValue>,
         idempotency_key: IdempotencyKey,
+        span_id: SpanId,
     },
     Consumed {
         request: SerializableInvokeRequest,
     },
 }
 
+impl FutureInvokeResultState {
+    pub fn span_id(&self) -> &SpanId {
+        match self {
+            Self::Pending { span_id, .. } => span_id,
+            Self::Completed { span_id, .. } => span_id,
+            Self::Deferred { span_id, .. } => span_id,
+            Self::Consumed { .. } => panic!("unexpected state: Consumed"),
+        }
+    }
+}
+
 #[async_trait]
 impl SubscribeAny for FutureInvokeResultState {
     async fn ready(&mut self) {
-        if let Self::Pending { handle, request } = self {
+        if let Self::Pending {
+            handle,
+            request,
+            span_id,
+        } = self
+        {
             *self = Self::Completed {
                 result: handle.await,
                 request: request.clone(),
+                span_id: span_id.clone(),
             };
         }
     }
@@ -652,10 +703,19 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let handle = this.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
+            let span_id = {
+                let entry = self.table().get_mut(&this)?;
+                let entry = entry
+                    .payload
+                    .as_any_mut()
+                    .downcast_mut::<FutureInvokeResultState>()
+                    .unwrap();
+                entry.span_id().clone()
+            };
             let stack = self
                 .state
                 .invocation_context
-                .get_stack(&self.state.current_span_id);
+                .clone_as_inherited_stack(&span_id);
 
             let entry = self.table().get_mut(&this)?;
             let entry = entry
@@ -682,7 +742,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     let request = request.clone();
                     let result =
                         std::mem::replace(entry, FutureInvokeResultState::Consumed { request });
-                    if let FutureInvokeResultState::Completed { request, result } = result {
+                    if let FutureInvokeResultState::Completed {
+                        request,
+                        result,
+                        span_id,
+                    } = result
+                    {
+                        self.finish_span(&span_id)?;
+
                         match result {
                             Ok(Ok(result)) => (
                                 Ok(Some(Ok(result.clone()))),
@@ -719,6 +786,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             function_name,
                             function_params,
                             idempotency_key,
+                            ..
                         } = request
                         else {
                             return Err(anyhow!("unexpected incoming response state".to_string()));
@@ -741,6 +809,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         function_name,
                         function_params,
                         idempotency_key,
+                        span_id,
                         ..
                     } = &entry
                     else {
@@ -764,6 +833,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         FutureInvokeResultState::Pending {
                             handle,
                             request: request.clone(),
+                            span_id: span_id.clone(),
                         },
                     ))
                     .map_err(|_| anyhow!("failed to send request to handler"))?;
@@ -996,6 +1066,7 @@ pub enum WasmRpcEntryPayload {
         #[allow(dead_code)]
         demand: Box<dyn RpcDemand>,
         remote_worker_id: OwnedWorkerId,
+        span_id: SpanId,
     },
     Resource {
         #[allow(dead_code)]
@@ -1003,6 +1074,7 @@ pub enum WasmRpcEntryPayload {
         remote_worker_id: OwnedWorkerId,
         resource_uri: Uri,
         resource_id: u64,
+        span_id: SpanId,
     },
 }
 
@@ -1039,6 +1111,13 @@ impl WasmRpcEntryPayload {
             Self::Resource {
                 remote_worker_id, ..
             } => remote_worker_id,
+        }
+    }
+
+    pub fn span_id(&self) -> &SpanId {
+        match self {
+            Self::Interface { span_id, .. } => span_id,
+            Self::Resource { span_id, .. } => span_id,
         }
     }
 
@@ -1081,4 +1160,46 @@ impl UrnExtensions for Uri {
             },
         }
     }
+}
+
+pub fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
+    ctx: &mut Ctx,
+    target_worker_id: &WorkerId,
+) -> anyhow::Result<Arc<InvocationContextSpan>> {
+    Ok(ctx.start_span(&[
+        (
+            "name".to_string(),
+            AttributeValue::String("rpc-connection".to_string()),
+        ),
+        (
+            "target_worker_id".to_string(),
+            AttributeValue::String(target_worker_id.to_string()),
+        ),
+    ])?)
+}
+
+pub fn create_invocation_span<Ctx: InvocationContextManagement>(
+    ctx: &mut Ctx,
+    connection_span_id: &SpanId,
+    function_name: &str,
+    idempotency_key: &IdempotencyKey,
+) -> anyhow::Result<Arc<InvocationContextSpan>> {
+    warn!("create_invocation_span in connection_span_id: {connection_span_id}");
+    Ok(ctx.start_child_span(
+        connection_span_id,
+        &[
+            (
+                "name".to_string(),
+                AttributeValue::String("rpc-invocation".to_string()),
+            ),
+            (
+                "function_name".to_string(),
+                AttributeValue::String(function_name.to_string()),
+            ),
+            (
+                "idempotency_key".to_string(),
+                AttributeValue::String(idempotency_key.to_string()),
+            ),
+        ],
+    )?)
 }
