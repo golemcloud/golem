@@ -23,7 +23,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
-use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -337,7 +336,6 @@ impl InvocationContextSpan {
     }
 
     pub fn set_attribute(&self, key: String, value: AttributeValue) {
-        warn!("set attribute {key}={value} in {}", self.span_id());
         match self {
             Self::Local { state, .. } => {
                 state.write().unwrap().attributes.insert(key, value);
