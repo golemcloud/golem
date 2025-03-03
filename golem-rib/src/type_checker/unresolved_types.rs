@@ -435,6 +435,19 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
+
+            outer_expr @ Expr::Length {
+                expr,
+                inferred_type,
+                ..
+            } => {
+                queue.push_back(QueuedExpr::new(expr, outer_expr));
+
+                if inferred_type.un_resolved() {
+                    return Err(UnResolvedTypesError::from(expr, parent));
+                }
+            }
+
             outer_expr @ Expr::ListReduce {
                 iterable_expr,
                 init_value_expr,

@@ -18,6 +18,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Concat { exprs, .. } => queue.extend(exprs.iter_mut()),
         Expr::ExprBlock { exprs, .. } => queue.extend(exprs.iter_mut()), // let x = 1, y = call(x);
         Expr::Not { expr, .. } => queue.push_back(&mut *expr),
+        Expr::Length { expr, .. } => queue.push_back(&mut *expr),
         Expr::GreaterThan { lhs, rhs, .. } => {
             queue.push_back(&mut *lhs);
             queue.push_back(&mut *rhs);
@@ -183,6 +184,8 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Tuple { exprs, .. } => queue.extend(exprs.iter()),
         Expr::Concat { exprs, .. } => queue.extend(exprs.iter()),
         Expr::ExprBlock { exprs, .. } => queue.extend(exprs.iter()),
+        Expr::Length { expr, .. } => queue.push_back(expr),
+
         Expr::Not { expr, .. } => queue.push_back(expr),
         Expr::GreaterThan { lhs, rhs, .. } => {
             queue.push_back(lhs);
@@ -366,6 +369,9 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
                 queue.push_front(expr);
             }
         }
+
+        Expr::Length { expr, .. } => queue.push_front(&mut *expr),
+
         Expr::Record { exprs, .. } => {
             for (_, expr) in exprs.iter_mut() {
                 queue.push_front(&mut **expr);

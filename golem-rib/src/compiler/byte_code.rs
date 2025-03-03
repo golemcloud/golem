@@ -114,6 +114,12 @@ mod internal {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Deconstruct);
             }
+
+            Expr::Length { expr, .. } => {
+                stack.push(ExprState::from_expr(expr.deref()));
+                instructions.push(RibIR::Length);
+            }
+
             Expr::Throw { message, .. } => {
                 instructions.push(RibIR::Throw(message.to_string()));
             }

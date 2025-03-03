@@ -65,6 +65,7 @@ pub enum RibIR {
     AdvanceIterator,
     PushToSink,
     SinkToList,
+    Length,
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -392,6 +393,7 @@ mod protobuf {
                         "Failed to convert CreateErrResult".to_string()
                     })?))
                 }
+                Instruction::Length(_) => Ok(RibIR::Length),
                 Instruction::SelectField(value) => Ok(RibIR::SelectField(value)),
                 Instruction::SelectIndex(value) => Ok(RibIR::SelectIndex(value as usize)),
                 Instruction::SelectIndexV1(_) => Ok(RibIR::SelectIndexV1),
@@ -574,6 +576,7 @@ mod protobuf {
                 RibIR::EqualTo => Instruction::EqualTo(EqualTo {}),
                 RibIR::GreaterThan => Instruction::GreaterThan(GreaterThan {}),
                 RibIR::LessThan => Instruction::LessThan(LessThan {}),
+                RibIR::Length => Instruction::Length(golem_api_grpc::proto::golem::rib::Length {}),
                 RibIR::SelectIndexV1 => {
                     Instruction::SelectIndexV1(golem_api_grpc::proto::golem::rib::SelectIndexV1 {})
                 }

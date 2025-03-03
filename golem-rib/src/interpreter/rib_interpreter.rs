@@ -257,8 +257,13 @@ impl Interpreter {
                 RibIR::PushToSink => {
                     internal::run_push_to_sink_instruction(&mut stack)?;
                 }
+
                 RibIR::SinkToList => {
                     internal::run_sink_to_list_instruction(&mut stack)?;
+                }
+
+                RibIR::Length => {
+                    internal::run_length_instruction(&mut stack)?;
                 }
             }
         }
@@ -581,6 +586,26 @@ mod internal {
             &analysed_type,
         );
 
+        Ok(())
+    }
+
+    pub(crate) fn run_length_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let rib_result = interpreter_stack
+            .pop()
+            .ok_or("internal error: failed to get a value from the stack")?;
+
+        let length = match rib_result {
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::List(items),
+                ..
+            }) => items.len(),
+            RibInterpreterStackValue::Iterator(iter) => iter.count(),
+            _ => return Err("internal error: failed to get the length of the value".to_string()),
+        };
+
+        interpreter_stack.push_val(ValueAndType::new(Value::U64(length as u64), u64()));
         Ok(())
     }
 

@@ -455,6 +455,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     source_span,
                 );
             }
+
             Expr::Sequence {
                 exprs,
                 type_annotation,
@@ -469,6 +470,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     source_span,
                 );
             }
+
             Expr::Record {
                 exprs,
                 inferred_type,
@@ -560,6 +562,15 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_unwrap(expr, inferred_type, &mut inferred_type_stack, source_span);
+            }
+
+            Expr::Length {
+                expr,
+                inferred_type,
+                source_span,
+                ..
+            } => {
+                internal::handle_length(expr, inferred_type, &mut inferred_type_stack, source_span);
             }
 
             Expr::Throw { .. } => {
@@ -1344,6 +1355,21 @@ mod internal {
                 inferred_type_stack.push_front(new_call);
             }
         }
+    }
+
+    pub(crate) fn handle_length(
+        original_length_expr: &Expr,
+        current_length_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+        source_span: &SourceSpan,
+    ) {
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_length_expr.clone());
+        let new_length = Expr::length(expr)
+            .with_inferred_type(current_length_type.clone())
+            .with_source_span(source_span.clone());
+        inferred_type_stack.push_front(new_length);
     }
 
     pub(crate) fn handle_unwrap(

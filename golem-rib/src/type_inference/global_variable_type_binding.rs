@@ -641,6 +641,21 @@ mod internal {
                     handle_unwrap(expr, inferred_type, &mut temp_stack, source_span);
                 }
 
+                Expr::Length {
+                    expr,
+                    inferred_type,
+                    source_span,
+                    type_annotation,
+                } => {
+                    handle_length(
+                        expr,
+                        inferred_type,
+                        &mut temp_stack,
+                        source_span,
+                        type_annotation,
+                    );
+                }
+
                 Expr::Throw { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
@@ -1436,6 +1451,24 @@ mod internal {
                 temp_stack.push_front((new_call, false));
             }
         }
+    }
+
+    fn handle_length(
+        original_expr: &Expr,
+        current_inferred_type: &InferredType,
+        temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan,
+        type_annotation: &Option<TypeName>,
+    ) {
+        let expr = temp_stack
+            .pop_front()
+            .map(|x| x.0)
+            .unwrap_or(original_expr.clone());
+        let new_length = Expr::length(expr)
+            .with_inferred_type(current_inferred_type.clone())
+            .with_source_span(source_span.clone())
+            .with_type_annotation_opt(type_annotation.clone());
+        temp_stack.push_front((new_length, false));
     }
 
     fn handle_unwrap(

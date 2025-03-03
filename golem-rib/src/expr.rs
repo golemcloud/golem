@@ -300,6 +300,12 @@ pub enum Expr {
         inferred_type: InferredType,
         source_span: SourceSpan,
     },
+    Length {
+        expr: Box<Expr>,
+        inferred_type: InferredType,
+        type_annotation: Option<TypeName>,
+        source_span: SourceSpan,
+    },
 }
 
 impl Expr {
@@ -440,6 +446,15 @@ impl Expr {
         Expr::Unwrap {
             expr: Box::new(self.clone()),
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
+            type_annotation: None,
+        }
+    }
+
+    pub fn length(expr: Expr) -> Self {
+        Expr::Length {
+            expr: Box::new(expr),
+            inferred_type: InferredType::U64,
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -1063,6 +1078,7 @@ impl Expr {
             | Expr::Call { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. } => inferred_type.clone(),
+            Expr::Length { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
@@ -1243,6 +1259,7 @@ impl Expr {
             | Expr::ListReduce { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
+            | Expr::Length { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -1293,6 +1310,7 @@ impl Expr {
             | Expr::ListReduce { source_span, .. }
             | Expr::InvokeMethodLazy { source_span, .. }
             | Expr::Range { source_span, .. }
+            | Expr::Length { source_span, .. }
             | Expr::Call { source_span, .. } => source_span.clone(),
         }
     }
@@ -1423,6 +1441,9 @@ impl Expr {
             | Expr::InvokeMethodLazy {
                 type_annotation, ..
             }
+            | Expr::Length {
+                type_annotation, ..
+            }
             | Expr::Call {
                 type_annotation, ..
             } => {
@@ -1475,6 +1496,7 @@ impl Expr {
             | Expr::ListComprehension { source_span, .. }
             | Expr::ListReduce { source_span, .. }
             | Expr::InvokeMethodLazy { source_span, .. }
+            | Expr::Length { source_span, .. }
             | Expr::Call { source_span, .. } => {
                 *source_span = new_source_span;
             }
@@ -1527,6 +1549,7 @@ impl Expr {
             | Expr::ListReduce { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
+            | Expr::Length { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -1859,6 +1882,16 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
 
                 Expr::select_index(selection.try_into()?, field.try_into()?)
                     .with_type_annotation_opt(type_annotation)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Length(expr) => {
+                let expr = expr.expr.ok_or("Missing expr")?;
+                Expr::Length {
+                    expr: Box::new((*expr).try_into()?),
+                    type_annotation: None,
+                    inferred_type: InferredType::Unknown,
+                    source_span: SourceSpan::default(),
+                }
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Range(range) => {
@@ -2302,6 +2335,14 @@ mod protobuf {
                         type_name: type_annotation.map(|t| t.into()),
                     }),
                 )),
+
+                Expr::Length { expr, .. } => {
+                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Length(
+                        Box::new(golem_api_grpc::proto::golem::rib::LengthExpr {
+                            expr: Some(Box::new((*expr).into())),
+                        }),
+                    ))
+                }
 
                 Expr::SelectField {
                     expr,

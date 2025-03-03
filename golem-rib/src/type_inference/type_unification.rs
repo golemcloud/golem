@@ -241,6 +241,29 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 }
             }
 
+            Expr::Length {
+                expr,
+                inferred_type,
+                ..
+            } => {
+                queue.push(expr);
+
+                let unified_inferred_type = inferred_type.unify();
+
+                match unified_inferred_type {
+                    Ok(unified_type) => *inferred_type = unified_type,
+                    Err(e) => {
+                        errors.push(
+                            UnResolvedTypesError::from(&expr_copied, None)
+                                .with_additional_error_detail(format!(
+                                    "cannot determine the type of length function: {}",
+                                    e
+                                )),
+                        );
+                    }
+                }
+            }
+
             Expr::ListComprehension {
                 iterable_expr,
                 yield_expr,

@@ -392,6 +392,12 @@ impl<W: Write> Writer<W> {
                 self.write_str(")")
             }
 
+            Expr::Length { expr, .. } => {
+                self.write_str("len(")?;
+                self.write_expr(expr)?;
+                self.write_str(")")
+            }
+
             Expr::Throw { message, .. } => {
                 self.write_str("throw(")?;
                 self.write_str(message)?;

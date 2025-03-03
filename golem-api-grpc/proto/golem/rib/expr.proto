@@ -45,6 +45,7 @@ message Expr {
     LazyInvokeMethodExpr lazy_invoke_method = 36;
     RangeExpr range = 37;
     SelectIndexExprV1 select_index_v1 = 38;
+    LengthExpr length = 39;
   }
 }
 
@@ -54,6 +55,10 @@ message RangeExpr {
         Range range = 5;
         RangeInclusive range_inclusive = 6;
     }
+}
+
+message LengthExpr {
+    Expr expr = 1;
 }
 
 message Range {
