@@ -68,64 +68,25 @@ where
     spaces()
         .with(
             (simple_expr(), rib_expr_rest()).and_then(|(expr, rest): (Expr, RibRest)| {
-                let with_index = index_expr(expr, rest.indices);
+                let with_index = fold_with_index_exprs(expr, rest.indices);
 
-                let with_field = fold_with_selections_or_fractions(
+                let with_selections = fold_with_selections_or_fractions(
                     with_index,
                     rest.selection_exprs_or_fraction,
                 )?;
 
                 let with_range = match rest.range_info {
-                    Some(range_info) => match range_info.base.expr {
-                        Some(rhs) => match range_info.base.range_type {
-                            RangeType::Inclusive => index_expr(
-                                Expr::range_inclusive(with_field, rhs),
-                                range_info.index_expr,
-                            ),
-                            RangeType::Exclusive => {
-                                index_expr(Expr::range(with_field, rhs), range_info.index_expr)
-                            }
-                        },
-                        None => match range_info.base.range_type {
-                            RangeType::Inclusive => {
-                                return Err(RibParseError::Message(
-                                    "Exclusive range should have a right hand side".to_string(),
-                                ))
-                            }
-                            RangeType::Exclusive => {
-                                index_expr(Expr::range_from(with_field), range_info.index_expr)
-                            }
-                        },
-                    },
-                    None => with_field,
+                    Some(range_info) => {
+                        match combine_with_range_info(with_selections, range_info) {
+                            Ok(expr) => expr,
+                            // Explicit pattern match to help with type inference for combine
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    None => with_selections,
                 };
 
-                let with_binary =
-                    rest.binary_ops
-                        .into_iter()
-                        .fold(with_range, |acc, (op, next)| {
-                            let next = index_expr(next.base, next.index_expr);
-
-                            match op {
-                                BinaryOp::GreaterThan => Expr::greater_than(acc, next),
-                                BinaryOp::LessThan => Expr::less_than(acc, next),
-                                BinaryOp::LessThanOrEqualTo => {
-                                    Expr::less_than_or_equal_to(acc, next)
-                                }
-                                BinaryOp::GreaterThanOrEqualTo => {
-                                    Expr::greater_than_or_equal_to(acc, next)
-                                }
-                                BinaryOp::EqualTo => Expr::equal_to(acc, next),
-                                BinaryOp::And => Expr::and(acc, next),
-                                BinaryOp::Or => Expr::or(acc, next),
-                                BinaryOp::Add => Expr::plus(acc, next),
-                                BinaryOp::Subtract => Expr::minus(acc, next),
-                                BinaryOp::Multiply => Expr::multiply(acc, next),
-                                BinaryOp::Divide => Expr::divide(acc, next),
-                            }
-                        });
-
-                Ok(with_binary)
+                Ok(fold_with_binary_ops(with_range, rest.binary_ops))
             }),
         )
         .skip(spaces())
@@ -482,7 +443,27 @@ where
         )
 }
 
-fn index_expr(base_expr: Expr, index_expr: IndexExprs) -> Expr {
+fn fold_with_binary_ops(base: Expr, binary_ops: Vec<(BinaryOp, WithIndex<Expr>)>) -> Expr {
+    binary_ops.into_iter().fold(base, |acc, (op, next)| {
+        let next = fold_with_index_exprs(next.base, next.index_expr);
+
+        match op {
+            BinaryOp::GreaterThan => Expr::greater_than(acc, next),
+            BinaryOp::LessThan => Expr::less_than(acc, next),
+            BinaryOp::LessThanOrEqualTo => Expr::less_than_or_equal_to(acc, next),
+            BinaryOp::GreaterThanOrEqualTo => Expr::greater_than_or_equal_to(acc, next),
+            BinaryOp::EqualTo => Expr::equal_to(acc, next),
+            BinaryOp::And => Expr::and(acc, next),
+            BinaryOp::Or => Expr::or(acc, next),
+            BinaryOp::Add => Expr::plus(acc, next),
+            BinaryOp::Subtract => Expr::minus(acc, next),
+            BinaryOp::Multiply => Expr::multiply(acc, next),
+            BinaryOp::Divide => Expr::divide(acc, next),
+        }
+    })
+}
+
+fn fold_with_index_exprs(base_expr: Expr, index_expr: IndexExprs) -> Expr {
     index_expr
         .exprs
         .into_iter()
@@ -511,13 +492,13 @@ fn fold_with_selections_or_fractions(
                     generic_type_parameter,
                     args,
                 );
-                base = index_expr(base, field_expr.index_expr)
+                base = fold_with_index_exprs(base, field_expr.index_expr)
                     .with_type_annotation_opt(field_expr.type_name)
             }
 
             SelectionOrFraction::SelectFieldExpr(expr) => {
                 let selection = build_selection(base.clone(), expr)?;
-                base = index_expr(selection, field_expr.index_expr)
+                base = fold_with_index_exprs(selection, field_expr.index_expr)
                     .with_type_annotation_opt(field_expr.type_name)
             }
 
@@ -539,6 +520,33 @@ fn fold_with_selections_or_fractions(
         }
     }
     Ok(base)
+}
+
+fn combine_with_range_info(
+    base: Expr,
+    range_info: WithIndex<RangeInfo>,
+) -> Result<Expr, RibParseError> {
+    match range_info.base.expr {
+        Some(rhs) => match range_info.base.range_type {
+            RangeType::Inclusive => Ok(fold_with_index_exprs(
+                Expr::range_inclusive(base, rhs),
+                range_info.index_expr,
+            )),
+            RangeType::Exclusive => Ok(fold_with_index_exprs(
+                Expr::range(base, rhs),
+                range_info.index_expr,
+            )),
+        },
+        None => match range_info.base.range_type {
+            RangeType::Inclusive => Err(RibParseError::Message(
+                "exclusive range should have a right hand side".to_string(),
+            )),
+            RangeType::Exclusive => Ok(fold_with_index_exprs(
+                Expr::range_from(base),
+                range_info.index_expr,
+            )),
+        },
+    }
 }
 
 #[cfg(test)]
