@@ -52,7 +52,7 @@ impl InterpreterStack {
 
     pub fn try_pop(&mut self) -> Result<RibInterpreterStackValue, String> {
         self.pop()
-            .ok_or("Internal Error: Failed to pop value from the interpreter stack".to_string())
+            .ok_or("internal error: failed to pop value from the interpreter stack".to_string())
     }
 
     pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
@@ -74,7 +74,7 @@ impl InterpreterStack {
 
     pub fn try_pop_n(&mut self, n: usize) -> Result<Vec<RibInterpreterStackValue>, String> {
         self.pop_n(n).ok_or(format!(
-            "Internal Error: Failed to pop {} values from the interpreter stack",
+            "internal error: failed to pop {} values from the interpreter stack",
             n
         ))
     }
@@ -86,7 +86,7 @@ impl InterpreterStack {
             .iter()
             .map(|interpreter_result| {
                 interpreter_result.get_val().ok_or(format!(
-                    "Internal Error: Failed to convert last {} in the stack to ValueAndType",
+                    "internal error: failed to convert last {} in the stack to ValueAndType",
                     n
                 ))
             })
@@ -99,7 +99,7 @@ impl InterpreterStack {
             .iter()
             .map(|type_value| {
                 type_value.get_literal().ok_or(format!(
-                    "Internal Error: Failed to convert last {} in the stack to literals {type_value:?}",
+                    "internal error: failed to convert last {} in the stack to literals {type_value:?}",
                     n
                 ))
             })
@@ -123,7 +123,7 @@ impl InterpreterStack {
     pub fn try_pop_val(&mut self) -> Result<ValueAndType, String> {
         self.try_pop().and_then(|x| {
             x.get_val().ok_or(
-                "Internal Error: Failed to pop ValueAndType from the interpreter stack".to_string(),
+                "internal error: failed to pop ValueAndType from the interpreter stack".to_string(),
             )
         })
     }
@@ -136,14 +136,14 @@ impl InterpreterStack {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             } => Ok((field_values, typ)),
-            _ => Err("Internal Error: Failed to pop a record from the interpreter".to_string()),
+            _ => Err("internal error: failed to pop a record from the interpreter".to_string()),
         }
     }
 
     pub fn try_pop_bool(&mut self) -> Result<bool, String> {
         self.try_pop_val().and_then(|val| {
             val.get_literal().and_then(|x| x.get_bool()).ok_or(
-                "Internal Error: Failed to pop boolean from the interpreter stack".to_string(),
+                "internal error: failed to pop boolean from the interpreter stack".to_string(),
             )
         })
     }
@@ -183,7 +183,7 @@ impl InterpreterStack {
             }
 
             a => Err(format!(
-                "Internal error: Failed to push values to sink {:?}",
+                "internal error: failed to push values to sink {:?}",
                 a
             )),
         }

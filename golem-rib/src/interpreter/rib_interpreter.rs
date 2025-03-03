@@ -209,7 +209,7 @@ impl Interpreter {
 
                 RibIR::Jump(instruction_id) => {
                     byte_code_cursor.move_to(&instruction_id).ok_or(format!(
-                        "Internal error. Failed to move to label {}",
+                        "internal error. Failed to move to label {}",
                         instruction_id.index
                     ))?;
                 }
@@ -314,7 +314,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         let rib_result = interpreter_stack.pop().ok_or(
-            "Internal Error: Failed to get a value from the stack to do check is_empty".to_string(),
+            "internal Error: Failed to get a value from the stack to do check is_empty".to_string(),
         )?;
 
         let bool_opt = match rib_result {
@@ -331,7 +331,7 @@ mod internal {
             RibInterpreterStackValue::Sink(values, analysed_type) => {
                 let possible_iterator = interpreter_stack
                     .pop()
-                    .ok_or("Internal Error: Expecting an iterator to check is empty".to_string())?;
+                    .ok_or("internal error: Expecting an iterator to check is empty".to_string())?;
 
                 match possible_iterator {
                     RibInterpreterStackValue::Iterator(iter) => {
@@ -351,7 +351,7 @@ mod internal {
             RibInterpreterStackValue::Unit => None,
         };
 
-        let bool = bool_opt.ok_or("Internal Error: Failed to run instruction is_empty")?;
+        let bool = bool_opt.ok_or("internal error: Failed to run instruction is_empty")?;
         interpreter_stack.push_val(bool.into_value_and_type());
         Ok(())
     }
@@ -366,7 +366,7 @@ mod internal {
         // Jump if predicate is false
         if !predicate {
             instruction_stack.move_to(&instruction_id).ok_or(format!(
-                "Internal Error: Failed to move to the instruction at {}",
+                "internal error: Failed to move to the instruction at {}",
                 instruction_id.index
             ))?;
         }
@@ -377,11 +377,11 @@ mod internal {
     pub(crate) fn run_to_iterator(interpreter_stack: &mut InterpreterStack) -> Result<(), String> {
         let popped_up = interpreter_stack
             .pop()
-            .ok_or("Internal Error: Failed to get a value from the stack".to_string())?;
+            .ok_or("internal error: failed to get a value from the stack".to_string())?;
 
         let value_and_type = popped_up
             .get_val()
-            .ok_or("Internal Error: Failed to get a value from the stack".to_string())?;
+            .ok_or("internal error: failed to get a value from the stack".to_string())?;
 
         match (value_and_type.value, value_and_type.typ) {
             (Value::List(items), AnalysedType::List(item_type)) => {
@@ -477,7 +477,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err("Internal Error: Failed to convert to an iterator".to_string()),
+            _ => Err("internal error: failed to convert to an iterator".to_string()),
         }
     }
 
@@ -515,13 +515,13 @@ mod internal {
     ) -> Result<(), String> {
         let mut rib_result = interpreter_stack
             .pop()
-            .ok_or("Internal Error: Failed to advance the iterator".to_string())?;
+            .ok_or("internal error: failed to advance the iterator".to_string())?;
 
         match &mut rib_result {
             RibInterpreterStackValue::Sink(_, _) => {
                 let mut existing_iterator = interpreter_stack
                     .pop()
-                    .ok_or("Internal Error: an iterator")?;
+                    .ok_or("internal error: failed to get an iterator")?;
 
                 match &mut existing_iterator {
                     RibInterpreterStackValue::Iterator(iter) => {
@@ -531,12 +531,12 @@ mod internal {
                             interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                             Ok(())
                         } else {
-                            Err("Internal Error: Iterator has no more items".to_string())
+                            Err("no more items found in the iterator".to_string())
                         }
                     }
 
                     _ => Err(
-                        "Internal Error: A sink cannot exist without a corresponding iterator"
+                        "internal error: A sink cannot exist without a corresponding iterator"
                             .to_string(),
                     ),
                 }
@@ -548,10 +548,10 @@ mod internal {
                     interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                     Ok(())
                 } else {
-                    Err("Internal Error: Iterator has no more items".to_string())
+                    Err("no more items found in the iterator".to_string())
                 }
             }
-            _ => Err("Internal Error: Expected an Iterator on the stack".to_string()),
+            _ => Err("internal Error: expected an iterator".to_string()),
         }
     }
 
@@ -633,7 +633,7 @@ mod internal {
             AnalysedType::Record(type_record) => type_record.fields,
             _ => {
                 return Err(format!(
-                    "Internal Error: Expected a record type to create a record. But obtained {:?}",
+                    "internal error: expected a record type to create a record, but obtained {:?}",
                     analysed_type
                 ))
             }
@@ -690,7 +690,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(format!("Internal Error: Failed to create tuple due to mismatch in types. Expected: list, Actual: {:?}", analysed_type)),
+            _ => Err(format!("internal error: failed to create tuple due to mismatch in types. expected: list, actual: {:?}", analysed_type)),
         }
     }
 
@@ -707,7 +707,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(format!("Internal Error: Failed to create tuple due to mismatch in types. Expected: tuple, Actual: {:?}", analysed_type)),
+            _ => Err(format!("internal error: failed to create tuple due to mismatch in types. expected: tuple, actual: {:?}", analysed_type)),
         }
     }
 
@@ -963,7 +963,7 @@ mod internal {
                     .cases
                     .iter()
                     .find(|name| name.name == variant_name)
-                    .ok_or(format!("Unknown variant {} not found", variant_name))?;
+                    .ok_or(format!("unknown variant {} not found", variant_name))?;
 
                 let variant_arg_typ = variant.typ.clone();
 
@@ -980,7 +980,7 @@ mod internal {
             }
 
             _ => Err(format!(
-                "Internal Error: Expected a variant type for {}, but obtained {:?}",
+                "internal error: expected a variant type for {}, but obtained {:?}",
                 variant_name, analysed_type
             )),
         }
@@ -1043,7 +1043,7 @@ mod internal {
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Internal Error: Failed to construct resource".to_string())
+                            .ok_or("internal error: failed to construct resource".to_string())
                     })
                     .collect::<Result<Vec<ValueAndType>, String>>()?;
 
@@ -1073,7 +1073,7 @@ mod internal {
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or(
-                            "Internal Error: Failed to call indexed resource method".to_string(),
+                            "internal error: failed to call indexed resource method".to_string(),
                         )
                     })
                     .collect::<Result<Vec<ValueAndType>, String>>()?;
@@ -1098,7 +1098,7 @@ mod internal {
                 method,
             } => {
                 let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or(
-                    "Internal error: Failed to get arguments for static resource method"
+                    "internal error: Failed to get arguments for static resource method"
                         .to_string(),
                 )?;
 
@@ -1106,7 +1106,7 @@ mod internal {
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or(
-                            "Internal error: Failed to call static resource method".to_string(),
+                            "internal error: Failed to call static resource method".to_string(),
                         )
                     })
                     .collect::<Result<Vec<ValueAndType>, String>>()?;
@@ -1127,7 +1127,7 @@ mod internal {
             }
             FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
                 let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or(
-                    "Internal Error: Failed to get resource parameters for indexed resource drop"
+                    "internal error: failed to get resource parameters for indexed resource drop"
                         .to_string(),
                 )?;
 
@@ -1135,7 +1135,7 @@ mod internal {
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or(
-                            "Internal Error: Failed to call indexed resource drop".to_string(),
+                            "internal error: failed to call indexed resource drop".to_string(),
                         )
                     })
                     .collect::<Result<Vec<ValueAndType>, String>>()?;
@@ -1166,14 +1166,14 @@ mod internal {
     ) -> Result<(), String> {
         let function_name = interpreter_stack
             .pop_str()
-            .ok_or("Internal Error: Failed to get a function name".to_string())?;
+            .ok_or("internal error: failed to get a function name".to_string())?;
 
         let worker_name = match worker_type {
             WorkerNamePresence::Present => None,
             WorkerNamePresence::Absent => {
                 let worker_name = interpreter_stack
                     .pop_str()
-                    .ok_or("Internal Error: Failed to get the worker name".to_string())?;
+                    .ok_or("internal error: failed to get the worker name".to_string())?;
 
                 Some(worker_name.clone())
             }
@@ -1181,13 +1181,13 @@ mod internal {
 
         let last_n_elements = interpreter_stack
             .pop_n(arg_size)
-            .ok_or("Internal Error: Failed to get arguments for the function call".to_string())?;
+            .ok_or("internal error: failed to get arguments for the function call".to_string())?;
 
         let parameter_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
                 interpreter_result.get_val().ok_or(format!(
-                    "Internal Error: Failed to call function {}",
+                    "internal error: failed to call function {}",
                     function_name
                 ))
             })
@@ -1284,7 +1284,7 @@ mod internal {
                 Ok(())
             }
             _ => Err(format!(
-                "Internal Error: Expected option type to create `some` value. But obtained {:?}",
+                "internal error: expected option type to create `some` value. But obtained {:?}",
                 analysed_type
             )),
         }
@@ -1300,7 +1300,7 @@ mod internal {
                 Ok(())
             }
             _ => Err(format!(
-                "Internal Error: Expected option type to create `none` value. But obtained {:?}",
+                "internal error: expected option type to create `none` value. But obtained {:?}",
                 analysed_type
             )),
         }
@@ -1318,7 +1318,7 @@ mod internal {
                 Ok(())
             }
             _ => Err(format!(
-                "Internal Error: Expected result type to create `ok` value. But obtained {:?}",
+                "internal error: expected result type to create `ok` value. But obtained {:?}",
                 analysed_type
             )),
         }
@@ -1336,7 +1336,7 @@ mod internal {
                 Ok(())
             }
             _ => Err(format!(
-                "Internal Error: Expected result type to create `err` value. But obtained {:?}",
+                "internal error: expected result type to create `err` value. But obtained {:?}",
                 analysed_type
             )),
         }

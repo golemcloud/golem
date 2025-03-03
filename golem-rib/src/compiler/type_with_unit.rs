@@ -213,7 +213,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 "Cannot convert AllOf types (multiple types) to AnalysedType. {:?}",
                 types
             )),
-            InferredType::Unknown => Err("Cannot convert Unknown type to AnalysedType".to_string()),
+            InferredType::Unknown => Err("  convert Unknown type to AnalysedType".to_string()),
             // We don't expect to have a sequence type in the inferred type.as
             // This implies Rib will not support multiple types from worker-function results
             InferredType::Sequence(vec) => {

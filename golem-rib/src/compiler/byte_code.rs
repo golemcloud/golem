@@ -132,7 +132,7 @@ mod internal {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
                 let value_and_type = number.to_val(&analysed_type).ok_or(format!(
-                    "Internal error: convert a number to wasm value using {:?}",
+                    "internal error: convert a number to wasm value using {:?}",
                     analysed_type
                 ))?;
 
