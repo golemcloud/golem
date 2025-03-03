@@ -1,25 +1,8 @@
 x-aliases:
-  aws-env-vars: &aws-env-vars
-    AWS_ACCESS_KEY_ID: test
-    AWS_SECRET_ACCESS_KEY: test
-    AWS_REGION: us-east-1
   blob-storage-env-vars: &blob-storage-env-vars
-    GOLEM__BLOB_STORAGE__TYPE: S3
-    GOLEM__BLOB_STORAGE__CONFIG__REGION: us-east-1
-    GOLEM__BLOB_STORAGE__CONFIG__AWS_ENDPOINT_URL: http://s3.localstack:${LOCALSTACK_PORT}
-    GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX: ""
-    GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET: golem-compilation-cache
-    GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET: golem-custom-data
-    GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET: golem-oplog-payload
-    GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS: "[golem-oplog-archive-1]"
-    GOLEM__BLOB_STORAGE__CONFIG__USE_MINIO_CREDENTIALS: false
-    GOLEM__BLOB_STORAGE__CONFIG__INITIAL_COMPONENT_FILES_BUCKET: golem-initial-component-files
-    GOLEM__BLOB_STORAGE__CONFIG__COMPONENTS_BUCKET: golem-component-store
-    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_ATTEMPTS: 5
-    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MIN_DELAY: 100ms
-    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_DELAY: 2s
-    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MULTIPLIER: 2
-  postgres-db-config: &postgres-db-config
+    GOLEM__BLOB_STORAGE__TYPE: "LocalFileSystem"
+    GOLEM__BLOB_STORAGE__CONFIG__ROOT: "/blob_storage"
+  db-env-vars: &db-env-vars
     GOLEM__DB__TYPE: Postgres
     GOLEM__DB__CONFIG__DATABASE: golem_db
     GOLEM__DB__CONFIG__PORT: ${POSTGRES_PORT}
@@ -31,7 +14,7 @@ x-aliases:
 services:
   router:
     build:
-      context: ..
+      context: ../..
       dockerfile: golem-router/docker/Dockerfile
     # Note that, golem_gateway_port should be changed carefully
     # as it is currently set to match the default port in golem-cli:
@@ -73,42 +56,15 @@ services:
       timeout: 5s
       retries: 5
 
-  localstack:
-    image: localstack/localstack:latest
-    ports:
-      - "${LOCALSTACK_PORT}:4566"
-    environment:
-      # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
-      DEBUG: 1
-      SERVICES: s3
-    volumes:
-      - localstack_data:/var/lib/localstack
-      - ./localstack:/etc/localstack/init/ready.d
-    healthcheck:
-      test: awslocal s3api wait bucket-exists --bucket signal-ready
-      interval: 5s
-      timeout: 120s
-      start_period: 5s
-      retries: 0
-    networks:
-      default:
-        aliases:
-          - golem-compilation-cache.s3.localstack
-          - golem-custom-data.s3.localstack
-          - golem-oplog-payload.s3.localstack
-          - golem-oplog-archive-1.s3.localstack
-          - golem-initial-component-files.s3.localstack
-          - golem-component-store.s3.localstack
-
   golem-shard-manager:
     build:
-      context: ..
+      context: ../..
       dockerfile: golem-shard-manager/docker/Dockerfile
     environment:
       WASMTIME_BACKTRACE_DETAILS: 1
       RUST_BACKTRACE: 1
       RUST_LOG=info,h2=warn,hyper=warn,tower: warn
-      GOLEM__PERSISTENCE__TYPE: Redis
+      GOLEM__PERSISTENCE__TYPE: "Redis"
       GOLEM__PERSISTENCE__CONFIG__HOST: redis
       GOLEM__PERSISTENCE__CONFIG__PORT: ${REDIS_PORT}
       GOLEM__HTTP_PORT: ${SHARD_MANAGER_HTTP_PORT}
@@ -118,52 +74,54 @@ services:
 
   golem-component-service:
     build:
-      context: ..
+      context: ../..
       dockerfile: golem-component-service/docker/Dockerfile
     restart: on-failure
     environment:
-      <<: [*blob-storage-env-vars, *postgres-db-config, *aws-env-vars]
+      <<: [*blob-storage-env-vars, *db-env-vars]
       ENVIRONMENT: local
       WASMTIME_BACKTRACE_DETAILS: 1
       RUST_BACKTRACE: 1
-      RUST_LOG: info,h2=warn,hyper=warn,tower=warn
-      GOLEM__COMPILATION__TYPE: Enabled
+      RUST_LOG=info,h2=warn,hyper=warn,tower: warn
+      GOLEM__COMPILATION__TYPE: "Enabled"
       GOLEM__COMPILATION__CONFIG__HOST: golem-component-compilation-service
       GOLEM__COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
       GOLEM__DB__CONFIG__SCHEMA: golem_component
       GOLEM__GRPC_PORT: ${COMPONENT_SERVICE_GRPC_PORT}
       GOLEM__HTTP_PORT: ${COMPONENT_SERVICE_HTTP_PORT}
+    volumes:
+      - blob_storage:/blob_storage
     ports:
       - "${COMPONENT_SERVICE_HTTP_PORT}:${COMPONENT_SERVICE_HTTP_PORT}"
       - "${COMPONENT_SERVICE_GRPC_PORT}:${COMPONENT_SERVICE_GRPC_PORT}"
     depends_on:
       postgres:
         condition: service_healthy
-      localstack:
-        condition: service_healthy
 
   golem-worker-service:
     build:
-      context: ..
+      context: ../..
       dockerfile: golem-worker-service/docker/Dockerfile
     pull_policy: always
     environment:
-      <<: [*blob-storage-env-vars, *postgres-db-config, *aws-env-vars]
+      <<: [*blob-storage-env-vars, *db-env-vars]
       RUST_BACKTRACE: 1
       RUST_LOG=info,h2=warn,hyper=warn,tower: warn
       GOLEM__DB__CONFIG__SCHEMA: golem_worker
-      GOLEM__GATEWAY_SESSION_STORAGE__TYPE: Redis
+      GOLEM__GATEWAY_SESSION_STORAGE__TYPE: "Redis"
       GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT: ${REDIS_PORT}
       GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST: redis
       GOLEM__ENVIRONMENT: local
       GOLEM__COMPONENT_SERVICE__HOST: golem-component-service
       GOLEM__COMPONENT_SERVICE__PORT: ${COMPONENT_SERVICE_GRPC_PORT}
-      GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN: 5C832D93-FF85-4A8F-9803-513950FDFDB1
-      GOLEM__ROUTING_TABLE__HOST: golem-shard-manager
+      GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN: "5C832D93-FF85-4A8F-9803-513950FDFDB1"
+      GOLEM__ROUTING_TABLE__HOST: "golem-shard-manager"
       GOLEM__ROUTING_TABLE__PORT: ${SHARD_MANAGER_GRPC_PORT}
       GOLEM__CUSTOM_REQUEST_PORT: ${WORKER_SERVICE_CUSTOM_REQUEST_PORT}
       GOLEM__PORT: ${WORKER_SERVICE_HTTP_PORT}
       GOLEM__WORKER_GRPC_PORT: ${WORKER_SERVICE_GRPC_PORT}
+    volumes:
+      - blob_storage:/blob_storage
     ports:
       - "${WORKER_SERVICE_HTTP_PORT}:${WORKER_SERVICE_HTTP_PORT}"
       - "${WORKER_SERVICE_CUSTOM_REQUEST_PORT}:${WORKER_SERVICE_CUSTOM_REQUEST_PORT}"
@@ -171,73 +129,67 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      localstack:
-        condition: service_healthy
 
   golem-component-compilation-service:
     build:
-      context: ..
+      context: ../..
       dockerfile: golem-component-compilation-service/docker/Dockerfile
     environment:
-      <<: [*blob-storage-env-vars, *aws-env-vars]
+      <<: [*blob-storage-env-vars]
       RUST_BACKTRACE: 1
       RUST_LOG=info,h2=warn,hyper=warn,tower: warn
+      GOLEM__BLOB_STORAGE__TYPE: "LocalFileSystem"
+      GOLEM__BLOB_STORAGE__CONFIG__ROOT: "/worker_executor_store"
       GOLEM__COMPONENT_SERVICE__HOST: golem-component-service
       GOLEM__COMPONENT_SERVICE__PORT: ${COMPONENT_SERVICE_GRPC_PORT}
-      GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN: 5C832D93-FF85-4A8F-9803-513950FDFDB1
-      GOLEM__COMPILED_COMPONENT_SERVICE__TYPE: Enabled
+      GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN: "5C832D93-FF85-4A8F-9803-513950FDFDB1"
+      GOLEM__COMPILED_COMPONENT_SERVICE__TYPE: "Enabled"
       GOLEM__HTTP_PORT: ${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}
       GOLEM__GRPC_PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
+    volumes:
+      - blob_storage:/blob_storage
     ports:
       - "${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}:${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}"
       - "${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}:${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}"
     depends_on:
-      golem-component-service:
-        condition: service_started
-      localstack:
-        condition: service_healthy
+      - golem-component-service
 
   golem-worker-executor:
     build:
-      context: ..
+      context: ../..
       dockerfile: golem-worker-executor/docker/Dockerfile
     environment:
-      <<: [*blob-storage-env-vars, *aws-env-vars]
+      <<: [*blob-storage-env-vars]
       ENVIRONMENT: local
       WASMTIME_BACKTRACE_DETAILS: 1
       RUST_BACKTRACE: 1
       RUST_LOG: info
-      GOLEM__KEY_VALUE_STORAGE__TYPE: Redis
+      GOLEM__KEY_VALUE_STORAGE__TYPE: "Redis"
       GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT: ${REDIS_PORT}
       GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST: redis
-      GOLEM__INDEXED_STORAGE__TYPE: KVStoreRedis
+      GOLEM__INDEXED_STORAGE__TYPE: "KVStoreRedis"
       GOLEM__COMPONENT_SERVICE__CONFIG__HOST: golem-component-service
       GOLEM__COMPONENT_SERVICE__CONFIG__PORT: ${COMPONENT_SERVICE_GRPC_PORT}
-      GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN: 2A354594-7A63-4091-A46B-CC58D379F677
+      GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN: "2A354594-7A63-4091-A46B-CC58D379F677"
       GOLEM__PORT: ${WORKER_EXECUTOR_GRPC_PORT}
       GOLEM__HTTP_PORT: ${WORKER_EXECUTOR_HTTP_PORT}
       GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST: golem-shard-manager
       GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT: ${SHARD_MANAGER_GRPC_PORT}
       GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS: 5
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY: 100ms
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY: 2s
+      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY: "100ms"
+      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY: "2s"
       GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER: 2
       GOLEM__PUBLIC_WORKER_API__HOST: golem-worker-service
       GOLEM__PUBLIC_WORKER_API__PORT: ${WORKER_SERVICE_GRPC_PORT}
-      GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN: 2A354594-7A63-4091-A46B-CC58D379F677
-      GOLEM__COMPILED_COMPONENT_SERVICE__TYPE: Enabled
-      GOLEM__SHARD_MANAGER_SERVICE__TYPE: Grpc
+      GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN: "2A354594-7A63-4091-A46B-CC58D379F677"
+      GOLEM__COMPILED_COMPONENT_SERVICE__TYPE: "Enabled"
+      GOLEM__SHARD_MANAGER_SERVICE__TYPE: "Grpc"
+    volumes:
+      - blob_storage:/blob_storage
     ports:
       - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
     depends_on:
-      redis:
-        condition: service_started
-      localstack:
-        condition: service_healthy
-
-networks:
-  default:
-    name: golem-localstack
+      - redis
 
 volumes:
   redis_data:
@@ -246,5 +198,5 @@ volumes:
     driver: local
   postgres_data:
     driver: local
-  localstack_data:
+  blob_storage:
     driver: local
