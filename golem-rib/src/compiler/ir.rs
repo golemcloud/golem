@@ -394,7 +394,7 @@ mod protobuf {
                 }
                 Instruction::SelectField(value) => Ok(RibIR::SelectField(value)),
                 Instruction::SelectIndex(value) => Ok(RibIR::SelectIndex(value as usize)),
-                Instruction::SelectDynamic(_) => Ok(RibIR::SelectIndexV1),
+                Instruction::SelectIndexV1(_) => Ok(RibIR::SelectIndexV1),
                 Instruction::EqualTo(_) => Ok(RibIR::EqualTo),
                 Instruction::GreaterThan(_) => Ok(RibIR::GreaterThan),
                 Instruction::LessThan(_) => Ok(RibIR::LessThan),
@@ -575,7 +575,7 @@ mod protobuf {
                 RibIR::GreaterThan => Instruction::GreaterThan(GreaterThan {}),
                 RibIR::LessThan => Instruction::LessThan(LessThan {}),
                 RibIR::SelectIndexV1 => {
-                    Instruction::SelectDynamic(golem_api_grpc::proto::golem::rib::SelectDynamic {})
+                    Instruction::SelectIndexV1(golem_api_grpc::proto::golem::rib::SelectIndexV1 {})
                 }
                 RibIR::GreaterThanOrEqualTo => {
                     Instruction::GreaterThanOrEqualTo(GreaterThanOrEqualTo {})
