@@ -817,7 +817,7 @@ impl Expr {
         )
     }
 
-    pub fn typed_list_comprehension(
+    pub fn list_comprehension_typed(
         iterated_variable: VariableId,
         iterable_expr: Expr,
         yield_expr: Expr,
@@ -838,7 +838,7 @@ impl Expr {
         iterable_expr: Expr,
         yield_expr: Expr,
     ) -> Self {
-        Expr::typed_list_comprehension(
+        Expr::list_comprehension_typed(
             variable_id,
             iterable_expr,
             yield_expr,

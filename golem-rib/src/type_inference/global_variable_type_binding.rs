@@ -746,7 +746,7 @@ mod internal {
             .unwrap_or(current_iterable_expr.clone());
 
         temp_stack.push_front((
-            Expr::typed_list_comprehension(
+            Expr::list_comprehension_typed(
                 variable_id.clone(),
                 iterable_expr_inferred,
                 yield_expr_inferred,
