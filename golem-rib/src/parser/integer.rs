@@ -62,16 +62,6 @@ mod tests {
     }
 
     #[test]
-    fn test_float_number() {
-        let input = "123.456";
-        let result = Expr::from_text(input);
-        assert_eq!(
-            result,
-            Ok(Expr::number(BigDecimal::from_str("123.456").unwrap()))
-        );
-    }
-
-    #[test]
     fn test_number_with_binding_positive() {
         let input = "123u32";
         let result = Expr::from_text(input);

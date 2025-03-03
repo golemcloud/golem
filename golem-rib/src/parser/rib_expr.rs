@@ -70,48 +70,10 @@ where
             (simple_expr(), rib_expr_rest()).and_then(|(expr, rest): (Expr, RibRest)| {
                 let with_index = index_expr(expr, rest.indices);
 
-                let with_field =
-                    rest.field_selection
-                        .into_iter()
-                        .fold(with_index, |acc, field_expr| match field_expr.base {
-                            FractionOrExpr::Expr(Expr::Call {
-                                call_type,
-                                generic_type_parameter,
-                                args,
-                                ..
-                            }) => {
-                                let base = Expr::invoke_worker_function(
-                                    acc,
-                                    call_type.function_name().unwrap().to_string(),
-                                    generic_type_parameter,
-                                    args,
-                                );
-                                index_expr(base, field_expr.index_expr)
-                                    .with_type_annotation_opt(field_expr.type_name)
-                            }
-
-                            FractionOrExpr::Expr(expr) => {
-                                let selection = build_selection(acc, expr).unwrap();
-                                index_expr(selection, field_expr.index_expr)
-                                    .with_type_annotation_opt(field_expr.type_name)
-                            }
-
-                            FractionOrExpr::Fraction(fraction) => match acc {
-                                Expr::Number { number, .. } => {
-                                    let combined = fraction
-                                        .combine_with_integer(number.value)
-                                        .map_err(RibParseError::Message)
-                                        .unwrap();
-
-                                    Expr::number(combined)
-                                        .with_type_annotation_opt(field_expr.type_name)
-                                }
-
-                                _ => {
-                                    panic!("Fraction can only be applied to numbers")
-                                }
-                            },
-                        });
+                let with_field = fold_with_selections_or_fractions(
+                    with_index,
+                    rest.selection_exprs_or_fraction,
+                )?;
 
                 let with_range = match rest.range_info {
                     Some(range_info) => match range_info.base.expr {
@@ -246,20 +208,27 @@ where
     choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
 }
 
+// A rib rest always a start with a proper delimiter (ex: ., [, etc)
+// and goes with trying to extract the next many expressions recursively
+// The structure of RibRest may not correspond to a valid expression,
+// but it will get validated in conjunction with the simple expression
+// already parsed. example: 1.23.abc[1] (`Vec<WithIndex<FractionOrSelection>>`)
+// is something user can write, but we decide abc is invalid
+// based on what's accumulated until which is 1.23 later
 struct RibRest {
-    indices: IndexExpr,
-    field_selection: Vec<WithIndex<FractionOrExpr>>,
+    indices: IndexExprs,
+    selection_exprs_or_fraction: Vec<WithIndex<SelectionOrFraction>>,
     range_info: Option<WithIndex<RangeInfo>>,
     binary_ops: Vec<(BinaryOp, WithIndex<Expr>)>,
 }
 
 #[derive(Debug, Clone)]
-struct IndexExpr {
+struct IndexExprs {
     exprs: Vec<Expr>,
 }
 
 struct WithIndex<T> {
-    index_expr: IndexExpr,
+    index_expr: IndexExprs,
     base: T,
     type_name: Option<TypeName>,
 }
@@ -276,9 +245,9 @@ impl RangeInfo {
     }
 }
 
-enum FractionOrExpr {
+enum SelectionOrFraction {
+    SelectFieldExpr(Expr),
     Fraction(Fraction),
-    Expr(Expr),
 }
 
 fn rib_expr_rest_<Input>() -> impl Parser<Input, Output = RibRest>
@@ -296,8 +265,10 @@ where
                 char('.').skip(spaces()).with(
                     (
                         fraction()
-                            .map(FractionOrExpr::Fraction)
-                            .or(simple_expr().skip(spaces()).map(FractionOrExpr::Expr)),
+                            .map(SelectionOrFraction::Fraction)
+                            .or(simple_expr()
+                                .skip(spaces())
+                                .map(SelectionOrFraction::SelectFieldExpr)),
                         select_index_expression().skip(spaces()),
                         optional(type_annotation()).skip(spaces()),
                     )
@@ -328,7 +299,7 @@ where
                     select_index_expression().skip(spaces()),
                 ),
             ))
-            .map(|binary_math: Vec<(BinaryOp, (Expr, IndexExpr))>| {
+            .map(|binary_math: Vec<(BinaryOp, (Expr, IndexExprs))>| {
                 binary_math
                     .into_iter()
                     .map(|(op, (expr, index_expr))| {
@@ -347,7 +318,7 @@ where
             .map(
                 |(indices, field_selection, range_info, binary_ops)| RibRest {
                     indices,
-                    field_selection,
+                    selection_exprs_or_fraction: field_selection,
                     range_info,
                     binary_ops,
                 },
@@ -429,7 +400,7 @@ where
     })
 }
 
-fn select_index_expression<Input>() -> impl Parser<Input, Output = IndexExpr>
+fn select_index_expression<Input>() -> impl Parser<Input, Output = IndexExprs>
 where
     Input: Stream<Token = char>,
     RibParseError: Into<
@@ -438,7 +409,7 @@ where
     Input::Position: GetSourcePosition,
 {
     many((char('['), rib_expr(), char(']').skip(spaces()))).map(
-        |collections: Vec<(char, Expr, char)>| IndexExpr {
+        |collections: Vec<(char, Expr, char)>| IndexExprs {
             exprs: collections
                 .into_iter()
                 .map(|(_, index_or_range, _)| index_or_range)
@@ -465,7 +436,7 @@ impl Fraction {
         let left = big.to_string();
         let right = self.0.to_string();
         let result = format!("{}.{}", left, right);
-        BigDecimal::from_str(&result).map_err(|e| e.to_string())
+        BigDecimal::from_str(&result).map_err(|e| format!("unable to parse number. {}", e))
     }
 }
 
@@ -511,13 +482,63 @@ where
         )
 }
 
-fn index_expr(base_expr: Expr, index_expr: IndexExpr) -> Expr {
+fn index_expr(base_expr: Expr, index_expr: IndexExprs) -> Expr {
     index_expr
         .exprs
         .into_iter()
         .fold(base_expr, |acc, index_expr| {
             Expr::select_index(acc, index_expr)
         })
+}
+
+fn fold_with_selections_or_fractions(
+    simple_expr: Expr,
+    exprs: Vec<WithIndex<SelectionOrFraction>>,
+) -> Result<Expr, RibParseError> {
+    let mut base = simple_expr;
+
+    for field_expr in exprs {
+        match field_expr.base {
+            SelectionOrFraction::SelectFieldExpr(Expr::Call {
+                call_type,
+                generic_type_parameter,
+                args,
+                ..
+            }) => {
+                base = Expr::invoke_worker_function(
+                    base.clone(),
+                    call_type.function_name().unwrap().to_string(),
+                    generic_type_parameter,
+                    args,
+                );
+                base = index_expr(base, field_expr.index_expr)
+                    .with_type_annotation_opt(field_expr.type_name)
+            }
+
+            SelectionOrFraction::SelectFieldExpr(expr) => {
+                let selection = build_selection(base.clone(), expr)?;
+                base = index_expr(selection, field_expr.index_expr)
+                    .with_type_annotation_opt(field_expr.type_name)
+            }
+
+            SelectionOrFraction::Fraction(fraction) => match base.clone() {
+                Expr::Number { number, .. } => {
+                    let combined = fraction
+                        .combine_with_integer(number.value)
+                        .map_err(RibParseError::Message)?;
+
+                    base = Expr::number(combined).with_type_annotation_opt(field_expr.type_name)
+                }
+
+                _ => {
+                    return Err(RibParseError::Message(
+                        "fraction can only be applied to numbers".to_string(),
+                    ))
+                }
+            },
+        }
+    }
+    Ok(base)
 }
 
 #[cfg(test)]
@@ -567,6 +588,14 @@ mod tests {
         let expected = Expr::number(BigDecimal::from_str("6.022e-23").unwrap())
             .with_type_annotation(TypeName::F32);
         assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_float_6() {
+        let input = "6.022e-23.562";
+        let result = Expr::from_text(input).unwrap_err();
+
+        assert_eq!(result, "Parse error at line: 1, column: 1\nunable to parse number. invalid digit found in string\n");
     }
 
     #[test]
