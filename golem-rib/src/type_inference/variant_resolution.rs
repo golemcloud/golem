@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_inference::variant_resolution::internal::get_variants_info;
 use crate::{Expr, FunctionTypeRegistry};
 
 pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) {
-    let variants = get_variants_info(expr, function_type_registry);
+    let variants = internal::get_variants_info(expr, function_type_registry);
 
     internal::convert_identifiers_to_no_arg_variant_calls(expr, &variants);
 
