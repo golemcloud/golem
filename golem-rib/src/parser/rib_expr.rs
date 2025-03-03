@@ -51,7 +51,7 @@ use crate::TypeName;
 // (ex: select_field, select_index, +, -, *,/, etc)
 parser! {
     pub fn rib_expr[Input]()(Input) -> Expr
-    where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
+    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
     {
        with_position(rib_expr_())
     }
@@ -59,7 +59,7 @@ parser! {
 
 pub fn rib_expr_<Input>() -> impl Parser<Input, Output = Expr>
 where
-    Input: combine::Stream<Token = char>,
+    Input: Stream<Token = char>,
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
@@ -199,7 +199,7 @@ where
 
 fn flag_or_record<Input>() -> impl Parser<Input, Output = Expr>
 where
-    Input: combine::Stream<Token = char>,
+    Input: Stream<Token = char>,
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
