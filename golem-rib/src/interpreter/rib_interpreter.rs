@@ -976,8 +976,7 @@ mod internal {
                     variant_name.clone(),
                     arg_value.map(|vnt| vnt.value),
                     variants.cases.clone(),
-                );
-                Ok(())
+                )
             }
 
             _ => Err(format!(

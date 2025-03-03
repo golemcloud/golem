@@ -194,11 +194,15 @@ impl InterpreterStack {
         variant_name: String,
         optional_variant_value: Option<Value>,
         cases: Vec<NameOptionTypePair>,
-    ) {
+    ) -> Result<(), String> {
         let case_idx = cases
             .iter()
             .position(|case| case.name == variant_name)
-            .unwrap() as u32; // TODO: return error
+            .ok_or(format!(
+                "internal Error: Failed to find the variant {} in the cases",
+                variant_name
+            ))? as u32;
+
         let case_value = optional_variant_value.map(Box::new);
         self.push_val(ValueAndType::new(
             Value::Variant {
@@ -207,6 +211,8 @@ impl InterpreterStack {
             },
             variant(cases),
         ));
+
+        Ok(())
     }
 
     pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) {
