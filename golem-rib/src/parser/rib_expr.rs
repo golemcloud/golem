@@ -552,10 +552,113 @@ fn combine_with_range_info(
 #[cfg(test)]
 mod tests {
     use crate::generic_type_parameter::GenericTypeParameter;
-    use crate::{ArmPattern, DynamicParsedFunctionName, Expr, MatchArm, TypeName};
-    use bigdecimal::BigDecimal;
+    use crate::{ArmPattern, DynamicParsedFunctionName, Expr, InferredType, MatchArm, TypeName};
+    use bigdecimal::{BigDecimal, FromPrimitive};
     use std::str::FromStr;
     use test_r::test;
+
+    #[test]
+    fn test_range() {
+        // All kind of ranges that `rust` supports
+        let range1 = "1..2"; // no spaces on both ends
+
+        let result1 = Expr::from_text(range1).unwrap();
+
+        assert_eq!(
+            result1,
+            Expr::range(
+                Expr::number_inferred(
+                    bigdecimal::BigDecimal::from_u64(1).unwrap(),
+                    None,
+                    InferredType::number()
+                ),
+                Expr::number_inferred(
+                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                    None,
+                    InferredType::number()
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn test_range_inclusive() {
+        // All kind of ranges that `rust` supports
+        let range1 = "1..=2"; // no spaces on both ends
+        let range2 = "1 ..= 2"; // space on both end
+        let range3 = "1 ..=2"; // space on left
+        let range4 = "1..=   2"; // space on right
+        let invalid_range = "1.. =2";
+
+        let result1 = Expr::from_text(range1).unwrap();
+        let result2 = Expr::from_text(range2).unwrap();
+        let result3 = Expr::from_text(range3).unwrap();
+        let result4 = Expr::from_text(range4).unwrap();
+        let result5 = Expr::from_text(invalid_range);
+
+        assert!(result1 == result2 && result2 == result3 && result3 == result4);
+        assert!(result5.is_err());
+        assert_eq!(
+            result1,
+            Expr::range_inclusive(
+                Expr::number_inferred(
+                    bigdecimal::BigDecimal::from_u64(1).unwrap(),
+                    None,
+                    InferredType::number()
+                ),
+                Expr::number_inferred(
+                    bigdecimal::BigDecimal::from_u64(2).unwrap(),
+                    None,
+                    InferredType::number()
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn test_range_from() {
+        // All kind of ranges that `rust` supports
+        let range1 = "1.."; // no spaces on both ends
+        let range2 = "1 .."; // space on both end
+
+        let result1 = Expr::from_text(range1).unwrap();
+        let result2 = Expr::from_text(range2).unwrap();
+
+        assert_eq!(result1, result2);
+
+        assert_eq!(
+            result1,
+            Expr::range_from(Expr::number_inferred(
+                bigdecimal::BigDecimal::from_u64(1).unwrap(),
+                None,
+                InferredType::number()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_range_from_2() {
+        // All kind of ranges that `rust` supports
+        let range2 = "1 .. + 2"; // space on both end
+
+        let result2 = Expr::from_text(range2).unwrap();
+
+        assert_eq!(
+            result2,
+            Expr::plus(
+                Expr::range_from(Expr::number_inferred(
+                    BigDecimal::from_u64(1).unwrap(),
+                    None,
+                    InferredType::number()
+                )),
+                Expr::number_inferred(
+                    BigDecimal::from_u64(2).unwrap(),
+                    None,
+                    InferredType::number()
+                )
+            )
+        );
+    }
 
     #[test]
     fn test_float_1() {
