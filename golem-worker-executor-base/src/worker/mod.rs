@@ -288,6 +288,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         })
     }
 
+    pub fn worker_id(&self) -> WorkerId {
+        self.owned_worker_id.worker_id()
+    }
+
     pub fn oom_retry_config(&self) -> &RetryConfig {
         &self.oom_retry_config
     }
