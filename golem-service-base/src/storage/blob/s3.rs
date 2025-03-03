@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ReplayableStream;
 use crate::config::S3BlobStorageConfig;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
@@ -24,17 +25,18 @@ use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use aws_sdk_s3::Client;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::TryFutureExt;
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
+use http_body::SizeHint;
+use http_body_util::combinators::BoxBody;
+use http_body_util::BodyExt;
 use std::error::Error;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::info;
-
-use super::ReplayableStream;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -606,7 +608,10 @@ impl BlobStorage for S3BlobStorage {
                     .make_stream()
                     .await
                     .map_err(SdkErrorOrCustomError::custom_error)?;
-                let body = reqwest::Body::wrap_stream(stream);
+
+                // Checksum calculation requires body length to be known.
+                let body = SizedBody::new(reqwest::Body::wrap_stream(stream), stream_length);
+
                 let byte_stream = ByteStream::from_body_1_x(body);
 
                 client
@@ -1007,5 +1012,46 @@ impl<T> SdkErrorOrCustomError<T> {
             SdkErrorOrCustomError::SdkError(err) => S3BlobStorage::error_string(&err),
             SdkErrorOrCustomError::CustomError(err) => err,
         }
+    }
+}
+
+// body with explicitly overridden size hint. Needed because size hints are not settable for streams, see: https://github.com/seanmonstar/reqwest/issues/1293
+pub struct SizedBody<D, E> {
+    inner: BoxBody<D, E>,
+    hint: SizeHint,
+}
+
+impl<D, E> SizedBody<D, E> {
+    pub fn new<B>(body: B, size: u64) -> Self
+    where
+        B: http_body::Body<Data = D, Error = E> + Send + Sync + 'static,
+    {
+        Self {
+            inner: body.boxed(),
+            hint: SizeHint::with_exact(size),
+        }
+    }
+}
+
+impl<D: Buf, E> http_body::Body for SizedBody<D, E> {
+    type Data = D;
+    type Error = E;
+
+    #[inline]
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Result<http_body::Frame<D>, E>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    #[inline]
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> SizeHint {
+        self.hint.clone()
     }
 }
