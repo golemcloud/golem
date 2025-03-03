@@ -568,6 +568,8 @@ impl InvocationContextStack {
 
     /// Returns the span IDs in this stack, partitioned by local and inherited ones
     /// Return value is (local, inherited)
+    ///
+    /// Linked spans are not included in the result
     pub fn span_ids(&self) -> (HashSet<SpanId>, HashSet<SpanId>) {
         (
             self.spans
@@ -609,11 +611,11 @@ impl Decode for InvocationContextStack {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let trace_id = TraceId::decode(decoder)?;
         let spans = Vec::<Arc<InvocationContextSpan>>::decode(decoder)?;
-        let trace_state = Vec::<String>::decode(decoder)?;
+        let trace_states = Vec::<String>::decode(decoder)?;
         Ok(Self {
             trace_id,
             spans: NEVec::try_from_vec(spans).ok_or(DecodeError::custom("No spans"))?,
-            trace_states: trace_state,
+            trace_states,
         })
     }
 }
@@ -856,11 +858,144 @@ mod protobuf {
                     .collect::<Result<Vec<Arc<InvocationContextSpan>>, String>>()?,
             )
             .ok_or_else(|| "No spans".to_string())?;
+
+            for idx in 0..(spans.len().get() - 1) {
+                spans[idx].replace_parent(Some(spans[idx + 1].clone()));
+            }
+
             Ok(Self {
                 trace_id,
                 spans,
                 trace_states: trace_state,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::invocation_context::{
+        AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+    };
+    use crate::model::Timestamp;
+    use crate::serialization::{deserialize, serialize};
+    use std::collections::HashSet;
+    use test_r::test;
+
+    fn example_trace_id_1() -> TraceId {
+        TraceId::from_string("4bf92f3577b34da6a3ce929d0e0e4736").unwrap()
+    }
+
+    fn example_span_id_1() -> SpanId {
+        SpanId::from_string("cddd89c618fb7bf3").unwrap()
+    }
+
+    fn example_span_id_2() -> SpanId {
+        SpanId::from_string("00f067aa0ba902b7").unwrap()
+    }
+
+    fn example_span_id_3() -> SpanId {
+        SpanId::from_string("d0fa4a9110f2dcab").unwrap()
+    }
+
+    fn example_span_id_4() -> SpanId {
+        SpanId::from_string("4a840260c6879c88").unwrap()
+    }
+
+    fn example_span_id_5() -> SpanId {
+        SpanId::from_string("04d81050b3163556").unwrap()
+    }
+
+    fn example_span_id_6() -> SpanId {
+        SpanId::from_string("b7027ded25941641").unwrap()
+    }
+
+    // span1 -> span2 -> span5 -> span6
+    // span3 -> span4 /
+    fn example_stack_1() -> InvocationContextStack {
+        let timestamp = Timestamp::from(1724701930000);
+
+        let root_span = InvocationContextSpan::external_parent(example_span_id_1());
+        let mut trace_states = Vec::new();
+        trace_states.push("state1=x".to_string());
+        trace_states.push("state2=y".to_string());
+
+        let span2 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_2())
+            .with_parent(root_span.clone())
+            .with_inherited(true)
+            .build();
+        span2.set_attribute("x".to_string(), AttributeValue::String("1".to_string()));
+        span2.set_attribute("y".to_string(), AttributeValue::String("2".to_string()));
+
+        let span3 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_3())
+            .build();
+        span3.set_attribute("w".to_string(), AttributeValue::String("4".to_string()));
+
+        let span4 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_4())
+            .with_parent(span3)
+            .build();
+        span4.set_attribute("y".to_string(), AttributeValue::String("22".to_string()));
+
+        let span5 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_5())
+            .with_parent(span2.clone())
+            .with_linked_context(span4)
+            .build();
+        span5.set_attribute("x".to_string(), AttributeValue::String("11".to_string()));
+        span5.set_attribute("z".to_string(), AttributeValue::String("3".to_string()));
+
+        let span6 = InvocationContextSpan::local()
+            .with_start(timestamp)
+            .with_span_id(example_span_id_6())
+            .with_parent(span5.clone())
+            .build();
+        span6.set_attribute("z".to_string(), AttributeValue::String("33".to_string()));
+        span6.set_attribute("a".to_string(), AttributeValue::String("0".to_string()));
+
+        let mut stack = InvocationContextStack::new(example_trace_id_1(), root_span, trace_states);
+        stack.push(span2);
+        stack.push(span5);
+        stack.push(span6);
+
+        stack
+    }
+
+    #[test]
+    fn get_span_ids() {
+        let stack = example_stack_1();
+        let (local, inherited) = stack.span_ids();
+        assert_eq!(
+            local,
+            HashSet::from_iter(vec![example_span_id_5(), example_span_id_6()])
+        );
+        assert_eq!(
+            inherited,
+            HashSet::from_iter(vec![example_span_id_1(), example_span_id_2()])
+        );
+    }
+
+    #[test]
+    fn binary_serialization() {
+        let stack = example_stack_1();
+        let encoded = serialize(&stack).unwrap();
+        let decoded: InvocationContextStack = deserialize(&encoded).unwrap();
+        assert_eq!(stack, decoded);
+    }
+
+    #[cfg(feature = "protobuf")]
+    #[test]
+    fn protobuf_serialization() {
+        let stack = example_stack_1();
+        let encoded: golem_api_grpc::proto::golem::worker::TracingInvocationContext =
+            stack.clone().into();
+        let decoded: InvocationContextStack = encoded.try_into().unwrap();
+        assert_eq!(stack, decoded);
     }
 }
