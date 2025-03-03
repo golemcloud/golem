@@ -1082,11 +1082,7 @@ mod type_inference_tests {
                     record(
                         vec![(
                             "foo".to_string(),
-                            Box::new(identifier(
-                                VariableId::local("n", 0),
-                                None,
-                                InferredType::U64,
-                            )),
+                            identifier(VariableId::local("n", 0), None, InferredType::U64),
                         )],
                         InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                     ),
@@ -1488,7 +1484,7 @@ mod type_inference_tests {
                     VariableId::local("x", 0),
                     None,
                     record(
-                        vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
+                        vec![("foo".to_string(), Expr::literal("bar"))],
                         InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                     ),
                     InferredType::Unknown,
@@ -1528,7 +1524,7 @@ mod type_inference_tests {
                         MatchArm::new(
                             ArmPattern::constructor("none", vec![]),
                             record(
-                                vec![("foo".to_string(), Box::new(Expr::literal("baz")))],
+                                vec![("foo".to_string(), Expr::literal("baz"))],
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                             ),
                         ),
@@ -1563,7 +1559,7 @@ mod type_inference_tests {
                     VariableId::local("x", 0),
                     None,
                     record(
-                        vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
+                        vec![("foo".to_string(), Expr::literal("bar"))],
                         InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                     ),
                     InferredType::Unknown,
@@ -1650,7 +1646,7 @@ mod type_inference_tests {
                     VariableId::local("x", 0),
                     None,
                     record(
-                        vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
+                        vec![("foo".to_string(), Expr::literal("bar"))],
                         InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                     ),
                     InferredType::Unknown,
@@ -1929,11 +1925,7 @@ mod type_inference_tests {
                     record(
                         vec![(
                             "foo".to_string(),
-                            Box::new(identifier(
-                                VariableId::local("number", 0),
-                                None,
-                                InferredType::U64,
-                            )),
+                            identifier(VariableId::local("number", 0), None, InferredType::U64),
                         )],
                         InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                     ),
@@ -2002,11 +1994,11 @@ mod type_inference_tests {
                                 record(
                                     vec![(
                                         "x".to_string(),
-                                        Box::new(identifier(
+                                        identifier(
                                             VariableId::local("x", 0),
                                             None,
                                             InferredType::U64,
-                                        )),
+                                        ),
                                     )],
                                     InferredType::Record(vec![(
                                         "x".to_string(),
@@ -2255,25 +2247,25 @@ mod type_inference_tests {
                     vec![
                         (
                             "a".to_string(),
-                            Box::new(identifier(
+                            identifier(
                                 VariableId::local("p", 0),
                                 None,
                                 InferredType::Result {
                                     ok: Some(Box::new(InferredType::Unknown)),
                                     error: Some(Box::new(InferredType::Str)),
                                 },
-                            )),
+                            ),
                         ),
                         (
                             "b".to_string(),
-                            Box::new(identifier(
+                            identifier(
                                 VariableId::local("q", 0),
                                 None,
                                 InferredType::Result {
                                     ok: Some(Box::new(InferredType::Str)),
                                     error: Some(Box::new(InferredType::Unknown)),
                                 },
-                            )),
+                            ),
                         ),
                     ],
                     InferredType::Record(vec![
@@ -2556,9 +2548,12 @@ mod type_inference_tests {
                 source_span: SourceSpan::default(),
             }
         }
-        pub(crate) fn record(exprs: Vec<(String, Box<Expr>)>, inferred_type: InferredType) -> Expr {
+        pub(crate) fn record(exprs: Vec<(String, Expr)>, inferred_type: InferredType) -> Expr {
             Expr::Record {
-                exprs,
+                exprs: exprs
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Box::new(v.clone())))
+                    .collect(),
                 inferred_type,
                 source_span: SourceSpan::default(),
                 type_annotation: None,
@@ -3051,27 +3046,15 @@ mod type_inference_tests {
                         vec![
                             (
                                 "x".to_string(),
-                                Box::new(identifier(
-                                    VariableId::local("x", 0),
-                                    None,
-                                    InferredType::Str,
-                                )),
+                                identifier(VariableId::local("x", 0), None, InferredType::Str),
                             ),
                             (
                                 "y".to_string(),
-                                Box::new(identifier(
-                                    VariableId::local("y", 0),
-                                    None,
-                                    InferredType::Str,
-                                )),
+                                identifier(VariableId::local("y", 0), None, InferredType::Str),
                             ),
                             (
                                 "z".to_string(),
-                                Box::new(identifier(
-                                    VariableId::local("z", 0),
-                                    None,
-                                    InferredType::Str,
-                                )),
+                                identifier(VariableId::local("z", 0), None, InferredType::Str),
                             ),
                         ],
                         InferredType::Record(vec![
@@ -3098,13 +3081,13 @@ mod type_inference_tests {
                         record(
                             vec![(
                                 "body".to_string(),
-                                Box::new(record(
+                                record(
                                     vec![
-                                        ("id".to_string(), Box::new(Expr::literal("bId"))),
-                                        ("name".to_string(), Box::new(Expr::literal("bName"))),
+                                        ("id".to_string(), Expr::literal("bId")),
+                                        ("name".to_string(), Expr::literal("bName")),
                                         (
                                             "titles".to_string(),
-                                            Box::new(select_field(
+                                            select_field(
                                                 select_field(
                                                     identifier(
                                                         VariableId::global("request".to_string()),
@@ -3161,11 +3144,11 @@ mod type_inference_tests {
                                                 "titles".to_string(),
                                                 None,
                                                 InferredType::List(Box::new(InferredType::Str)),
-                                            )),
+                                            ),
                                         ),
                                         (
                                             "address".to_string(),
-                                            Box::new(select_field(
+                                            select_field(
                                                 select_field(
                                                     identifier(
                                                         VariableId::global("request".to_string()),
@@ -3225,7 +3208,7 @@ mod type_inference_tests {
                                                     ("street".to_string(), InferredType::Str),
                                                     ("city".to_string(), InferredType::Str),
                                                 ]),
-                                            )),
+                                            ),
                                         ),
                                     ],
                                     InferredType::Record(vec![
@@ -3243,7 +3226,7 @@ mod type_inference_tests {
                                             InferredType::List(Box::new(InferredType::Str)),
                                         ),
                                     ]),
-                                )),
+                                ),
                             )],
                             InferredType::Record(vec![(
                                 "body".to_string(),
