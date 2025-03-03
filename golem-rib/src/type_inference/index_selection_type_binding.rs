@@ -12,12 +12,24 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
     while let Some(expr) = queue.pop_back() {
         match expr {
             Expr::SelectIndex { expr, index, .. } => {
-                let existing = index.inferred_type();
-                if existing.is_unknown() || existing.is_one_of() {
-                    if let Expr::Number { inferred_type, .. } = index.deref_mut() {
+                if let Expr::Number { inferred_type, .. } = index.deref_mut() {
+                    if inferred_type.is_unknown() || inferred_type.is_one_of() {
                         *inferred_type = InferredType::U64
                     }
                 }
+
+                if let Expr::Range { range, .. } = index.deref_mut() {
+                    let exprs = range.get_exprs_mut();
+
+                    for expr in exprs {
+                        if let Expr::Number { inferred_type, .. } = expr.deref_mut() {
+                            if inferred_type.is_unknown() || inferred_type.is_one_of() {
+                                *inferred_type = InferredType::U64
+                            }
+                        }
+                    }
+                }
+
                 queue.push_back(expr);
             }
 

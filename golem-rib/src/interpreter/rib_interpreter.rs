@@ -2560,8 +2560,8 @@ mod interpreter_tests {
     async fn test_interpreter_for_select_dynamic_7() {
         let expr = r#"
               let list: list<u8> = [2, 5, 4, 6];
-              let result = list[0:u8..2:u8];
-              for i in result[0:u8..2:u8] {
+              let result = list[0..2];
+              for i in result[0..2] {
                 yield i;
               }
               "#;
@@ -2584,7 +2584,7 @@ mod interpreter_tests {
     #[test]
     async fn test_interpreter_range_returns_1() {
         let expr = r#"
-              let x = 1:u64..;
+              let x = 1..;
               x
               "#;
 
@@ -2612,7 +2612,7 @@ mod interpreter_tests {
     #[test]
     async fn test_interpreter_range_returns_2() {
         let expr = r#"
-              let x = 1:u64..2:u64;
+              let x = 1..2;
               x
               "#;
 
@@ -2642,7 +2642,7 @@ mod interpreter_tests {
     #[test]
     async fn test_interpreter_range_returns_3() {
         let expr = r#"
-              let x = 1:u64..=10:u64;
+              let x = 1..=10;
               x
               "#;
 
@@ -2705,7 +2705,7 @@ mod interpreter_tests {
     async fn test_interpreter_range_returns_5() {
         let expr = r#"
               let y = 1:u64 + 10: u64;
-              1:u64..y
+              1..y
               "#;
 
         let expr = Expr::from_text(expr).unwrap();
@@ -2730,7 +2730,7 @@ mod interpreter_tests {
     #[test]
     async fn test_interpreter_range_with_comprehension_1() {
         let expr = r#"
-              let range = 1:u64..=5:u64;
+              let range = 1..=5;
               for i in range {
                 yield i;
               }
@@ -2761,7 +2761,7 @@ mod interpreter_tests {
     #[test]
     async fn test_interpreter_range_with_comprehension_2() {
         let expr = r#"
-              let range = 1:u64..5:u64;
+              let range = 1..5;
               for i in range {
                 yield i;
               }
