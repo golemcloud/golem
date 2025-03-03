@@ -550,68 +550,28 @@ mod type_inference_tests {
                     InferredType::Unknown,
                 ),
                 greater_than(
-                    Box::new(identifier(
-                        VariableId::local("x", 0),
-                        None,
-                        InferredType::U64,
-                    )),
-                    Box::new(identifier(
-                        VariableId::local("y", 0),
-                        None,
-                        InferredType::U64,
-                    )),
+                    identifier(VariableId::local("x", 0), None, InferredType::U64),
+                    identifier(VariableId::local("y", 0), None, InferredType::U64),
                     InferredType::Bool,
                 ),
                 greater_than_or_equal_to(
-                    Box::new(identifier(
-                        VariableId::local("x", 0),
-                        None,
-                        InferredType::U64,
-                    )),
-                    Box::new(identifier(
-                        VariableId::local("y", 0),
-                        None,
-                        InferredType::U64,
-                    )),
+                    identifier(VariableId::local("x", 0), None, InferredType::U64),
+                    identifier(VariableId::local("y", 0), None, InferredType::U64),
                     InferredType::Bool,
                 ),
                 less_than(
-                    Box::new(identifier(
-                        VariableId::local("x", 0),
-                        None,
-                        InferredType::U64,
-                    )),
-                    Box::new(identifier(
-                        VariableId::local("y", 0),
-                        None,
-                        InferredType::U64,
-                    )),
+                    identifier(VariableId::local("x", 0), None, InferredType::U64),
+                    identifier(VariableId::local("y", 0), None, InferredType::U64),
                     InferredType::Bool,
                 ),
                 less_than_or_equal_to(
-                    Box::new(identifier(
-                        VariableId::local("x", 0),
-                        None,
-                        InferredType::U64,
-                    )),
-                    Box::new(identifier(
-                        VariableId::local("y", 0),
-                        None,
-                        InferredType::U64,
-                    )),
+                    identifier(VariableId::local("x", 0), None, InferredType::U64),
+                    identifier(VariableId::local("y", 0), None, InferredType::U64),
                     InferredType::Bool,
                 ),
                 equal_to(
-                    Box::new(identifier(
-                        VariableId::local("x", 0),
-                        None,
-                        InferredType::U64,
-                    )),
-                    Box::new(identifier(
-                        VariableId::local("y", 0),
-                        None,
-                        InferredType::U64,
-                    )),
+                    identifier(VariableId::local("x", 0), None, InferredType::U64),
+                    identifier(VariableId::local("y", 0), None, InferredType::U64),
                     InferredType::Bool,
                 ),
             ],
@@ -863,29 +823,13 @@ mod type_inference_tests {
                     InferredType::Unknown,
                 ),
                 cond(
-                    Box::new(greater_than(
-                        Box::new(identifier(
-                            VariableId::local("x", 0),
-                            None,
-                            InferredType::U64,
-                        )),
-                        Box::new(identifier(
-                            VariableId::local("y", 0),
-                            None,
-                            InferredType::U64,
-                        )),
+                    greater_than(
+                        identifier(VariableId::local("x", 0), None, InferredType::U64),
+                        identifier(VariableId::local("y", 0), None, InferredType::U64),
                         InferredType::Bool,
-                    )),
-                    Box::new(identifier(
-                        VariableId::local("res1", 0),
-                        None,
-                        InferredType::Str,
-                    )),
-                    Box::new(identifier(
-                        VariableId::local("res2", 0),
-                        None,
-                        InferredType::Str,
-                    )),
+                    ),
+                    identifier(VariableId::local("res1", 0), None, InferredType::Str),
+                    identifier(VariableId::local("res2", 0), None, InferredType::Str),
                     InferredType::Str,
                 ),
             ],
@@ -2028,21 +1972,21 @@ mod type_inference_tests {
                     VariableId::local("x", 0),
                     Some(TypeName::U64),
                     cond(
-                        Box::new(Expr::boolean(true)),
-                        Box::new(number(
+                        Expr::boolean(true),
+                        number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
                             Some(TypeName::U64),
                             InferredType::U64,
-                        )),
-                        Box::new(number(
+                        ),
+                        number(
                             Number {
                                 value: BigDecimal::from(20),
                             },
                             Some(TypeName::U64),
                             InferredType::U64,
-                        )),
+                        ),
                         InferredType::U64,
                     ),
                     InferredType::Unknown,
@@ -2497,29 +2441,20 @@ mod type_inference_tests {
             }
         }
 
-        pub(crate) fn cond(
-            cond: Box<Expr>,
-            lhs: Box<Expr>,
-            rhs: Box<Expr>,
-            inferred_type: InferredType,
-        ) -> Expr {
+        pub(crate) fn cond(cond: Expr, lhs: Expr, rhs: Expr, inferred_type: InferredType) -> Expr {
             Expr::Cond {
-                cond,
-                lhs,
-                rhs,
+                cond: Box::new(cond),
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
                 inferred_type,
                 source_span: SourceSpan::default(),
                 type_annotation: None,
             }
         }
-        pub(crate) fn greater_than(
-            lhs: Box<Expr>,
-            rhs: Box<Expr>,
-            inferred_type: InferredType,
-        ) -> Expr {
+        pub(crate) fn greater_than(lhs: Expr, rhs: Expr, inferred_type: InferredType) -> Expr {
             Expr::GreaterThan {
-                lhs,
-                rhs,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
                 inferred_type,
                 source_span: SourceSpan::default(),
                 type_annotation: None,
@@ -2527,27 +2462,23 @@ mod type_inference_tests {
         }
 
         pub(crate) fn greater_than_or_equal_to(
-            lhs: Box<Expr>,
-            rhs: Box<Expr>,
+            lhs: Expr,
+            rhs: Expr,
             inferred_type: InferredType,
         ) -> Expr {
             Expr::GreaterThanOrEqualTo {
-                lhs,
-                rhs,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
                 inferred_type,
                 source_span: SourceSpan::default(),
                 type_annotation: None,
             }
         }
 
-        pub(crate) fn less_than(
-            lhs: Box<Expr>,
-            rhs: Box<Expr>,
-            inferred_type: InferredType,
-        ) -> Expr {
+        pub(crate) fn less_than(lhs: Expr, rhs: Expr, inferred_type: InferredType) -> Expr {
             Expr::LessThan {
-                lhs,
-                rhs,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
                 inferred_type,
                 source_span: SourceSpan::default(),
                 type_annotation: None,
@@ -2555,27 +2486,23 @@ mod type_inference_tests {
         }
 
         pub(crate) fn less_than_or_equal_to(
-            lhs: Box<Expr>,
-            rhs: Box<Expr>,
+            lhs: Expr,
+            rhs: Expr,
             inferred_type: InferredType,
         ) -> Expr {
             Expr::LessThanOrEqualTo {
-                lhs,
-                rhs,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
                 inferred_type,
                 source_span: SourceSpan::default(),
                 type_annotation: None,
             }
         }
 
-        pub(crate) fn equal_to(
-            lhs: Box<Expr>,
-            rhs: Box<Expr>,
-            inferred_type: InferredType,
-        ) -> Expr {
+        pub(crate) fn equal_to(lhs: Expr, rhs: Expr, inferred_type: InferredType) -> Expr {
             Expr::EqualTo {
-                lhs,
-                rhs,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
                 inferred_type,
                 source_span: SourceSpan::default(),
                 type_annotation: None,
