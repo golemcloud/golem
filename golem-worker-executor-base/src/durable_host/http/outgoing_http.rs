@@ -76,7 +76,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .collect();
 
         if self.state.forward_trace_context_headers {
-            let invocation_context = self.state.invocation_context.get_stack(span.span_id());
+            let invocation_context = self
+                .state
+                .invocation_context
+                .get_stack(span.span_id())
+                .unwrap();
             let trace_context_headers =
                 TraceContextHeaders::from_invocation_context(invocation_context);
             for (key, value) in trace_context_headers.to_raw_headers_map() {

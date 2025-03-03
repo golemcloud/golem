@@ -230,6 +230,16 @@ impl InvocationContextSpan {
         }
     }
 
+    pub fn linked_context(&self) -> Option<Arc<Self>> {
+        match self {
+            Self::Local { state, .. } => {
+                let state = state.read().unwrap();
+                state.linked_context.clone()
+            }
+            Self::ExternalParent { .. } => None,
+        }
+    }
+
     pub fn start_span(self: &Arc<Self>, span_id: Option<SpanId>) -> Arc<Self> {
         Self::local()
             .with_parent(self.clone())
@@ -240,10 +250,7 @@ impl InvocationContextSpan {
     pub fn add_link(&self, linked_span: Arc<InvocationContextSpan>) {
         match self {
             Self::Local { state, .. } => {
-                state.write().unwrap().attributes.insert(
-                    "linked_span".to_string(),
-                    AttributeValue::String(linked_span.span_id().to_string()),
-                );
+                state.write().unwrap().linked_context = Some(linked_span);
             }
             _ => {
                 panic!("Cannot add link to external parent span")
@@ -261,6 +268,14 @@ impl InvocationContextSpan {
                         Some(value) => break Some(value.clone()),
                         None => {
                             if inherit {
+                                // First look in the linked context
+                                if let Some(linked_context) = &state.linked_context {
+                                    if let Some(value) = linked_context.get_attribute(key, false) {
+                                        break Some(value);
+                                    }
+                                }
+
+                                // Otherwise recurse to the parent
                                 match &state.parent {
                                     Some(parent) => parent.clone(),
                                     None => break None,
@@ -285,6 +300,12 @@ impl InvocationContextSpan {
                     let state = state.read().unwrap();
                     if let Some(value) = state.attributes.get(key) {
                         result.push(value.clone());
+                    }
+                    // Add value from the linked context
+                    if let Some(linked_context) = &state.linked_context {
+                        if let Some(value) = linked_context.get_attribute(key, false) {
+                            result.push(value.clone());
+                        }
                     }
                     match state.parent.as_ref() {
                         Some(parent) => parent.clone(),
@@ -322,6 +343,15 @@ impl InvocationContextSpan {
                             .push(value.clone());
                     }
                     if inherit {
+                        if let Some(linked_context) = &state.linked_context {
+                            for (key, value) in linked_context.get_attributes(false) {
+                                result
+                                    .entry(key.clone())
+                                    .or_insert_with(Vec::new)
+                                    .extend(value);
+                            }
+                        }
+
                         match state.parent.as_ref() {
                             Some(parent) => parent.clone(),
                             None => break result,
@@ -916,9 +946,7 @@ mod tests {
         let timestamp = Timestamp::from(1724701930000);
 
         let root_span = InvocationContextSpan::external_parent(example_span_id_1());
-        let mut trace_states = Vec::new();
-        trace_states.push("state1=x".to_string());
-        trace_states.push("state2=y".to_string());
+        let trace_states = vec!["state1=x".to_string(), "state2=y".to_string()];
 
         let span2 = InvocationContextSpan::local()
             .with_start(timestamp)

@@ -745,8 +745,6 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
     ) -> Result<(), GolemError> {
-        warn!("set_current_invocation_context: {invocation_context:?}");
-
         let (invocation_context, current_span_id) =
             InvocationContext::from_stack(invocation_context).map_err(GolemError::runtime)?;
 
@@ -760,6 +758,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         self.state
             .invocation_context
             .get_stack(&self.state.current_span_id)
+            .unwrap()
     }
 
     fn is_live(&self) -> bool {
@@ -1252,8 +1251,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
-        warn!("start_child_span in {parent}");
-
         let current_span_id = &self.state.current_span_id;
         let span = self
             .state
