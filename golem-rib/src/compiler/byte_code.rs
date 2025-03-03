@@ -284,7 +284,7 @@ mod internal {
             } => {
                 let desugared_pattern_match =
                     desugar_pattern_match(predicate.deref(), match_arms, inferred_type.clone())
-                        .ok_or("Desugar pattern match failed".to_string())?;
+                        .ok_or("internal error: desugar pattern match failed".to_string())?;
 
                 stack.push(ExprState::from_expr(&desugared_pattern_match));
             }
@@ -305,7 +305,7 @@ mod internal {
 
             Expr::SelectIndex { expr, index, .. } => match index.inferred_type() {
                 InferredType::Range { .. } => {
-                    let list_comprehension = desugar_range_selection(expr, index);
+                    let list_comprehension = desugar_range_selection(expr, index)?;
                     stack.push(ExprState::from_expr(&list_comprehension));
                 }
                 _ => {

@@ -12,20 +12,63 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredType, MatchArm, VariableId};
+use crate::{Expr, InferredType, MatchArm, Range, VariableId};
+use bigdecimal::BigDecimal;
+use std::ops::Deref;
 
-pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Expr {
-    let iterable_expr = VariableId::list_comprehension_identifier("i");
+pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Result<Expr, String> {
+    let iterable_expr = VariableId::list_comprehension_identifier("__i__");
 
-    Expr::list_comprehension(
-        VariableId::list_comprehension_identifier("i"),
-        range_expr.clone(),
-        Expr::select_index(
-            select_from.clone(),
-            Expr::identifier_with_variable_id(iterable_expr, None),
-        ),
-    )
-    .with_inferred_type(select_from.inferred_type())
+    match range_expr {
+        Expr::Range { range, .. } => match range {
+            Range::Range { .. } | Range::RangeInclusive { .. } => Ok(Expr::list_comprehension(
+                iterable_expr.clone(),
+                range_expr.clone(),
+                Expr::select_index(
+                    select_from.clone(),
+                    Expr::identifier_with_variable_id(iterable_expr, None),
+                ),
+            )
+            .with_inferred_type(select_from.inferred_type())),
+
+            Range::RangeFrom { from, .. } => {
+                let length = VariableId::local("__size__", 0);
+                let length_identifier = Expr::identifier_with_variable_id(length.clone(), None)
+                    .with_inferred_type(InferredType::U64);
+                let index = VariableId::local("__index__", 0);
+                let index_identifier = Expr::identifier_with_variable_id(index.clone(), None)
+                    .with_inferred_type(InferredType::U64);
+
+                Ok(Expr::expr_block(vec![
+                    Expr::let_binding_with_variable_id(
+                        length,
+                        Expr::length(select_from.clone()),
+                        None,
+                    ),
+                    Expr::let_binding_with_variable_id(
+                        index,
+                        Expr::minus(
+                            length_identifier,
+                            Expr::number(BigDecimal::from(1)).with_inferred_type(InferredType::U64),
+                        ),
+                        None,
+                    )
+                    .with_inferred_type(InferredType::U64),
+                    Expr::list_comprehension(
+                        iterable_expr.clone(),
+                        Expr::range(from.deref().clone(), index_identifier),
+                        Expr::select_index(
+                            select_from.clone(),
+                            Expr::identifier_with_variable_id(iterable_expr, None),
+                        ),
+                    )
+                    .with_inferred_type(select_from.inferred_type()),
+                ]))
+            }
+        },
+
+        _ => Err("internal error: expression is not a range for any desugar to apply".to_string()),
+    }
 }
 
 pub fn desugar_pattern_match(
