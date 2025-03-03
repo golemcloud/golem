@@ -1852,7 +1852,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 Expr::let_binding(name, expr, type_annotation)
             }
 
-            golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(expr) => {
+            golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndexV1(expr) => {
                 let selection = *expr.expr.ok_or("Missing expr")?;
                 let field = *expr.index.ok_or("Missing index")?;
                 let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
@@ -2360,8 +2360,8 @@ mod protobuf {
                     type_annotation,
                     ..
                 } => Some(
-                    golem_api_grpc::proto::golem::rib::expr::Expr::SelectDynamic(Box::new(
-                        golem_api_grpc::proto::golem::rib::SelectDynamicExpr {
+                    golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndexV1(Box::new(
+                        golem_api_grpc::proto::golem::rib::SelectIndexExprV1 {
                             expr: Some(Box::new((*expr).into())),
                             index: Some(Box::new((*index).into())),
                             type_name: type_annotation.map(|t| t.into()),
