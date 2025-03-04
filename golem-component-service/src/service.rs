@@ -17,7 +17,6 @@ use golem_common::config::DbConfig;
 use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_component_service_base::config::ComponentStoreConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
@@ -27,7 +26,7 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_component_service_base::service::component_object_store;
+use golem_component_service_base::service::component_object_store::BlobStorageComponentObjectStore;
 use golem_component_service_base::service::component_object_store::{
     ComponentObjectStore, LoggedComponentObjectStore,
 };
@@ -110,22 +109,9 @@ impl Services {
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let object_store: Arc<dyn ComponentObjectStore + Sync + Send> =
-            match &config.component_store {
-                ComponentStoreConfig::S3(c) => {
-                    let store: Arc<dyn ComponentObjectStore + Sync + Send> =
-                        Arc::new(LoggedComponentObjectStore::new(
-                            component_object_store::AwsS3ComponentObjectStore::new(c).await,
-                        ));
-                    store
-                }
-                ComponentStoreConfig::Local(c) => {
-                    let store: Arc<dyn ComponentObjectStore + Sync + Send> =
-                        Arc::new(LoggedComponentObjectStore::new(
-                            component_object_store::FsComponentObjectStore::new(c)?,
-                        ));
-                    store
-                }
-            };
+            Arc::new(LoggedComponentObjectStore::new(
+                BlobStorageComponentObjectStore::new(blob_storage.clone()),
+            ));
 
         let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
             match config.compilation.clone() {

@@ -59,8 +59,10 @@ impl InitialComponentFilesService {
         &self,
         account_id: &AccountId,
         key: &InitialComponentFileKey,
-    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
-    {
+    ) -> Result<
+        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
+        String,
+    > {
         self.blob_storage
             .get_stream(
                 INITIAL_COMPONENT_FILES_LABEL,
@@ -88,7 +90,7 @@ impl InitialComponentFilesService {
             .blob_storage
             .get_metadata(
                 INITIAL_COMPONENT_FILES_LABEL,
-                "put",
+                "get_metadata",
                 BlobStorageNamespace::InitialComponentFiles {
                     account_id: account_id.clone(),
                 },

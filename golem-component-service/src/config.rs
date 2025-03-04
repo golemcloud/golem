@@ -12,19 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::config::BlobStorageConfig;
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbConfig, DbSqliteConfig, HasConfigExamples,
 };
 use golem_common::model::Empty;
 use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_component_service_base::config::{
-    ComponentStoreConfig, ComponentStoreLocalConfig, ComponentStoreS3Config,
-};
+use golem_service_base::config::BlobStorageConfig;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
@@ -32,7 +28,6 @@ pub struct ComponentServiceConfig {
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,
-    pub component_store: ComponentStoreConfig,
     pub compilation: ComponentCompilationConfig,
     pub blob_storage: BlobStorageConfig,
 }
@@ -47,10 +42,6 @@ impl Default for ComponentServiceConfig {
                 database: "../data/golem_component.sqlite".to_string(),
                 max_connections: 10,
             }),
-            component_store: ComponentStoreConfig::Local(ComponentStoreLocalConfig {
-                root_path: "../data/component_store".to_string(),
-                object_prefix: "".to_string(),
-            }),
             compilation: ComponentCompilationConfig::default(),
             blob_storage: BlobStorageConfig::default(),
         }
@@ -63,10 +54,6 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
             "with postgres, s3 and disabled compilation",
             Self {
                 db: DbConfig::postgres_example(),
-                component_store: ComponentStoreConfig::S3(ComponentStoreS3Config {
-                    bucket_name: "bucket".to_string(),
-                    object_prefix: "object_prefix".to_string(),
-                }),
                 compilation: ComponentCompilationConfig::Disabled(Empty {}),
                 blob_storage: BlobStorageConfig::default_s3(),
                 ..ComponentServiceConfig::default()

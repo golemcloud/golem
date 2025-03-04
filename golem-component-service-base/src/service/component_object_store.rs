@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{ComponentStoreLocalConfig, ComponentStoreS3Config};
-use anyhow::Error;
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
-use aws_config::BehaviorVersion;
-use futures::Stream;
-use golem_service_base::stream::{ByteStream, LoggedByteStream};
-use std::fs;
+use futures::{Stream, StreamExt};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::stream::LoggedByteStream;
 use std::path::PathBuf;
 use std::pin::Pin;
-use tracing::{debug, debug_span, error, info};
+use std::sync::Arc;
+use tracing::{debug, debug_span, error};
 use tracing_futures::Instrument;
+
+const COMPONENT_FILES_LABEL: &str = "component_files";
 
 #[async_trait]
 pub trait ComponentObjectStore {
@@ -31,7 +32,7 @@ pub trait ComponentObjectStore {
     async fn get_stream(
         &self,
         object_key: &str,
-    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>>;
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>>, Error>;
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error>;
 
@@ -76,12 +77,12 @@ impl<Store: ComponentObjectStore + Sync> ComponentObjectStore
     async fn get_stream(
         &self,
         object_key: &str,
-    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>>, Error> {
         let span = debug_span!("Getting component stream", key = object_key);
-        let inner_stream = self.store.get_stream(object_key).await;
+        let inner_stream = self.store.get_stream(object_key).await?;
         let logging_stream = LoggedByteStream::new(inner_stream);
         let instrumented_stream = logging_stream.instrument(span);
-        Box::pin(instrumented_stream)
+        Ok(Box::pin(instrumented_stream))
     }
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
@@ -101,244 +102,215 @@ impl<Store: ComponentObjectStore + Sync> ComponentObjectStore
     }
 }
 
-pub struct AwsS3ComponentObjectStore {
-    client: aws_sdk_s3::Client,
-    bucket_name: String,
-    object_prefix: String,
+pub struct BlobStorageComponentObjectStore {
+    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 }
 
-impl AwsS3ComponentObjectStore {
-    pub async fn new(config: &ComponentStoreS3Config) -> Self {
-        info!(
-            "S3 Component Object Store bucket: {}, prefix: {}",
-            config.bucket_name, config.object_prefix
-        );
-        let sdk_config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
-        let client = aws_sdk_s3::Client::new(&sdk_config);
-        Self {
-            client,
-            bucket_name: config.bucket_name.clone(),
-            object_prefix: config.object_prefix.clone(),
-        }
-    }
-
-    fn get_key(&self, object_key: &str) -> String {
-        if self.object_prefix.is_empty() {
-            object_key.to_string()
-        } else {
-            format!("{}/{}", self.object_prefix, object_key)
-        }
+impl BlobStorageComponentObjectStore {
+    pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
+        Self { blob_storage }
     }
 }
 
 #[async_trait]
-impl ComponentObjectStore for AwsS3ComponentObjectStore {
+impl ComponentObjectStore for BlobStorageComponentObjectStore {
     async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error> {
-        let key = self.get_key(object_key);
+        let result = self
+            .blob_storage
+            .get_raw(
+                COMPONENT_FILES_LABEL,
+                "get",
+                BlobStorageNamespace::Components,
+                &PathBuf::from(object_key),
+            )
+            .await
+            .map_err(|e| anyhow!(e))?
+            .ok_or(anyhow!("Did not find component for key: {object_key}"))?
+            .to_vec();
 
-        info!("Getting object: {}/{}", self.bucket_name, key);
-
-        let response = self
-            .client
-            .get_object()
-            .bucket(&self.bucket_name)
-            .key(key)
-            .send()
-            .await?;
-
-        let data = response.body.collect().await?;
-        Ok(data.to_vec())
+        Ok(result)
     }
 
     async fn get_stream(
         &self,
         object_key: &str,
-    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>> {
-        let key = self.get_key(object_key);
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>>, Error> {
+        let result = self
+            .blob_storage
+            .get_stream(
+                COMPONENT_FILES_LABEL,
+                "get_stream",
+                BlobStorageNamespace::Components,
+                &PathBuf::from(object_key),
+            )
+            .await
+            .map_err(|e| anyhow!(e))?
+            .ok_or(anyhow!("Did not find component for key: {object_key}"))?
+            .map(|rb| rb.map(|b| b.to_vec()).map_err(|e| anyhow!(e)));
 
-        info!("Getting object: {}/{}", self.bucket_name, key);
-
-        Box::pin(
-            match self
-                .client
-                .get_object()
-                .bucket(&self.bucket_name)
-                .key(key)
-                .send()
-                .await
-            {
-                Ok(response) => response.body.into(),
-                Err(error) => ByteStream::error(error),
-            },
-        )
+        Ok(Box::pin(result))
     }
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
-        let key = self.get_key(object_key);
-
-        info!("Putting object: {}/{}", self.bucket_name, key);
-
-        self.client
-            .put_object()
-            .bucket(&self.bucket_name)
-            .key(key)
-            .body(aws_sdk_s3::primitives::ByteStream::from(data))
-            .send()
-            .await?;
-
-        Ok(())
+        self.blob_storage
+            .put_raw(
+                COMPONENT_FILES_LABEL,
+                "put",
+                BlobStorageNamespace::Components,
+                &PathBuf::from(object_key),
+                &data,
+            )
+            .await
+            .map_err(|e| anyhow!(e))
     }
 
     async fn delete(&self, object_key: &str) -> Result<(), Error> {
-        let key = self.get_key(object_key);
-
-        info!("Deleting object: {}/{}", self.bucket_name, key);
-
-        self.client
-            .delete_object()
-            .bucket(&self.bucket_name)
-            .key(key)
-            .send()
-            .await?;
-
-        Ok(())
+        self.blob_storage
+            .delete(
+                COMPONENT_FILES_LABEL,
+                "delete",
+                BlobStorageNamespace::Components,
+                &PathBuf::from(object_key),
+            )
+            .await
+            .map_err(|e| anyhow!(e))
     }
 }
 
-pub struct FsComponentObjectStore {
-    root_path: String,
-    object_prefix: String,
-}
+// pub struct FsComponentObjectStore {
+//     root_path: String,
+//     object_prefix: String,
+// }
 
-impl FsComponentObjectStore {
-    pub fn new(config: &ComponentStoreLocalConfig) -> Result<Self, String> {
-        let root_dir = std::path::PathBuf::from(config.root_path.as_str());
-        if !root_dir.exists() {
-            fs::create_dir_all(root_dir.clone()).map_err(|e| e.to_string())?;
-        }
-        info!(
-            "FS Component Object Store root: {}, prefix: {}",
-            root_dir.display(),
-            config.object_prefix
-        );
+// impl FsComponentObjectStore {
+//     pub fn new(config: &ComponentStoreLocalConfig) -> Result<Self, String> {
+//         let root_dir = std::path::PathBuf::from(config.root_path.as_str());
+//         if !root_dir.exists() {
+//             fs::create_dir_all(root_dir.clone()).map_err(|e| e.to_string())?;
+//         }
+//         info!(
+//             "FS Component Object Store root: {}, prefix: {}",
+//             root_dir.display(),
+//             config.object_prefix
+//         );
 
-        Ok(Self {
-            root_path: config.root_path.clone(),
-            object_prefix: config.object_prefix.clone(),
-        })
-    }
+//         Ok(Self {
+//             root_path: config.root_path.clone(),
+//             object_prefix: config.object_prefix.clone(),
+//         })
+//     }
 
-    fn get_dir_path(&self) -> PathBuf {
-        let root_path = std::path::PathBuf::from(self.root_path.as_str());
-        if self.object_prefix.is_empty() {
-            root_path
-        } else {
-            root_path.join(self.object_prefix.as_str())
-        }
-    }
-}
+//     fn get_dir_path(&self) -> PathBuf {
+//         let root_path = std::path::PathBuf::from(self.root_path.as_str());
+//         if self.object_prefix.is_empty() {
+//             root_path
+//         } else {
+//             root_path.join(self.object_prefix.as_str())
+//         }
+//     }
+// }
 
-#[async_trait]
-impl ComponentObjectStore for FsComponentObjectStore {
-    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error> {
-        let dir_path = self.get_dir_path();
+// #[async_trait]
+// impl ComponentObjectStore for FsComponentObjectStore {
+//     async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error> {
+//         let dir_path = self.get_dir_path();
 
-        debug!("Getting object: {}/{}", dir_path.display(), object_key);
+//         debug!("Getting object: {}/{}", dir_path.display(), object_key);
 
-        let file_path = dir_path.join(object_key);
+//         let file_path = dir_path.join(object_key);
 
-        if file_path.exists() {
-            fs::read(file_path).map_err(|e| e.into())
-        } else {
-            Err(Error::msg("Object not found"))
-        }
-    }
+//         if file_path.exists() {
+//             fs::read(file_path).map_err(|e| e.into())
+//         } else {
+//             Err(Error::msg("Object not found"))
+//         }
+//     }
 
-    async fn get_stream(
-        &self,
-        object_key: &str,
-    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>> {
-        let dir_path = self.get_dir_path();
+//     async fn get_stream(
+//         &self,
+//         object_key: &str,
+//     ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>> {
+//         let dir_path = self.get_dir_path();
 
-        debug!("Getting object: {}/{}", dir_path.display(), object_key);
+//         debug!("Getting object: {}/{}", dir_path.display(), object_key);
 
-        let file_path = dir_path.join(object_key);
+//         let file_path = dir_path.join(object_key);
 
-        Box::pin(
-            match aws_sdk_s3::primitives::ByteStream::from_path(file_path).await {
-                Ok(stream) => stream.into(),
-                Err(error) => ByteStream::error(error),
-            },
-        )
-    }
+//         Box::pin(
+//             match aws_sdk_s3::primitives::ByteStream::from_path(file_path).await {
+//                 Ok(stream) => stream.into(),
+//                 Err(error) => ByteStream::error(error),
+//             },
+//         )
+//     }
 
-    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
-        let dir_path = self.get_dir_path();
+//     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
+//         let dir_path = self.get_dir_path();
 
-        debug!("Putting object: {}/{}", dir_path.display(), object_key);
+//         debug!("Putting object: {}/{}", dir_path.display(), object_key);
 
-        if !dir_path.exists() {
-            fs::create_dir_all(dir_path.clone())?;
-        }
+//         if !dir_path.exists() {
+//             fs::create_dir_all(dir_path.clone())?;
+//         }
 
-        let file_path = dir_path.join(object_key);
+//         let file_path = dir_path.join(object_key);
 
-        fs::write(file_path, data).map_err(|e| e.into())
-    }
+//         fs::write(file_path, data).map_err(|e| e.into())
+//     }
 
-    async fn delete(&self, object_key: &str) -> Result<(), Error> {
-        let dir_path = self.get_dir_path();
+//     async fn delete(&self, object_key: &str) -> Result<(), Error> {
+//         let dir_path = self.get_dir_path();
 
-        debug!("Deleting object: {}/{}", dir_path.display(), object_key);
+//         debug!("Deleting object: {}/{}", dir_path.display(), object_key);
 
-        if !dir_path.exists() {
-            fs::create_dir_all(dir_path.clone())?;
-        }
+//         if !dir_path.exists() {
+//             fs::create_dir_all(dir_path.clone())?;
+//         }
 
-        let file_path = dir_path.join(object_key);
+//         let file_path = dir_path.join(object_key);
 
-        if file_path.exists() {
-            fs::remove_file(file_path)?;
-        }
+//         if file_path.exists() {
+//             fs::remove_file(file_path)?;
+//         }
 
-        Ok(())
-    }
-}
+//         Ok(())
+//     }
+// }
 
-#[cfg(test)]
-mod tests {
-    use test_r::test;
+// #[cfg(test)]
+// mod tests {
+//     use test_r::test;
 
-    use crate::config::ComponentStoreLocalConfig;
-    use crate::service::component_object_store::{ComponentObjectStore, FsComponentObjectStore};
-    use futures::TryStreamExt;
+//     use crate::config::ComponentStoreLocalConfig;
+//     use crate::service::component_object_store::{ComponentObjectStore, FsComponentObjectStore};
+//     use futures::TryStreamExt;
 
-    #[test]
-    pub async fn test_fs_object_store() {
-        let config = ComponentStoreLocalConfig {
-            root_path: "/tmp/cloud-service".to_string(),
-            object_prefix: "prefix".to_string(),
-        };
+//     #[test]
+//     pub async fn test_fs_object_store() {
+//         let config = ComponentStoreLocalConfig {
+//             root_path: "/tmp/cloud-service".to_string(),
+//             object_prefix: "prefix".to_string(),
+//         };
 
-        let store = FsComponentObjectStore::new(&config).unwrap();
+//         let store = FsComponentObjectStore::new(&config).unwrap();
 
-        let object_key = "test_object";
+//         let object_key = "test_object";
 
-        let data = b"hello world".to_vec();
+//         let data = b"hello world".to_vec();
 
-        store.put(object_key, data.clone()).await.unwrap();
+//         store.put(object_key, data.clone()).await.unwrap();
 
-        let get_data = store.get(object_key).await.unwrap();
+//         let get_data = store.get(object_key).await.unwrap();
 
-        assert_eq!(get_data, data.clone());
+//         assert_eq!(get_data, data.clone());
 
-        let stream = store.get_stream(object_key).await;
-        let stream_data: Vec<Vec<u8>> = stream.try_collect::<Vec<_>>().await.unwrap();
-        let stream_data: Vec<u8> = stream_data.into_iter().flatten().collect();
-        assert_eq!(stream_data, data);
+//         let stream = store.get_stream(object_key).await;
+//         let stream_data: Vec<Vec<u8>> = stream.try_collect::<Vec<_>>().await.unwrap();
+//         let stream_data: Vec<u8> = stream_data.into_iter().flatten().collect();
+//         assert_eq!(stream_data, data);
 
-        let stream = store.get_stream("not_existing").await;
-        let stream_data = stream.try_collect::<Vec<_>>().await;
-        assert!(stream_data.is_err());
-    }
-}
+//         let stream = store.get_stream("not_existing").await;
+//         let stream_data = stream.try_collect::<Vec<_>>().await;
+//         assert!(stream_data.is_err());
+//     }
+// }
