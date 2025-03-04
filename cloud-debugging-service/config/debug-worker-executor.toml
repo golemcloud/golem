@@ -57,6 +57,8 @@ multiplier = 3.0
 [indexed_storage]
 type = "KVStoreRedis"
 
+[indexed_storage.config]
+
 [key_value_storage]
 type = "Redis"
 
@@ -228,6 +230,8 @@ without_time = false
 # 
 # [indexed_storage]
 # type = "KVStoreRedis"
+# 
+# [indexed_storage.config]
 # 
 # [key_value_storage]
 # type = "Redis"

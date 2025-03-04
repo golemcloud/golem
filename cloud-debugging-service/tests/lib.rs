@@ -26,8 +26,8 @@ use golem_worker_executor_base::services::additional_config::{
 };
 use golem_worker_executor_base::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, GolemConfig,
-    IndexedStorageConfig, KeyValueStorageConfig, MemoryConfig, ShardManagerServiceConfig,
-    WorkerServiceGrpcConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, WorkerServiceGrpcConfig,
 };
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -92,7 +92,7 @@ pub fn get_golem_config(
             key_prefix: redis_prefix,
             ..Default::default()
         }),
-        indexed_storage: IndexedStorageConfig::KVStoreRedis,
+        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: Path::new("data/blobs").to_path_buf(),
         }),
@@ -101,7 +101,9 @@ pub fn get_golem_config(
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
-        shard_manager_service: ShardManagerServiceConfig::SingleShard,
+        shard_manager_service: ShardManagerServiceConfig::SingleShard(
+            ShardManagerServiceSingleShardConfig {},
+        ),
         public_worker_api: WorkerServiceGrpcConfig {
             host: "localhost".to_string(),
             port: server_port,

@@ -1,7 +1,7 @@
 use cloud_common::config::RemoteCloudServiceConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples};
 use golem_common::tracing::TracingConfig;
-use golem_component_service_base::config::{ComponentCompilationConfig, ComponentStoreConfig};
+use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_service_base::config::BlobStorageConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -14,7 +14,6 @@ pub struct ComponentServiceConfig {
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,
-    pub component_store: ComponentStoreConfig,
     pub compilation: ComponentCompilationConfig,
     pub cloud_service: RemoteCloudServiceConfig,
     pub blob_storage: BlobStorageConfig,
@@ -29,7 +28,6 @@ impl Default for ComponentServiceConfig {
             http_port: 8081,
             grpc_port: 9091,
             db: DbConfig::default(),
-            component_store: ComponentStoreConfig::default(),
             compilation: ComponentCompilationConfig::default(),
             cloud_service: RemoteCloudServiceConfig::default(),
             blob_storage: BlobStorageConfig::default(),

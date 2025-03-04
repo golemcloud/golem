@@ -29,13 +29,6 @@ type = "Enabled"
 host = "localhost"
 port = 9091
 
-[component_store]
-type = "Local"
-
-[component_store.config]
-object_prefix = ""
-root_path = "/tmp"
-
 [db]
 type = "Sqlite"
 

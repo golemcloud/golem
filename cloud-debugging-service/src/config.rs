@@ -9,7 +9,8 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor_base::services::golem_config::{
     ActiveWorkersConfig, CompiledComponentServiceConfig, GolemConfig, IndexedStorageConfig,
     KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, PluginServiceConfig, SchedulerConfig,
-    ShardManagerServiceConfig, SuspendConfig, WorkerServiceGrpcConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig,
+    WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -66,7 +67,9 @@ impl DebugConfig {
             port: self.port,
             http_address: self.http_address,
             http_port: self.http_port,
-            shard_manager_service: ShardManagerServiceConfig::SingleShard,
+            shard_manager_service: ShardManagerServiceConfig::SingleShard(
+                ShardManagerServiceSingleShardConfig {},
+            ),
         }
     }
 }

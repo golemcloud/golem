@@ -10,7 +10,7 @@ use cloud_common::clients::project::{ProjectError, ProjectService, ProjectServic
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner};
 use golem_common::config::DbConfig;
 use golem_common::SafeDisplay;
-use golem_component_service_base::config::{ComponentCompilationConfig, ComponentStoreConfig};
+use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
@@ -23,7 +23,9 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_component_service_base::service::component_object_store;
+use golem_component_service_base::service::component_object_store::{
+    self, BlobStorageComponentObjectStore,
+};
 use golem_component_service_base::service::plugin::{
     PluginError, PluginService, PluginServiceDefault,
 };
@@ -63,7 +65,7 @@ impl Services {
                     .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
                 Arc::new(SqliteBlobStorage::new(pool.clone()).await?)
             }
-            BlobStorageConfig::InMemory => {
+            BlobStorageConfig::InMemory(_) => {
                 Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
             }
             _ => {
@@ -118,14 +120,7 @@ impl Services {
         ));
 
         let object_store: Arc<dyn component_object_store::ComponentObjectStore + Send + Sync> =
-            match config.component_store.clone() {
-                ComponentStoreConfig::S3(c) => {
-                    Arc::new(component_object_store::AwsS3ComponentObjectStore::new(&c).await)
-                }
-                ComponentStoreConfig::Local(c) => {
-                    Arc::new(component_object_store::FsComponentObjectStore::new(&c)?)
-                }
-            };
+            Arc::new(BlobStorageComponentObjectStore::new(blob_storage.clone()));
 
         let compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
             match config.compilation.clone() {

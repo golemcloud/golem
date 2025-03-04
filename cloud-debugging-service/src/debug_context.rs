@@ -1,7 +1,7 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::invocation_context::{self, InvocationContextStack};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -43,7 +43,8 @@ use golem_worker_executor_base::services::{
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::GolemTypes;
 use std::collections::HashSet;
@@ -459,6 +460,32 @@ impl<T: GolemTypes> DynamicLinking<Self> for DebugContext<T> {
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
+    }
+}
+
+impl<T: GolemTypes> InvocationContextManagement for DebugContext<T> {
+    fn start_span(
+        &mut self,
+        initial_attributes: &[(String, invocation_context::AttributeValue)],
+    ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
+        self.durable_ctx.start_span(initial_attributes)
+    }
+
+    fn start_child_span(
+        &mut self,
+        parent: &invocation_context::SpanId,
+        initial_attributes: &[(String, invocation_context::AttributeValue)],
+    ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
+        self.durable_ctx
+            .start_child_span(parent, initial_attributes)
+    }
+
+    fn finish_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id)
+    }
+
+    fn remove_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
     }
 }
 
