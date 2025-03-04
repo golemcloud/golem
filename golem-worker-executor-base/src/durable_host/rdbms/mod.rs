@@ -55,7 +55,6 @@ where
     E: From<RdbmsError>,
 {
     let interface = get_db_connection_interface::<T>();
-
     ctx.observe_function_call(interface.as_str(), "open");
 
     let worker_id = ctx.state.owned_worker_id.worker_id.clone();
@@ -72,7 +71,7 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
-        Err(e) => Ok(Err(e.into())),
+        Err(error) => Ok(Err(error.into())),
     }
 }
 
@@ -176,7 +175,7 @@ where
                 .map_err(|e| RdbmsError::QueryResponseFailure(e).into());
             Ok(result)
         }
-        Err(e) => Ok(Err(e.into())),
+        Err(error) => Ok(Err(error.into())),
     }
 }
 
@@ -290,7 +289,7 @@ where
         let query_stream = get_db_query_stream(ctx, entry).await;
         let result = match query_stream {
             Ok(query_stream) => query_stream.deref().get_columns().await,
-            Err(e) => Err(e),
+            Err(error) => Err(error),
         };
         durability.persist(ctx, (), result).await
     } else {
@@ -306,7 +305,7 @@ where
                 .map_err(|e| anyhow!(RdbmsError::QueryResponseFailure(e)))?;
             Ok(result)
         }
-        Err(e) => Err(anyhow!(e)),
+        Err(error) => Err(anyhow!(error)),
     }
 }
 
@@ -338,7 +337,7 @@ where
         let query_stream = get_db_query_stream(ctx, entry).await;
         let result = match query_stream {
             Ok(query_stream) => query_stream.deref().get_next().await,
-            Err(e) => Err(e),
+            Err(error) => Err(error),
         };
         durability.persist(ctx, (), result).await
     } else {
@@ -360,7 +359,7 @@ where
             };
             Ok(rows)
         }
-        Err(e) => Err(anyhow!(e)),
+        Err(error) => Err(anyhow!(error)),
     }
 }
 
@@ -373,7 +372,6 @@ where
     T: RdbmsType + Clone + 'static,
 {
     let interface = get_db_result_stream_interface::<T>();
-
     ctx.observe_function_call(interface.as_str(), "drop");
 
     let handle = entry.rep();
@@ -429,7 +427,7 @@ where
                 .map_err(|e| RdbmsError::QueryResponseFailure(e).into());
             Ok(result)
         }
-        Err(e) => Ok(Err(e.into())),
+        Err(error) => Ok(Err(error.into())),
     }
 }
 
@@ -666,7 +664,7 @@ where
         .as_wasi_view()
         .table()
         .get::<RdbmsResultStreamEntry<T>>(entry)
-        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .map_err(RdbmsError::other_response_failure)?
         .clone();
 
     match query_stream_entry.state {
@@ -701,12 +699,12 @@ where
                     ctx.as_wasi_view()
                         .table()
                         .get_mut::<RdbmsResultStreamEntry<T>>(entry)
-                        .map_err(|e| RdbmsError::Other(e.to_string()))?
+                        .map_err(RdbmsError::other_response_failure)?
                         .set_open(query_stream.clone());
 
                     Ok(query_stream)
                 }
-                Err(e) => Err(e),
+                Err(error) => Err(error),
             }
         }
         RdbmsResultStreamState::Open(query_stream) => Ok(query_stream),
@@ -727,12 +725,17 @@ impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
     fn set_open(&mut self, value: Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>) {
         self.state = RdbmsTransactionState::Open(value);
     }
+
+    fn set_closed(&mut self) {
+        self.state = RdbmsTransactionState::Closed;
+    }
 }
 
 #[derive(Clone)]
 pub enum RdbmsTransactionState<T: RdbmsType + Clone + 'static> {
     New,
     Open(Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>),
+    Closed,
 }
 
 async fn get_db_transaction<Ctx, T>(
@@ -754,7 +757,7 @@ where
         .as_wasi_view()
         .table()
         .get::<RdbmsTransactionEntry<T>>(entry)
-        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .map_err(RdbmsError::other_response_failure)?
         .clone();
 
     match transaction_entry.state {
@@ -774,15 +777,18 @@ where
                     ctx.as_wasi_view()
                         .table()
                         .get_mut::<RdbmsTransactionEntry<T>>(entry)
-                        .map_err(|e| RdbmsError::Other(e.to_string()))?
+                        .map_err(RdbmsError::other_response_failure)?
                         .set_open(transaction.clone());
 
                     Ok((transaction_entry.pool_key, transaction))
                 }
-                Err(e) => Err(e),
+                Err(error) => Err(error),
             }
         }
         RdbmsTransactionState::Open(transaction) => Ok((transaction_entry.pool_key, transaction)),
+        RdbmsTransactionState::Closed => {
+            Err(RdbmsError::other_response_failure("Transaction is closed"))
+        }
     }
 }
 
@@ -825,7 +831,7 @@ where
             }
             Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
         },
-        Err(error) => (None, Err(RdbmsError::Other(error.to_string()))),
+        Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
     }
 }
 
@@ -866,7 +872,7 @@ where
             }
             Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
         },
-        Err(error) => (None, Err(RdbmsError::Other(error.to_string()))),
+        Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
     }
 }
 
@@ -885,7 +891,7 @@ where
         .as_wasi_view()
         .table()
         .get::<RdbmsConnection<T>>(entry)
-        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .map_err(RdbmsError::other_response_failure)?
         .pool_key
         .clone();
 
@@ -921,7 +927,7 @@ where
                         result,
                     )
                 }
-                Err(e) => (None, Err(e)),
+                Err(error) => (None, Err(error)),
             }
         }
         Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
@@ -951,7 +957,7 @@ where
                         result,
                     )
                 }
-                Err(e) => (None, Err(e)),
+                Err(error) => (None, Err(error)),
             }
         }
         Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
@@ -973,7 +979,7 @@ where
         .as_wasi_view()
         .table()
         .get::<RdbmsTransactionEntry<T>>(entry)
-        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .map_err(RdbmsError::other_response_failure)?
         .pool_key
         .clone();
 
@@ -998,9 +1004,17 @@ where
         .map(|e| e.state.clone());
 
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => transaction.commit().await,
+        Ok(RdbmsTransactionState::Open(transaction)) => {
+            transaction.commit().await?;
+            ctx.as_wasi_view()
+                .table()
+                .get_mut::<RdbmsTransactionEntry<T>>(entry)
+                .map_err(RdbmsError::other_response_failure)?
+                .set_closed();
+            Ok(())
+        }
         Ok(_) => Ok(()),
-        Err(e) => Err(RdbmsError::Other(e.to_string())),
+        Err(error) => Err(RdbmsError::other_response_failure(error)),
     }
 }
 
@@ -1019,9 +1033,17 @@ where
         .map(|e| e.state.clone());
 
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => transaction.rollback().await,
+        Ok(RdbmsTransactionState::Open(transaction)) => {
+            transaction.rollback().await?;
+            ctx.as_wasi_view()
+                .table()
+                .get_mut::<RdbmsTransactionEntry<T>>(entry)
+                .map_err(RdbmsError::other_response_failure)?
+                .set_closed();
+            Ok(())
+        }
         Ok(_) => Ok(()),
-        Err(e) => Err(RdbmsError::Other(e.to_string())),
+        Err(error) => Err(RdbmsError::other_response_failure(error)),
     }
 }
 
