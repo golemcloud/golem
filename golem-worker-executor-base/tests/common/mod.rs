@@ -936,29 +936,31 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+#[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
-    fn start_span(
+    async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
-        self.durable_ctx.start_span(initial_attributes)
+        self.durable_ctx.start_span(initial_attributes).await
     }
 
-    fn start_child_span(
+    async fn start_child_span(
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         self.durable_ctx
             .start_child_span(parent, initial_attributes)
+            .await
     }
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
         self.durable_ctx.remove_span(span_id)
     }
 
-    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
-        self.durable_ctx.finish_span(span_id)
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id).await
     }
 }
 

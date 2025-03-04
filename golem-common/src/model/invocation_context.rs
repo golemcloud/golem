@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::oplog::SpanData;
 use crate::model::Timestamp;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -104,9 +105,9 @@ impl Display for AttributeValue {
 
 #[derive(Debug, PartialEq)]
 pub struct LocalInvocationContextSpanState {
-    parent: Option<Arc<InvocationContextSpan>>,
-    attributes: HashMap<String, AttributeValue>,
-    linked_context: Option<Arc<InvocationContextSpan>>,
+    pub parent: Option<Arc<InvocationContextSpan>>,
+    pub attributes: HashMap<String, AttributeValue>,
+    pub linked_context: Option<Arc<InvocationContextSpan>>,
 }
 
 pub struct LocalInvocationContextSpanBuilder {
@@ -162,6 +163,11 @@ impl LocalInvocationContextSpanBuilder {
 
     pub fn with_inherited(mut self, inherited: bool) -> Self {
         self.inherited = inherited;
+        self
+    }
+
+    pub fn linked_context(mut self, linked_context: Option<Arc<InvocationContextSpan>>) -> Self {
+        self.linked_context = linked_context;
         self
     }
 
@@ -236,6 +242,13 @@ impl InvocationContextSpan {
                 let state = state.read().unwrap();
                 state.linked_context.clone()
             }
+            Self::ExternalParent { .. } => None,
+        }
+    }
+
+    pub fn start(&self) -> Option<Timestamp> {
+        match self {
+            Self::Local { start, .. } => Some(*start),
             Self::ExternalParent { .. } => None,
         }
     }
@@ -590,6 +603,67 @@ impl InvocationContextStack {
             spans: NEVec::new(root_span),
             trace_states,
         }
+    }
+
+    pub fn from_oplog_data(
+        trace_id: &TraceId,
+        trace_states: &[String],
+        spans: &[SpanData],
+    ) -> Self {
+        if spans.is_empty() {
+            let root = InvocationContextSpan::local().build();
+            Self {
+                trace_id: trace_id.clone(),
+                spans: NEVec::new(root),
+                trace_states: trace_states.to_vec(),
+            }
+        } else {
+            let mut result_spans = Vec::new();
+            for span_data in spans.iter().rev() {
+                let result_span = match span_data {
+                    SpanData::ExternalSpan { span_id } => {
+                        InvocationContextSpan::external_parent(span_id.clone())
+                    }
+                    SpanData::LocalSpan {
+                        span_id,
+                        start,
+                        parent_id,
+                        linked_context,
+                        attributes,
+                        inherited,
+                    } => InvocationContextSpan::local()
+                        .with_span_id(span_id.clone())
+                        .with_start(*start)
+                        .parent(
+                            parent_id
+                                .as_ref()
+                                .and_then(|_| result_spans.first().cloned()),
+                        )
+                        .with_attributes(attributes.clone())
+                        .with_inherited(*inherited)
+                        .linked_context(linked_context.as_ref().map(|linked_spans| {
+                            let linked_stack = InvocationContextStack::from_oplog_data(
+                                trace_id,
+                                trace_states,
+                                linked_spans,
+                            );
+                            linked_stack.spans.first().clone()
+                        }))
+                        .build(),
+                };
+                result_spans.insert(0, result_span);
+            }
+
+            InvocationContextStack {
+                trace_id: trace_id.clone(),
+                trace_states: trace_states.to_vec(),
+                spans: NEVec::try_from_vec(result_spans).unwrap(),
+            }
+        }
+    }
+
+    pub fn to_oplog_data(&self) -> Vec<SpanData> {
+        SpanData::from_chain(&self.spans)
     }
 
     pub fn push(&mut self, span: Arc<InvocationContextSpan>) {

@@ -27,14 +27,16 @@ use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{r#enum, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
+use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
 
 pub use crate::base_model::OplogIndex;
+use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 
 pub struct OplogIndexRange {
     current: u64,
@@ -236,6 +238,57 @@ impl IntoValue for LogLevel {
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub enum SpanData {
+    LocalSpan {
+        span_id: SpanId,
+        start: Timestamp,
+        parent_id: Option<SpanId>,
+        linked_context: Option<Vec<SpanData>>,
+        attributes: HashMap<String, AttributeValue>,
+        inherited: bool,
+    },
+    ExternalSpan {
+        span_id: SpanId,
+    },
+}
+
+impl SpanData {
+    pub fn from_chain(spans: &NEVec<Arc<InvocationContextSpan>>) -> Vec<SpanData> {
+        let mut result_spans = Vec::new();
+        for span in spans {
+            let span_data = match &**span {
+                InvocationContextSpan::ExternalParent { span_id } => SpanData::ExternalSpan {
+                    span_id: span_id.clone(),
+                },
+                InvocationContextSpan::Local {
+                    span_id,
+                    start,
+                    state,
+                    inherited,
+                } => {
+                    let state = state.read().unwrap();
+                    let parent_id = state.parent.as_ref().map(|parent| parent.span_id().clone());
+                    let linked_context = state.linked_context.as_ref().map(|linked| {
+                        let linked_chain = linked.to_chain();
+                        SpanData::from_chain(&linked_chain)
+                    });
+                    SpanData::LocalSpan {
+                        span_id: span_id.clone(),
+                        start: *start,
+                        parent_id,
+                        linked_context,
+                        attributes: state.attributes.clone(),
+                        inherited: *inherited,
+                    }
+                }
+            };
+            result_spans.push(span_data);
+        }
+        result_spans
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     CreateV1 {
         timestamp: Timestamp,
@@ -256,7 +309,7 @@ pub enum OplogEntry {
         wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
     },
     /// The worker has been invoked
-    ExportedFunctionInvoked {
+    ExportedFunctionInvokedV1 {
         timestamp: Timestamp,
         function_name: String,
         request: OplogPayload,
@@ -414,6 +467,29 @@ pub enum OplogEntry {
     CancelPendingInvocation {
         timestamp: Timestamp,
         idempotency_key: IdempotencyKey,
+    },
+    /// The worker has been invoked
+    ExportedFunctionInvoked {
+        timestamp: Timestamp,
+        function_name: String,
+        request: OplogPayload,
+        idempotency_key: IdempotencyKey,
+        trace_id: TraceId,
+        trace_states: Vec<String>,
+        invocation_context: Vec<SpanData>,
+    },
+    /// Starts a new span in the invocation context
+    StartSpan {
+        timestamp: Timestamp,
+        span_id: SpanId,
+        parent_id: Option<SpanId>,
+        linked_context_id: Option<SpanId>,
+        attributes: HashMap<String, AttributeValue>,
+    },
+    /// Finishes an open span in the invocation context
+    FinishSpan {
+        timestamp: Timestamp,
+        span_id: SpanId,
     },
 }
 
@@ -624,6 +700,29 @@ impl OplogEntry {
         }
     }
 
+    pub fn start_span(
+        timestamp: Timestamp,
+        span_id: SpanId,
+        parent_id: Option<SpanId>,
+        linked_context_id: Option<SpanId>,
+        attributes: HashMap<String, AttributeValue>,
+    ) -> OplogEntry {
+        OplogEntry::StartSpan {
+            timestamp,
+            span_id,
+            parent_id,
+            linked_context_id,
+            attributes,
+        }
+    }
+
+    pub fn finish_span(span_id: SpanId) -> OplogEntry {
+        OplogEntry::FinishSpan {
+            timestamp: Timestamp::now_utc(),
+            span_id,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -685,7 +784,7 @@ impl OplogEntry {
         match self {
             OplogEntry::Create { timestamp, .. }
             | OplogEntry::ImportedFunctionInvokedV1 { timestamp, .. }
-            | OplogEntry::ExportedFunctionInvoked { timestamp, .. }
+            | OplogEntry::ExportedFunctionInvokedV1 { timestamp, .. }
             | OplogEntry::ExportedFunctionCompleted { timestamp, .. }
             | OplogEntry::Suspend { timestamp }
             | OplogEntry::Error { timestamp, .. }
@@ -714,7 +813,10 @@ impl OplogEntry {
             | OplogEntry::ActivatePlugin { timestamp, .. }
             | OplogEntry::DeactivatePlugin { timestamp, .. }
             | OplogEntry::Revert { timestamp, .. }
-            | OplogEntry::CancelPendingInvocation { timestamp, .. } => *timestamp,
+            | OplogEntry::CancelPendingInvocation { timestamp, .. }
+            | OplogEntry::ExportedFunctionInvoked { timestamp, .. }
+            | OplogEntry::StartSpan { timestamp, .. }
+            | OplogEntry::FinishSpan { timestamp, .. } => *timestamp,
         }
     }
 

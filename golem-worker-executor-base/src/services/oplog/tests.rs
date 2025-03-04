@@ -128,16 +128,33 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             response,
             wrapped_function_type,
         },
+        OplogEntry::ExportedFunctionInvokedV1 {
+            timestamp,
+            function_name,
+            request,
+            idempotency_key,
+        } => OplogEntry::ExportedFunctionInvokedV1 {
+            timestamp: rounded_ts(timestamp),
+            function_name,
+            request,
+            idempotency_key,
+        },
         OplogEntry::ExportedFunctionInvoked {
             timestamp,
             function_name,
             request,
             idempotency_key,
+            trace_id,
+            trace_states,
+            invocation_context,
         } => OplogEntry::ExportedFunctionInvoked {
             timestamp: rounded_ts(timestamp),
             function_name,
             request,
             idempotency_key,
+            trace_id,
+            trace_states,
+            invocation_context,
         },
         OplogEntry::ExportedFunctionCompleted {
             timestamp,
@@ -294,6 +311,23 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
         } => OplogEntry::CancelPendingInvocation {
             timestamp: rounded_ts(timestamp),
             idempotency_key,
+        },
+        OplogEntry::StartSpan {
+            timestamp,
+            span_id,
+            parent_id,
+            linked_context_id,
+            attributes,
+        } => OplogEntry::StartSpan {
+            timestamp: rounded_ts(timestamp),
+            span_id,
+            parent_id,
+            linked_context_id,
+            attributes,
+        },
+        OplogEntry::FinishSpan { timestamp, span_id } => OplogEntry::FinishSpan {
+            timestamp: rounded_ts(timestamp),
+            span_id,
         },
     }
 }
@@ -468,6 +502,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 "f2".to_string(),
                 &"request".to_string(),
                 IdempotencyKey::fresh(),
+                InvocationContextStack::fresh(),
             )
             .await
             .unwrap(),
@@ -587,6 +622,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 "f2".to_string(),
                 &large_payload2,
                 IdempotencyKey::fresh(),
+                InvocationContextStack::fresh(),
             )
             .await
             .unwrap(),

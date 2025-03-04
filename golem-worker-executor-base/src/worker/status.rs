@@ -172,6 +172,9 @@ fn calculate_latest_worker_status(
             OplogEntry::ImportedFunctionInvoked { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::ExportedFunctionInvokedV1 { .. } => {
+                result = WorkerStatus::Running;
+            }
             OplogEntry::ExportedFunctionInvoked { .. } => {
                 result = WorkerStatus::Running;
             }
@@ -250,6 +253,12 @@ fn calculate_latest_worker_status(
             OplogEntry::DeactivatePlugin { .. } => {}
             OplogEntry::Revert { .. } => {}
             OplogEntry::CancelPendingInvocation { .. } => {}
+            OplogEntry::StartSpan { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::FinishSpan { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result
@@ -375,7 +384,10 @@ fn calculate_pending_invocations(
                     invocation: invocation.clone(),
                 });
             }
-            OplogEntry::ExportedFunctionInvoked {
+            OplogEntry::ExportedFunctionInvokedV1 {
+                idempotency_key, ..
+            }
+            | OplogEntry::ExportedFunctionInvoked {
                 idempotency_key, ..
             } => {
                 result.retain(|invocation| match invocation {
@@ -546,7 +558,10 @@ fn calculate_invocation_results(
         }
 
         match entry {
-            OplogEntry::ExportedFunctionInvoked {
+            OplogEntry::ExportedFunctionInvokedV1 {
+                idempotency_key, ..
+            }
+            | OplogEntry::ExportedFunctionInvoked {
                 idempotency_key, ..
             } => {
                 current_idempotency_key = Some(idempotency_key.clone());
@@ -693,7 +708,7 @@ mod test {
     use bincode::Encode;
     use bytes::Bytes;
     use golem_common::base_model::OplogIndex;
-    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::{
         DurableFunctionType, OplogEntry, OplogPayload, TimestampedUpdateDescription,
         UpdateDescription,
@@ -1055,6 +1070,9 @@ mod test {
                     function_name: function_name.to_string(),
                     request: OplogPayload::Inline(serialize(request).unwrap().to_vec()),
                     idempotency_key: idempotency_key.clone(),
+                    trace_id: TraceId::generate(),
+                    trace_states: vec![],
+                    invocation_context: vec![],
                 },
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);

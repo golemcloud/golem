@@ -346,11 +346,18 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     },
                 ))
             }
-            OplogEntry::ExportedFunctionInvoked {
+            OplogEntry::ExportedFunctionInvokedV1 {
                 timestamp,
                 function_name,
                 request,
                 idempotency_key,
+            }
+            | OplogEntry::ExportedFunctionInvoked {
+                timestamp,
+                function_name,
+                request,
+                idempotency_key,
+                ..
             } => {
                 let payload_bytes = oplog_service
                     .download_payload(owned_worker_id, &request)
@@ -379,6 +386,8 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     .zip(params)
                     .map(|(param, value)| ValueAndType::new(value, param.typ.clone()))
                     .collect();
+
+                // TODO: store invocation context in public oplog
 
                 Ok(PublicOplogEntry::ExportedFunctionInvoked(
                     ExportedFunctionInvokedParameters {
@@ -738,6 +747,8 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     idempotency_key,
                 },
             )),
+            OplogEntry::StartSpan { .. } => todo!(),
+            OplogEntry::FinishSpan { .. } => todo!(),
         }
     }
 }

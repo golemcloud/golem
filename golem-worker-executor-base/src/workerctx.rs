@@ -438,12 +438,13 @@ pub trait FileSystemReading {
 }
 
 /// Functions to manipulate and query the current invocation context
+#[async_trait]
 pub trait InvocationContextManagement {
-    fn start_span(
+    async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError>;
-    fn start_child_span(
+    async fn start_child_span(
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
@@ -453,7 +454,7 @@ pub trait InvocationContextManagement {
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
 
     /// Removes and finishes a local span
-    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
 }
 
 #[async_trait]

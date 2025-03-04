@@ -908,6 +908,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .map(|value| value.clone().into())
                 .collect();
 
+            let stack = self.get_current_invocation_context().await;
+
             self.state
                 .oplog
                 .add_exported_function_invoked(
@@ -916,6 +918,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     self.get_current_idempotency_key().await.ok_or(anyhow!(
                         "No active invocation key is associated with the worker"
                     ))?,
+                    stack,
                 )
                 .await
                 .unwrap_or_else(|err| {
@@ -1237,26 +1240,55 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
-    fn start_span(
+    async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         let span_id = self.state.current_span_id.clone();
-        self.start_child_span(&span_id, initial_attributes)
+        self.start_child_span(&span_id, initial_attributes).await
     }
 
-    fn start_child_span(
+    async fn start_child_span(
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         let current_span_id = &self.state.current_span_id;
-        let span = self
+
+        let is_live = self.is_live();
+        let span = if is_live {
+            self.state
+                .invocation_context
+                .start_span(current_span_id, None)
+                .map_err(GolemError::runtime)?
+        } else if let Some((_, entry)) = self
             .state
-            .invocation_context
-            .start_span(current_span_id, None)
-            .map_err(GolemError::runtime)?;
+            .replay_state
+            .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
+            .await
+        {
+            let (timestamp, span_id) = match entry {
+                OplogEntry::StartSpan {
+                    timestamp, span_id, ..
+                } => (timestamp, span_id),
+                _ => unreachable!(),
+            };
+
+            let span = InvocationContextSpan::local()
+                .with_span_id(span_id)
+                .with_start(timestamp)
+                .with_parent(self.state.invocation_context.get(current_span_id).unwrap())
+                .build();
+            self.state.invocation_context.add_span(span.clone());
+            span
+        } else {
+            self.state
+                .invocation_context
+                .start_span(current_span_id, None)
+                .map_err(GolemError::runtime)?
+        };
 
         if current_span_id != parent
             && !self
@@ -1279,7 +1311,18 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span.set_attribute(name.clone(), value.clone());
         }
 
-        // TODO: write an open span entry to the oplog, or read the persisted span in replay mode
+        if is_live {
+            self.state
+                .oplog
+                .add(OplogEntry::start_span(
+                    span.start().unwrap_or(Timestamp::now_utc()),
+                    span.span_id().clone(),
+                    Some(current_span_id.clone()),
+                    span.linked_context().map(|link| link.span_id().clone()),
+                    HashMap::from_iter(initial_attributes.iter().cloned()),
+                ))
+                .await;
+        }
 
         Ok(span)
     }
@@ -1293,8 +1336,20 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
-        // TODO: if live mode write a close span entry to the oplog
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        if self.is_live() {
+            self.state
+                .oplog
+                .add(OplogEntry::finish_span(span_id.clone()))
+                .await;
+        } else {
+            let _ = self
+                .state
+                .replay_state
+                .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::FinishSpan { .. }))
+                .await;
+        }
+
         let _ = self
             .state
             .invocation_context
@@ -1382,7 +1437,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         for span_id in local_span_ids {
-                            store.as_context_mut().data_mut().finish_span(&span_id)?;
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .finish_span(&span_id)
+                                .await?;
                         }
                         for span_id in inherited_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
@@ -1892,6 +1951,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     break;
                 }
             }
+            Some((_, OplogEntry::ExportedFunctionInvokedV1 { .. })) => break,
             Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
             _ => {}
         }
