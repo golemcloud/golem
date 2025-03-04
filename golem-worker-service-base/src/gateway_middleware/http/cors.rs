@@ -123,7 +123,7 @@ impl HttpCors {
     }
 
     pub fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<HttpCors, String> {
-        let compiled_expr = rib::compile(&expr.0, &vec![])
+        let compiled_expr = rib::compile(expr.0.clone(), &vec![])
             .map_err(|err| format!("Rib compilation for cors-preflight response. {}", err))?;
 
         let rib_input = RibInput::default();
@@ -276,7 +276,7 @@ impl CorsPreflightExpr {
         if let Some(max_age) = &cors.max_age {
             cors_parameters.push((
                 ACCESS_CONTROL_MAX_AGE.to_string(),
-                Expr::untyped_number_with_type_name(BigDecimal::from(*max_age), TypeName::U64),
+                Expr::number(BigDecimal::from(*max_age)).with_type_annotation(TypeName::U64),
             ));
         }
 

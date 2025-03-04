@@ -48,6 +48,7 @@ use std::collections::VecDeque;
 //
 // At the end of this process, each expression has an assigned
 // inferred type, created by traversing in a queue and stack order.
+
 pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
@@ -60,6 +61,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 exprs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_tuple(exprs, inferred_type, &mut inferred_type_stack, source_span);
             }
@@ -175,6 +177,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_if_else(
                     cond,
@@ -192,6 +195,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 match_arms,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_pattern_match(
                     predicate,
@@ -212,6 +216,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 exprs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_multiple(
                     exprs,
@@ -234,6 +239,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -245,6 +251,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -254,6 +261,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -265,6 +274,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -274,6 +284,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -285,6 +297,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -293,6 +306,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -304,6 +319,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -313,6 +329,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -324,6 +342,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -333,6 +352,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -344,6 +365,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -353,6 +375,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_math_op(
                     lhs,
@@ -364,6 +388,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -373,6 +398,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -384,6 +411,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -393,6 +421,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 rhs,
                 inferred_type,
                 source_span,
+                type_annotation,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,
@@ -404,6 +434,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -424,6 +455,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     source_span,
                 );
             }
+
             Expr::Sequence {
                 exprs,
                 type_annotation,
@@ -438,10 +470,12 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     source_span,
                 );
             }
+
             Expr::Record {
                 exprs,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_record(
                     exprs,
@@ -463,6 +497,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 lhs,
                 rhs,
                 source_span,
+                type_annotation,
                 ..
             } => {
                 internal::handle_comparison_op(
@@ -475,6 +510,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -483,6 +519,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 lhs,
                 rhs,
                 source_span,
+                type_annotation,
                 ..
             } => {
                 internal::handle_comparison_op(
@@ -495,6 +532,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         rhs: b,
                         inferred_type: c,
                         source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
                     },
                 );
             }
@@ -505,6 +543,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 args,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_call(
                     call_type,
@@ -520,8 +559,18 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 expr,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_unwrap(expr, inferred_type, &mut inferred_type_stack, source_span);
+            }
+
+            Expr::Length {
+                expr,
+                inferred_type,
+                source_span,
+                ..
+            } => {
+                internal::handle_length(expr, inferred_type, &mut inferred_type_stack, source_span);
             }
 
             Expr::Throw { .. } => {
@@ -532,6 +581,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 expr,
                 inferred_type,
                 source_span,
+                ..
             } => {
                 internal::handle_get_tag(
                     expr,
@@ -567,6 +617,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 yield_expr,
                 inferred_type,
                 source_span,
+                ..
             } => internal::handle_list_reduce(
                 reduce_variable,
                 iterated_variable,
@@ -577,6 +628,12 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 &mut inferred_type_stack,
                 source_span,
             ),
+
+            Expr::Range {
+                range, source_span, ..
+            } => {
+                internal::handle_range(range, source_span, &mut inferred_type_stack);
+            }
         }
     }
 
@@ -597,10 +654,10 @@ mod internal {
     use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
     use crate::type_inference::kind::TypeKind;
-    use crate::type_refinement::precise_types::{ListType, RecordType};
+    use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        ActualType, ExpectedType, Expr, InferredType, MatchArm, TypeMismatchError, TypeName,
+        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
         VariableId,
     };
     use std::collections::VecDeque;
@@ -637,7 +694,7 @@ mod internal {
         let comprehension_type = current_comprehension_type.merge(list_expr);
 
         inferred_type_stack.push_front(
-            Expr::typed_list_comprehension(
+            Expr::list_comprehension_typed(
                 variable_id.clone(),
                 iterable_expr_inferred,
                 yield_expr_inferred,
@@ -734,29 +791,64 @@ mod internal {
         Ok(())
     }
 
-    pub fn handle_select_index(
+    pub(crate) fn handle_select_index(
         original_selection_expr: &Expr,
-        index: &usize,
-        current_index_type: &InferredType,
+        original_index_expr: &Expr,
+        curren_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) -> Result<(), RibCompilationError> {
-        let expr = inferred_type_stack
+        let new_index_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_index_expr.clone());
+
+        let inferred_type_of_index_expr = new_index_expr.inferred_type();
+
+        let new_selection_expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
-        let inferred_type_of_selection_expr = expr.inferred_type();
-        let list_type = get_inferred_type_of_selection_index(
-            original_selection_expr,
-            *index,
-            &inferred_type_of_selection_expr,
-        )?;
-        let new_select_index = Expr::select_index(expr.clone(), *index)
-            .with_inferred_type(current_index_type.merge(list_type))
-            .with_source_span(source_span.clone());
 
-        inferred_type_stack.push_front(new_select_index);
+        let inferred_type_of_selection_expr = new_selection_expr.inferred_type();
 
-        Ok(())
+        // If selection expression is not yet known in this stage
+        if !inferred_type_of_selection_expr.is_unknown() {
+            let (index_type, expression_type) = get_inferred_type_of_selection_dynamic(
+                original_selection_expr,
+                original_index_expr,
+                &inferred_type_of_selection_expr,
+                &inferred_type_of_index_expr,
+            )?;
+
+            let new_select_index = match index_type {
+                SelectionIndexType::Index(index_type) => Expr::select_index(
+                    new_selection_expr.clone(),
+                    original_index_expr.clone().with_inferred_type(index_type),
+                )
+                .with_inferred_type(curren_type.merge(expression_type))
+                .with_source_span(source_span.clone()),
+
+                SelectionIndexType::Range(range_index_type) => Expr::select_index(
+                    new_selection_expr.clone(),
+                    original_index_expr
+                        .clone()
+                        .with_inferred_type(range_index_type),
+                )
+                .with_inferred_type(curren_type.merge(expression_type))
+                .with_source_span(source_span.clone()),
+            };
+
+            inferred_type_stack.push_front(new_select_index);
+
+            Ok(())
+        } else {
+            let new_select_index =
+                Expr::select_index(new_selection_expr.clone(), original_index_expr.clone())
+                    .with_source_span(source_span.clone());
+
+            inferred_type_stack.push_front(new_select_index);
+
+            Ok(())
+        }
     }
 
     pub(crate) fn handle_result_ok(
@@ -1039,6 +1131,68 @@ mod internal {
         inferred_type_stack.push_front(new_binary);
     }
 
+    pub(crate) fn handle_range(
+        range: &Range,
+        source_span: &SourceSpan,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        match range {
+            Range::Range { from, to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: Some(Box::new(right.inferred_type())),
+                };
+                let new_range = Expr::range(left, right)
+                    .with_inferred_type(new_inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeInclusive { from, to } => {
+                let right = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(to.deref().clone());
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: Some(Box::new(right.inferred_type())),
+                };
+
+                let new_range = Expr::range_inclusive(left, right)
+                    .with_inferred_type(new_inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+            Range::RangeFrom { from } => {
+                let left = inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(from.deref().clone());
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(left.inferred_type()),
+                    to: None,
+                };
+
+                let new_range = Expr::range_from(left)
+                    .with_inferred_type(new_inferred_type)
+                    .with_source_span(source_span.clone());
+
+                inferred_type_stack.push_front(new_range);
+            }
+        }
+    }
+
     pub(crate) fn handle_call(
         call_type: &CallType,
         generic_type_parameter: Option<GenericTypeParameter>,
@@ -1203,6 +1357,21 @@ mod internal {
         }
     }
 
+    pub(crate) fn handle_length(
+        original_length_expr: &Expr,
+        current_length_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+        source_span: &SourceSpan,
+    ) {
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_length_expr.clone());
+        let new_length = Expr::length(expr)
+            .with_inferred_type(current_length_type.clone())
+            .with_source_span(source_span.clone());
+        inferred_type_stack.push_front(new_length);
+    }
+
     pub(crate) fn handle_unwrap(
         expr: &Expr,
         current_inferred_type: &InferredType,
@@ -1338,11 +1507,18 @@ mod internal {
         Ok(refined_record.inner_type_by_name(select_field))
     }
 
-    pub(crate) fn get_inferred_type_of_selection_index(
+    #[derive(Debug, Clone)]
+    pub(crate) enum SelectionIndexType {
+        Range(InferredType), // Range type
+        Index(InferredType), // This should be a number type
+    }
+
+    fn get_inferred_type_of_selection_dynamic(
         original_selection_expr: &Expr,
-        selected_index: usize,
+        selected_index: &Expr,
         select_from_type: &InferredType,
-    ) -> Result<InferredType, RibCompilationError> {
+        select_index_type: &InferredType,
+    ) -> Result<(SelectionIndexType, InferredType), RibCompilationError> {
         let refined_list = ListType::refine(select_from_type).ok_or({
             TypeMismatchError {
                 expr_with_wrong_type: original_selection_expr.clone(),
@@ -1351,13 +1527,48 @@ mod internal {
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
-                    "Cannot get index {} since it is not a list type. Found: {:?}",
+                    "cannot get index {} since it is not a list type. Found: {:?}",
                     selected_index, select_from_type
                 )],
             }
         })?;
 
-        Ok(refined_list.inner_type())
+        let list_type = refined_list.inner_type();
+
+        let is_number = select_index_type.contains_only_number();
+
+        if is_number {
+            Ok((
+                SelectionIndexType::Index(select_index_type.clone()),
+                list_type,
+            ))
+        } else {
+            let range = RangeType::refine(select_index_type).ok_or({
+                TypeMismatchError {
+                    expr_with_wrong_type: original_selection_expr.clone(),
+                    parent_expr: None,
+                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    actual_type: ActualType::Inferred(select_index_type.clone()),
+                    field_path: Default::default(),
+                    additional_error_detail: vec![format!(
+                        "Cannot get index {} since it is neither a number type (or a range type). Found: {:?}",
+                        selected_index, select_index_type
+                    )],
+                }
+            })?;
+
+            // Selecting a range results in a list type
+            let range = range.inner_types().0;
+            let range_type = InferredType::Range {
+                from: Box::new(range[0].clone()),
+                to: range.last().map(|x| Box::new(x.clone())),
+            };
+
+            Ok((
+                SelectionIndexType::Range(range_type),
+                InferredType::List(Box::new(list_type)),
+            ))
+        }
     }
 }
 
@@ -1398,17 +1609,18 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_select_index() {
         let identifier = Expr::identifier_global("foo", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
-        let expr = Expr::select_index(identifier.clone(), 0);
+        let expr = Expr::select_index(identifier.clone(), Expr::number(BigDecimal::from(0)));
         let new_expr = expr.pull_types_up().unwrap();
-        let expected = Expr::select_index(identifier, 0).merge_inferred_type(InferredType::U64);
+        let expected = Expr::select_index(identifier, Expr::number(BigDecimal::from(0)))
+            .merge_inferred_type(InferredType::U64);
         assert_eq!(new_expr, expected);
     }
 
     #[test]
     pub fn test_pull_up_for_sequence() {
         let elems = vec![
-            Expr::number(BigDecimal::from(1), None, InferredType::U64),
-            Expr::number(BigDecimal::from(2), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(2), None, InferredType::U64),
         ];
 
         let expr = Expr::sequence(elems.clone(), None).with_inferred_type(InferredType::Unknown);
@@ -1425,7 +1637,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tuple() {
         let expr = Expr::tuple(vec![
             Expr::literal("foo"),
-            Expr::number(BigDecimal::from(1), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
         ]);
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(
@@ -1439,11 +1651,11 @@ mod type_pull_up_tests {
         let elems = vec![
             (
                 "foo".to_string(),
-                Expr::number(BigDecimal::from(1), None, InferredType::U64),
+                Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
             ),
             (
                 "bar".to_string(),
-                Expr::number(BigDecimal::from(2), None, InferredType::U32),
+                Expr::number_inferred(BigDecimal::from(2), None, InferredType::U32),
             ),
         ];
         let expr = Expr::record(elems.clone()).with_inferred_type(InferredType::Record(vec![
@@ -1488,14 +1700,14 @@ mod type_pull_up_tests {
         let inner1 = Expr::identifier_global("foo", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
 
-        let select_index1 = Expr::select_index(inner1.clone(), 0);
-        let select_index2 = Expr::select_index(inner1, 1);
+        let select_index1 = Expr::select_index(inner1.clone(), Expr::number(BigDecimal::from(0)));
+        let select_index2 = Expr::select_index(inner1, Expr::number(BigDecimal::from(1)));
 
         let inner2 = Expr::identifier_global("bar", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
 
-        let select_index3 = Expr::select_index(inner2.clone(), 0);
-        let select_index4 = Expr::select_index(inner2, 1);
+        let select_index3 = Expr::select_index(inner2.clone(), Expr::number(BigDecimal::from(0)));
+        let select_index4 = Expr::select_index(inner2, Expr::number(BigDecimal::from(1)));
 
         let expr = Expr::cond(
             Expr::greater_than(select_index1.clone(), select_index2.clone()),
@@ -1509,13 +1721,13 @@ mod type_pull_up_tests {
                 Expr::select_index(
                     Expr::identifier_global("foo", None)
                         .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                    0,
+                    Expr::number(BigDecimal::from(0)),
                 )
                 .with_inferred_type(InferredType::U64),
                 Expr::select_index(
                     Expr::identifier_global("foo", None)
                         .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                    1,
+                    Expr::number(BigDecimal::from(1)),
                 )
                 .with_inferred_type(InferredType::U64),
             )
@@ -1523,13 +1735,13 @@ mod type_pull_up_tests {
             Expr::select_index(
                 Expr::identifier_global("bar", None)
                     .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                0,
+                Expr::number(BigDecimal::from(0)),
             )
             .with_inferred_type(InferredType::U64),
             Expr::select_index(
                 Expr::identifier_global("bar", None)
                     .with_inferred_type(InferredType::List(Box::new(InferredType::U64))),
-                1,
+                Expr::number(BigDecimal::from(1)),
             )
             .with_inferred_type(InferredType::U64),
         )
@@ -1564,8 +1776,8 @@ mod type_pull_up_tests {
         let inner = Expr::identifier_global("foo", None)
             .merge_inferred_type(InferredType::List(Box::new(InferredType::U64)));
 
-        let select_index1 = Expr::select_index(inner.clone(), 0);
-        let select_index2 = Expr::select_index(inner, 1);
+        let select_index1 = Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0)));
+        let select_index2 = Expr::select_index(inner, Expr::number(BigDecimal::from(1)));
         let expr = Expr::greater_than_or_equal_to(select_index1.clone(), select_index2.clone());
 
         let new_expr = expr.pull_types_up().unwrap();
@@ -1588,10 +1800,16 @@ mod type_pull_up_tests {
         let inner = Expr::identifier_global("foo", None)
             .merge_inferred_type(InferredType::List(Box::new(record_type.clone())));
 
-        let select_field_from_first =
-            Expr::select_field(Expr::select_index(inner.clone(), 0), "bar", None);
-        let select_field_from_second =
-            Expr::select_field(Expr::select_index(inner.clone(), 1), "baz", None);
+        let select_field_from_first = Expr::select_field(
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0))),
+            "bar",
+            None,
+        );
+        let select_field_from_second = Expr::select_field(
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(1))),
+            "baz",
+            None,
+        );
         let expr = Expr::less_than_or_equal_to(
             select_field_from_first.clone(),
             select_field_from_second.clone(),
@@ -1600,14 +1818,16 @@ mod type_pull_up_tests {
         let new_expr = expr.pull_types_up().unwrap();
 
         let new_select_field_from_first = Expr::select_field(
-            Expr::select_index(inner.clone(), 0).merge_inferred_type(record_type.clone()),
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0)))
+                .merge_inferred_type(record_type.clone()),
             "bar",
             None,
         )
         .merge_inferred_type(InferredType::Str);
 
         let new_select_field_from_second = Expr::select_field(
-            Expr::select_index(inner.clone(), 1).merge_inferred_type(record_type),
+            Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(1)))
+                .merge_inferred_type(record_type),
             "baz",
             None,
         )
@@ -1623,8 +1843,8 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_equal_to() {
         let expr = Expr::equal_to(
-            Expr::untyped_number(BigDecimal::from(1)),
-            Expr::untyped_number(BigDecimal::from(2)),
+            Expr::number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(2)),
         );
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
@@ -1633,8 +1853,8 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_less_than() {
         let expr = Expr::less_than(
-            Expr::untyped_number(BigDecimal::from(1)),
-            Expr::untyped_number(BigDecimal::from(2)),
+            Expr::number(BigDecimal::from(1)),
+            Expr::number(BigDecimal::from(2)),
         );
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
@@ -1646,7 +1866,7 @@ mod type_pull_up_tests {
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
             None,
             None,
-            vec![Expr::untyped_number(BigDecimal::from(1))],
+            vec![Expr::number(BigDecimal::from(1))],
         );
         expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
@@ -1719,7 +1939,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_unwrap() {
-        let mut number = Expr::untyped_number(BigDecimal::from(1));
+        let mut number = Expr::number(BigDecimal::from(1));
         number.with_inferred_type_mut(InferredType::F64);
         let expr = Expr::option(Some(number)).unwrap();
         let expr = expr.pull_types_up().unwrap();
@@ -1731,7 +1951,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_tag() {
-        let mut number = Expr::untyped_number(BigDecimal::from(1));
+        let mut number = Expr::number(BigDecimal::from(1));
         number.with_inferred_type_mut(InferredType::F64);
         let expr = Expr::get_tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();

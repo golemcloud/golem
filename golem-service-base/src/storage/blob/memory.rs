@@ -81,7 +81,8 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>>, String> {
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>>, String>
+    {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -97,7 +98,7 @@ impl BlobStorage for InMemoryBlobStorage {
                 directory.get(&key).map(|entry| {
                     let data = entry.data.clone();
                     let stream = tokio_stream::once(Ok(data));
-                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>> =
+                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>> =
                         Box::pin(stream);
                     boxed
                 })

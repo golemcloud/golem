@@ -79,6 +79,7 @@ impl SqliteBlobStorage {
             BlobStorageNamespace::InitialComponentFiles { account_id } => {
                 format!("initial_component_files-{}", account_id.value)
             }
+            BlobStorageNamespace::Components => "components".to_string(),
         }
     }
 
@@ -124,14 +125,16 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
-    {
+    ) -> Result<
+        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
+        String,
+    > {
         let result = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
         Ok(result.map(|bytes| {
             let stream = tokio_stream::once(Ok(bytes));
-            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
+            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>> =
                 Box::pin(stream);
             boxed
         }))

@@ -34,7 +34,8 @@ pub enum RibIR {
     PushErrResult(AnalysedType),
     PushFlag(ValueAndType), // More or less like a literal, compiler can form the value directly
     SelectField(String),
-    SelectIndex(usize),
+    SelectIndex(usize), // Kept for backward compatibility. Cannot read old SelectIndex(usize) as a SelectIndexV1
+    SelectIndexV1,
     EqualTo,
     GreaterThan,
     And,
@@ -59,11 +60,12 @@ pub enum RibIR {
     Divide(AnalysedType),
     Multiply(AnalysedType),
     Negate,
-    ListToIterator,
+    ToIterator,
     CreateSink(AnalysedType),
     AdvanceIterator,
     PushToSink,
     SinkToList,
+    Length,
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -391,8 +393,10 @@ mod protobuf {
                         "Failed to convert CreateErrResult".to_string()
                     })?))
                 }
+                Instruction::Length(_) => Ok(RibIR::Length),
                 Instruction::SelectField(value) => Ok(RibIR::SelectField(value)),
                 Instruction::SelectIndex(value) => Ok(RibIR::SelectIndex(value as usize)),
+                Instruction::SelectIndexV1(_) => Ok(RibIR::SelectIndexV1),
                 Instruction::EqualTo(_) => Ok(RibIR::EqualTo),
                 Instruction::GreaterThan(_) => Ok(RibIR::GreaterThan),
                 Instruction::LessThan(_) => Ok(RibIR::LessThan),
@@ -508,7 +512,7 @@ mod protobuf {
                         function_reference_type,
                     ))
                 }
-                Instruction::ListToIterator(_) => Ok(RibIR::ListToIterator),
+                Instruction::ListToIterator(_) => Ok(RibIR::ToIterator),
                 Instruction::CreateSink(create_sink) => {
                     let result = create_sink
                         .list_type
@@ -572,6 +576,10 @@ mod protobuf {
                 RibIR::EqualTo => Instruction::EqualTo(EqualTo {}),
                 RibIR::GreaterThan => Instruction::GreaterThan(GreaterThan {}),
                 RibIR::LessThan => Instruction::LessThan(LessThan {}),
+                RibIR::Length => Instruction::Length(golem_api_grpc::proto::golem::rib::Length {}),
+                RibIR::SelectIndexV1 => {
+                    Instruction::SelectIndexV1(golem_api_grpc::proto::golem::rib::SelectIndexV1 {})
+                }
                 RibIR::GreaterThanOrEqualTo => {
                     Instruction::GreaterThanOrEqualTo(GreaterThanOrEqualTo {})
                 }
@@ -656,7 +664,7 @@ mod protobuf {
                     })
                 }
 
-                RibIR::ListToIterator => Instruction::ListToIterator(
+                RibIR::ToIterator => Instruction::ListToIterator(
                     golem_api_grpc::proto::golem::rib::ListToIterator {},
                 ),
                 RibIR::CreateSink(analysed_type) => {

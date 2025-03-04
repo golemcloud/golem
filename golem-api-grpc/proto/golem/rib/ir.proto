@@ -53,8 +53,14 @@ message RibIR {
         wasm.ast.Type multiply = 41;
         wasm.ast.Type divide = 42;
         IsEmpty is_empty = 43;
+        SelectIndexV1 select_index_v1 = 44;
+        Length length = 45;
     }
 }
+
+message Length {}
+
+message SelectIndexV1{}
 
 message VariableId {
     oneof variable_id {

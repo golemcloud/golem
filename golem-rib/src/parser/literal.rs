@@ -171,7 +171,7 @@ mod literal_parse_tests {
                         Expr::identifier_global("worker_id", None)
                     ])
                 ),
-                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::number(BigDecimal::from(1)),
                 Expr::literal("baz"),
             )
         );

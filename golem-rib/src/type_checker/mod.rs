@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 pub(crate) use check_instance_returns::*;
 pub(crate) use exhaustive_pattern_match::*;
 pub(crate) use invalid_expr::*;
@@ -61,7 +75,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_message = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_message = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 32
@@ -97,7 +111,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -122,7 +136,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -147,7 +161,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -176,7 +190,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 51
@@ -200,7 +214,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 21
@@ -223,7 +237,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -248,7 +262,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -274,7 +288,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 3, column 30
@@ -299,7 +313,7 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(&expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28

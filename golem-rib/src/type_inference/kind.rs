@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::InferredType;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt::Display;
@@ -23,6 +37,7 @@ pub enum TypeKind {
     Variant,
     Unknown,
     Ambiguous { possibilities: Vec<TypeKind> },
+    Range,
 }
 
 impl Display for TypeKind {
@@ -42,6 +57,7 @@ impl Display for TypeKind {
             TypeKind::Resource => write!(f, "resource"),
             TypeKind::Variant => write!(f, "variant"),
             TypeKind::Unknown => write!(f, "unknown"),
+            TypeKind::Range => write!(f, "range"),
             TypeKind::Ambiguous { possibilities } => {
                 write!(f, "conflicting types: ")?;
                 for (i, kind) in possibilities.iter().enumerate() {
@@ -115,6 +131,7 @@ impl GetTypeKind for InferredType {
             InferredType::Unknown => TypeKind::Unknown,
             InferredType::Sequence(_) => TypeKind::Unknown,
             InferredType::Instance { .. } => TypeKind::Unknown,
+            InferredType::Range { .. } => TypeKind::Range,
         }
     }
 }

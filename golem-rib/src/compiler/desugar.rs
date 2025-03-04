@@ -12,7 +12,66 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredType, MatchArm};
+use crate::{Expr, InferredType, MatchArm, Range, VariableId};
+use bigdecimal::BigDecimal;
+use std::ops::Deref;
+
+pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Result<Expr, String> {
+    let iterable_expr = VariableId::list_comprehension_identifier("__i__");
+
+    match range_expr {
+        Expr::Range { range, .. } => match range {
+            Range::Range { .. } | Range::RangeInclusive { .. } => Ok(Expr::list_comprehension(
+                iterable_expr.clone(),
+                range_expr.clone(),
+                Expr::select_index(
+                    select_from.clone(),
+                    Expr::identifier_with_variable_id(iterable_expr, None),
+                ),
+            )
+            .with_inferred_type(select_from.inferred_type())),
+
+            Range::RangeFrom { from, .. } => {
+                let length = VariableId::local("__size__", 0);
+                let length_identifier = Expr::identifier_with_variable_id(length.clone(), None)
+                    .with_inferred_type(InferredType::U64);
+                let index = VariableId::local("__index__", 0);
+                let index_identifier = Expr::identifier_with_variable_id(index.clone(), None)
+                    .with_inferred_type(InferredType::U64);
+
+                Ok(Expr::expr_block(vec![
+                    Expr::let_binding_with_variable_id(
+                        length,
+                        Expr::length(select_from.clone()),
+                        None,
+                    ),
+                    Expr::let_binding_with_variable_id(
+                        index,
+                        Expr::minus(
+                            length_identifier,
+                            Expr::number(BigDecimal::from(1)).with_inferred_type(InferredType::U64),
+                        )
+                        .with_inferred_type(InferredType::U64),
+                        None,
+                    )
+                    .with_inferred_type(InferredType::U64),
+                    Expr::list_comprehension(
+                        iterable_expr.clone(),
+                        Expr::range(from.deref().clone(), index_identifier),
+                        Expr::select_index(
+                            select_from.clone(),
+                            Expr::identifier_with_variable_id(iterable_expr, None),
+                        ),
+                    )
+                    .with_inferred_type(select_from.inferred_type()),
+                ]))
+            }
+        },
+
+        _ => Err("internal error: expression is not a range for any desugar to apply".to_string()),
+    }
+}
+
 pub fn desugar_pattern_match(
     pred: &Expr,
     match_arms: &[MatchArm],
@@ -32,7 +91,9 @@ pub fn desugar_pattern_match(
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+    use crate::rib_source_span::SourceSpan;
+    use crate::{ArmPattern, Expr, InferredType, MatchArm, Number, VariableId};
+    use bigdecimal::{BigDecimal, FromPrimitive};
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -419,7 +480,17 @@ mod internal {
                 // However there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (index, arm_pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = Expr::select_index(pred_expr.clone(), index);
+                    let new_pred = Expr::select_index(
+                        pred_expr.clone(),
+                        Expr::Number {
+                            number: Number {
+                                value: BigDecimal::from_usize(index).unwrap(),
+                            },
+                            type_annotation: None,
+                            inferred_type: InferredType::U64,
+                            source_span: SourceSpan::default(),
+                        },
+                    );
                     let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::Unknown);
 
                     let branch = get_conditions(
@@ -467,7 +538,17 @@ mod internal {
                 // However there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (index, arm_pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = Expr::select_index(pred_expr.clone(), index);
+                    let new_pred = Expr::select_index(
+                        pred_expr.clone(),
+                        Expr::Number {
+                            number: Number {
+                                value: BigDecimal::from_usize(index).unwrap(),
+                            },
+                            type_annotation: None,
+                            inferred_type: InferredType::U64,
+                            source_span: SourceSpan::default(),
+                        },
+                    );
                     let new_pred_type = inferred_type.clone();
 
                     let branch = get_conditions(
@@ -647,7 +728,11 @@ mod desugar_tests {
                         Expr::literal("none"),
                     )
                     .with_inferred_type(InferredType::Bool),
-                    Expr::number(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+                    Expr::number_inferred(
+                        BigDecimal::from(1),
+                        Some(TypeName::U64),
+                        InferredType::U64,
+                    ),
                     Expr::throw("No match found"),
                 )
                 .with_inferred_type(InferredType::U64),

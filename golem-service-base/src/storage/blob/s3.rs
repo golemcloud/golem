@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ReplayableStream;
 use crate::config::S3BlobStorageConfig;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
@@ -24,17 +25,18 @@ use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use aws_sdk_s3::Client;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::TryFutureExt;
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
+use http_body::SizeHint;
+use http_body_util::combinators::BoxBody;
+use http_body_util::BodyExt;
 use std::error::Error;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::info;
-
-use super::ReplayableStream;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -50,10 +52,7 @@ impl S3BlobStorage {
             aws_config::defaults(BehaviorVersion::v2024_03_28()).region(Region::new(region));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
-            info!(
-                "The AWS endpoint urls for blob storage is {}",
-                &endpoint_url
-            );
+            info!("The AWS endpoint url for blob storage is {}", &endpoint_url);
             config_builder = config_builder.endpoint_url(endpoint_url);
         }
 
@@ -81,6 +80,7 @@ impl S3BlobStorage {
             BlobStorageNamespace::InitialComponentFiles { .. } => {
                 &self.config.initial_component_files_bucket
             }
+            BlobStorageNamespace::Components => &self.config.components_bucket,
         }
     }
 
@@ -144,6 +144,7 @@ impl S3BlobStorage {
                         .to_path_buf()
                 }
             }
+            BlobStorageNamespace::Components => Path::new(&self.config.object_prefix).to_path_buf(),
         }
     }
 
@@ -251,12 +252,16 @@ impl S3BlobStorage {
 
     fn error_string<T: Error>(error: &SdkError<T>) -> String {
         match error {
-            SdkError::ConstructionFailure(_) => "Construction failure".to_string(),
-            SdkError::TimeoutError(_) => "Timeout".to_string(),
+            SdkError::ConstructionFailure(inner) => format!("Construction failure: {inner:?}"),
+            SdkError::TimeoutError(inner) => format!("Timeout: {inner:?}"),
             SdkError::DispatchFailure(inner) => {
-                format!("Dispatch failure: {}", inner.as_connector_error().unwrap())
+                // normal display of the error does not expose enough useful information
+                format!(
+                    "Dispatch failure: {:?}",
+                    inner.as_connector_error().unwrap()
+                )
             }
-            SdkError::ResponseError(_) => "Response error".to_string(),
+            SdkError::ResponseError(inner) => format!("Response error: {inner:?}"),
             SdkError::ServiceError(inner) => inner.err().to_string(),
             _ => error.to_string(),
         }
@@ -350,8 +355,10 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
-    {
+    ) -> Result<
+        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
+        String,
+    > {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -383,9 +390,7 @@ impl BlobStorage for S3BlobStorage {
                         .await
                         .map(|x| (x.map_err(|e| e.to_string()), body))
                 });
-                let pinned: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
-                    Box::pin(stream);
-                Ok(Some(pinned))
+                Ok(Some(Box::pin(stream)))
             }
             Err(SdkError::ServiceError(service_error)) => match service_error.err() {
                 NoSuchKey(_) => Ok(None),
@@ -454,7 +459,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<BlobMetadata>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let op_id = format!("{} - {:?}", bucket, key);
+        let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
             target_label,
@@ -603,7 +608,10 @@ impl BlobStorage for S3BlobStorage {
                     .make_stream()
                     .await
                     .map_err(SdkErrorOrCustomError::custom_error)?;
-                let body = reqwest::Body::wrap_stream(stream);
+
+                // Checksum calculation requires body length to be known.
+                let body = SizedBody::new(reqwest::Body::wrap_stream(stream), stream_length);
+
                 let byte_stream = ByteStream::from_body_1_x(body);
 
                 client
@@ -1004,5 +1012,46 @@ impl<T> SdkErrorOrCustomError<T> {
             SdkErrorOrCustomError::SdkError(err) => S3BlobStorage::error_string(&err),
             SdkErrorOrCustomError::CustomError(err) => err,
         }
+    }
+}
+
+// body with explicitly overridden size hint. Needed because size hints are not settable for streams, see: https://github.com/seanmonstar/reqwest/issues/1293
+pub struct SizedBody<D, E> {
+    inner: BoxBody<D, E>,
+    hint: SizeHint,
+}
+
+impl<D, E> SizedBody<D, E> {
+    pub fn new<B>(body: B, size: u64) -> Self
+    where
+        B: http_body::Body<Data = D, Error = E> + Send + Sync + 'static,
+    {
+        Self {
+            inner: body.boxed(),
+            hint: SizeHint::with_exact(size),
+        }
+    }
+}
+
+impl<D: Buf, E> http_body::Body for SizedBody<D, E> {
+    type Data = D;
+    type Error = E;
+
+    #[inline]
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Result<http_body::Frame<D>, E>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    #[inline]
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> SizeHint {
+        self.hint.clone()
     }
 }

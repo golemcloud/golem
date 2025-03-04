@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use crate::Expr;
 
 // Given `f` executes inference, find expr where `f(expr) = expr`
@@ -394,7 +395,7 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding_with_variable_id(
                 VariableId::local("x", 0),
-                Expr::number(BigDecimal::from(1), None, InferredType::U64),
+                Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
                 Some(TypeName::U64),
             ),
             Expr::cond(
