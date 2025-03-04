@@ -90,15 +90,16 @@ mod protobuf {
 }
 
 mod internal {
-    use crate::compiler::desugar::desugar_pattern_match;
+    use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR, VariableId, WorkerNamePresence,
+        InferredType, InstructionId, Range, RibIR, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
+    use golem_wasm_ast::analysis::analysed_type::bool;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -113,6 +114,12 @@ mod internal {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Deconstruct);
             }
+
+            Expr::Length { expr, .. } => {
+                stack.push(ExprState::from_expr(expr.deref()));
+                instructions.push(RibIR::Length);
+            }
+
             Expr::Throw { message, .. } => {
                 instructions.push(RibIR::Throw(message.to_string()));
             }
@@ -131,7 +138,7 @@ mod internal {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
                 let value_and_type = number.to_val(&analysed_type).ok_or(format!(
-                    "Internal error: convert a number to wasm value using {:?}",
+                    "internal error: convert a number to wasm value using {:?}",
                     analysed_type
                 ))?;
 
@@ -277,7 +284,8 @@ mod internal {
             } => {
                 let desugared_pattern_match =
                     desugar_pattern_match(predicate.deref(), match_arms, inferred_type.clone())
-                        .ok_or("Desugar pattern match failed".to_string())?;
+                        .ok_or("internal error: desugar pattern match failed".to_string())?;
+
                 stack.push(ExprState::from_expr(&desugared_pattern_match));
             }
             Expr::Cond { cond, lhs, rhs, .. } => {
@@ -294,10 +302,19 @@ mod internal {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::SelectField(field.clone()));
             }
-            Expr::SelectIndex { expr, index, .. } => {
-                stack.push(ExprState::from_expr(expr.deref()));
-                instructions.push(RibIR::SelectIndex(*index));
-            }
+
+            Expr::SelectIndex { expr, index, .. } => match index.inferred_type() {
+                InferredType::Range { .. } => {
+                    let list_comprehension = desugar_range_selection(expr, index)?;
+                    stack.push(ExprState::from_expr(&list_comprehension));
+                }
+                _ => {
+                    stack.push(ExprState::from_expr(index.deref()));
+                    stack.push(ExprState::from_expr(expr.deref()));
+                    instructions.push(RibIR::SelectIndexV1);
+                }
+            },
+
             Expr::Option {
                 expr: Some(inner_expr),
                 inferred_type,
@@ -596,6 +613,25 @@ mod internal {
                 )
             }
 
+            range_expr @ Expr::Range {
+                range,
+                inferred_type,
+                ..
+            } => match inferred_type {
+                InferredType::Range { .. } => {
+                    let analysed_type = convert_to_analysed_type(range_expr, inferred_type)?;
+
+                    handle_range(range, stack, analysed_type, instructions);
+                }
+
+                _ => {
+                    return Err(format!(
+                        "Range should have inferred type Range {:?}",
+                        inferred_type
+                    ));
+                }
+            },
+
             // Invoke is always handled by the CallType::Function branch
             Expr::InvokeMethodLazy { .. } => {}
 
@@ -651,6 +687,36 @@ mod internal {
         }
     }
 
+    fn handle_range(
+        range: &Range,
+        stack: &mut Vec<ExprState>,
+        analysed_type: AnalysedType,
+        instructions: &mut Vec<RibIR>,
+    ) {
+        let from = range.from();
+        let to = range.to();
+        let inclusive = range.inclusive();
+
+        if let Some(from) = from {
+            stack.push(ExprState::from_expr(from));
+            instructions.push(RibIR::UpdateRecord("from".to_string()));
+        }
+
+        if let Some(to) = to {
+            stack.push(ExprState::from_expr(to));
+            instructions.push(RibIR::UpdateRecord("to".to_string()));
+        }
+
+        stack.push(ExprState::from_ir(RibIR::PushLit(ValueAndType::new(
+            Value::Bool(inclusive),
+            bool(),
+        ))));
+
+        instructions.push(RibIR::UpdateRecord("inclusive".to_string()));
+
+        instructions.push(RibIR::CreateAndPushRecord(analysed_type));
+    }
+
     fn handle_list_comprehension(
         instruction_id: &mut InstructionId,
         stack: &mut Vec<ExprState>,
@@ -661,7 +727,7 @@ mod internal {
     ) {
         stack.push(ExprState::from_expr(iterable_expr));
 
-        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+        stack.push(ExprState::from_ir(RibIR::ToIterator));
 
         stack.push(ExprState::from_ir(RibIR::CreateSink(sink_type.clone())));
 
@@ -707,7 +773,7 @@ mod internal {
             reduce_variable.clone(),
         )));
 
-        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+        stack.push(ExprState::from_ir(RibIR::ToIterator));
 
         let loop_start_label = instruction_id.increment_mut();
 
@@ -775,15 +841,15 @@ mod compiler_tests {
 
     use super::*;
     use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{list, str};
+    use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
-    use golem_wasm_rpc::IntoValueAndType;
+    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     #[test]
     fn test_instructions_for_literal() {
         let literal = Expr::literal("hello");
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&literal, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(literal, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -803,7 +869,7 @@ mod compiler_tests {
         let empty_registry = FunctionTypeRegistry::empty();
         let expr = Expr::identifier_with_variable_id(variable_id.clone(), None)
             .with_inferred_type(inferred_input_type);
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -825,7 +891,7 @@ mod compiler_tests {
         let expr = Expr::let_binding_with_variable_id(variable_id.clone(), literal, None);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -843,12 +909,12 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_equal_to() {
-        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -870,12 +936,12 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than() {
-        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number(BigDecimal::from(2), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(2), None, InferredType::U32);
 
         let expr = Expr::greater_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -897,12 +963,12 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than() {
-        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::less_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -924,12 +990,12 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than_or_equal_to() {
-        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -951,12 +1017,12 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than_or_equal_to() {
-        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -988,7 +1054,7 @@ mod compiler_tests {
         ]));
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1026,7 +1092,7 @@ mod compiler_tests {
         let expr = Expr::expr_block(vec![Expr::literal("foo"), Expr::literal("bar")]);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1051,7 +1117,7 @@ mod compiler_tests {
         let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1086,7 +1152,7 @@ mod compiler_tests {
         let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1129,7 +1195,7 @@ mod compiler_tests {
             Expr::select_field(record, "bar_key", None).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1168,18 +1234,20 @@ mod compiler_tests {
         let sequence = Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None)
             .with_inferred_type(InferredType::List(Box::new(InferredType::Str)));
 
-        let expr = Expr::select_index(sequence, 1).with_inferred_type(InferredType::Str);
+        let expr = Expr::select_index(sequence, Expr::number(BigDecimal::from(1)))
+            .with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
+            RibIR::PushLit(ValueAndType::new(Value::U64(1), u64())),
             RibIR::PushLit("bar".into_value_and_type()),
             RibIR::PushLit("foo".into_value_and_type()),
             RibIR::PushList(list(str()), 2),
-            RibIR::SelectIndex(1),
+            RibIR::SelectIndexV1,
         ];
 
         let expected_instructions = RibByteCode {
@@ -1211,7 +1279,7 @@ mod compiler_tests {
         .with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1267,7 +1335,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &vec![]).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &vec![]).unwrap_err().to_string();
 
             assert_eq!(compiler_error, "error in the following rib found at line 2, column 16\n`foo(request)`\ncause: invalid function call `foo`\nunknown function\n");
         }
@@ -1283,7 +1351,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 4, column 16\n`golem:it/api.{cart0(user_id).add-item}(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
@@ -1301,7 +1369,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 4, column 16\n`golem:it/api.{cart(user_id).foo}(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
@@ -1323,7 +1391,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 29\n`foo(user_id, user_id)`\ncause: invalid argument size for function `foo`. expected 1 arguments, found 2\n"
@@ -1340,7 +1408,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id, user_id).add-item}(\"apple\")`\ncause: invalid argument size for function `[constructor]cart`. expected 1 arguments, found 2\n"
@@ -1357,7 +1425,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id).add-item}(\"apple\", \"samsung\")`\ncause: invalid argument size for function `[method]cart.add-item`. expected 1 arguments, found 2\n"
@@ -1375,7 +1443,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 0, column 0\n`register-user(1, \"foo\")`\ncause: invalid argument size for function `register-user`. expected 1 arguments, found 2\n"
@@ -1396,7 +1464,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 2, column 33\n`1: u64`\nfound within:\n`foo(1: u64)`\ncause: type mismatch. expected string. found u64\ninvalid argument to the function `foo`\n"
@@ -1413,7 +1481,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`golem:it/api.{cart(user_id).add-item}(\"apple\")`\ncause: type mismatch. expected record{name: string}. found string\ninvalid argument to the function `[method]cart.add-item`\n"
@@ -1429,7 +1497,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`golem:it/api.{cart({foo: \"bar\"}).add-item}(\"apple\")`\ncause: type mismatch. expected string. found record{foo: string}\ninvalid argument to the function `[constructor]cart`\n"
@@ -1447,7 +1515,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err().to_string();
+            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 2, column 56\n`\"foo\"`\nfound within:\n`register-user(\"foo\")`\ncause: type mismatch. expected u64. found string\ninvalid argument to the function `register-user`\n"
@@ -1488,7 +1556,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1517,7 +1585,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1566,7 +1634,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1603,7 +1671,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1639,7 +1707,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1676,7 +1744,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1724,7 +1792,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1768,7 +1836,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1803,7 +1871,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 

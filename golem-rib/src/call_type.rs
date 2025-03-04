@@ -53,6 +53,12 @@ impl InstanceCreationType {
 }
 
 impl CallType {
+    pub fn function_name(&self) -> Option<DynamicParsedFunctionName> {
+        match self {
+            CallType::Function { function_name, .. } => Some(function_name.clone()),
+            _ => None,
+        }
+    }
     pub fn worker_expr(&self) -> Option<&Expr> {
         match self {
             CallType::Function { worker, .. } => worker.as_deref(),

@@ -16,7 +16,7 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier_text;
 use crate::parser::rib_expr::rib_expr;
-use crate::parser::type_name::parse_type_name;
+use crate::parser::type_name::type_name;
 use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::{alpha_num, char};
 use combine::{
@@ -39,12 +39,7 @@ where
     .with(
         (
             let_variable().skip(spaces()),
-            optional(
-                char_(':')
-                    .skip(spaces())
-                    .with(parse_type_name())
-                    .skip(spaces()),
-            ),
+            optional(char_(':').skip(spaces()).with(type_name()).skip(spaces())),
             char_('=').skip(spaces()),
             rib_expr(),
         )

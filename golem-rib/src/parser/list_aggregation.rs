@@ -109,12 +109,12 @@ mod tests {
                 VariableId::list_comprehension_identifier("p"),
                 Expr::sequence(
                     vec![
-                        Expr::untyped_number(BigDecimal::from(1)),
-                        Expr::untyped_number(BigDecimal::from(2))
+                        Expr::number(BigDecimal::from(1)),
+                        Expr::number(BigDecimal::from(2))
                     ],
                     None
                 ),
-                Expr::untyped_number(BigDecimal::from(0)),
+                Expr::number(BigDecimal::from(0)),
                 Expr::expr_block(vec![Expr::plus(
                     Expr::identifier_global("z", None),
                     Expr::identifier_global("p", None)
@@ -139,9 +139,9 @@ mod tests {
                     "ages",
                     Expr::sequence(
                         vec![
-                            Expr::untyped_number(BigDecimal::from(1)),
-                            Expr::untyped_number(BigDecimal::from(2)),
-                            Expr::untyped_number(BigDecimal::from(3))
+                            Expr::number(BigDecimal::from(1)),
+                            Expr::number(BigDecimal::from(2)),
+                            Expr::number(BigDecimal::from(3))
                         ],
                         None
                     ),
@@ -151,7 +151,7 @@ mod tests {
                     VariableId::list_reduce_identifier("z"),
                     VariableId::list_comprehension_identifier("a"),
                     Expr::identifier_global("ages", None),
-                    Expr::untyped_number(BigDecimal::from(0)),
+                    Expr::number(BigDecimal::from(0)),
                     Expr::expr_block(vec![Expr::plus(
                         Expr::identifier_global("z", None),
                         Expr::identifier_global("a", None)

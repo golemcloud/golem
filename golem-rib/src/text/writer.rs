@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::expr::Expr;
-use crate::{ArmPattern, MatchArm};
+use crate::{ArmPattern, MatchArm, Range};
 use std::fmt::Display;
 use std::io::Write;
 
@@ -94,6 +94,23 @@ impl<W: Write> Writer<W> {
                 }
             }
 
+            Expr::Range { range, .. } => match range {
+                Range::Range { from, to } => {
+                    self.write_expr(from)?;
+                    self.write_str("..")?;
+                    self.write_expr(to)
+                }
+                Range::RangeInclusive { from, to } => {
+                    self.write_expr(from)?;
+                    self.write_str("..=")?;
+                    self.write_expr(to)
+                }
+                Range::RangeFrom { from } => {
+                    self.write_str("..")?;
+                    self.write_expr(from)
+                }
+            },
+
             Expr::Let {
                 variable_id,
                 type_annotation,
@@ -132,9 +149,9 @@ impl<W: Write> Writer<W> {
                 ..
             } => {
                 self.write_expr(expr)?;
-                self.write_display("[")?;
-                self.write_display(index)?;
-                self.write_display("]")?;
+                self.write_str("[")?;
+                self.write_expr(index)?;
+                self.write_str("]")?;
                 if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
                     self.write_display(type_name)
@@ -142,6 +159,7 @@ impl<W: Write> Writer<W> {
                     Ok(())
                 }
             }
+
             Expr::Sequence {
                 exprs,
                 type_annotation,
@@ -374,6 +392,12 @@ impl<W: Write> Writer<W> {
                 self.write_str(")")
             }
 
+            Expr::Length { expr, .. } => {
+                self.write_str("len(")?;
+                self.write_expr(expr)?;
+                self.write_str(")")
+            }
+
             Expr::Throw { message, .. } => {
                 self.write_str("throw(")?;
                 self.write_str(message)?;
@@ -400,7 +424,7 @@ impl<W: Write> Writer<W> {
                 yield_expr,
                 ..
             } => {
-                self.write_display("for")?;
+                self.write_display(" for ")?;
                 self.write_display(iterated_variable.to_string())?;
                 self.write_display(" in ")?;
                 self.write_expr(iterable_expr)?;

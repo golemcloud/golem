@@ -294,15 +294,14 @@ mod pattern_match_bindings {
                     },
                     MatchArm {
                         arm_pattern: ArmPattern::constructor("none", vec![]),
-                        arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
+                        arm_resolution_expr: Box::new(Expr::number(BigDecimal::from(0))),
                     },
                 ],
             )
         }
 
         pub(crate) fn expected_match_with_let_binding(index: usize) -> Expr {
-            let let_binding =
-                Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
+            let let_binding = Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None);
             let identifier_expr =
                 Expr::identifier_with_variable_id(VariableId::Global("x".to_string()), None);
             let block = Expr::expr_block(vec![let_binding, identifier_expr]);
@@ -325,7 +324,7 @@ mod pattern_match_bindings {
                     },
                     MatchArm {
                         arm_pattern: ArmPattern::constructor("none", vec![]),
-                        arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
+                        arm_resolution_expr: Box::new(Expr::number(BigDecimal::from(0))),
                     },
                 ],
             )
@@ -393,9 +392,9 @@ mod pattern_match_bindings {
                                 },
                                 MatchArm {
                                     arm_pattern: ArmPattern::constructor("none", vec![]),
-                                    arm_resolution_expr: Box::new(Expr::untyped_number(
-                                        BigDecimal::from(0),
-                                    )),
+                                    arm_resolution_expr: Box::new(Expr::number(BigDecimal::from(
+                                        0,
+                                    ))),
                                 },
                             ],
                         )),
@@ -411,7 +410,7 @@ mod pattern_match_bindings {
                                 None,
                             ))],
                         ),
-                        arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
+                        arm_resolution_expr: Box::new(Expr::number(BigDecimal::from(0))),
                     },
                 ],
             )

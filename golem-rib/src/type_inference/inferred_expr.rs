@@ -28,11 +28,11 @@ impl InferredExpr {
     }
 
     pub fn from_expr(
-        expr: &Expr,
+        expr: Expr,
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<InferredExpr, RibCompilationError> {
-        let mut mutable_expr = expr.clone();
+        let mut mutable_expr = expr;
 
         mutable_expr.infer_types(function_type_registry, type_spec)?;
 
