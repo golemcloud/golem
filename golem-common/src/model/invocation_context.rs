@@ -22,6 +22,7 @@ use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value};
 use nonempty_collections::NEVec;
 use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
@@ -68,6 +69,79 @@ impl IntoValue for TraceId {
     }
 }
 
+
+impl Serialize for TraceId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TraceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::from_string(String::deserialize(deserializer)?).map_err(|err| Error::custom(err))
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::Type for TraceId {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::from(format!("string({})", stringify!(SpanId)))
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Inline(Box::new(
+            poem_openapi::registry::MetaSchema::new("string"),
+        ))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromParameter for TraceId {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Ok(Self::from_string(value)?)
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromJSON for TraceId {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(serde_json::Value::String(s)) => Ok(Self::from_string(&s)?),
+            _ => Err(poem_openapi::types::ParseError::<TraceId>::custom(format!(
+                "Unexpected representation of {}",
+                stringify!(SpanId)
+            ))),
+        }
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ToJSON for TraceId {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::String(self.0.to_string()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct SpanId(pub NonZeroU64);
 
@@ -109,6 +183,78 @@ impl IntoValue for SpanId {
 
     fn get_type() -> AnalysedType {
         analysed_type::str()
+    }
+}
+
+impl Serialize for SpanId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SpanId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::from_string(String::deserialize(deserializer)?).map_err(|err| Error::custom(err))
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::Type for SpanId {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::from(format!("string({})", stringify!(SpanId)))
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Inline(Box::new(
+            poem_openapi::registry::MetaSchema::new("string"),
+        ))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromParameter for SpanId {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Ok(Self::from_string(value)?)
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromJSON for SpanId {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(serde_json::Value::String(s)) => Ok(Self::from_string(&s)?),
+            _ => Err(poem_openapi::types::ParseError::<SpanId>::custom(format!(
+                "Unexpected representation of {}",
+                stringify!(SpanId)
+            ))),
+        }
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ToJSON for SpanId {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::String(self.0.to_string()))
     }
 }
 

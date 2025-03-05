@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
+use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{DurableFunctionType, LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::plugin::PluginInstallation;
@@ -24,7 +24,7 @@ use crate::model::{
 use golem_wasm_ast::analysis::analysed_type::{
     bool, case, f64, field, list, option, record, s64, str, tuple, u32, u64, u8, unit_case, variant,
 };
-use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -412,6 +412,33 @@ impl IntoValue for ImportedFunctionInvokedParameters {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct StringAttributeValue {
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+pub enum PublicAttributeValue {
+    String(StringAttributeValue),
+}
+
+impl IntoValue for PublicAttributeValue {
+    fn into_value(self) -> Value {
+        match self {
+            Self::String(value) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::String(value.value))),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::variant(vec![analysed_type::case("string", analysed_type::str())])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct PublicLocalSpanData {
@@ -419,7 +446,7 @@ pub struct PublicLocalSpanData {
     pub start: Timestamp,
     pub parent_id: Option<SpanId>,
     pub linked_context: Option<u64>,
-    pub attributes: HashMap<String, AttributeValue>,
+    pub attributes: HashMap<String, PublicAttributeValue>,
     pub inherited: bool,
 }
 
@@ -430,11 +457,12 @@ impl IntoValue for PublicLocalSpanData {
             self.start.into_value(),
             self.parent_id.into_value(),
             self.linked_context.into_value(),
-            self.attributes
-                .into_iter()
-                .map(|(k, v)| Value::Record(vec![k.into_value(), v.into_value()]))
-                .collect::<Vec<Value>>()
-                .into_value(),
+            Value::List(
+                self.attributes
+                    .into_iter()
+                    .map(|(k, v)| Value::Record(vec![k.into_value(), v.into_value()]))
+                    .collect::<Vec<Value>>(),
+            ),
             self.inherited.into_value(),
         ])
     }
@@ -449,7 +477,7 @@ impl IntoValue for PublicLocalSpanData {
                 "attributes",
                 list(record(vec![
                     field("key", str()),
-                    field("value", AttributeValue::get_type()),
+                    field("value", PublicAttributeValue::get_type()),
                 ])),
             ),
             field("inherited", bool()),
@@ -976,7 +1004,7 @@ pub struct StartSpanParameters {
     pub span_id: SpanId,
     pub parent_id: Option<SpanId>,
     pub linked_context: Option<SpanId>,
-    pub attributes: HashMap<String, AttributeValue>,
+    pub attributes: HashMap<String, PublicAttributeValue>,
 }
 
 impl IntoValue for StartSpanParameters {
@@ -986,11 +1014,12 @@ impl IntoValue for StartSpanParameters {
             self.span_id.into_value(),
             self.parent_id.into_value(),
             self.linked_context.into_value(),
-            self.attributes
-                .into_iter()
-                .map(|(k, v)| Value::Record(vec![k.into_value(), v.into_value()]))
-                .collect::<Vec<Value>>()
-                .into_value(),
+            Value::List(
+                self.attributes
+                    .into_iter()
+                    .map(|(k, v)| Value::Record(vec![k.into_value(), v.into_value()]))
+                    .collect::<Vec<Value>>(),
+            ),
         ])
     }
 
@@ -1004,7 +1033,7 @@ impl IntoValue for StartSpanParameters {
                 "attributes",
                 list(record(vec![
                     field("key", str()),
-                    field("value", AttributeValue::get_type()),
+                    field("value", PublicAttributeValue::get_type()),
                 ])),
             ),
         ])
@@ -1037,7 +1066,7 @@ pub struct SetSpanAttributeParameters {
     pub timestamp: Timestamp,
     pub span_id: SpanId,
     pub key: String,
-    pub value: AttributeValue,
+    pub value: PublicAttributeValue,
 }
 
 impl IntoValue for SetSpanAttributeParameters {
@@ -1055,7 +1084,7 @@ impl IntoValue for SetSpanAttributeParameters {
             field("timestamp", Timestamp::get_type()),
             field("span-id", SpanId::get_type()),
             field("key", str()),
-            field("value", AttributeValue::get_type()),
+            field("value", PublicAttributeValue::get_type()),
         ])
     }
 }
@@ -1197,7 +1226,7 @@ impl PublicOplogEntry {
     }
 
     fn span_attribute_match(
-        attributes: &HashMap<String, AttributeValue>,
+        attributes: &HashMap<String, PublicAttributeValue>,
         path_stack: &[String],
         query_path: &[String],
         query: &LeafQuery,
@@ -1207,10 +1236,12 @@ impl PublicOplogEntry {
             new_path.push(key.clone());
 
             let vnt = match value {
-                AttributeValue::String(value) => value.clone().into_value_and_type(),
+                PublicAttributeValue::String(StringAttributeValue { value }) => {
+                    value.clone().into_value_and_type()
+                }
             };
 
-            if Self::match_value(&vnt, &new_path, path_stack, query) {
+            if Self::match_value(&vnt, &new_path, query_path, query) {
                 return true;
             }
         }
@@ -1400,8 +1431,26 @@ impl PublicOplogEntry {
                 Self::string_match("startspan", &[], query_path, query)
                     || Self::string_match("start-span", &[], query_path, query)
                     || Self::string_match(&params.span_id.to_string(), &[], query_path, query)
-                    || Self::string_match(&params.as_ref().parent_id.map(|id| id.to_string()).unwrap_or_default(), &[], query_path, query)
-                    || Self::string_match(&params.as_ref().linked_context.map(|id| id.to_string()).unwrap_or_default(), &[], query_path, query)
+                    || Self::string_match(
+                        &params
+                            .parent_id
+                            .as_ref()
+                            .map(|id| id.to_string())
+                            .unwrap_or_default(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+                    || Self::string_match(
+                        &params
+                            .linked_context
+                            .as_ref()
+                            .map(|id| id.to_string())
+                            .unwrap_or_default(),
+                        &[],
+                        query_path,
+                        query,
+                    )
                     || Self::span_attribute_match(&params.attributes, &[], query_path, query)
             }
             PublicOplogEntry::FinishSpan(params) => {
@@ -1726,7 +1775,7 @@ impl IntoValue for PublicOplogEntry {
             PublicOplogEntry::SetSpanAttribute(params) => Value::Variant {
                 case_idx: 31,
                 case_value: Some(Box::new(params.into_value())),
-            }
+            },
         }
     }
 
