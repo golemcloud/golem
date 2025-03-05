@@ -242,7 +242,7 @@ impl ProjectApi {
     #[oai(
         path = "/:project_id/plugins/installs",
         method = "get",
-        operation_id = "get_installed_plugins"
+        operation_id = "get_installed_plugins_of_project"
     )]
     async fn get_installed_plugins(
         &self,
@@ -250,7 +250,7 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> LimitedApiResult<Json<Vec<PluginInstallation>>> {
         let record = recorded_http_api_request!(
-            "get_installed_plugins",
+            "get_installed_plugins_of_project",
             project_id = project_id.0.to_string(),
         );
         let auth = self
