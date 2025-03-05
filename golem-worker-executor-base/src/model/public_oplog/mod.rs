@@ -39,17 +39,19 @@ use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::exports::{find_resource_site, function_by_name};
+use golem_common::model::invocation_context::TraceId;
 use golem_common::model::lucene::Query;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
     CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
     ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
-    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
-    SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicExternalSpanData,
+    PublicLocalSpanData, PublicOplogEntry, PublicSpanData, PublicUpdateDescription,
+    PublicWorkerInvocation, ResourceParameters, RevertParameters, SnapshotBasedUpdateParameters,
+    SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
@@ -351,13 +353,6 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 function_name,
                 request,
                 idempotency_key,
-            }
-            | OplogEntry::ExportedFunctionInvoked {
-                timestamp,
-                function_name,
-                request,
-                idempotency_key,
-                ..
             } => {
                 let payload_bytes = oplog_service
                     .download_payload(owned_worker_id, &request)
@@ -387,7 +382,54 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     .map(|(param, value)| ValueAndType::new(value, param.typ.clone()))
                     .collect();
 
-                // TODO: store invocation context in public oplog
+                Ok(PublicOplogEntry::ExportedFunctionInvoked(
+                    ExportedFunctionInvokedParameters {
+                        timestamp,
+                        function_name,
+                        request,
+                        idempotency_key,
+                        trace_id: TraceId::generate(),
+                        trace_states: vec![],
+                        invocation_context: vec![],
+                    },
+                ))
+            }
+            OplogEntry::ExportedFunctionInvoked {
+                timestamp,
+                function_name,
+                request,
+                idempotency_key,
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => {
+                let payload_bytes = oplog_service
+                    .download_payload(owned_worker_id, &request)
+                    .await?;
+                let proto_params: Vec<golem_wasm_rpc::protobuf::Val> =
+                    core_try_deserialize(&payload_bytes)?.unwrap_or_default();
+                let params = proto_params
+                    .into_iter()
+                    .map(Value::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let metadata = components
+                    .get_metadata(
+                        &owned_worker_id.account_id,
+                        &owned_worker_id.worker_id.component_id,
+                        Some(component_version),
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
+                    format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
+                )?;
+                let request = function
+                    .parameters
+                    .iter()
+                    .zip(params)
+                    .map(|(param, value)| ValueAndType::new(value, param.typ.clone()))
+                    .collect();
 
                 Ok(PublicOplogEntry::ExportedFunctionInvoked(
                     ExportedFunctionInvokedParameters {
@@ -395,6 +437,9 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         function_name,
                         request,
                         idempotency_key,
+                        trace_id,
+                        trace_states,
+                        invocation_context: encode_span_data(&invocation_context),
                     },
                 ))
             }
@@ -2481,4 +2526,61 @@ fn bucket_and_keys(bucket: String, keys: Vec<String>) -> ValueAndType {
         ]),
         record(vec![field("bucket", str()), field("keys", list(str()))]),
     )
+}
+
+fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
+    let mut result = Vec::new();
+    let mut current = Vec::new();
+
+    for span in spans.iter().rev() {
+        match span {
+            SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                linked_context,
+                attributes,
+                inherited,
+            } => {
+                let linked_context = if let Some(linked_context) = linked_context {
+                    let id = result.len() as u64;
+                    let encoded_linked_context = encode_span_data(linked_context);
+                    result.extend(encoded_linked_context);
+                    Some(id)
+                } else {
+                    None
+                };
+                let span_data = PublicSpanData::LocalSpan(PublicLocalSpanData {
+                    span_id: span_id.clone(),
+                    start: *start,
+                    parent_id: parent_id.clone(),
+                    linked_context,
+                    attributes: attributes
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone().into()))
+                        .collect(),
+                    inherited: *inherited,
+                });
+                current.insert(0, span_data);
+            }
+            SpanData::ExternalSpan { span_id } => {
+                let span_data = PublicSpanData::ExternalSpan(PublicExternalSpanData {
+                    span_id: span_id.clone(),
+                });
+                current.insert(0, span_data);
+            }
+        }
+    }
+
+    for stack in &mut result {
+        for span in stack {
+            if let PublicSpanData::LocalSpan(ref mut local_span) = span {
+                if let Some(linked_id) = &mut local_span.linked_context {
+                    *linked_id += 1;
+                }
+            }
+        }
+    }
+    result.insert(0, current);
+    result
 }

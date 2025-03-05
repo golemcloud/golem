@@ -6,7 +6,7 @@ interface oplog {
     use golem:rpc/types@0.1.3.{wit-value};
 
     use host.{account-id, component-version, oplog-index, retry-policy, uuid, worker-id};
-    use context.{attribute, span-id, trace-id};
+    use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
         /// The side-effect reads from the worker's local state (for example local file system,
@@ -81,7 +81,7 @@ interface oplog {
         request: list<wit-value>,
         idempotency-key: string,
         trace-id: trace-id,
-        span-id: span-id,
+        trace-states: list<string>,
         /// The first one is the invocation context stack associated with the exported function invocation,
         /// and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
         invocation-context: list<list<span-data>>

@@ -69,7 +69,6 @@ impl IntoValue for TraceId {
     }
 }
 
-
 impl Serialize for TraceId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -84,7 +83,7 @@ impl<'de> Deserialize<'de> for TraceId {
     where
         D: Deserializer<'de>,
     {
-        Self::from_string(String::deserialize(deserializer)?).map_err(|err| Error::custom(err))
+        Self::from_string(String::deserialize(deserializer)?).map_err(Error::custom)
     }
 }
 
@@ -200,7 +199,7 @@ impl<'de> Deserialize<'de> for SpanId {
     where
         D: Deserializer<'de>,
     {
-        Self::from_string(String::deserialize(deserializer)?).map_err(|err| Error::custom(err))
+        Self::from_string(String::deserialize(deserializer)?).map_err(Error::custom)
     }
 }
 
