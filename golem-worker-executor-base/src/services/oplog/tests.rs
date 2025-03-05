@@ -329,6 +329,17 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             span_id,
         },
+        OplogEntry::SetSpanAttribute {
+            timestamp,
+            span_id,
+            key,
+            value,
+        } => OplogEntry::SetSpanAttribute {
+            timestamp: rounded_ts(timestamp),
+            span_id,
+            key,
+            value,
+        },
     }
 }
 

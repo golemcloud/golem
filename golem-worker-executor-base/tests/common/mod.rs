@@ -962,6 +962,17 @@ impl InvocationContextManagement for TestWorkerCtx {
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
         self.durable_ctx.finish_span(span_id).await
     }
+
+    async fn set_span_attribute(
+        &mut self,
+        span_id: &SpanId,
+        key: &str,
+        value: AttributeValue,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx
+            .set_span_attribute(span_id, key, value)
+            .await
+    }
 }
 
 #[async_trait]

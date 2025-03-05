@@ -455,6 +455,13 @@ pub trait InvocationContextManagement {
 
     /// Removes and finishes a local span
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
+
+    async fn set_span_attribute(
+        &mut self,
+        span_id: &SpanId,
+        key: &str,
+        value: AttributeValue,
+    ) -> Result<(), GolemError>;
 }
 
 #[async_trait]

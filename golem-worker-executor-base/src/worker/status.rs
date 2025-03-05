@@ -259,6 +259,9 @@ fn calculate_latest_worker_status(
             OplogEntry::FinishSpan { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::SetSpanAttribute { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result

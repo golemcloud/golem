@@ -749,6 +749,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
             )),
             OplogEntry::StartSpan { .. } => todo!(),
             OplogEntry::FinishSpan { .. } => todo!(),
+            OplogEntry::SetSpanAttribute { .. } => todo!(),
         }
     }
 }

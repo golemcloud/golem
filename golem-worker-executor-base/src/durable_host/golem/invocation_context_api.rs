@@ -31,8 +31,14 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::context::span", "started-at");
 
         let entry = self.table().get(&self_)?;
-        Ok(entry
-            .span
+        let span_id = entry.span_id.clone();
+
+        let span = self
+            .state
+            .invocation_context
+            .get(&span_id)
+            .map_err(|err| anyhow!(err))?;
+        Ok(span
             .start()
             .ok_or_else(|| anyhow!("Span has no start timestamp"))?
             .into())
@@ -47,7 +53,10 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::context::span", "set_attribute");
 
         let entry = self.table().get(&self_)?;
-        entry.span.set_attribute(name, value.into());
+        let span_id = entry.span_id.clone();
+
+        self.set_span_attribute(&span_id, &name, value.into())
+            .await?;
         Ok(())
     }
 
@@ -59,10 +68,11 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::context::span", "set_attributes");
 
         let entry = self.table().get(&self_)?;
+        let span_id = entry.span_id.clone();
+
         for attribute in attributes {
-            entry
-                .span
-                .set_attribute(attribute.key, attribute.value.into());
+            self.set_span_attribute(&span_id, &attribute.key, attribute.value.into())
+                .await?;
         }
         Ok(())
     }
@@ -71,7 +81,7 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::context::span", "finish");
 
         let entry = self.table().get(&self_)?;
-        let span_id = entry.span.span_id().clone();
+        let span_id = entry.span_id.clone();
 
         self.finish_span(&span_id)
             .await
@@ -83,7 +93,8 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::context::span", "drop");
 
         let entry = self.table().delete(rep)?;
-        self.finish_span(entry.span.span_id())
+
+        self.finish_span(&entry.span_id)
             .await
             .map_err(|err| anyhow!(err))?;
 
@@ -268,7 +279,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 )],
             )
             .await?;
-        let entry = SpanEntry { span };
+        let entry = SpanEntry {
+            span_id: span.span_id().clone(),
+        };
         let result = self.table().push(entry)?;
         Ok(result)
     }
@@ -303,7 +316,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 }
 
 pub struct SpanEntry {
-    span: Arc<InvocationContextSpan>,
+    span_id: golem_common::model::invocation_context::SpanId,
 }
 
 pub struct InvocationContextEntry {

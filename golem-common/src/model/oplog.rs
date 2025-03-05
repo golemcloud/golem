@@ -491,6 +491,13 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         span_id: SpanId,
     },
+    /// SetSpanAttribute
+    SetSpanAttribute {
+        timestamp: Timestamp,
+        span_id: SpanId,
+        key: String,
+        value: AttributeValue,
+    },
 }
 
 impl OplogEntry {
@@ -723,6 +730,15 @@ impl OplogEntry {
         }
     }
 
+    pub fn set_span_attribute(span_id: SpanId, key: String, value: AttributeValue) -> OplogEntry {
+        OplogEntry::SetSpanAttribute {
+            timestamp: Timestamp::now_utc(),
+            span_id,
+            key,
+            value,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -816,7 +832,8 @@ impl OplogEntry {
             | OplogEntry::CancelPendingInvocation { timestamp, .. }
             | OplogEntry::ExportedFunctionInvoked { timestamp, .. }
             | OplogEntry::StartSpan { timestamp, .. }
-            | OplogEntry::FinishSpan { timestamp, .. } => *timestamp,
+            | OplogEntry::FinishSpan { timestamp, .. }
+            | OplogEntry::SetSpanAttribute { timestamp, .. } => *timestamp,
         }
     }
 

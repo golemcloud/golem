@@ -1258,6 +1258,10 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         let current_span_id = &self.state.current_span_id;
 
         let is_live = self.is_live();
+
+        // Using try_get_oplog_entry here to preserve backward compatibility - starting and finishing
+        // spans has been added to existing operations (such as wasi-http and rpc) and old oplogs
+        // does not have the StartSpan/FinishSpan paris persisted.
         let span = if is_live {
             self.state
                 .invocation_context
@@ -1343,6 +1347,9 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .add(OplogEntry::finish_span(span_id.clone()))
                 .await;
         } else {
+            // Using try_get_oplog_entry here to preserve backward compatibility - starting and finishing
+            // spans has been added to existing operations (such as wasi-http and rpc) and old oplogs
+            // does not have the StartSpan/FinishSpan paris persisted.
             let _ = self
                 .state
                 .replay_state
@@ -1355,6 +1362,31 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .finish_span(span_id)
             .map_err(GolemError::runtime);
+        Ok(())
+    }
+
+    async fn set_span_attribute(
+        &mut self,
+        span_id: &SpanId,
+        key: &str,
+        value: AttributeValue,
+    ) -> Result<(), GolemError> {
+        self.state
+            .invocation_context
+            .set_attribute(span_id, key.to_string(), value.clone())
+            .map_err(GolemError::runtime)?;
+        if self.is_live() {
+            self.state
+                .oplog
+                .add(OplogEntry::set_span_attribute(
+                    span_id.clone(),
+                    key.to_string(),
+                    value,
+                ))
+                .await;
+        } else {
+            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
+        }
         Ok(())
     }
 }
