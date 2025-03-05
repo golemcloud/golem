@@ -18,7 +18,6 @@ interface context {
     /// Returns the previous value of the setting
     allow-forwarding-trace-context-headers: func(allow: bool) -> bool;
 
-
     /// Represents a unit of work or operation
     resource span {
         /// Gets the starting time of the span
