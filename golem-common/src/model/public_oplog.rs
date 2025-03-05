@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{DurableFunctionType, LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::plugin::PluginInstallation;
@@ -21,12 +22,12 @@ use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
 use golem_wasm_ast::analysis::analysed_type::{
-    case, f64, field, list, option, record, s64, str, tuple, u32, u64, u8, unit_case, variant,
+    bool, case, f64, field, list, option, record, s64, str, tuple, u32, u64, u8, unit_case, variant,
 };
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType, WitValue};
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
@@ -413,11 +414,105 @@ impl IntoValue for ImportedFunctionInvokedParameters {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct PublicLocalSpanData {
+    pub span_id: SpanId,
+    pub start: Timestamp,
+    pub parent_id: Option<SpanId>,
+    pub linked_context: Option<u64>,
+    pub attributes: HashMap<String, AttributeValue>,
+    pub inherited: bool,
+}
+
+impl IntoValue for PublicLocalSpanData {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.span_id.into_value(),
+            self.start.into_value(),
+            self.parent_id.into_value(),
+            self.linked_context.into_value(),
+            self.attributes
+                .into_iter()
+                .map(|(k, v)| Value::Record(vec![k.into_value(), v.into_value()]))
+                .collect::<Vec<Value>>()
+                .into_value(),
+            self.inherited.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("span-id", SpanId::get_type()),
+            field("start", Timestamp::get_type()),
+            field("parent-id", option(SpanId::get_type())),
+            field("linked-context", option(u64())),
+            field(
+                "attributes",
+                list(record(vec![
+                    field("key", str()),
+                    field("value", AttributeValue::get_type()),
+                ])),
+            ),
+            field("inherited", bool()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct PublicExternalSpanData {
+    pub span_id: SpanId,
+}
+
+impl IntoValue for PublicExternalSpanData {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.span_id.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("span-id", SpanId::get_type())])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+pub enum PublicSpanData {
+    LocalSpan(PublicLocalSpanData),
+    ExternalSpan(PublicExternalSpanData),
+}
+
+impl IntoValue for PublicSpanData {
+    fn into_value(self) -> Value {
+        match self {
+            PublicSpanData::LocalSpan(data) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(data.into_value())),
+            },
+            PublicSpanData::ExternalSpan(data) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(data.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("local-span", PublicLocalSpanData::get_type()),
+            case("external-span", PublicExternalSpanData::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ExportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
     pub request: Vec<ValueAndType>,
     pub idempotency_key: IdempotencyKey,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<PublicSpanData>,
 }
 
 impl IntoValue for ExportedFunctionInvokedParameters {
@@ -431,14 +526,21 @@ impl IntoValue for ExportedFunctionInvokedParameters {
                 .collect::<Vec<WitValue>>()
                 .into_value(),
             self.idempotency_key.into_value(),
+            self.trace_id.into_value(),
+            self.trace_states.into_value(),
+            self.invocation_context.into_value(),
         ])
     }
 
     fn get_type() -> AnalysedType {
         record(vec![
             field("timestamp", Timestamp::get_type()),
+            field("function_name", str()),
             field("request", list(WitValue::get_type())),
             field("idempotency-key", IdempotencyKey::get_type()),
+            field("trace-id", TraceId::get_type()),
+            field("trace-states", list(str())),
+            field("invocation-context", list(list(PublicSpanData::get_type()))),
         ])
     }
 }
@@ -867,6 +969,97 @@ impl IntoValue for CancelInvocationParameters {
     }
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct StartSpanParameters {
+    pub timestamp: Timestamp,
+    pub span_id: SpanId,
+    pub parent_id: Option<SpanId>,
+    pub linked_context: Option<SpanId>,
+    pub attributes: HashMap<String, AttributeValue>,
+}
+
+impl IntoValue for StartSpanParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.span_id.into_value(),
+            self.parent_id.into_value(),
+            self.linked_context.into_value(),
+            self.attributes
+                .into_iter()
+                .map(|(k, v)| Value::Record(vec![k.into_value(), v.into_value()]))
+                .collect::<Vec<Value>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("span-id", SpanId::get_type()),
+            field("parent-id", option(SpanId::get_type())),
+            field("linked-context", option(SpanId::get_type())),
+            field(
+                "attributes",
+                list(record(vec![
+                    field("key", str()),
+                    field("value", AttributeValue::get_type()),
+                ])),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct FinishSpanParameters {
+    pub timestamp: Timestamp,
+    pub span_id: SpanId,
+}
+
+impl IntoValue for FinishSpanParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.span_id.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("span-id", SpanId::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct SetSpanAttributeParameters {
+    pub timestamp: Timestamp,
+    pub span_id: SpanId,
+    pub key: String,
+    pub value: AttributeValue,
+}
+
+impl IntoValue for SetSpanAttributeParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.span_id.into_value(),
+            self.key.into_value(),
+            self.value.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("span-id", SpanId::get_type()),
+            field("key", str()),
+            field("value", AttributeValue::get_type()),
+        ])
+    }
+}
+
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -947,6 +1140,12 @@ pub enum PublicOplogEntry {
     Revert(RevertParameters),
     /// Cancel a pending invocation
     CancelInvocation(CancelInvocationParameters),
+    /// Start a new span in the invocation context
+    StartSpan(StartSpanParameters),
+    /// Finish an open span in the invocation context
+    FinishSpan(FinishSpanParameters),
+    /// Set an attribute on an open span in the invocation context
+    SetSpanAttribute(SetSpanAttributeParameters),
 }
 
 impl PublicOplogEntry {
@@ -995,6 +1194,27 @@ impl PublicOplogEntry {
         } else {
             false
         }
+    }
+
+    fn span_attribute_match(
+        attributes: &HashMap<String, AttributeValue>,
+        path_stack: &[String],
+        query_path: &[String],
+        query: &LeafQuery,
+    ) -> bool {
+        for (key, value) in attributes {
+            let mut new_path: Vec<String> = path_stack.to_vec();
+            new_path.push(key.clone());
+
+            let vnt = match value {
+                AttributeValue::String(value) => value.clone().into_value_and_type(),
+            };
+
+            if Self::match_value(&vnt, &new_path, path_stack, query) {
+                return true;
+            }
+        }
+        false
     }
 
     fn matches_leaf_query(&self, query_path: &[String], query: &LeafQuery) -> bool {
@@ -1175,6 +1395,27 @@ impl PublicOplogEntry {
                 Self::string_match("cancel", &[], query_path, query)
                     || Self::string_match("cancel-invocation", &[], query_path, query)
                     || Self::string_match(&params.idempotency_key.value, &[], query_path, query)
+            }
+            PublicOplogEntry::StartSpan(params) => {
+                Self::string_match("startspan", &[], query_path, query)
+                    || Self::string_match("start-span", &[], query_path, query)
+                    || Self::string_match(&params.span_id.to_string(), &[], query_path, query)
+                    || Self::string_match(&params.as_ref().parent_id.map(|id| id.to_string()).unwrap_or_default(), &[], query_path, query)
+                    || Self::string_match(&params.as_ref().linked_context.map(|id| id.to_string()).unwrap_or_default(), &[], query_path, query)
+                    || Self::span_attribute_match(&params.attributes, &[], query_path, query)
+            }
+            PublicOplogEntry::FinishSpan(params) => {
+                Self::string_match("finishspan", &[], query_path, query)
+                    || Self::string_match("finish-span", &[], query_path, query)
+                    || Self::string_match(&params.span_id.to_string(), &[], query_path, query)
+            }
+            PublicOplogEntry::SetSpanAttribute(params) => {
+                let mut attributes = HashMap::new();
+                attributes.insert(params.key.clone(), params.value.clone());
+                Self::string_match("setspanattribute", &[], query_path, query)
+                    || Self::string_match("set-span-attribute", &[], query_path, query)
+                    || Self::string_match(&params.key, &[], query_path, query)
+                    || Self::span_attribute_match(&attributes, &[], query_path, query)
             }
         }
     }
@@ -1474,6 +1715,18 @@ impl IntoValue for PublicOplogEntry {
                 case_idx: 28,
                 case_value: Some(Box::new(params.into_value())),
             },
+            PublicOplogEntry::StartSpan(params) => Value::Variant {
+                case_idx: 29,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::FinishSpan(params) => Value::Variant {
+                case_idx: 30,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::SetSpanAttribute(params) => Value::Variant {
+                case_idx: 31,
+                case_value: Some(Box::new(params.into_value())),
+            }
         }
     }
 
@@ -1523,6 +1776,9 @@ impl IntoValue for PublicOplogEntry {
             case("deactivate-plugin", DeactivatePluginParameters::get_type()),
             case("revert", RevertParameters::get_type()),
             case("cancel-invocation", CancelInvocationParameters::get_type()),
+            case("start-span", StartSpanParameters::get_type()),
+            case("finish-span", FinishSpanParameters::get_type()),
+            case("set-span-attribute", SetSpanAttributeParameters::get_type()),
         ])
     }
 }

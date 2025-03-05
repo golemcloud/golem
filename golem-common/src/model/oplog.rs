@@ -491,7 +491,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         span_id: SpanId,
     },
-    /// SetSpanAttribute
+    /// Set an attribute on an open span in the invocation contex
     SetSpanAttribute {
         timestamp: Timestamp,
         span_id: SpanId,

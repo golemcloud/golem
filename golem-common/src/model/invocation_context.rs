@@ -18,6 +18,8 @@ use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_rpc::{IntoValue, Value};
 use nonempty_collections::NEVec;
 use serde::de::Error;
 use std::collections::{HashMap, HashSet};
@@ -56,6 +58,16 @@ impl Display for TraceId {
     }
 }
 
+impl IntoValue for TraceId {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::str()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct SpanId(pub NonZeroU64);
 
@@ -90,6 +102,16 @@ impl Display for SpanId {
     }
 }
 
+impl IntoValue for SpanId {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::str()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum AttributeValue {
     String(String),
@@ -100,6 +122,21 @@ impl Display for AttributeValue {
         match self {
             Self::String(value) => write!(f, "{}", value),
         }
+    }
+}
+
+impl IntoValue for AttributeValue {
+    fn into_value(self) -> Value {
+        match self {
+            Self::String(value) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::String(value))),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::variant(vec![analysed_type::case("string", analysed_type::str())])
     }
 }
 
