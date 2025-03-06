@@ -48,6 +48,7 @@ pub struct GolemConfig {
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
+    pub rdbms: RdbmsConfig,
     pub grpc_address: String,
     pub port: u16,
     pub http_address: String,
@@ -322,6 +323,7 @@ impl Default for GolemConfig {
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
+            rdbms: RdbmsConfig::default(),
             grpc_address: "0.0.0.0".to_string(),
             port: 9000,
             http_address: "0.0.0.0".to_string(),
@@ -510,6 +512,42 @@ impl Default for MemoryConfig {
                 multiplier: 2.0,
                 max_jitter_factor: None, // TODO: should we add jitter here?
             },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct RdbmsConfig {
+    pub pool: RdbmsPoolConfig,
+    pub query: RdbmsQueryConfig,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RdbmsQueryConfig {
+    pub query_batch: usize,
+}
+
+impl Default for RdbmsQueryConfig {
+    fn default() -> Self {
+        Self { query_batch: 50 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RdbmsPoolConfig {
+    pub max_connections: u32,
+    #[serde(with = "humantime_serde")]
+    pub eviction_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub eviction_period: Duration,
+}
+
+impl Default for RdbmsPoolConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 20,
+            eviction_ttl: Duration::from_secs(10 * 60),
+            eviction_period: Duration::from_secs(2 * 60),
         }
     }
 }

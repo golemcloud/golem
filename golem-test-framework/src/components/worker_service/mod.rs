@@ -48,28 +48,29 @@ use golem_api_grpc::proto::golem::worker::v1::{
     cancel_invocation_response, delete_worker_response, get_file_contents_response,
     get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
     interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest,
-    CancelInvocationResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest,
-    GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
+    list_directory_response, resume_worker_response, revert_worker_response, search_oplog_response,
+    update_worker_response, CancelInvocationRequest, CancelInvocationResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
+    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
+    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
-    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::worker_filter::Filter;
 use golem_api_grpc::proto::golem::worker::{
     file_system_node, update_record, Cursor, DirectoryFileSystemNode, FailedUpdate,
     FileFileSystemNode, FileSystemNode, IdempotencyKey, IndexedResourceMetadata, InvocationContext,
-    InvokeParameters, InvokeResult, LogEvent, OplogCursor, OplogEntry, OplogEntryWithIndex,
-    PendingUpdate, ResourceMetadata, SuccessfulUpdate, TargetWorkerId, UpdateMode, UpdateRecord,
-    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata, WorkerNameFilter, WorkerStatusFilter,
-    WorkerVersionFilter,
+    InvokeParameters, InvokeResult, InvokeResultTyped, LogEvent, OplogCursor, OplogEntry,
+    OplogEntryWithIndex, PendingUpdate, ResourceMetadata, SuccessfulUpdate, TargetWorkerId,
+    UpdateMode, UpdateRecord, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata,
+    WorkerNameFilter, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionServiceHttpClientLive;
@@ -83,6 +84,7 @@ use golem_client::model::{ApiDeployment, ApiDeploymentRequest, SecuritySchemeDat
 use golem_client::Context;
 use golem_common::model::{ComponentId, WorkerEvent};
 use golem_service_base::model::VersionedComponentId;
+use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -405,6 +407,52 @@ pub trait WorkerService {
                                 }
                             },
                         })),
+                    }),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        invoke_parameters: Vec<ValueAndType>,
+        context: Option<InvocationContext>,
+    ) -> crate::Result<InvokeAndAwaitTypedResponse> {
+        match self.worker_client() {
+            WorkerServiceClient::Grpc(mut client) => {
+                let request = InvokeAndAwaitRequest {
+                    worker_id: Some(worker_id),
+                    idempotency_key,
+                    function,
+                    invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
+                    context,
+                };
+
+                Ok(client.invoke_and_await_typed(request).await?.into_inner())
+            }
+            WorkerServiceClient::Http(client) => {
+                match client
+                    .invoke_and_await_function(
+                        &worker_id.component_id.unwrap().value.unwrap().into(),
+                        &worker_id.name.unwrap(),
+                        idempotency_key.map(|key| key.value).as_deref(),
+                        &function,
+                        &invoke_parameters_to_http(invoke_parameters),
+                    )
+                    .await
+                {
+                    Ok(result) => Ok(InvokeAndAwaitTypedResponse {
+                        result: Some(invoke_and_await_typed_response::Result::Success(
+                            InvokeResultTyped {
+                                result: Some(TypeAnnotatedValue {
+                                    type_annotated_value: Some(result.result),
+                                }),
+                            },
+                        )),
                     }),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }

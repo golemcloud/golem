@@ -302,6 +302,13 @@ pub mod analysed_type {
         }
     }
 
+    pub fn opt_case(name: &str, typ: Option<AnalysedType>) -> NameOptionTypePair {
+        NameOptionTypePair {
+            name: name.to_string(),
+            typ,
+        }
+    }
+
     pub fn unit_case(name: &str) -> NameOptionTypePair {
         NameOptionTypePair {
             name: name.to_string(),
