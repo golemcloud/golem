@@ -19,6 +19,7 @@ use crate::durable_host::http::serialized::{
     SerializableHttpMethod, SerializableHttpRequest, SerializableResponse,
     SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
 };
+use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
@@ -32,6 +33,12 @@ use crate::model::InterruptKind;
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
+use crate::services::rdbms::mysql::types as mysql_types;
+use crate::services::rdbms::mysql::MysqlType;
+use crate::services::rdbms::postgres::types as postgres_types;
+use crate::services::rdbms::postgres::PostgresType;
+use crate::services::rdbms::Error as RdbmsError;
+use crate::services::rdbms::RdbmsIntoValueAndType;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::GolemTypes;
@@ -1147,6 +1154,32 @@ fn encode_host_function_request_as_value(
             let payload: (String, String) = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
+        "rdbms::mysql::db-connection::query"
+        | "rdbms::mysql::db-connection::execute"
+        | "rdbms::mysql::db-connection::query-stream"
+        | "rdbms::mysql::db-transaction::query"
+        | "rdbms::mysql::db-transaction::execute"
+        | "rdbms::mysql::db-transaction::query-stream" => {
+            let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::mysql::db-transaction::rollback"
+        | "rdbms::mysql::db-transaction::commit"
+        | "rdbms::mysql::db-result-stream::get-columns"
+        | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
+        "rdbms::postgres::db-connection::query"
+        | "rdbms::postgres::db-connection::execute"
+        | "rdbms::postgres::db-connection::query-stream"
+        | "rdbms::postgres::db-transaction::query"
+        | "rdbms::postgres::db-transaction::execute"
+        | "rdbms::postgres::db-transaction::query-stream" => {
+            let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::postgres::db-transaction::rollback"
+        | "rdbms::postgres::db-transaction::commit"
+        | "rdbms::postgres::db-result-stream::get-columns"
+        | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
         _ => Err(format!("Unsupported host function name: {}", function_name)),
     }
 }
@@ -1493,6 +1526,68 @@ fn encode_host_function_response_as_value(
             let payload: Result<Option<WorkerId>, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
+        "rdbms::mysql::db-connection::execute" | "rdbms::mysql::db-transaction::execute" => {
+            let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-connection::query" | "rdbms::mysql::db-transaction::query" => {
+            let payload: Result<crate::services::rdbms::DbResult<MysqlType>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::mysql::db-connection::query-stream"
+        | "rdbms::mysql::db-transaction::query-stream" => {
+            let payload: Result<RdbmsRequest<MysqlType>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::mysql::db-transaction::rollback" | "rdbms::mysql::db-transaction::commit" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-result-stream::get-columns" => {
+            let payload: Result<Vec<mysql_types::DbColumn>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::mysql::db-result-stream::get-next" => {
+            let payload: Result<
+                Option<Vec<crate::services::rdbms::DbRow<mysql_types::DbValue>>>,
+                SerializableError,
+            > = try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::postgres::db-connection::execute" | "rdbms::postgres::db-transaction::execute" => {
+            let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-connection::query" | "rdbms::postgres::db-transaction::query" => {
+            let payload: Result<crate::services::rdbms::DbResult<PostgresType>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::postgres::db-connection::query-stream"
+        | "rdbms::postgres::db-transaction::query-stream" => {
+            let payload: Result<RdbmsRequest<PostgresType>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::postgres::db-transaction::rollback" | "rdbms::postgres::db-transaction::commit" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-result-stream::get-columns" => {
+            let payload: Result<Vec<postgres_types::DbColumn>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::postgres::db-result-stream::get-next" => {
+            let payload: Result<
+                Option<Vec<crate::services::rdbms::DbRow<postgres_types::DbValue>>>,
+                SerializableError,
+            > = try_deserialize(bytes)?;
+            Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
         _ => Err(format!("Unsupported host function name: {}", function_name)),
     }
 }
@@ -1524,6 +1619,10 @@ impl IntoValue for SerializableError {
                 case_idx: 5,
                 case_value: Some(Box::new(error.into_value())),
             },
+            SerializableError::Rdbms { error } => Value::Variant {
+                case_idx: 6,
+                case_value: Some(Box::new(error.into_value())),
+            },
         }
     }
 
@@ -1553,6 +1652,10 @@ impl IntoValue for SerializableError {
                 NameOptionTypePair {
                     name: "WorkerProxy".to_string(),
                     typ: Some(WorkerProxyError::get_type()),
+                },
+                NameOptionTypePair {
+                    name: "Rdbms".to_string(),
+                    typ: Some(RdbmsError::get_type()),
                 },
             ],
         })

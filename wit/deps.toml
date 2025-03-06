@@ -1,1 +1,3 @@
 all = "https://github.com/golemcloud/golem-wit/archive/invocation-context-api.tar.gz"
+
+rdbms = "https://github.com/golemcloud/wasi-rdbms/archive/v0.0.1.tar.gz"
