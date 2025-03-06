@@ -264,7 +264,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo install --no-confirm cargo-component@0.20.0
+        run: cargo install --force --locked cargo-component@0.20.0
       - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug
@@ -383,7 +383,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo install --no-confirm cargo-component@0.20.0
+        run: cargo install --force --locked cargo-component@0.20.0
       - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug-bins
@@ -457,7 +457,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo install --no-confirm cargo-component@0.20.0
+        run: cargo install --force --locked cargo-component@0.20.0
       - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug
@@ -514,7 +514,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo install --no-confirm cargo-component@0.20.0
+        run: cargo install --force --locked cargo-component@0.20.0
       - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug-bins
