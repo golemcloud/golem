@@ -75,7 +75,7 @@ jobs:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
   docker-publish:
-    runs-on: blacksmith-arm
+    runs-on: blacksmith
     needs: [docker-targets-build]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
@@ -209,7 +209,7 @@ jobs:
   build-and-test:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -251,7 +251,7 @@ jobs:
           include_passed: true
 
   wasm-rpc-stub:
-    runs-on: blacksmith-arm
+    runs-on: blacksmith
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -281,7 +281,7 @@ jobs:
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 
   worker-tests-group1:
-    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     name: worker-tests-group1
     steps:
       - name: Checkout
@@ -319,7 +319,7 @@ jobs:
           include_passed: true
   worker-tests:
     needs: [worker-tests-group1]
-    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     strategy:
       fail-fast: true
       matrix:
@@ -370,7 +370,7 @@ jobs:
   build-bins:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -434,7 +434,7 @@ jobs:
   api-and-integration-tests-1:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     strategy:
       fail-fast: true
       matrix:
@@ -490,7 +490,7 @@ jobs:
   api-and-integration-tests-2:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-bins
     strategy:
       fail-fast: true
@@ -558,7 +558,7 @@ jobs:
   publish:
     needs: [build-and-test, wasm-rpc-stub, worker-tests, api-and-integration-tests-1, api-and-integration-tests-2]
     if: "startsWith(github.ref, 'refs/tags/v')"
-    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -589,7 +589,7 @@ jobs:
   publish-slack-notification:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
     needs: [publish, docker-publish]
-    runs-on: blacksmith-arm
+    runs-on: blacksmith
     steps:
       - name: Publish Slack Notification
         uses: rtCamp/action-slack-notify@v2
