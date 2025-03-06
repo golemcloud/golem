@@ -220,7 +220,7 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug
           cache-all-crates: true
@@ -265,7 +265,7 @@ jobs:
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo install --no-confirm cargo-component@0.20.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug
           cache-all-crates: true
@@ -293,7 +293,7 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug-workertests
           cache-all-crates: true
@@ -342,7 +342,7 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug-workertests
           cache-all-crates: true
@@ -384,7 +384,7 @@ jobs:
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo install --no-confirm cargo-component@0.20.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug-bins
           cache-all-crates: true
@@ -458,7 +458,7 @@ jobs:
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo install --no-confirm cargo-component@0.20.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug
           cache-all-crates: true
@@ -515,7 +515,7 @@ jobs:
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo install --no-confirm cargo-component@0.20.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: debug-bins
           cache-all-crates: true
@@ -569,7 +569,7 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           shared-key: release
           cache-all-crates: true
