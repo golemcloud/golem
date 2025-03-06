@@ -46,12 +46,13 @@ use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
     CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
     ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PublicExternalSpanData,
     PublicLocalSpanData, PublicOplogEntry, PublicSpanData, PublicUpdateDescription,
-    PublicWorkerInvocation, ResourceParameters, RevertParameters, SnapshotBasedUpdateParameters,
-    SuccessfulUpdateParameters, TimestampParameter,
+    PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
+    TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
@@ -792,9 +793,38 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     idempotency_key,
                 },
             )),
-            OplogEntry::StartSpan { .. } => todo!(),
-            OplogEntry::FinishSpan { .. } => todo!(),
-            OplogEntry::SetSpanAttribute { .. } => todo!(),
+            OplogEntry::StartSpan {
+                timestamp,
+                span_id,
+                parent_id,
+                linked_context_id,
+                attributes,
+            } => Ok(PublicOplogEntry::StartSpan(StartSpanParameters {
+                timestamp,
+                span_id,
+                parent_id,
+                linked_context: linked_context_id,
+                attributes: attributes.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            })),
+            OplogEntry::FinishSpan { timestamp, span_id } => {
+                Ok(PublicOplogEntry::FinishSpan(FinishSpanParameters {
+                    timestamp,
+                    span_id,
+                }))
+            }
+            OplogEntry::SetSpanAttribute {
+                timestamp,
+                span_id,
+                key,
+                value,
+            } => Ok(PublicOplogEntry::SetSpanAttribute(
+                SetSpanAttributeParameters {
+                    timestamp,
+                    span_id,
+                    key,
+                    value: value.into(),
+                },
+            )),
         }
     }
 }

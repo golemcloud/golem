@@ -818,14 +818,44 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::StartSpan(_) => {
-                todo!()
+            PublicOplogEntry::StartSpan(start) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::StartSpan(
+                        golem_api_grpc::proto::golem::worker::StartSpanParameters {
+                            timestamp: Some(start.timestamp.into()),
+                            span_id: start.span_id.0.get(),
+                            parent_id: start.parent_id.map(|id| id.0.get()),
+                            linked_context: start.linked_context.map(|id| id.0.get()),
+                            attributes: start
+                                .attributes
+                                .into_iter()
+                                .map(|(key, value)| (key, value.into()))
+                                .collect(),
+                        }
+                    ))
+                }
             }
-            PublicOplogEntry::FinishSpan(_) => {
-                todo!()
+            PublicOplogEntry::FinishSpan(finish) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::FinishSpan(
+                        golem_api_grpc::proto::golem::worker::FinishSpanParameters {
+                            timestamp: Some(finish.timestamp.into()),
+                            span_id: finish.span_id.0.get(),
+                        }
+                    ))
+                }
             }
-            PublicOplogEntry::SetSpanAttribute(_) => {
-                todo!()
+            PublicOplogEntry::SetSpanAttribute(set) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::SetSpanAttribute(
+                        golem_api_grpc::proto::golem::worker::SetSpanAttributeParameters {
+                            timestamp: Some(set.timestamp.into()),
+                            span_id: set.span_id.0.get(),
+                            key: set.key,
+                            value: Some(set.value.into()),
+                        }
+                    ))
+                }
             }
         })
     }

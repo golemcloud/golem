@@ -81,7 +81,7 @@ async fn get_oplog_1(
 
     // Whether there is an "enqueued invocation" entry or just directly started invocation
     // depends on timing
-    assert!(oplog.len() >= 12 && oplog.len() <= 14);
+    assert!(oplog.len() >= 18 && oplog.len() <= 20);
     assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog
@@ -250,7 +250,7 @@ async fn get_oplog_with_api_changing_updates(
     // println!("oplog\n{:#?}", oplog);
 
     check!(result[0] == Value::U64(11));
-    assert_eq!(oplog.len(), 17);
+    assert_eq!(oplog.len(), 23);
 }
 
 #[test]
@@ -280,5 +280,5 @@ async fn get_oplog_starting_with_updated_component(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
     check!(result[0] == Value::U64(11));
-    assert_eq!(oplog.len(), 3);
+    assert_eq!(oplog.len(), 5);
 }
