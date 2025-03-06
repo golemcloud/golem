@@ -207,8 +207,8 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   build-and-test:
-    #env:
-     # CARGO_BUILD_JOBS: 6
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
@@ -367,8 +367,8 @@ jobs:
           detailed_summary: true
           include_passed: true
   build-bins:
-    #env:
-     # CARGO_BUILD_JOBS: 6
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
@@ -428,8 +428,8 @@ jobs:
 
   # Integration tess not requiring prebuilt executables
   api-and-integration-tests-1:
-    #env:
-     # CARGO_BUILD_JOBS: 6
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
       fail-fast: true
@@ -481,8 +481,8 @@ jobs:
 
   # Integration tests requiring prebuilt executables
   api-and-integration-tests-2:
-    #env:
-     # CARGO_BUILD_JOBS: 6
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     needs: build-bins
     strategy:
