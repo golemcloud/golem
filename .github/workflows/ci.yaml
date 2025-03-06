@@ -48,7 +48,9 @@ jobs:
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.platform.target }}
-      - uses: davidB/rust-cargo-make@v1
+        - uses: taiki-e/install-action@v2
+          with:
+            tool: cargo-make
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
@@ -225,7 +227,9 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: true
-      - uses: davidB/rust-cargo-make@v1
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -270,7 +274,9 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: true
-      - uses: davidB/rust-cargo-make@v1
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -297,7 +303,9 @@ jobs:
         with:
           shared-key: debug-workertests
           cache-all-crates: true
-      - uses: davidB/rust-cargo-make@v1
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -347,7 +355,9 @@ jobs:
           shared-key: debug-workertests
           cache-all-crates: true
           save-if: false
-      - uses: davidB/rust-cargo-make@v1
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -389,7 +399,9 @@ jobs:
           shared-key: debug-bins
           cache-all-crates: true
           save-if: true
-      - uses: davidB/rust-cargo-make@v1
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -463,7 +475,9 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - uses: davidB/rust-cargo-make@v1
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -531,7 +545,9 @@ jobs:
         working-directory: target/debug
         run: chmod +x golem-component-compilation-service golem-component-service golem-shard-manager golem-worker-service worker-executor
 
-      - uses: davidB/rust-cargo-make@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -573,7 +589,9 @@ jobs:
         with:
           shared-key: release
           cache-all-crates: true
-      - uses: davidB/rust-cargo-make@v1
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
