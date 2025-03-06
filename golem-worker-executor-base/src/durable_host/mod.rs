@@ -1468,15 +1468,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .instrument(span)
                         .await;
 
-                        for span_id in local_span_ids {
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .finish_span(&span_id)
-                                .await?;
-                        }
-                        for span_id in inherited_span_ids {
-                            store.as_context_mut().data_mut().remove_span(&span_id)?;
+                        if !matches!(invoke_result, Ok(InvokeResult::Interrupted { .. })) {
+                            for span_id in local_span_ids {
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .finish_span(&span_id)
+                                    .await?;
+                            }
+                            for span_id in inherited_span_ids {
+                                store.as_context_mut().data_mut().remove_span(&span_id)?;
+                            }
                         }
 
                         match invoke_result {

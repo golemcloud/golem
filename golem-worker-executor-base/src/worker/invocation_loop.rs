@@ -518,11 +518,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         )
         .await;
 
-        for span_id in local_span_ids {
-            self.store.data_mut().finish_span(&span_id).await?;
-        }
-        for span_id in inherited_span_ids {
-            self.store.data_mut().remove_span(&span_id)?;
+        if !matches!(result, Ok(InvokeResult::Interrupted { .. })) {
+            for span_id in local_span_ids {
+                self.store.data_mut().finish_span(&span_id).await?;
+            }
+            for span_id in inherited_span_ids {
+                self.store.data_mut().remove_span(&span_id)?;
+            }
         }
 
         result
