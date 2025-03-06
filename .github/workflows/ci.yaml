@@ -20,7 +20,7 @@ env:
 
 jobs:
   docker-targets-build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
@@ -75,8 +75,8 @@ jobs:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
   docker-publish:
-    runs-on: ubuntu-latest
-    needs: [ docker-targets-build ]
+    runs-on: blacksmith-arm
+    needs: [docker-targets-build]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
@@ -209,7 +209,7 @@ jobs:
   build-and-test:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: ubuntu-latest-xlarge
+    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -246,12 +246,12 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: always()
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
 
   wasm-rpc-stub:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -281,7 +281,7 @@ jobs:
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 
   worker-tests-group1:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     name: worker-tests-group1
     steps:
       - name: Checkout
@@ -314,12 +314,12 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: always()
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
   worker-tests:
-    needs: [ worker-tests-group1 ]
-    runs-on: ubuntu-latest-xlarge
+    needs: [worker-tests-group1]
+    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     strategy:
       fail-fast: true
       matrix:
@@ -364,13 +364,13 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: always()
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
   build-bins:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: ubuntu-latest-xlarge
+    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -434,7 +434,7 @@ jobs:
   api-and-integration-tests-1:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: ubuntu-latest-xlarge
+    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     strategy:
       fail-fast: true
       matrix:
@@ -482,7 +482,7 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: always()
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
 
@@ -490,7 +490,7 @@ jobs:
   api-and-integration-tests-2:
     env:
       CARGO_BUILD_JOBS: 6
-    runs-on: ubuntu-latest-xlarge
+    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     needs: build-bins
     strategy:
       fail-fast: true
@@ -551,21 +551,14 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: always()
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
 
   publish:
-    needs:
-      [
-        build-and-test,
-        wasm-rpc-stub,
-        worker-tests,
-        api-and-integration-tests-1,
-        api-and-integration-tests-2,
-      ]
+    needs: [build-and-test, wasm-rpc-stub, worker-tests, api-and-integration-tests-1, api-and-integration-tests-2]
     if: "startsWith(github.ref, 'refs/tags/v')"
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -595,8 +588,8 @@ jobs:
 
   publish-slack-notification:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [ publish, docker-publish ]
-    runs-on: ubuntu-latest
+    needs: [publish, docker-publish]
+    runs-on: blacksmith-arm
     steps:
       - name: Publish Slack Notification
         uses: rtCamp/action-slack-notify@v2
