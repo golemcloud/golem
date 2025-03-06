@@ -64,10 +64,10 @@ Once you have Docker Compose installed, you can make use of docker-compose file 
 
 ```bash filename="Terminal" copy
 # Download an example docker-compose file along with .env file that has a few common configurations
-curl -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/local-postgres/compose.yaml -O  https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/local-postgres/.env
+curl -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/published-postgres/compose.yaml -O  https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/published-postgres/.env
 
 # Start Golem with backend storage as PostgreSQL and Redis
-docker-compose -f compose.yaml up
+docker compose -f compose.yaml up
 ```
 
 Note that, here we are making use of an example docker-compose file. You may
