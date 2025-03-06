@@ -23,7 +23,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::oplog::{SpanData, WorkerError};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentType, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
@@ -56,6 +56,30 @@ fn tracing() -> Tracing {
 
 fn rounded_ts(ts: Timestamp) -> Timestamp {
     Timestamp::from(ts.to_millis())
+}
+
+fn rounded_span_data(invocation_context: Vec<SpanData>) -> Vec<SpanData> {
+    invocation_context
+        .into_iter()
+        .map(|span_data| match span_data {
+            SpanData::ExternalSpan { span_id } => SpanData::ExternalSpan { span_id },
+            SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                linked_context,
+                attributes,
+                inherited,
+            } => SpanData::LocalSpan {
+                span_id,
+                start: rounded_ts(start),
+                parent_id,
+                linked_context: linked_context.map(rounded_span_data),
+                attributes,
+                inherited,
+            },
+        })
+        .collect()
 }
 
 pub fn rounded(entry: OplogEntry) -> OplogEntry {
@@ -154,7 +178,7 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             idempotency_key,
             trace_id,
             trace_states,
-            invocation_context,
+            invocation_context: rounded_span_data(invocation_context),
         },
         OplogEntry::ExportedFunctionCompleted {
             timestamp,
