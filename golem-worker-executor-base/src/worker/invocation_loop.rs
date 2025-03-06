@@ -518,13 +518,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         )
         .await;
 
-        if !matches!(result, Ok(InvokeResult::Interrupted { .. })) {
-            for span_id in local_span_ids {
-                self.store.data_mut().finish_span(&span_id).await?;
-            }
-            for span_id in inherited_span_ids {
-                self.store.data_mut().remove_span(&span_id)?;
-            }
+        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
+        // as it would add FinishSpan oplog entries without corersponding StartSpan ones. Instead,
+        // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
+        // are finished at ExportedFunctionCompleted.
+        for span_id in local_span_ids {
+            self.store.data_mut().remove_span(&span_id)?;
+        }
+        for span_id in inherited_span_ids {
+            self.store.data_mut().remove_span(&span_id)?;
         }
 
         result
