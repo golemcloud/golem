@@ -33,7 +33,7 @@ use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::component::ComponentService;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
@@ -191,6 +191,155 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
         }
     }
 
+    async fn fetch_existing_deployments<Namespace>(
+        &self,
+        deployment: &ApiDeploymentRequest<Namespace>,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        self.deployment_repo.get_by_site(&deployment.site.to_string()).await
+    }
+
+    /// Ensures that the site is not already used by another namespace.
+    fn ensure_no_namespace_conflict<Namespace>(
+        &self,
+        deployment: &ApiDeploymentRequest<Namespace>,
+        existing_records: &[ApiDeploymentRecord],
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        for record in existing_records {
+            if record.namespace != deployment.namespace.to_string()
+                || record.subdomain != deployment.site.subdomain
+                || record.host != deployment.site.host
+            {
+                info!(namespace = %deployment.namespace,
+                "Deploying API definition - failed, site used by another API (under another namespace/API)",
+            );
+                return Err(ApiDeploymentError::ApiDeploymentConflict(
+                    ApiSiteString::from(&ApiSite {
+                        host: record.host.clone(),
+                        subdomain: record.subdomain.clone(),
+                    }),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Collects new API definitions that need to be deployed.
+    async fn collect_new_api_definitions<Namespace>(
+        &self,
+        deployment: &ApiDeploymentRequest<Namespace>,
+        created_at: DateTime<Utc>,
+    ) -> Result<(Vec<ApiDeploymentRecord>, Vec<ApiDefinitionIdWithVersion>, Vec<CompiledHttpApiDefinition<Namespace>>), ApiDeploymentError<Namespace>> {
+        let mut new_deployment_records = Vec::new();
+        let mut set_not_draft = Vec::new();
+        let mut new_definitions = Vec::new();
+
+        let existing_api_definition_keys: HashSet<_> = self
+            .fetch_existing_deployments(deployment)
+            .await?
+            .into_iter()
+            .map(|record| ApiDefinitionIdWithVersion {
+                id: record.definition_id.into(),
+                version: record.definition_version.into(),
+            })
+            .collect();
+
+        for api_key in &deployment.api_definition_keys {
+            if existing_api_definition_keys.contains(api_key) {
+                continue;
+            }
+
+            match self.definition_repo.get(
+                &deployment.namespace.to_string(),
+                &api_key.id.0,
+                &api_key.version.0,
+            ).await? {
+                Some(record) => {
+                    if record.draft {
+                        set_not_draft.push(api_key.clone());
+                    }
+                    new_definitions.push(record.try_into()?);
+                }
+                None => {
+                    return Err(ApiDeploymentError::ApiDefinitionNotFound(
+                        deployment.namespace.clone(),
+                        api_key.id.clone(),
+                    ));
+                }
+            }
+
+            new_deployment_records.push(ApiDeploymentRecord::new(
+                deployment.namespace.clone(),
+                deployment.site.clone(),
+                api_key.clone(),
+                created_at,
+            ));
+        }
+
+        Ok((new_deployment_records, set_not_draft, new_definitions))
+    }
+
+    /// Fetches existing API definitions for the site.
+    async fn get_existing_definitions<Namespace>(
+        &self,
+        deployment: &ApiDeploymentRequest<Namespace>,
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>> {
+        self.get_definitions_by_site(&deployment.namespace, &(&deployment.site.clone()).into()).await
+    }
+
+    /// Checks for conflicts among API definitions.
+    fn check_for_conflicts<Namespace>(
+        &self,
+        deployment: &ApiDeploymentRequest<Namespace>,
+        all_definitions: &[CompiledHttpApiDefinition<Namespace>],
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        let conflicts = HttpApiDefinition::find_conflicts(&all_definitions.iter().map(|x| x.into()).collect::<Vec<_>>());
+
+        if conflicts.is_empty() {
+            Ok(())
+        } else {
+            let conflicts_str = conflicts.iter().map(|def| def.to_string()).collect::<Vec<_>>().join(", ");
+            info!(namespace = %deployment.namespace, "Deploy API definition - failed, conflicting definitions: {}", conflicts_str);
+            Err(ApiDeploymentError::ApiDefinitionsConflict(conflicts_str))
+        }
+    }
+
+
+    /// Finalizes the deployment by marking drafts, updating constraints, and saving records.
+    async fn finalize_deployment<Namespace>(
+        &self,
+        deployment: &ApiDeploymentRequest<Namespace>,
+        auth_ctx: &AuthCtx,
+        set_not_draft: Vec<ApiDefinitionIdWithVersion>,
+        new_deployment_records: Vec<ApiDeploymentRecord>,
+        new_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        if new_deployment_records.is_empty() {
+            return Ok(());
+        }
+
+        for api_key in &set_not_draft {
+            info!(namespace = %deployment.namespace,
+            "Set API definition as not draft - definition id: {}, definition version: {}",
+            api_key.id, api_key.version
+        );
+            self.definition_repo.set_draft(
+                &deployment.namespace.to_string(),
+                &api_key.id.0,
+                &api_key.version.0,
+                false,
+            ).await?;
+        }
+
+        let constraints = Self::get_worker_functions_in_api_definitions(new_definitions.clone())?;
+        for (component_id, constraints) in constraints {
+            self.component_service.create_or_update_constraints(&component_id, constraints, auth_ctx).await
+                .map_err(|err| ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string()))?;
+        }
+
+        self.deployment_repo.create(new_deployment_records).await?;
+        Ok(())
+    }
+
     async fn set_undeployed_as_draft<Namespace>(
         &self,
         deployments: Vec<ApiDeploymentRecord>,
@@ -283,145 +432,22 @@ where
         info!(namespace = %deployment.namespace, "Deploy API definitions");
 
         let created_at = Utc::now();
+        let existing_deployment_records = self.fetch_existing_deployments(deployment).await?;
 
-        // Existing deployment
-        let existing_deployment_records = self
-            .deployment_repo
-            .get_by_site(&deployment.site.to_string())
-            .await?;
+        self.ensure_no_namespace_conflict(deployment, &existing_deployment_records)?;
 
-        let mut existing_api_definition_keys: HashSet<ApiDefinitionIdWithVersion> = HashSet::new();
+        let (new_deployment_records, set_not_draft, new_definitions) =
+            self.collect_new_api_definitions(deployment, created_at).await?;
 
-        for deployment_record in existing_deployment_records {
-            if deployment_record.namespace != deployment.namespace.to_string()
-                || deployment_record.subdomain != deployment.site.subdomain
-                || deployment_record.host != deployment.site.host
-            {
-                info!(namespace = %deployment.namespace,
-                    "Deploying API definition - failed, site used by another API (under another namespace/API)",
-                );
-                return Err(ApiDeploymentError::ApiDeploymentConflict(
-                    ApiSiteString::from(&ApiSite {
-                        host: deployment_record.host,
-                        subdomain: deployment_record.subdomain,
-                    }),
-                ));
-            }
+        let all_definitions = self.get_existing_definitions(deployment).await?;
+        let all_definitions: Vec<_> = new_definitions.into_iter().chain(all_definitions).collect();
 
-            existing_api_definition_keys.insert(ApiDefinitionIdWithVersion {
-                id: deployment_record.definition_id.into(),
-                version: deployment_record.definition_version.into(),
-            });
+        if let Err(conflicting) = self.check_for_conflicts(deployment, &all_definitions) {
+            return Err(conflicting);
         }
 
-        let mut new_deployment_records: Vec<ApiDeploymentRecord> = vec![];
-
-        let mut set_not_draft: Vec<ApiDefinitionIdWithVersion> = vec![];
-
-        let mut new_definitions: Vec<CompiledHttpApiDefinition<Namespace>> = vec![];
-
-        for api_definition_key in deployment.api_definition_keys.clone() {
-            // If definition is not present in existing deployment
-            if !existing_api_definition_keys.contains(&api_definition_key) {
-                let record = self
-                    .definition_repo
-                    .get(
-                        deployment.namespace.to_string().as_str(),
-                        api_definition_key.id.0.as_str(),
-                        api_definition_key.version.0.as_str(),
-                    )
-                    .await?;
-
-                match record {
-                    None => {
-                        return Err(ApiDeploymentError::ApiDefinitionNotFound(
-                            deployment.namespace.clone(),
-                            api_definition_key.id.clone(),
-                        ));
-                    }
-                    Some(record) => {
-                        if record.draft {
-                            set_not_draft.push(api_definition_key.clone());
-                        }
-                        let definition = record.try_into().map_err(|e| {
-                            ApiDeploymentError::conversion_error("API definition record", e)
-                        })?;
-                        new_definitions.push(definition);
-                    }
-                }
-
-                new_deployment_records.push(ApiDeploymentRecord::new(
-                    deployment.namespace.clone(),
-                    deployment.site.clone(),
-                    api_definition_key,
-                    created_at,
-                ));
-            }
-        }
-
-        let existing_definitions = self
-            .get_definitions_by_site(&deployment.namespace, &(&deployment.site.clone()).into())
-            .await?;
-
-        new_definitions.extend(existing_definitions);
-
-        let conflicting_definitions = HttpApiDefinition::find_conflicts(
-            new_definitions
-                .clone()
-                .into_iter()
-                .map(|x| x.into())
-                .collect::<Vec<HttpApiDefinition>>()
-                .as_slice(),
-        );
-
-        if !conflicting_definitions.is_empty() {
-            let conflicting_definitions = conflicting_definitions
-                .iter()
-                .map(|def| format!("{}", def))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            info!(namespace = %deployment.namespace,
-                "Deploy API definition - failed, conflicting definitions: {}",
-                conflicting_definitions
-            );
-            Err(ApiDeploymentError::ApiDefinitionsConflict(
-                conflicting_definitions,
-            ))
-        } else if !new_deployment_records.is_empty() {
-            for api_definition_key in set_not_draft {
-                info!(namespace = %deployment.namespace,
-                    "Set API definition as not draft - definition id: {}, definition version: {}",
-                    api_definition_key.id, api_definition_key.version
-                );
-
-                self.definition_repo
-                    .set_draft(
-                        deployment.namespace.to_string().as_str(),
-                        api_definition_key.id.0.as_str(),
-                        api_definition_key.version.0.as_str(),
-                        false,
-                    )
-                    .await?;
-            }
-
-            let constraints =
-                Self::get_worker_functions_in_api_definitions(new_definitions.clone())?;
-
-            for (component_id, constraints) in constraints {
-                self.component_service
-                    .create_or_update_constraints(&component_id, constraints, auth_ctx)
-                    .await
-                    .map_err(|err| {
-                        ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
-                    })?;
-            }
-
-            self.deployment_repo.create(new_deployment_records).await?;
-            Ok(())
-        } else {
-            Ok(())
-        }
+        self.finalize_deployment(deployment, auth_ctx, set_not_draft, new_deployment_records, all_definitions)
+            .await
     }
 
     async fn undeploy(
