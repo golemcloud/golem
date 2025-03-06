@@ -52,12 +52,14 @@ impl InterpreterStack {
 
     pub fn try_pop(&mut self) -> Result<RibInterpreterStackValue, String> {
         self.pop()
-            .ok_or("Internal Error: Failed to pop value from the interpreter stack".to_string())
+            .ok_or("internal error: failed to pop value from the interpreter stack".to_string())
     }
 
-    pub fn pop_sink(&mut self) -> Option<Vec<ValueAndType>> {
+    pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
         match self.pop() {
-            Some(RibInterpreterStackValue::Sink(vec, _)) => Some(vec.clone()),
+            Some(RibInterpreterStackValue::Sink(vec, analysed_type)) => {
+                Some((vec.clone(), analysed_type))
+            }
             _ => None,
         }
     }
@@ -72,7 +74,7 @@ impl InterpreterStack {
 
     pub fn try_pop_n(&mut self, n: usize) -> Result<Vec<RibInterpreterStackValue>, String> {
         self.pop_n(n).ok_or(format!(
-            "Internal Error: Failed to pop {} values from the interpreter stack",
+            "internal error: failed to pop {} values from the interpreter stack",
             n
         ))
     }
@@ -84,7 +86,7 @@ impl InterpreterStack {
             .iter()
             .map(|interpreter_result| {
                 interpreter_result.get_val().ok_or(format!(
-                    "Internal Error: Failed to convert last {} in the stack to ValueAndType",
+                    "internal error: failed to convert last {} in the stack to ValueAndType",
                     n
                 ))
             })
@@ -97,7 +99,7 @@ impl InterpreterStack {
             .iter()
             .map(|type_value| {
                 type_value.get_literal().ok_or(format!(
-                    "Internal Error: Failed to convert last {} in the stack to literals {type_value:?}",
+                    "internal error: failed to convert last {} in the stack to literals {type_value:?}",
                     n
                 ))
             })
@@ -121,7 +123,7 @@ impl InterpreterStack {
     pub fn try_pop_val(&mut self) -> Result<ValueAndType, String> {
         self.try_pop().and_then(|x| {
             x.get_val().ok_or(
-                "Internal Error: Failed to pop ValueAndType from the interpreter stack".to_string(),
+                "internal error: failed to pop ValueAndType from the interpreter stack".to_string(),
             )
         })
     }
@@ -134,14 +136,14 @@ impl InterpreterStack {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             } => Ok((field_values, typ)),
-            _ => Err("Internal Error: Failed to pop a record from the interpreter".to_string()),
+            _ => Err("internal error: failed to pop a record from the interpreter".to_string()),
         }
     }
 
     pub fn try_pop_bool(&mut self) -> Result<bool, String> {
         self.try_pop_val().and_then(|val| {
             val.get_literal().and_then(|x| x.get_bool()).ok_or(
-                "Internal Error: Failed to pop boolean from the interpreter stack".to_string(),
+                "internal error: failed to pop boolean from the interpreter stack".to_string(),
             )
         })
     }
@@ -181,7 +183,7 @@ impl InterpreterStack {
             }
 
             a => Err(format!(
-                "Internal error: Failed to push values to sink {:?}",
+                "internal error: failed to push values to sink {:?}",
                 a
             )),
         }
@@ -192,11 +194,15 @@ impl InterpreterStack {
         variant_name: String,
         optional_variant_value: Option<Value>,
         cases: Vec<NameOptionTypePair>,
-    ) {
+    ) -> Result<(), String> {
         let case_idx = cases
             .iter()
             .position(|case| case.name == variant_name)
-            .unwrap() as u32; // TODO: return error
+            .ok_or(format!(
+                "internal Error: Failed to find the variant {} in the cases",
+                variant_name
+            ))? as u32;
+
         let case_value = optional_variant_value.map(Box::new);
         self.push_val(ValueAndType::new(
             Value::Variant {
@@ -205,6 +211,8 @@ impl InterpreterStack {
             },
             variant(cases),
         ));
+
+        Ok(())
     }
 
     pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) {
@@ -264,11 +272,7 @@ impl InterpreterStack {
         });
     }
 
-    pub fn push_list(
-        &mut self,
-        values: Vec<Value>,
-        list_elem_type: &AnalysedType, // Expecting a list type and not inner
-    ) {
+    pub fn push_list(&mut self, values: Vec<Value>, list_elem_type: &AnalysedType) {
         self.push_val(ValueAndType {
             value: Value::List(values),
             typ: list(list_elem_type.clone()),

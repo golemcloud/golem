@@ -43,7 +43,36 @@ message Expr {
     MultiplyExpr multiply = 34;
     DivideExpr divide = 35;
     LazyInvokeMethodExpr lazy_invoke_method = 36;
+    RangeExpr range = 37;
+    SelectIndexExprV1 select_index_v1 = 38;
+    LengthExpr length = 39;
   }
+}
+
+message RangeExpr {
+    oneof range_expr {
+        RangeFrom range_from = 2;
+        Range range = 5;
+        RangeInclusive range_inclusive = 6;
+    }
+}
+
+message LengthExpr {
+    Expr expr = 1;
+}
+
+message Range {
+    Expr from = 1;
+    Expr to = 2;
+}
+
+message RangeFrom {
+    Expr from = 1;
+}
+
+message RangeInclusive {
+    Expr from = 1;
+    Expr to = 2;
 }
 
 message LetExpr {
@@ -60,6 +89,12 @@ message SelectFieldExpr {
 
 message SelectIndexExpr {
   uint64 index = 1;
+  Expr expr = 2;
+  optional TypeName type_name = 3;
+}
+
+message SelectIndexExprV1 {
+  Expr index = 1;
   Expr expr = 2;
   optional TypeName type_name = 3;
 }

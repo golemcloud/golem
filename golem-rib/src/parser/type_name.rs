@@ -385,6 +385,9 @@ impl TryFrom<InferredType> for TypeName {
             InferredType::Instance { .. } => {
                 Err("Cannot convert an instance type to a type name".to_string())
             }
+            InferredType::Range { .. } => {
+                Err("Cannot convert a range type to a type name".to_string())
+            }
         }
     }
 }
@@ -428,7 +431,7 @@ where
         .with(between(
             char('<').skip(spaces()),
             char('>').skip(spaces()),
-            parse_type_name(),
+            type_name(),
         ))
         .map(|inner_type| TypeName::List(Box::new(inner_type)))
 }
@@ -446,7 +449,7 @@ where
         .with(between(
             char('<').skip(spaces()),
             char('>').skip(spaces()),
-            parse_type_name(),
+            type_name(),
         ))
         .map(|inner_type| TypeName::Option(Box::new(inner_type)))
 }
@@ -473,15 +476,9 @@ where
             (
                 choice!(
                     string("_").skip(spaces()).map(|_| ResultSuccess::NoType),
-                    parse_type_name()
-                        .skip(spaces())
-                        .map(ResultSuccess::WithType)
+                    type_name().skip(spaces()).map(ResultSuccess::WithType)
                 ),
-                optional(
-                    char(',')
-                        .skip(spaces())
-                        .with(parse_type_name().skip(spaces())),
-                ),
+                optional(char(',').skip(spaces()).with(type_name().skip(spaces()))),
             ),
         )))
         .map(|result| match result {
@@ -521,12 +518,12 @@ where
         .with(between(
             char('<').skip(spaces()),
             char('>').skip(spaces()),
-            sep_by(parse_type_name(), char(',').skip(spaces())),
+            sep_by(type_name(), char(',').skip(spaces())),
         ))
         .map(TypeName::Tuple)
 }
 
-pub fn parse_type_name_<Input>() -> impl Parser<Input, Output = TypeName>
+pub fn type_name_<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
@@ -544,10 +541,10 @@ where
 }
 
 parser! {
-    pub fn parse_type_name[Input]()(Input) -> TypeName
+    pub fn type_name[Input]()(Input) -> TypeName
      where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
     {
-       parse_type_name_()
+       type_name_()
     }
 }
 
@@ -725,10 +722,10 @@ mod type_name_tests {
 
     fn parse_and_compare(input: &str, expected: TypeName) {
         let written = format!("{}", expected);
-        let result1 = parse_type_name()
+        let result1 = type_name()
             .easy_parse(position::Stream::new(input))
             .map(|x| x.0);
-        let result2 = parse_type_name()
+        let result2 = type_name()
             .easy_parse(position::Stream::new(written.as_str()))
             .map(|x| x.0);
         assert_eq!(result1, Ok(expected.clone()));

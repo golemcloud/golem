@@ -32,7 +32,7 @@ mod type_with_unit;
 mod worker_functions_in_rib;
 
 pub fn compile(
-    expr: &Expr,
+    expr: Expr,
     export_metadata: &Vec<AnalysedExport>,
 ) -> Result<CompilerOutput, RibError> {
     compile_with_restricted_global_variables(expr, export_metadata, None, &vec![])
@@ -46,7 +46,7 @@ pub fn compile(
 // Example:  request.path.*` should be always a `string`.
 // Not all global variables require a type specification.
 pub fn compile_with_restricted_global_variables(
-    expr: &Expr,
+    expr: Expr,
     export_metadata: &Vec<AnalysedExport>,
     allowed_global_variables: Option<Vec<String>>,
     global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
