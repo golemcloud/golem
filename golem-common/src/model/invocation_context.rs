@@ -137,7 +137,7 @@ impl poem_openapi::types::ParseFromJSON for TraceId {
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for TraceId {
     fn to_json(&self) -> Option<serde_json::Value> {
-        Some(serde_json::Value::String(self.0.to_string()))
+        Some(serde_json::Value::String(self.to_string()))
     }
 }
 
@@ -253,7 +253,7 @@ impl poem_openapi::types::ParseFromJSON for SpanId {
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for SpanId {
     fn to_json(&self) -> Option<serde_json::Value> {
-        Some(serde_json::Value::String(self.0.to_string()))
+        Some(serde_json::Value::String(self.to_string()))
     }
 }
 

@@ -426,6 +426,8 @@ pub struct StringAttributeValue {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
 pub enum PublicAttributeValue {
     String(StringAttributeValue),
 }
@@ -517,9 +519,10 @@ impl IntoValue for PublicExternalSpanData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
 pub enum PublicSpanData {
     LocalSpan(PublicLocalSpanData),
     ExternalSpan(PublicExternalSpanData),
