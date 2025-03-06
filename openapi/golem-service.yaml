@@ -5152,8 +5152,24 @@ components:
       - Microsoft
       - Gitlab
     PublicAttributeValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          String: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
       type: object
-      anyOf:
+      oneOf:
+      - $ref: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
+    PublicAttributeValue_StringAttributeValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: String
+            type: string
+            enum:
+            - String
+        required:
+        - type
       - $ref: '#/components/schemas/StringAttributeValue'
     PublicDurableFunctionType:
       discriminator:
