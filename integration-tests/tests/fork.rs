@@ -316,7 +316,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
 
-    let oplog_index_of_function_completed_g1001 = OplogIndex::from_u64(11);
+    let oplog_index_of_function_completed_g1001 = OplogIndex::from_u64(17);
 
     // Minus 1 as oplog index starts from 1
     let log_record = source_oplog
