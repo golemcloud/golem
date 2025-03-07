@@ -52,6 +52,7 @@ use golem_common::model::{
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -335,9 +336,9 @@ pub trait ComponentService {
                 }];
 
                 loop {
-                    let mut buffer = [0; 4096];
+                    let mut buffer = Box::new([0; 4096]);
 
-                    let n = file.read(&mut buffer).await.map_err(|_| {
+                    let n = file.read(buffer.deref_mut()).await.map_err(|_| {
                         AddComponentError::Other(format!(
                             "Failed to read component from {local_path:?}"
                         ))
@@ -474,10 +475,10 @@ pub trait ComponentService {
                 }];
 
                 loop {
-                    let mut buffer = [0; 4096];
+                    let mut buffer = Box::new([0; 4096]);
 
                     let n = file
-                        .read(&mut buffer)
+                        .read(buffer.deref_mut())
                         .await
                         .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
 
