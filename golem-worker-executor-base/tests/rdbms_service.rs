@@ -12,11 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::mysql::{types as mysql_types, MysqlType};
-use crate::services::rdbms::postgres::{types as postgres_types, PostgresType};
-use crate::services::rdbms::{DbResult, DbRow, Error};
-use crate::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
-use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -24,6 +19,13 @@ use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::{RdbConnection, RdbsConnections};
+use golem_worker_executor_base::services::rdbms::mysql::{types as mysql_types, MysqlType};
+use golem_worker_executor_base::services::rdbms::postgres::{
+    types as postgres_types, PostgresType,
+};
+use golem_worker_executor_base::services::rdbms::{DbResult, DbRow, Error};
+use golem_worker_executor_base::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
+use golem_worker_executor_base::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use mac_address::MacAddress;
 use serde_json::json;
 use std::collections::{Bound, HashMap};
