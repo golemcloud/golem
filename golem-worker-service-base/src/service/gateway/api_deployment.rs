@@ -22,11 +22,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::gateway_api_definition::http::{
-    AllPathPatterns, CompiledHttpApiDefinition, HttpApiDefinition, Route,
-};
+use crate::gateway_api_definition::http::{AllPathPatterns, CompiledAuthCallBackRoute, CompiledHttpApiDefinition, HttpApiDefinition, Route};
 
-use crate::gateway_binding::GatewayBindingCompiled;
+use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
@@ -41,6 +39,7 @@ use golem_service_base::repo::RepoError;
 use rib::WorkerFunctionsInRib;
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
+use openidconnect::RedirectUrl;
 
 #[async_trait]
 pub trait ApiDeploymentService<AuthCtx, Namespace> {
@@ -268,9 +267,35 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
             .get_definitions_by_site(&deployment.namespace, &(&deployment.site.clone()).into())
             .await?;
 
+        let mut deployed_auth_call_back_routes = vec![];
+
+        for api_def in &deployed_defs {
+            for route in api_def.routes {
+                route.as_auth_callback_route().map(|auth_callback_route| {
+                    deployed_auth_call_back_routes.push(auth_callback_route);
+                });
+            }
+        }
+
+        let new_auth_call_back_routes =
+            new_deployment.auth_call_back_routes.clone();
+
+        let already_deployed_call_back_routes =
+            new_auth_call_back_routes
+                .iter()
+                .filter(|new_auth_call_back_route| {
+                    !deployed_auth_call_back_routes
+                        .iter()
+                        .any(|deployed_auth_call_back_route| {
+                            new_auth_call_back_route == &deployed_auth_call_back_route
+                        })
+                })
+                .collect::<Vec<_>>();
+
         let all_definitions = new_deployment
-            .api_defs
+            .api_defs_to_deploy
             .iter()
+            .map(|def| def.remove_auth_call_back_routes(already_deployed_call_back_routes))
             .chain(&deployed_defs)
             .collect::<Vec<_>>();
 
@@ -639,7 +664,8 @@ where
 struct NewDeployment<Namespace> {
     namespace: Namespace,
     site: ApiSite,
-    api_defs: Vec<CompiledHttpApiDefinition<Namespace>>,
+    api_defs_to_deploy: Vec<CompiledHttpApiDefinition<Namespace>>,
+    auth_call_back_routes: Vec<CompiledAuthCallBackRoute>
 }
 
 impl<Namespace: Display + Clone> NewDeployment<Namespace>
@@ -664,6 +690,8 @@ where
             })
             .collect::<HashSet<_>>();
 
+        let mut auth_call_back_routes = vec![];
+
         for api_key_to_deploy in &deployment_request.api_definition_keys {
             if existing_deployed_api_def_keys.contains(api_key_to_deploy) {
                 continue;
@@ -677,6 +705,11 @@ where
             .await?
             {
                 Some(api_def) => {
+                    for route in &api_def.routes {
+                        route.as_auth_callback_route().map(|auth_callback_route| {
+                            auth_call_back_routes.push(auth_callback_route);
+                        });
+                    }
                     new_definitions_to_deploy.push(api_def);
                 }
                 None => {
@@ -691,16 +724,17 @@ where
         Ok(NewDeployment {
             namespace: deployment_request.namespace.clone(),
             site: deployment_request.site.clone(),
-            api_defs: new_definitions_to_deploy,
+            api_defs_to_deploy: new_definitions_to_deploy,
+            auth_call_back_routes
         })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.api_defs.is_empty()
+        self.api_defs_to_deploy.is_empty()
     }
 
     pub fn never_deployed_api_defs(&self) -> Vec<&CompiledHttpApiDefinition<Namespace>> {
-        self.api_defs
+        self.api_defs_to_deploy
             .iter()
             .filter(|def| def.draft)
             .collect::<Vec<_>>()
@@ -709,7 +743,7 @@ where
     pub fn deployment_records(&self) -> Vec<ApiDeploymentRecord> {
         let created_at = Utc::now();
 
-        self.api_defs
+        self.api_defs_to_deploy
             .iter()
             .map(|def| {
                 ApiDeploymentRecord::new(
@@ -759,7 +793,7 @@ impl ComponentConstraints {
     ) -> Result<Self, ApiDeploymentError<Namespace>> {
         let mut worker_functions_in_rib = HashMap::new();
 
-        for definition in &new_deployment.api_defs {
+        for definition in &new_deployment.api_defs_to_deploy {
             for route in definition.routes.iter() {
                 if let GatewayBindingCompiled::Worker(worker_binding) = route.binding.clone() {
                     let component_id = worker_binding.component_id;
