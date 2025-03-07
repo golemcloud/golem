@@ -22,9 +22,8 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
-use golem_test_framework::components::rdb::RdbsConnections;
+use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -40,13 +39,13 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
 #[test_dep]
-async fn postgres() -> DockerPostgresRdbs {
-    DockerPostgresRdbs::new(3, 5424, true, false).await
+async fn postgres() -> DockerPostgresRdb {
+    DockerPostgresRdb::new(true).await
 }
 
 #[test_dep]
-async fn mysql() -> DockerMysqlRdbs {
-    DockerMysqlRdbs::new(3, 3317, true, false).await
+async fn mysql() -> DockerMysqlRdb {
+    DockerMysqlRdb::new(true).await
 }
 
 #[repr(u8)]
@@ -137,13 +136,6 @@ impl StatementTest {
             ..self.clone()
         }
     }
-
-    // fn with_sleep(&self, sleep: u64) -> Self {
-    //     Self {
-    //         sleep: Some(sleep),
-    //         ..self.clone()
-    //     }
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -182,20 +174,18 @@ impl RdbmsTest {
 async fn rdbms_postgres_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    let db_addresses: Vec<String> = postgres.host_connection_strings();
+    let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids1 =
-        start_workers::<PostgresType>(&executor, &component_id, db_addresses.clone(), 1).await;
+    let worker_ids1 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
 
-    let worker_ids3 =
-        start_workers::<PostgresType>(&executor, &component_id, db_addresses.clone(), 3).await;
+    let worker_ids3 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 3).await;
 
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS test_users
@@ -327,17 +317,16 @@ async fn rdbms_postgres_crud(
 async fn rdbms_postgres_idempotency(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    let db_address = postgres.host_connection_strings()[0].clone();
+    let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids =
-        start_workers::<PostgresType>(&executor, &component_id, vec![db_address.clone()], 1).await;
+    let worker_ids = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
 
     let worker_id = worker_ids[0].clone();
 
@@ -532,7 +521,7 @@ fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_
 async fn rdbms_postgres_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(1));
@@ -559,7 +548,7 @@ async fn rdbms_postgres_select1(
     rdbms_component_test::<PostgresType>(
         last_unique_id,
         deps,
-        postgres.host_connection_strings(),
+        &postgres.public_connection_string(),
         RdbmsTest::new(vec![test1, test2], None),
         3,
     )
@@ -571,20 +560,18 @@ async fn rdbms_postgres_select1(
 async fn rdbms_mysql_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    mysql: &DockerMysqlRdbs,
+    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    let db_addresses: Vec<String> = mysql.host_connection_strings();
+    let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids1 =
-        start_workers::<MysqlType>(&executor, &component_id, db_addresses.clone(), 1).await;
+    let worker_ids1 = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
 
-    let worker_ids3 =
-        start_workers::<MysqlType>(&executor, &component_id, db_addresses.clone(), 3).await;
+    let worker_ids3 = start_workers::<MysqlType>(&executor, &component_id, &db_address, 3).await;
 
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS test_users
@@ -716,17 +703,16 @@ async fn rdbms_mysql_crud(
 async fn rdbms_mysql_idempotency(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    mysql: &DockerMysqlRdbs,
+    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    let db_address = mysql.host_connection_strings()[0].clone();
+    let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids =
-        start_workers::<MysqlType>(&executor, &component_id, vec![db_address.clone()], 1).await;
+    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
 
     let worker_id = worker_ids[0].clone();
 
@@ -903,7 +889,7 @@ fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Val
 async fn rdbms_mysql_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    mysql: &DockerMysqlRdbs,
+    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(0));
@@ -930,7 +916,7 @@ async fn rdbms_mysql_select1(
     rdbms_component_test::<MysqlType>(
         last_unique_id,
         deps,
-        mysql.host_connection_strings(),
+        &mysql.public_connection_string(),
         RdbmsTest::new(vec![test1, test2], None),
         1,
     )
@@ -940,15 +926,14 @@ async fn rdbms_mysql_select1(
 async fn rdbms_component_test<T: RdbmsType>(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    db_addresses: Vec<String>,
+    db_address: &str,
     test: RdbmsTest,
-    workers_per_db: u8,
+    n_workers: u8,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
-    let worker_ids =
-        start_workers::<T>(&executor, &component_id, db_addresses, workers_per_db).await;
+    let worker_ids = start_workers::<T>(&executor, &component_id, db_address, n_workers).await;
 
     rdbms_workers_test::<T>(&executor, worker_ids, test).await;
 
@@ -1096,27 +1081,26 @@ fn check_test_result(worker_id: &WorkerId, result: Result<ValueAndType, Error>, 
 async fn start_workers<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component_id: &ComponentId,
-    db_addresses: Vec<String>,
-    workers_per_db: u8,
+    db_address: &str,
+    n_workers: u8,
 ) -> Vec<WorkerId> {
     let mut worker_ids: Vec<WorkerId> = Vec::new();
     let db_type = T::default().to_string();
-    let db_env_var = format!("DB_{}_URL", db_type.to_uppercase());
 
-    for db_address in db_addresses.into_iter() {
-        let mut env = HashMap::new();
-        env.insert(db_env_var.clone(), db_address);
-        for _ in 0..workers_per_db {
-            let worker_name = format!("rdbms-service-{}-{}", db_type, Uuid::new_v4());
-            let worker_id = executor
-                .start_worker_with(component_id, &worker_name, vec![], env.clone())
-                .await;
-            worker_ids.push(worker_id.clone());
-            let _result = executor
-                .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
-                .await
-                .unwrap();
-        }
+    let mut env = HashMap::new();
+    let db_env_var = format!("DB_{}_URL", db_type.to_uppercase());
+    env.insert(db_env_var, db_address.to_string());
+
+    for _ in 0..n_workers {
+        let worker_name = format!("rdbms-service-{}-{}", db_type, Uuid::new_v4());
+        let worker_id = executor
+            .start_worker_with(component_id, &worker_name, vec![], env.clone())
+            .await;
+        worker_ids.push(worker_id.clone());
+        let _result = executor
+            .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
+            .await
+            .unwrap();
     }
     worker_ids
 }

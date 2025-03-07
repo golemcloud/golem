@@ -188,6 +188,7 @@ impl CliParams {
 
 #[derive(Subcommand, Debug, Clone)]
 #[command()]
+#[allow(clippy::large_enum_variant)]
 pub enum TestMode {
     #[command()]
     Provided {
@@ -351,7 +352,7 @@ impl CliTestDependencies {
             let component_directory = PathBuf::from(&params.component_directory);
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true, params.keep_containers, None).await);
+                    Arc::new(DockerPostgresRdb::new(params.keep_containers).await);
 
                 let component_compilation_service = if !compilation_service_disabled {
                     Some((
@@ -498,7 +499,7 @@ impl CliTestDependencies {
 
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true, params.keep_containers, None).await);
+                    Arc::new(DockerPostgresRdb::new(params.keep_containers).await);
 
                 let component_compilation_service_port = if !compilation_service_disabled {
                     Some(component_compilation_service_grpc_port)

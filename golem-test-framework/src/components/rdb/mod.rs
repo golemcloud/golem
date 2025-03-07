@@ -67,23 +67,20 @@ impl DbInfo {
 }
 
 pub trait RdbConnection {
-    fn connection_string(&self) -> String;
-
-    fn host_connection_string(&self) -> String;
-}
-
-pub trait RdbsConnections {
-    fn host_connection_strings(&self) -> Vec<String>;
+    fn public_connection_string(&self) -> String;
+    fn private_connection_string(&self) -> String;
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct PostgresInfo {
-    #[arg(long = "postgres-host", default_value = "localhost")]
-    pub host: String,
-    #[arg(long = "postgres-port", default_value = "5432")]
-    pub port: u16,
-    #[arg(long = "postgres-host-port", default_value = "5432")]
-    pub host_port: u16,
+    #[arg(long = "postgres-public-host", default_value = "localhost")]
+    pub public_host: String,
+    #[arg(long = "postgres-public-port", default_value = "5432")]
+    pub public_port: u16,
+    #[arg(long = "postgres-private-host", default_value = "localhost")]
+    pub private_host: String,
+    #[arg(long = "postgres-private-port", default_value = "5432")]
+    pub private_port: u16,
     #[arg(long = "postgres-db-name", default_value = "postgres")]
     pub database_name: String,
     #[arg(long = "postgres-username", default_value = "postgres")]
@@ -95,19 +92,19 @@ pub struct PostgresInfo {
 impl PostgresInfo {
     pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
         HashMap::from([
-            ("DB_HOST".to_string(), self.host.clone()),
-            ("DB_PORT".to_string(), self.port.to_string()),
-            ("DB_NAME".to_string(), self.database_name.clone()),
-            ("DB_USERNAME".to_string(), self.username.clone()),
-            ("DB_PASSWORD".to_string(), self.password.clone()),
-            ("COMPONENT_REPOSITORY_TYPE".to_string(), "jdbc".to_string()),
             ("GOLEM__DB__TYPE".to_string(), "Postgres".to_string()),
             (
                 "GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(),
                 "10".to_string(),
             ),
-            ("GOLEM__DB__CONFIG__HOST".to_string(), self.host.clone()),
-            ("GOLEM__DB__CONFIG__PORT".to_string(), self.port.to_string()),
+            (
+                "GOLEM__DB__CONFIG__HOST".to_string(),
+                self.private_host.clone(),
+            ),
+            (
+                "GOLEM__DB__CONFIG__PORT".to_string(),
+                self.private_port.to_string(),
+            ),
             (
                 "GOLEM__DB__CONFIG__SCHEMA".to_string(),
                 service_namespace.to_string(),
@@ -126,20 +123,18 @@ impl PostgresInfo {
             ),
         ])
     }
-}
 
-impl RdbConnection for PostgresInfo {
-    fn connection_string(&self) -> String {
+    pub fn public_connection_string(&self) -> String {
         format!(
             "postgres://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.port, self.database_name
+            self.username, self.password, self.public_host, self.public_port, self.database_name
         )
     }
 
-    fn host_connection_string(&self) -> String {
+    pub fn private_connection_string(&self) -> String {
         format!(
             "postgres://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.host_port, self.database_name
+            self.username, self.password, self.private_host, self.private_port, self.database_name
         )
     }
 }
@@ -150,8 +145,8 @@ async fn postgres_check_if_running(info: &PostgresInfo) -> Result<(), sqlx::Erro
         .username(info.username.as_str())
         .password(info.password.as_str())
         .database(info.database_name.as_str())
-        .host(info.host.as_str())
-        .port(info.host_port);
+        .host(info.public_host.as_str())
+        .port(info.public_port);
 
     let mut conn = connection_options.connect().await?;
 
@@ -166,8 +161,8 @@ async fn postgres_check_if_running(info: &PostgresInfo) -> Result<(), sqlx::Erro
 async fn postgres_wait_for_startup(info: &PostgresInfo, timeout: Duration) {
     info!(
         "Waiting for Postgres start on host {}:{}, timeout: {}s",
-        info.host,
-        info.host_port,
+        info.public_host,
+        info.public_port,
         timeout.as_secs()
     );
     let start = Instant::now();
@@ -180,12 +175,12 @@ async fn postgres_wait_for_startup(info: &PostgresInfo, timeout: Duration) {
                 if start.elapsed() > timeout {
                     error!(
                         "Failed to verify that Postgres host {}:{} is running: {}",
-                        info.host, info.host_port, e
+                        info.public_host, info.public_port, e
                     );
                     std::panic!(
                         "Failed to verify that Postgres host {}:{} is running",
-                        info.host,
-                        info.host_port
+                        info.public_host,
+                        info.public_port
                     );
                 }
             }
@@ -196,12 +191,14 @@ async fn postgres_wait_for_startup(info: &PostgresInfo, timeout: Duration) {
 
 #[derive(Debug, Clone, Args)]
 pub struct MysqlInfo {
-    #[arg(long = "mysql-host", default_value = "localhost")]
-    pub host: String,
-    #[arg(long = "mysql-port", default_value = "3306")]
-    pub port: u16,
-    #[arg(long = "mysql-host-port", default_value = "3306")]
-    pub host_port: u16,
+    #[arg(long = "mysql-private-host", default_value = "localhost")]
+    pub private_host: String,
+    #[arg(long = "mysql-private-port", default_value = "3306")]
+    pub private_port: u16,
+    #[arg(long = "mysql-public-host", default_value = "3306")]
+    pub public_host: String,
+    #[arg(long = "mysql-public-port", default_value = "3306")]
+    pub public_port: u16,
     #[arg(long = "mysql-db-name", default_value = "mysql")]
     pub database_name: String,
     #[arg(long = "mysql-username", default_value = "mysql")]
@@ -213,19 +210,19 @@ pub struct MysqlInfo {
 impl MysqlInfo {
     pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
         HashMap::from([
-            ("DB_HOST".to_string(), self.host.clone()),
-            ("DB_PORT".to_string(), self.port.to_string()),
-            ("DB_NAME".to_string(), self.database_name.clone()),
-            ("DB_USERNAME".to_string(), self.username.clone()),
-            ("DB_PASSWORD".to_string(), self.password.clone()),
-            ("COMPONENT_REPOSITORY_TYPE".to_string(), "jdbc".to_string()),
             ("GOLEM__DB__TYPE".to_string(), "Mysql".to_string()),
             (
                 "GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(),
                 "10".to_string(),
             ),
-            ("GOLEM__DB__CONFIG__HOST".to_string(), self.host.clone()),
-            ("GOLEM__DB__CONFIG__PORT".to_string(), self.port.to_string()),
+            (
+                "GOLEM__DB__CONFIG__HOST".to_string(),
+                self.private_host.clone(),
+            ),
+            (
+                "GOLEM__DB__CONFIG__PORT".to_string(),
+                self.private_port.to_string(),
+            ),
             (
                 "GOLEM__DB__CONFIG__SCHEMA".to_string(),
                 service_namespace.to_string(),
@@ -244,6 +241,20 @@ impl MysqlInfo {
             ),
         ])
     }
+
+    pub fn public_connection_string(&self) -> String {
+        format!(
+            "mysql://{}:{}@{}:{}/{}",
+            self.username, self.password, self.public_host, self.public_port, self.database_name
+        )
+    }
+
+    pub fn private_connection_string(&self) -> String {
+        format!(
+            "mysql://{}:{}@{}:{}/{}",
+            self.username, self.password, self.private_host, self.private_port, self.database_name
+        )
+    }
 }
 
 async fn mysql_check_if_running(info: &MysqlInfo) -> Result<(), sqlx::Error> {
@@ -252,8 +263,8 @@ async fn mysql_check_if_running(info: &MysqlInfo) -> Result<(), sqlx::Error> {
         .username(info.username.as_str())
         .password(info.password.as_str())
         .database(info.database_name.as_str())
-        .host(info.host.as_str())
-        .port(info.host_port);
+        .host(info.public_host.as_str())
+        .port(info.public_port);
 
     let mut conn = connection_options.connect().await?;
 
@@ -268,8 +279,8 @@ async fn mysql_check_if_running(info: &MysqlInfo) -> Result<(), sqlx::Error> {
 async fn mysql_wait_for_startup(info: &MysqlInfo, timeout: Duration) {
     info!(
         "Waiting for Mysql start on host {}:{}, timeout: {}s",
-        info.host,
-        info.host_port,
+        info.public_host,
+        info.public_port,
         timeout.as_secs()
     );
     let start = Instant::now();
@@ -282,12 +293,12 @@ async fn mysql_wait_for_startup(info: &MysqlInfo, timeout: Duration) {
                 if start.elapsed() > timeout {
                     error!(
                         "Failed to verify that Mysql host {}:{} is running: {}",
-                        info.host, info.host_port, e
+                        info.public_host, info.public_port, e
                     );
                     std::panic!(
                         "Failed to verify that Mysql host {}:{} is running",
-                        info.host,
-                        info.host_port
+                        info.public_host,
+                        info.public_port
                     );
                 }
             }
@@ -297,17 +308,17 @@ async fn mysql_wait_for_startup(info: &MysqlInfo, timeout: Duration) {
 }
 
 impl RdbConnection for MysqlInfo {
-    fn connection_string(&self) -> String {
+    fn public_connection_string(&self) -> String {
         format!(
             "mysql://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.port, self.database_name
+            self.username, self.password, self.public_host, self.public_port, self.database_name
         )
     }
 
-    fn host_connection_string(&self) -> String {
+    fn private_connection_string(&self) -> String {
         format!(
             "mysql://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.host_port, self.database_name
+            self.username, self.password, self.private_host, self.private_port, self.database_name
         )
     }
 }
