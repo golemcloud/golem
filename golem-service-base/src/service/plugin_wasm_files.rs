@@ -42,7 +42,7 @@ impl PluginWasmFilesService {
             .get_raw(
                 PLUGIN_WASM_FILES_LABEL,
                 "get",
-                BlobStorageNamespace::LibraryPluginFiles {
+                BlobStorageNamespace::PluginWasmFiles {
                     account_id: account_id.clone(),
                 },
                 &PathBuf::from(key.0.clone()),
@@ -64,7 +64,7 @@ impl PluginWasmFilesService {
             .get_metadata(
                 PLUGIN_WASM_FILES_LABEL,
                 "get_metadata",
-                BlobStorageNamespace::LibraryPluginFiles {
+                BlobStorageNamespace::PluginWasmFiles {
                     account_id: account_id.clone(),
                 },
                 &key,
@@ -79,7 +79,7 @@ impl PluginWasmFilesService {
                 .put_stream(
                     PLUGIN_WASM_FILES_LABEL,
                     "put",
-                    BlobStorageNamespace::LibraryPluginFiles {
+                    BlobStorageNamespace::PluginWasmFiles {
                         account_id: account_id.clone(),
                     },
                     &key,

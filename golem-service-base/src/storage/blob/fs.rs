@@ -94,8 +94,8 @@ impl FileSystemBlobStorage {
             BlobStorageNamespace::Components => {
                 result.push("component_store");
             }
-            BlobStorageNamespace::LibraryPluginFiles { account_id } => {
-                result.push("library_plugin_files");
+            BlobStorageNamespace::PluginWasmFiles { account_id } => {
+                result.push("plugin_wasm_files");
                 result.push(account_id.to_string());
             }
         }

@@ -360,7 +360,7 @@ pub enum BlobStorageNamespace {
     },
     // TODO: prefix with account_id and move existing data
     Components,
-    LibraryPluginFiles {
+    PluginWasmFiles {
         account_id: AccountId,
     },
 }

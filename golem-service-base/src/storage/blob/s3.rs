@@ -82,9 +82,7 @@ impl S3BlobStorage {
                 &self.config.initial_component_files_bucket
             }
             BlobStorageNamespace::Components => &self.config.components_bucket,
-            BlobStorageNamespace::LibraryPluginFiles { .. } => {
-                &self.config.library_plugin_files_bucket
-            }
+            BlobStorageNamespace::PluginWasmFiles { .. } => &self.config.plugin_wasm_files_bucket,
         }
     }
 
@@ -149,7 +147,7 @@ impl S3BlobStorage {
                 }
             }
             BlobStorageNamespace::Components => Path::new(&self.config.object_prefix).to_path_buf(),
-            BlobStorageNamespace::LibraryPluginFiles { account_id } => {
+            BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 let account_id_string = account_id.to_string();
                 if self.config.object_prefix.is_empty() {
                     PathBuf::from(&account_id_string)

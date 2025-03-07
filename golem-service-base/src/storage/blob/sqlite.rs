@@ -81,8 +81,8 @@ impl SqliteBlobStorage {
                 format!("initial_component_files-{}", account_id.value)
             }
             BlobStorageNamespace::Components => "components".to_string(),
-            BlobStorageNamespace::LibraryPluginFiles { account_id } => {
-                format!("initial_component_files-{}", account_id.value)
+            BlobStorageNamespace::PluginWasmFiles { account_id } => {
+                format!("plugin_wasm_files-{}", account_id.value)
             }
         }
     }

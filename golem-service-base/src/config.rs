@@ -78,7 +78,7 @@ pub struct S3BlobStorageConfig {
     pub use_minio_credentials: bool,
     pub initial_component_files_bucket: String,
     pub components_bucket: String,
-    pub library_plugin_files_bucket: String,
+    pub plugin_wasm_files_bucket: String,
 }
 
 impl Default for S3BlobStorageConfig {
@@ -95,7 +95,7 @@ impl Default for S3BlobStorageConfig {
             use_minio_credentials: false,
             initial_component_files_bucket: "golem-initial-component-files".to_string(),
             components_bucket: "component-store".to_string(),
-            library_plugin_files_bucket: "library-plugin-files".to_string(),
+            plugin_wasm_files_bucket: "golem-plugin-wasm-files".to_string(),
         }
     }
 }
