@@ -618,7 +618,7 @@ pub trait ComponentService {
             }
             PluginServiceClient::Http(client) => {
                 let result = client.create_plugin(
-                    &golem_client::model::PluginDefinitionWithoutOwnerDefaultPluginScope {
+                    &golem_client::model::PluginDefinitionCreationDefaultPluginScope {
                         name: definition.name,
                         version: definition.version,
                         description: definition.description,
@@ -626,7 +626,7 @@ pub trait ComponentService {
                         homepage: definition.homepage,
                         specs: match definition.specs {
                             PluginTypeSpecificDefinition::ComponentTransformer(def) => {
-                                golem_client::model::PluginTypeSpecificDefinition::ComponentTransformer(
+                                golem_client::model::PluginTypeSpecificCreation::ComponentTransformer(
                                     golem_client::model::ComponentTransformerDefinition {
                                         provided_wit_package: def.provided_wit_package,
                                         json_schema: def.json_schema,
@@ -636,7 +636,7 @@ pub trait ComponentService {
                                 )
                             }
                             PluginTypeSpecificDefinition::OplogProcessor(def) => {
-                                golem_client::model::PluginTypeSpecificDefinition::OplogProcessor(
+                                golem_client::model::PluginTypeSpecificCreation::OplogProcessor(
                                     golem_client::model::OplogProcessorDefinition {
                                         component_id: def.component_id.0,
                                         component_version: def.component_version,

@@ -3,6 +3,7 @@ use crate::model::plugin::PluginWasmFileReference;
 use golem_common::model::plugin as common_plugin_model;
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_service_base::poem::TempFileUpload;
+use poem_openapi::types::Binary;
 use poem_openapi::Multipart;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -65,7 +66,7 @@ pub struct LibraryPluginDefinitionCreation<Scope: PluginScope> {
     pub name: String,
     pub version: String,
     pub description: String,
-    pub icon: Vec<u8>,
+    pub icon: Binary<Vec<u8>>,
     pub homepage: String,
     pub scope: Scope,
     pub wasm: TempFileUpload,
@@ -80,7 +81,7 @@ impl<Scope: PluginScope> LibraryPluginDefinitionCreation<Scope> {
             name: self.name,
             version: self.version,
             description: self.description,
-            icon: self.icon,
+            icon: self.icon.0,
             homepage: self.homepage,
             scope: self.scope,
             owner,
@@ -99,7 +100,7 @@ pub struct AppPluginDefinitionCreation<Scope: PluginScope> {
     pub name: String,
     pub version: String,
     pub description: String,
-    pub icon: Vec<u8>,
+    pub icon: Binary<Vec<u8>>,
     pub homepage: String,
     pub scope: Scope,
     pub wasm: TempFileUpload,
@@ -114,7 +115,7 @@ impl<Scope: PluginScope> AppPluginDefinitionCreation<Scope> {
             name: self.name,
             version: self.version,
             description: self.description,
-            icon: self.icon,
+            icon: self.icon.0,
             homepage: self.homepage,
             scope: self.scope,
             owner,

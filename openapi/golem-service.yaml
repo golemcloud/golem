@@ -3407,15 +3407,13 @@ paths:
                 description:
                   type: string
                 icon:
-                  type: array
-                  items:
-                    type: integer
-                    format: uint8
+                  type: string
+                  format: binary
                 homepage:
                   type: string
                 scope:
                   $ref: '#/components/schemas/DefaultPluginScope'
-                data:
+                wasm:
                   type: string
                   format: binary
               required:
@@ -3425,7 +3423,7 @@ paths:
               - icon
               - homepage
               - scope
-              - data
+              - wasm
         required: true
       responses:
         '200':
@@ -3489,15 +3487,13 @@ paths:
                 description:
                   type: string
                 icon:
-                  type: array
-                  items:
-                    type: integer
-                    format: uint8
+                  type: string
+                  format: binary
                 homepage:
                   type: string
                 scope:
                   $ref: '#/components/schemas/DefaultPluginScope'
-                data:
+                wasm:
                   type: string
                   format: binary
               required:
@@ -3507,7 +3503,7 @@ paths:
               - icon
               - homepage
               - scope
-              - data
+              - wasm
         required: true
       responses:
         '200':
