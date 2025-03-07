@@ -21,7 +21,7 @@ use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::AccountId;
 use tracing::debug;
 
-const LIBRARY_PLUGIN_STORE_LABEL: &str = "library_plugins";
+const PLUGIN_WASM_FILES_LABEL: &str = "plugin_wasms";
 
 /// Service for storing plugin wasm files.
 pub struct PluginWasmFilesService {
@@ -40,7 +40,7 @@ impl PluginWasmFilesService {
     ) -> Result<Option<Bytes>, String> {
         self.blob_storage
             .get_raw(
-                LIBRARY_PLUGIN_STORE_LABEL,
+                PLUGIN_WASM_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::LibraryPluginFiles {
                     account_id: account_id.clone(),
@@ -62,7 +62,7 @@ impl PluginWasmFilesService {
         let metadata = self
             .blob_storage
             .get_metadata(
-                LIBRARY_PLUGIN_STORE_LABEL,
+                PLUGIN_WASM_FILES_LABEL,
                 "get_metadata",
                 BlobStorageNamespace::LibraryPluginFiles {
                     account_id: account_id.clone(),
@@ -77,7 +77,7 @@ impl PluginWasmFilesService {
 
             self.blob_storage
                 .put_stream(
-                    LIBRARY_PLUGIN_STORE_LABEL,
+                    PLUGIN_WASM_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::LibraryPluginFiles {
                         account_id: account_id.clone(),

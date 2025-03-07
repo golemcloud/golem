@@ -31,7 +31,6 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = 
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"], optional = true }
 
 anyhow = { workspace = true }
-async-hash = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
@@ -42,9 +41,7 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true, optional = true }
 fred = { workspace = true, optional = true }
-futures = { workspace = true }
 git-version = { workspace = true }
-hex = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 iso8601-timestamp = { workspace = true }
