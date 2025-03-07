@@ -1191,7 +1191,6 @@ pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
     function_name: &str,
     idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<Arc<InvocationContextSpan>> {
-    warn!("create_invocation_span in connection_span_id: {connection_span_id}");
     Ok(ctx
         .start_child_span(
             connection_span_id,

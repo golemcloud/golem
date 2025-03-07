@@ -519,7 +519,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .await;
 
         // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-        // as it would add FinishSpan oplog entries without corersponding StartSpan ones. Instead,
+        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
         // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
         // are finished at ExportedFunctionCompleted.
         for span_id in local_span_ids {

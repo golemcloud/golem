@@ -1252,7 +1252,9 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         let span_id = self.state.current_span_id.clone();
-        self.start_child_span(&span_id, initial_attributes).await
+        let span = self.start_child_span(&span_id, initial_attributes).await?;
+        self.state.current_span_id = span.span_id().clone();
+        Ok(span)
     }
 
     async fn start_child_span(
@@ -1337,6 +1339,16 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        if &self.state.current_span_id == span_id {
+            self.state.current_span_id = self
+                .state
+                .invocation_context
+                .get(span_id)
+                .unwrap()
+                .parent()
+                .map(|p| p.span_id().clone())
+                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
+        }
         let _ = self
             .state
             .invocation_context
@@ -1362,6 +1374,16 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .await;
         }
 
+        if &self.state.current_span_id == span_id {
+            self.state.current_span_id = self
+                .state
+                .invocation_context
+                .get(span_id)
+                .unwrap()
+                .parent()
+                .map(|p| p.span_id().clone())
+                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
+        }
         let _ = self
             .state
             .invocation_context

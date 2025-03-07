@@ -269,16 +269,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn start_span(&mut self, name: String) -> anyhow::Result<Resource<SpanEntry>> {
         self.observe_function_call("golem::api::context", "start");
 
-        let current_span_id = self.state.current_span_id.clone();
-        let span = self
-            .start_child_span(
-                &current_span_id,
-                &[(
-                    "name".to_string(),
-                    golem_common::model::invocation_context::AttributeValue::String(name),
-                )],
-            )
-            .await?;
+        let span = InvocationContextManagement::start_span(
+            self,
+            &[(
+                "name".to_string(),
+                golem_common::model::invocation_context::AttributeValue::String(name),
+            )],
+        )
+        .await?;
         let entry = SpanEntry {
             span_id: span.span_id().clone(),
         };
