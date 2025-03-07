@@ -24,22 +24,20 @@ use tracing::{error, info};
 
 use crate::gateway_api_definition::http::{AllPathPatterns, CompiledAuthCallBackRoute, CompiledHttpApiDefinition, HttpApiDefinition, Route};
 
-use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
+use crate::gateway_binding::{GatewayBindingCompiled};
 use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::component::ComponentService;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
-use chrono::{DateTime, Utc};
+use chrono::{Utc};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use rib::WorkerFunctionsInRib;
 use std::fmt::{Debug, Display};
-use std::ops::Deref;
-use openidconnect::RedirectUrl;
 
 #[async_trait]
 pub trait ApiDeploymentService<AuthCtx, Namespace> {
@@ -229,7 +227,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
     fn check_for_conflicts<Namespace: Display + Clone>(
         &self,
         namespace: &Namespace,
-        all_definitions: &[&CompiledHttpApiDefinition<Namespace>],
+        all_definitions: &[CompiledHttpApiDefinition<Namespace>],
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         let conflicts = HttpApiDefinition::find_conflicts(
             &all_definitions
@@ -270,7 +268,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         let mut deployed_auth_call_back_routes = vec![];
 
         for api_def in &deployed_defs {
-            for route in api_def.routes {
+            for route in &api_def.routes {
                 route.as_auth_callback_route().map(|auth_callback_route| {
                     deployed_auth_call_back_routes.push(auth_callback_route);
                 });
@@ -295,12 +293,12 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         let all_definitions = new_deployment
             .api_defs_to_deploy
             .iter()
-            .map(|def| def.remove_auth_call_back_routes(already_deployed_call_back_routes))
-            .chain(&deployed_defs)
+            .map(|def| def.remove_auth_call_back_routes(already_deployed_call_back_routes.as_slice()))
+            .chain(deployed_defs)
             .collect::<Vec<_>>();
 
         if let Err(conflicting) =
-            self.check_for_conflicts(&deployment.namespace, all_definitions.deref())
+            self.check_for_conflicts(&deployment.namespace, &all_definitions)
         {
             return Err(conflicting);
         }

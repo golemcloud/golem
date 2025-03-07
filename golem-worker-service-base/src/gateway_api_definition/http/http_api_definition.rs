@@ -234,10 +234,21 @@ pub struct CompiledHttpApiDefinition<Namespace> {
 }
 
 impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
-    pub fn remove_auth_call_back_routes(&self, auth_routes: Vec<&CompiledAuthCallBackRoute>) -> CompiledHttpApiDefinition<Namespace> {
-        let mut new_routes = self.routes.iter().filter(|route| {
-            route.as_auth_callback_route().map(|auth_route| !auth_routes.contains(&&auth_route)).unwrap_or(true)
-        }).cloned().collect::<Vec<_>>();
+    pub fn remove_auth_call_back_routes(
+        &self,
+        auth_routes: &[&CompiledAuthCallBackRoute],
+    ) -> CompiledHttpApiDefinition<Namespace> {
+        let new_routes = self
+            .routes
+            .iter()
+            .filter(|route| {
+                route
+                    .as_auth_callback_route()
+                    .map(|auth_route| !auth_routes.contains(&&auth_route))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
 
         CompiledHttpApiDefinition {
             id: self.id.clone(),
@@ -567,18 +578,12 @@ pub struct CompiledRoute {
 impl CompiledRoute {
     pub fn as_auth_callback_route(&self) -> Option<CompiledAuthCallBackRoute> {
         match &self.binding {
-            GatewayBindingCompiled::Static(static_binding) => {
-                if let GatewayBinding::Static(StaticBinding::HttpAuthCallBack(auth_callback)) =
-                    &static_binding
-                {
-                    Some(CompiledAuthCallBackRoute {
-                        method: self.method.clone(),
-                        path: self.path.clone(),
-                        http_auth_middleware: auth_callback.deref().clone(),
-                    })
-                } else {
-                    None
-                }
+            GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(auth_callback)) => {
+                Some(CompiledAuthCallBackRoute {
+                    method: self.method.clone(),
+                    path: self.path.clone(),
+                    http_auth_middleware: auth_callback.deref().clone(),
+                })
             }
 
             _ => None,
