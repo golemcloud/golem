@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::sqlite::DBValue;
 use crate::storage::{
     blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult},
@@ -25,8 +26,6 @@ use bytes::Bytes;
 use chrono::NaiveDateTime;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
-
-use crate::replayable_stream::ErasedReplayableStream;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {

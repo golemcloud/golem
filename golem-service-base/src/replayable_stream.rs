@@ -30,37 +30,37 @@ pub trait ReplayableStream: Send + Sync {
 
     fn length(&self) -> impl Future<Output = Result<u64, String>> + Send;
 
-    fn erased(self) -> constructors::Erased<Self>
+    fn erased(self) -> internal::Erased<Self>
     where
         Self: Sized,
     {
-        constructors::Erased(self)
+        internal::Erased(self)
     }
 
     fn boxed<'a>(self) -> BoxReplayableStream<'a, Self::Item, Self::Error>
     where
-        Self: 'a + Sized,
+        Self: Sized + 'a,
     {
-        Box::new(self.erased())
+        Box::new(internal::Erased(self))
     }
 
-    fn map_item<Item2, F>(self, map_item: F) -> constructors::MapItem<Self, F>
+    fn map_item<Item2, F>(self, map_item: F) -> internal::MapItem<Self, F>
     where
         Self: Sized,
         F: FnMut(Self::Item) -> Item2,
     {
-        constructors::MapItem {
+        internal::MapItem {
             inner: self,
             map_item,
         }
     }
 
-    fn map_error<E2, F>(self, map_err: F) -> constructors::MapError<Self, F>
+    fn map_error<E2, F>(self, map_err: F) -> internal::MapError<Self, F>
     where
         Self: Sized,
         F: FnMut(Self::Error) -> E2,
     {
-        constructors::MapError {
+        internal::MapError {
             inner: self,
             map_err,
         }
@@ -98,22 +98,6 @@ pub trait ErasedReplayableStream: Send + Sync {
 
 pub type BoxReplayableStream<'a, Item, Error> =
     Box<dyn ErasedReplayableStream<Item = Item, Error = Error> + 'a>;
-
-/// Blanket impl for all reference types
-impl<T: ErasedReplayableStream + ?Sized> ErasedReplayableStream for &'_ T {
-    type Item = T::Item;
-    type Error = T::Error;
-
-    fn make_stream_erased(
-        &self,
-    ) -> BoxFuture<'_, Result<BoxStream<'static, Self::Item>, Self::Error>> {
-        <T as ErasedReplayableStream>::make_stream_erased(*self)
-    }
-
-    fn length_erased(&self) -> BoxFuture<'_, Result<u64, String>> {
-        <T as ErasedReplayableStream>::length_erased(*self)
-    }
-}
 
 /// Specialized impls for the two common ways of using dynsafe objects
 impl<Item: 'static, Error> ReplayableStream
@@ -201,7 +185,7 @@ impl<E: Display> std::fmt::Display for HashingError<E> {
 
 impl<E: Debug + Display> std::error::Error for HashingError<E> {}
 
-pub mod constructors {
+pub mod internal {
     use super::{ErasedReplayableStream, ReplayableStream};
     use futures::future::BoxFuture;
     use futures::stream::BoxStream;

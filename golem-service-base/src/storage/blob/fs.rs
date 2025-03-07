@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -22,8 +23,6 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
-
-use super::ErasedReplayableStream;
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
