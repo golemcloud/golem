@@ -68,7 +68,7 @@ pub struct LibraryPluginDefinitionCreation<Scope: PluginScope> {
     pub icon: Vec<u8>,
     pub homepage: String,
     pub scope: Scope,
-    pub data: TempFileUpload,
+    pub wasm: TempFileUpload,
 }
 
 impl<Scope: PluginScope> LibraryPluginDefinitionCreation<Scope> {
@@ -86,7 +86,7 @@ impl<Scope: PluginScope> LibraryPluginDefinitionCreation<Scope> {
             owner,
             specs: local_plugin_model::PluginTypeSpecificCreation::Library(
                 local_plugin_model::LibraryPluginCreation {
-                    data: PluginWasmFileReference::Data(Box::new(self.data)),
+                    data: PluginWasmFileReference::Data(Box::new(self.wasm)),
                 },
             ),
         }
@@ -102,7 +102,7 @@ pub struct AppPluginDefinitionCreation<Scope: PluginScope> {
     pub icon: Vec<u8>,
     pub homepage: String,
     pub scope: Scope,
-    pub data: TempFileUpload,
+    pub wasm: TempFileUpload,
 }
 
 impl<Scope: PluginScope> AppPluginDefinitionCreation<Scope> {
@@ -120,7 +120,7 @@ impl<Scope: PluginScope> AppPluginDefinitionCreation<Scope> {
             owner,
             specs: local_plugin_model::PluginTypeSpecificCreation::App(
                 local_plugin_model::AppPluginCreation {
-                    data: PluginWasmFileReference::Data(Box::new(self.data)),
+                    data: PluginWasmFileReference::Data(Box::new(self.wasm)),
                 },
             ),
         }

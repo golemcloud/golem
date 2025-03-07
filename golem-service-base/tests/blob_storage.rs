@@ -494,7 +494,7 @@ async fn get_put_get_new_dir(
 
 #[test]
 #[tracing::instrument]
-async fn get_put_get_new_dir_streaming<'a>(
+async fn get_put_get_new_dir_streaming(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
