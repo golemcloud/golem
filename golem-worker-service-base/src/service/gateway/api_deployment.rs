@@ -233,7 +233,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         let conflicts = HttpApiDefinition::find_conflicts(
             &all_definitions
-                .into_iter()
+                .iter()
                 .map(|x| HttpApiDefinition::from((*x).clone()))
                 .collect::<Vec<_>>(),
         );
