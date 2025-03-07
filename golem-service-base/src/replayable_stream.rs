@@ -16,7 +16,6 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::Stream;
-use futures::StreamExt;
 use std::convert::Infallible;
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -31,23 +30,37 @@ pub trait ReplayableStream: Send + Sync {
 
     fn length(&self) -> impl Future<Output = Result<u64, String>> + Send;
 
-    fn map_item<Item2, F>(self, map_item: F) -> MapItemReplayableStream<Self, F>
+    fn erased(self) -> constructors::Erased<Self>
+    where
+        Self: Sized,
+    {
+        constructors::Erased(self)
+    }
+
+    fn boxed<'a>(self) -> BoxReplayableStream<'a, Self::Item, Self::Error>
+    where
+        Self: 'a + Sized,
+    {
+        Box::new(self.erased())
+    }
+
+    fn map_item<Item2, F>(self, map_item: F) -> constructors::MapItem<Self, F>
     where
         Self: Sized,
         F: FnMut(Self::Item) -> Item2,
     {
-        MapItemReplayableStream {
+        constructors::MapItem {
             inner: self,
             map_item,
         }
     }
 
-    fn map_error<E2, F>(self, map_err: F) -> MapErrorReplayableStream<Self, F>
+    fn map_error<E2, F>(self, map_err: F) -> constructors::MapError<Self, F>
     where
         Self: Sized,
         F: FnMut(Self::Error) -> E2,
     {
-        MapErrorReplayableStream {
+        constructors::MapError {
             inner: self,
             map_err,
         }
@@ -86,34 +99,19 @@ pub trait ErasedReplayableStream: Send + Sync {
 pub type BoxReplayableStream<'a, Item, Error> =
     Box<dyn ErasedReplayableStream<Item = Item, Error = Error> + 'a>;
 
-impl<T: ReplayableStream> ErasedReplayableStream for T {
-    type Error = T::Error;
+/// Blanket impl for all reference types
+impl<T: ErasedReplayableStream + ?Sized> ErasedReplayableStream for &'_ T {
     type Item = T::Item;
+    type Error = T::Error;
 
     fn make_stream_erased(
         &self,
     ) -> BoxFuture<'_, Result<BoxStream<'static, Self::Item>, Self::Error>> {
-        Box::pin(async move { self.make_stream().await.map(|s| s.boxed()) })
+        <T as ErasedReplayableStream>::make_stream_erased(*self)
     }
 
     fn length_erased(&self) -> BoxFuture<'_, Result<u64, String>> {
-        Box::pin(self.length())
-    }
-}
-
-/// Specialized impls for the two common ways of using dynsafe objects
-impl<Item: 'static, Error> ReplayableStream for BoxReplayableStream<'_, Item, Error> {
-    type Item = Item;
-    type Error = Error;
-
-    async fn make_stream(
-        &self,
-    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error> {
-        self.make_stream_erased().await
-    }
-
-    async fn length(&self) -> Result<u64, String> {
-        self.length_erased().await
+        <T as ErasedReplayableStream>::length_erased(*self)
     }
 }
 
@@ -135,51 +133,19 @@ impl<Item: 'static, Error> ReplayableStream
     }
 }
 
-pub struct MapItemReplayableStream<Inner, F> {
-    inner: Inner,
-    map_item: F,
-}
-
-impl<Inner, F, I2> ReplayableStream for MapItemReplayableStream<Inner, F>
-where
-    Inner: ReplayableStream,
-    F: FnMut(Inner::Item) -> I2 + Send + Sync + Clone + 'static,
-    I2: 'static,
-{
-    type Error = Inner::Error;
-    type Item = I2;
-
-    async fn make_stream(&self) -> Result<impl Stream<Item = I2> + Send + 'static, Inner::Error> {
-        let stream = self.inner.make_stream().await?;
-        Ok(stream.map(self.map_item.clone()))
-    }
-
-    async fn length(&self) -> Result<u64, String> {
-        self.inner.length().await
-    }
-}
-
-pub struct MapErrorReplayableStream<Inner, F> {
-    inner: Inner,
-    map_err: F,
-}
-
-impl<Inner, F, E2> ReplayableStream for MapErrorReplayableStream<Inner, F>
-where
-    Inner: ReplayableStream,
-    F: FnMut(Inner::Error) -> E2 + Send + Sync + Clone,
-{
-    type Error = E2;
-    type Item = Inner::Item;
+/// Specialized impls for the two common ways of using dynsafe objects
+impl<Item: 'static, Error> ReplayableStream for BoxReplayableStream<'_, Item, Error> {
+    type Item = Item;
+    type Error = Error;
 
     async fn make_stream(
         &self,
-    ) -> Result<impl Stream<Item = Inner::Item> + Send + 'static, Self::Error> {
-        self.inner.make_stream().await.map_err(self.map_err.clone())
+    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error> {
+        self.make_stream_erased().await
     }
 
     async fn length(&self) -> Result<u64, String> {
-        self.inner.length().await
+        self.length_erased().await
     }
 }
 
@@ -234,3 +200,78 @@ impl<E: Display> std::fmt::Display for HashingError<E> {
 }
 
 impl<E: Debug + Display> std::error::Error for HashingError<E> {}
+
+pub mod constructors {
+    use super::{ErasedReplayableStream, ReplayableStream};
+    use futures::future::BoxFuture;
+    use futures::stream::BoxStream;
+    use futures::Stream;
+    use futures::StreamExt;
+
+    pub struct Erased<T>(pub(super) T);
+
+    impl<T: ReplayableStream> ErasedReplayableStream for Erased<T> {
+        type Error = T::Error;
+        type Item = T::Item;
+
+        fn make_stream_erased(
+            &self,
+        ) -> BoxFuture<'_, Result<BoxStream<'static, Self::Item>, Self::Error>> {
+            Box::pin(async move { self.0.make_stream().await.map(|s| s.boxed()) })
+        }
+
+        fn length_erased(&self) -> BoxFuture<'_, Result<u64, String>> {
+            Box::pin(self.0.length())
+        }
+    }
+
+    pub struct MapItem<Inner, F> {
+        pub(super) inner: Inner,
+        pub(super) map_item: F,
+    }
+
+    impl<Inner, F, I2> ReplayableStream for MapItem<Inner, F>
+    where
+        Inner: ReplayableStream,
+        F: FnMut(Inner::Item) -> I2 + Send + Sync + Clone + 'static,
+        I2: 'static,
+    {
+        type Error = Inner::Error;
+        type Item = I2;
+
+        async fn make_stream(
+            &self,
+        ) -> Result<impl Stream<Item = I2> + Send + 'static, Inner::Error> {
+            let stream = self.inner.make_stream().await?;
+            Ok(stream.map(self.map_item.clone()))
+        }
+
+        async fn length(&self) -> Result<u64, String> {
+            self.inner.length().await
+        }
+    }
+
+    pub struct MapError<Inner, F> {
+        pub(super) inner: Inner,
+        pub(super) map_err: F,
+    }
+
+    impl<Inner, F, E2> ReplayableStream for MapError<Inner, F>
+    where
+        Inner: ReplayableStream,
+        F: FnMut(Inner::Error) -> E2 + Send + Sync + Clone,
+    {
+        type Error = E2;
+        type Item = Inner::Item;
+
+        async fn make_stream(
+            &self,
+        ) -> Result<impl Stream<Item = Inner::Item> + Send + 'static, Self::Error> {
+            self.inner.make_stream().await.map_err(self.map_err.clone())
+        }
+
+        async fn length(&self) -> Result<u64, String> {
+            self.inner.length().await
+        }
+    }
+}

@@ -3,6 +3,7 @@ use crate::model::plugin::PluginWasmFileReference;
 use golem_common::model::plugin as common_plugin_model;
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_service_base::poem::TempFileUpload;
+use golem_service_base::replayable_stream::ReplayableStream;
 use poem_openapi::types::Binary;
 use poem_openapi::Multipart;
 use serde::{Deserialize, Serialize};
@@ -87,7 +88,7 @@ impl<Scope: PluginScope> LibraryPluginDefinitionCreation<Scope> {
             owner,
             specs: local_plugin_model::PluginTypeSpecificCreation::Library(
                 local_plugin_model::LibraryPluginCreation {
-                    data: PluginWasmFileReference::Data(Box::new(self.wasm)),
+                    data: PluginWasmFileReference::Data(self.wasm.boxed()),
                 },
             ),
         }
@@ -121,7 +122,7 @@ impl<Scope: PluginScope> AppPluginDefinitionCreation<Scope> {
             owner,
             specs: local_plugin_model::PluginTypeSpecificCreation::App(
                 local_plugin_model::AppPluginCreation {
-                    data: PluginWasmFileReference::Data(Box::new(self.wasm)),
+                    data: PluginWasmFileReference::Data(self.wasm.boxed()),
                 },
             ),
         }

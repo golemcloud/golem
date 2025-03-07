@@ -83,7 +83,7 @@ impl PluginWasmFilesService {
                         account_id: account_id.clone(),
                     },
                     &key,
-                    &data,
+                    &data.erased(),
                 )
                 .await?;
         };

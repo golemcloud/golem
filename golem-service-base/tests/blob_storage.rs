@@ -515,7 +515,8 @@ async fn get_put_get_new_dir_streaming(
 
     let stream = (&data)
         .map_item(|i| i.map_err(widen_infallible))
-        .map_error(widen_infallible);
+        .map_error(widen_infallible)
+        .erased();
 
     storage
         .put_stream(

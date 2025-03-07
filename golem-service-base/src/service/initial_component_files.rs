@@ -106,7 +106,7 @@ impl InitialComponentFilesService {
                         account_id: account_id.clone(),
                     },
                     &key,
-                    &data,
+                    &data.erased(),
                 )
                 .await?;
         };
