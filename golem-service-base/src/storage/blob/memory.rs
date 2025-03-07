@@ -16,6 +16,7 @@ use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, Exis
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
+use futures::stream::BoxStream;
 use futures::{Stream, TryStreamExt};
 use golem_common::model::Timestamp;
 use std::{
@@ -23,7 +24,7 @@ use std::{
     pin::Pin,
 };
 
-use super::ReplayableStream;
+use super::ErasedReplayableStream;
 
 #[derive(Debug)]
 pub struct InMemoryBlobStorage {
@@ -81,8 +82,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>>, String>
-    {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -98,7 +98,7 @@ impl BlobStorage for InMemoryBlobStorage {
                 directory.get(&key).map(|entry| {
                     let data = entry.data.clone();
                     let stream = tokio_stream::once(Ok(data));
-                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>> =
+                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>> =
                         Box::pin(stream);
                     boxed
                 })
@@ -169,7 +169,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<(), String> {
         let dir = path
             .parent()
@@ -182,7 +182,7 @@ impl BlobStorage for InMemoryBlobStorage {
             .to_string_lossy()
             .to_string();
 
-        let stream = stream.make_stream().await?;
+        let stream = stream.make_stream_erased().await?;
         let data = stream
             .try_collect::<Vec<_>>()
             .await

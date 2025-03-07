@@ -19,8 +19,9 @@ use axum::routing::post;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_common::model::plugin::{
-    ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope,
-    OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
+    AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope,
+    LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
+    PluginTypeSpecificDefinition,
 };
 use golem_common::model::{Empty, ScanCursor};
 use golem_test_framework::config::EnvBasedTestDependencies;
@@ -309,4 +310,86 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         format!("-1/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
     ];
     assert_eq!(invocations, expected);
+}
+
+#[test]
+async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps
+        .component("app_and_library_plugin_app")
+        .unique()
+        .store()
+        .await;
+
+    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_plugin_library").await;
+
+    deps.create_plugin(PluginDefinition {
+        name: "library-plugin-1".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key,
+        }),
+        scope: DefaultPluginScope::Global(Empty {}),
+        owner: DefaultPluginOwner,
+    })
+    .await;
+
+    let _installation_id = deps
+        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    let worker = deps.start_worker(&component_id, "worker1").await;
+
+    let response = deps
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-plugin-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
+
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+#[test]
+async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps
+        .component("app_and_library_plugin_library")
+        .unique()
+        .store()
+        .await;
+
+    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_plugin_app").await;
+
+    deps.create_plugin(PluginDefinition {
+        name: "app-plugin-1".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::App(AppPluginDefinition {
+            blob_storage_key: plugin_wasm_key,
+        }),
+        scope: DefaultPluginScope::Global(Empty {}),
+        owner: DefaultPluginOwner,
+    })
+    .await;
+
+    let _installation_id = deps
+        .install_plugin_to_component(&component_id, "app-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    let worker = deps.start_worker(&component_id, "worker1").await;
+
+    let response = deps
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-plugin-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
+
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
 }

@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use async_zip::tokio::read::seek::ZipFileReader;
 use async_zip::ZipEntry;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
@@ -32,8 +33,9 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
 use golem_common::model::plugin::{
-    ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationCreation,
-    PluginInstallationUpdate, PluginScope, PluginTypeSpecificDefinition,
+    AppPluginDefinition, ComponentPluginInstallationTarget, LibraryPluginDefinition,
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate, PluginScope,
+    PluginTypeSpecificDefinition,
 };
 use golem_common::model::ComponentVersion;
 use golem_common::model::RetryConfig;
@@ -45,17 +47,17 @@ use golem_common::model::{
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::ReplayableStream;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
 use http::StatusCode;
 use reqwest::multipart::{Form, Part};
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
 use tap::TapFallible;
@@ -66,6 +68,8 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, info_span};
 use tracing_futures::Instrument;
+use wac_graph::types::Package;
+use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -106,6 +110,8 @@ pub enum ComponentError {
     InternalPluginError(#[from] Box<PluginError>),
     #[error("Component transformation failed: {0}")]
     TransformationFailed(TransformationFailedReason),
+    #[error("Plugin composition failed: {0}")]
+    PluginApplicationFailed(String),
 }
 
 impl ComponentError {
@@ -179,6 +185,7 @@ impl SafeDisplay for ComponentError {
             ComponentError::TransformationPluginNotFound { .. } => self.to_string(),
             ComponentError::InternalPluginError(_) => self.to_string(),
             ComponentError::TransformationFailed(_) => self.to_string(),
+            ComponentError::PluginApplicationFailed(_) => self.to_string(),
         }
     }
 }
@@ -257,6 +264,11 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
                 })
             }
             ComponentError::TransformationFailed(_) => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::PluginApplicationFailed(_) => {
                 component_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
@@ -357,10 +369,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
         owner: &Owner,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
-        ComponentError,
-    >;
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError>;
 
     async fn find_by_name(
         &self,
@@ -445,6 +454,7 @@ pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
     component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope> + Sync + Send>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
 impl<Owner: ComponentOwner, Scope: PluginScope> Debug for ComponentServiceDefault<Owner, Scope> {
@@ -460,6 +470,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
         plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope> + Sync + Send>,
+        library_plugin_files_service: Arc<PluginWasmFilesService>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
@@ -467,6 +478,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             component_compilation,
             initial_component_files_service,
             plugin_service,
+            plugin_wasm_files_service: library_plugin_files_service,
         }
     }
 
@@ -838,24 +850,53 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     .map_err(Box::new)?;
 
                 if let Some(plugin) = plugin {
-                    if let PluginTypeSpecificDefinition::ComponentTransformer(spec) = plugin.specs {
-                        let span = info_span!("component transformation",
-                            owner = %component.owner,
-                            component_id = %component.versioned_component_id,
-                            plugin_name = %installation.name,
-                            plugin_version = %installation.version,
-                            plugin_installation_id = %installation.id,
-                        );
+                    match plugin.specs {
+                        PluginTypeSpecificDefinition::ComponentTransformer(spec) => {
+                            let span = info_span!("component transformation",
+                                owner = %component.owner,
+                                component_id = %component.versioned_component_id,
+                                plugin_name = %installation.name,
+                                plugin_version = %installation.version,
+                                plugin_installation_id = %installation.id,
+                            );
 
-                        data = self
-                            .apply_transformation(
-                                component,
-                                &data,
-                                spec.transform_url,
-                                &installation.parameters,
-                            )
-                            .instrument(span)
-                            .await?;
+                            data = self
+                                .apply_component_transformer_plugin(
+                                    component,
+                                    &data,
+                                    spec.transform_url,
+                                    &installation.parameters,
+                                )
+                                .instrument(span)
+                                .await?;
+                        }
+                        PluginTypeSpecificDefinition::Library(spec) => {
+                            let span = info_span!("library plugin",
+                                owner = %component.owner,
+                                component_id = %component.versioned_component_id,
+                                plugin_name = %installation.name,
+                                plugin_version = %installation.version,
+                                plugin_installation_id = %installation.id,
+                            );
+                            data = self
+                                .apply_library_plugin(component, &data, spec)
+                                .instrument(span)
+                                .await?;
+                        }
+                        PluginTypeSpecificDefinition::App(spec) => {
+                            let span = info_span!("app plugin",
+                                owner = %component.owner,
+                                component_id = %component.versioned_component_id,
+                                plugin_name = %installation.name,
+                                plugin_version = %installation.version,
+                                plugin_installation_id = %installation.id,
+                            );
+                            data = self
+                                .apply_app_plugin(component, &data, spec)
+                                .instrument(span)
+                                .await?;
+                        }
+                        PluginTypeSpecificDefinition::OplogProcessor(_) => (),
                     }
                 } else {
                     Err(ComponentError::TransformationPluginNotFound {
@@ -869,7 +910,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         Ok(data)
     }
 
-    async fn apply_transformation(
+    async fn apply_component_transformer_plugin(
         &self,
         component: &Component<Owner>,
         data: &[u8],
@@ -966,6 +1007,62 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                 TransformationFailedReason::HttpStatus(response.status()),
             ))
         }
+    }
+
+    async fn apply_library_plugin(
+        &self,
+        component: &Component<Owner>,
+        data: &[u8],
+        plugin_spec: LibraryPluginDefinition,
+    ) -> Result<Vec<u8>, ComponentError> {
+        info!(%component.versioned_component_id, "Applying library plugin");
+
+        let plug_bytes = self
+            .plugin_wasm_files_service
+            .get(&component.owner.account_id(), &plugin_spec.blob_storage_key)
+            .await
+            .map_err(|e| {
+                ComponentError::PluginApplicationFailed(format!("Failed to fetch plugin wasm: {e}"))
+            })?
+            .ok_or(ComponentError::PluginApplicationFailed(
+                "Plugin data not found".to_string(),
+            ))?;
+
+        let composed = compose_components(data, &plug_bytes).map_err(|e| {
+            ComponentError::PluginApplicationFailed(format!(
+                "Failed to compose plugin with component: {e}"
+            ))
+        })?;
+
+        Ok(composed)
+    }
+
+    async fn apply_app_plugin(
+        &self,
+        component: &Component<Owner>,
+        data: &[u8],
+        plugin_spec: AppPluginDefinition,
+    ) -> Result<Vec<u8>, ComponentError> {
+        info!(%component.versioned_component_id, "Applying app plugin");
+
+        let socket_bytes = self
+            .plugin_wasm_files_service
+            .get(&component.owner.account_id(), &plugin_spec.blob_storage_key)
+            .await
+            .map_err(|e| {
+                ComponentError::PluginApplicationFailed(format!("Failed to fetch plugin wasm: {e}"))
+            })?
+            .ok_or(ComponentError::PluginApplicationFailed(
+                "Plugin data not found".to_string(),
+            ))?;
+
+        let composed = compose_components(&socket_bytes, data).map_err(|e| {
+            ComponentError::PluginApplicationFailed(format!(
+                "Failed to compose plugin with component: {e}"
+            ))
+        })?;
+
+        Ok(composed)
     }
 
     async fn retransform(
@@ -1216,10 +1313,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
         owner: &Owner,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
-        ComponentError,
-    > {
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let component = match version {
             None => self.get_latest_version(component_id, owner).await?,
             Some(version) => {
@@ -1751,13 +1845,11 @@ impl ZipEntryStream {
     }
 }
 
-#[async_trait]
 impl ReplayableStream for ZipEntryStream {
+    type Error = String;
     type Item = Result<Bytes, String>;
 
-    async fn make_stream(
-        &self,
-    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send + Sync>>, String> {
+    async fn make_stream(&self) -> Result<impl Stream<Item = Self::Item> + Send + 'static, String> {
         let reopened = self
             .file
             .reopen()
@@ -1793,6 +1885,28 @@ impl ReplayableStream for ZipEntryStream {
             .get(self.index)
             .ok_or("Entry with not found in archive")?
             .uncompressed_size())
+    }
+}
+
+fn compose_components(socket_bytes: &[u8], plug_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut graph = CompositionGraph::new();
+
+    let socket = Package::from_bytes("socket", None, socket_bytes, graph.types_mut())?;
+    let socket = graph.register_package(socket)?;
+
+    let plug_package = Package::from_bytes("plug", None, plug_bytes, graph.types_mut())?;
+    let plub_package_id = graph.register_package(plug_package)?;
+
+    match wac_graph::plug(&mut graph, vec![plub_package_id], socket) {
+        Ok(()) => {
+            let bytes = graph.encode(EncodeOptions::default())?;
+            Ok(bytes)
+        }
+        Err(PlugError::NoPlugHappened) => {
+            info!("No plugs where executed when composing components");
+            Ok(socket_bytes.to_vec())
+        }
+        Err(error) => Err(error.into()),
     }
 }
 

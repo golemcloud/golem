@@ -17,14 +17,13 @@ use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetail};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::HasAccountId;
-use golem_common::virtual_exports;
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
+use golem_common::{virtual_exports, widen_infallible};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::TypeAnnotatedValueConstructors;
 use http::StatusCode;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
-use std::convert::Infallible;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -170,9 +169,8 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
 
                 let body_with_trailers = converted_body.with_trailers(async { trailers });
 
-                let boxed: BoxBody<Bytes, std::io::Error> = BoxBody::new(
-                    body_with_trailers.map_err(error_from_infallible::<std::io::Error>),
-                );
+                let boxed: BoxBody<Bytes, std::io::Error> =
+                    BoxBody::new(body_with_trailers.map_err(widen_infallible::<std::io::Error>));
 
                 builder.body(boxed)
             } else {
@@ -184,8 +182,4 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
             response: poem_response,
         })
     }
-}
-
-fn error_from_infallible<E>(_infallible: Infallible) -> E {
-    unreachable!()
 }

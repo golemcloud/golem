@@ -14,7 +14,6 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -58,7 +57,6 @@ use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
-use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 pub(crate) fn bad_request_error(error: &str) -> ComponentError {
@@ -161,10 +159,7 @@ impl ComponentGrpcApi {
     async fn download(
         &self,
         request: DownloadComponentRequest,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
-        ComponentError,
-    > {
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let id = Self::require_component_id(&request.component_id)?;
         let version = request.version;
         let result = self

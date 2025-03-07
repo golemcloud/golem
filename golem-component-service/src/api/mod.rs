@@ -171,6 +171,11 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::PluginApplicationFailed(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -203,6 +208,9 @@ impl From<PluginError> for ComponentError {
                 error: value.to_safe_string(),
             })),
             PluginError::InvalidScope { .. } => ComponentError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            PluginError::BlobStorageError(_) => ComponentError::InternalError(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
         }

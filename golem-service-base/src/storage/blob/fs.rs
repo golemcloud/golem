@@ -15,15 +15,15 @@
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
-use super::ReplayableStream;
+use super::ErasedReplayableStream;
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
@@ -94,6 +94,10 @@ impl FileSystemBlobStorage {
             BlobStorageNamespace::Components => {
                 result.push("component_store");
             }
+            BlobStorageNamespace::LibraryPluginFiles { account_id } => {
+                result.push("library_plugin_files");
+                result.push(account_id.to_string());
+            }
         }
 
         result.push(path);
@@ -137,10 +141,7 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<
-        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
-        String,
-    > {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -211,7 +212,7 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<(), String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
@@ -230,7 +231,7 @@ impl BlobStorage for FileSystemBlobStorage {
 
         let mut writer = tokio::io::BufWriter::new(file);
 
-        let mut stream = stream.make_stream().await?;
+        let mut stream = stream.make_stream_erased().await?;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|err| err.to_string())?;
             writer

@@ -643,6 +643,10 @@ pub trait ComponentService {
                                     },
                                 )
                             }
+                            golem_common::model::plugin::PluginTypeSpecificDefinition::Library(_) =>
+                                unimplemented!("Creating library plugins is not supported when using the http api"),
+                            golem_common::model::plugin::PluginTypeSpecificDefinition::App(_) =>
+                                unimplemented!("Creating app plugins is not supported when using the http api")
                         },
                         scope: definition.scope,
                     },

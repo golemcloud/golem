@@ -3006,6 +3006,7 @@ name = "golem-common"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-hash",
  "async-trait",
  "bincode",
  "bytes 1.9.0",
@@ -3016,11 +3017,13 @@ dependencies = [
  "derive_more",
  "figment",
  "fred",
+ "futures",
  "git-version",
  "golem-api-grpc",
  "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "hex",
  "http 1.2.0",
  "humantime-serde",
  "iso8601-timestamp",
@@ -3169,6 +3172,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "uuid",
+ "wac-graph",
 ]
 
 [[package]]

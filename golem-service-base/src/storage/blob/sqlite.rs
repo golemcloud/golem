@@ -23,9 +23,10 @@ use crate::storage::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
+use futures::stream::BoxStream;
 use futures::TryStreamExt;
 
-use super::ReplayableStream;
+use crate::replayable_stream::ErasedReplayableStream;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -80,6 +81,9 @@ impl SqliteBlobStorage {
                 format!("initial_component_files-{}", account_id.value)
             }
             BlobStorageNamespace::Components => "components".to_string(),
+            BlobStorageNamespace::LibraryPluginFiles { account_id } => {
+                format!("initial_component_files-{}", account_id.value)
+            }
         }
     }
 
@@ -125,16 +129,13 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<
-        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
-        String,
-    > {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         let result = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
         Ok(result.map(|bytes| {
             let stream = tokio_stream::once(Ok(bytes));
-            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>> =
+            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
                 Box::pin(stream);
             boxed
         }))
@@ -196,9 +197,13 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<(), String> {
-        let data = stream.make_stream().await?.try_collect::<Vec<_>>().await?;
+        let data = stream
+            .make_stream_erased()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
         let data = Bytes::from(data.concat());
         self.put_raw(target_label, op_label, namespace, path, &data)
             .await

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ReplayableStream;
 use crate::config::S3BlobStorageConfig;
+use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
@@ -26,6 +26,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use aws_sdk_s3::Client;
 use bytes::{Buf, Bytes};
+use futures::stream::BoxStream;
 use futures::TryFutureExt;
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
@@ -81,6 +82,9 @@ impl S3BlobStorage {
                 &self.config.initial_component_files_bucket
             }
             BlobStorageNamespace::Components => &self.config.components_bucket,
+            BlobStorageNamespace::LibraryPluginFiles { .. } => {
+                &self.config.library_plugin_files_bucket
+            }
         }
     }
 
@@ -145,6 +149,16 @@ impl S3BlobStorage {
                 }
             }
             BlobStorageNamespace::Components => Path::new(&self.config.object_prefix).to_path_buf(),
+            BlobStorageNamespace::LibraryPluginFiles { account_id } => {
+                let account_id_string = account_id.to_string();
+                if self.config.object_prefix.is_empty() {
+                    PathBuf::from(&account_id_string)
+                } else {
+                    Path::new(&self.config.object_prefix)
+                        .join(account_id_string)
+                        .to_path_buf()
+                }
+            }
         }
     }
 
@@ -355,10 +369,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<
-        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
-        String,
-    > {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -583,7 +594,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
@@ -593,7 +604,7 @@ impl BlobStorage for S3BlobStorage {
                 Client,
                 &String,
                 PathBuf,
-                &dyn ReplayableStream<Item = Result<Bytes, String>>,
+                &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
             ),
         ) -> Pin<
             Box<dyn Future<Output = Result<(), SdkErrorOrCustomError<PutObjectError>>> + 'a + Send>,
@@ -601,11 +612,12 @@ impl BlobStorage for S3BlobStorage {
             let (client, bucket, key, stream) = args;
             Box::pin(async move {
                 let stream_length = stream
-                    .length()
+                    .length_erased()
                     .await
                     .map_err(SdkErrorOrCustomError::custom_error)?;
+
                 let stream = stream
-                    .make_stream()
+                    .make_stream_erased()
                     .await
                     .map_err(SdkErrorOrCustomError::custom_error)?;
 

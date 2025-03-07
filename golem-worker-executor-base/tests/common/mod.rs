@@ -1,5 +1,6 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceConfig, ComponentServiceLocalConfig, DefaultAdditionalGolemConfig,
 };
@@ -263,6 +264,10 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.deps.initial_component_files_service()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.deps.plugin_wasm_files_service()
     }
 }
 
