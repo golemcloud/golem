@@ -22,16 +22,18 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::gateway_api_definition::http::{AllPathPatterns, CompiledAuthCallBackRoute, CompiledHttpApiDefinition, HttpApiDefinition, Route};
+use crate::gateway_api_definition::http::{
+    AllPathPatterns, CompiledAuthCallBackRoute, CompiledHttpApiDefinition, HttpApiDefinition, Route,
+};
 
-use crate::gateway_binding::{GatewayBindingCompiled};
+use crate::gateway_binding::GatewayBindingCompiled;
 use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::component::ComponentService;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
-use chrono::{Utc};
+use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
@@ -269,39 +271,35 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
 
         for api_def in &deployed_defs {
             for route in &api_def.routes {
-                route.as_auth_callback_route().map(|auth_callback_route| {
+                if let Some(auth_callback_route) = route.as_auth_callback_route() {
                     deployed_auth_call_back_routes.push(auth_callback_route);
-                });
+                }
             }
         }
 
-        let new_auth_call_back_routes =
-            new_deployment.auth_call_back_routes.clone();
+        let new_auth_call_back_routes = new_deployment.auth_call_back_routes.clone();
 
-        let already_deployed_call_back_routes =
-            new_auth_call_back_routes
-                .iter()
-                .filter(|new_auth_call_back_route| {
-                    !deployed_auth_call_back_routes
-                        .iter()
-                        .any(|deployed_auth_call_back_route| {
-                            new_auth_call_back_route == &deployed_auth_call_back_route
-                        })
-                })
-                .collect::<Vec<_>>();
+        let already_deployed_call_back_routes = new_auth_call_back_routes
+            .iter()
+            .filter(|new_auth_call_back_route| {
+                !deployed_auth_call_back_routes
+                    .iter()
+                    .any(|deployed_auth_call_back_route| {
+                        new_auth_call_back_route == &deployed_auth_call_back_route
+                    })
+            })
+            .collect::<Vec<_>>();
 
         let all_definitions = new_deployment
             .api_defs_to_deploy
             .iter()
-            .map(|def| def.remove_auth_call_back_routes(already_deployed_call_back_routes.as_slice()))
+            .map(|def| {
+                def.remove_auth_call_back_routes(already_deployed_call_back_routes.as_slice())
+            })
             .chain(deployed_defs)
             .collect::<Vec<_>>();
 
-        if let Err(conflicting) =
-            self.check_for_conflicts(&deployment.namespace, &all_definitions)
-        {
-            return Err(conflicting);
-        }
+        self.check_for_conflicts(&deployment.namespace, &all_definitions)?;
 
         // If there is nothing to deploy return Ok
         if new_deployment.is_empty() {
@@ -663,7 +661,7 @@ struct NewDeployment<Namespace> {
     namespace: Namespace,
     site: ApiSite,
     api_defs_to_deploy: Vec<CompiledHttpApiDefinition<Namespace>>,
-    auth_call_back_routes: Vec<CompiledAuthCallBackRoute>
+    auth_call_back_routes: Vec<CompiledAuthCallBackRoute>,
 }
 
 impl<Namespace: Display + Clone> NewDeployment<Namespace>
@@ -697,16 +695,16 @@ where
 
             match Self::get_api_definition_details(
                 &deployment_request.namespace,
-                &api_key_to_deploy,
+                api_key_to_deploy,
                 definition_repo,
             )
             .await?
             {
                 Some(api_def) => {
                     for route in &api_def.routes {
-                        route.as_auth_callback_route().map(|auth_callback_route| {
+                        if let Some(auth_callback_route) = route.as_auth_callback_route() {
                             auth_call_back_routes.push(auth_callback_route);
-                        });
+                        }
                     }
                     new_definitions_to_deploy.push(api_def);
                 }
@@ -723,7 +721,7 @@ where
             namespace: deployment_request.namespace.clone(),
             site: deployment_request.site.clone(),
             api_defs_to_deploy: new_definitions_to_deploy,
-            auth_call_back_routes
+            auth_call_back_routes,
         })
     }
 
