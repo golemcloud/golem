@@ -678,7 +678,7 @@ mod tests {
         SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
     };
     use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
-    use chrono::{DateTime, Utc};
+    use chrono::Utc;
     use golem_service_base::auth::DefaultNamespace;
     use test_r::test;
 
