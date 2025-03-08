@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::worker_executor::{new_client, WorkerExecutor, WorkerExecutorEnvVars};
-use crate::components::{GolemEnvVars, NETWORK};
+use crate::components::worker_executor::{new_client, WorkerExecutor};
+use crate::components::docker::{get_docker_container_name, NETWORK};
 use async_trait::async_trait;
 use std::borrow::Cow;
-
 use crate::components::component_service::ComponentService;
 use crate::components::docker::KillContainer;
 use crate::components::shard_manager::ShardManager;
@@ -57,7 +56,6 @@ impl DockerWorkerExecutor {
         keep_container: bool,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             http_port,
             grpc_port,
             redis,
@@ -72,7 +70,6 @@ impl DockerWorkerExecutor {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -85,8 +82,7 @@ impl DockerWorkerExecutor {
     ) -> Self {
         info!("Starting golem-worker-executor container");
 
-        let env_vars = env_vars
-            .env_vars(
+        let env_vars = super::env_vars(
                 http_port,
                 grpc_port,
                 component_service,
@@ -97,23 +93,23 @@ impl DockerWorkerExecutor {
             )
             .await;
 
-        let name = format!("golem-worker-executor-{grpc_port}");
-
         let container = WorkerExecutorImage::new(
             ContainerPort::Tcp(grpc_port),
             ContainerPort::Tcp(http_port),
             env_vars.clone(),
         )
-        .with_container_name(&name)
         .with_network(NETWORK)
         .start()
         .await
         .expect("Failed to start golem-worker-executor container");
 
+        let name = get_docker_container_name(container.id()).await;
+
         let public_http_port = container
             .get_host_port_ipv4(http_port)
             .await
             .expect("Failed to get public HTTP port");
+
         let public_grpc_port = container
             .get_host_port_ipv4(grpc_port)
             .await

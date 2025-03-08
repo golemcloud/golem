@@ -24,11 +24,11 @@ use tokio::sync::Mutex;
 use tracing::{info, Level};
 
 use crate::components::component_compilation_service::{
-    ComponentCompilationService, ComponentCompilationServiceEnvVars,
+    ComponentCompilationService,
 };
 use crate::components::component_service::ComponentService;
 use crate::components::docker::KillContainer;
-use crate::components::{GolemEnvVars, NETWORK};
+use crate::components::docker::{NETWORK};
 
 pub struct DockerComponentCompilationService {
     container: Arc<Mutex<Option<ContainerAsync<GolemComponentCompilationServiceImage>>>>,
@@ -48,7 +48,6 @@ impl DockerComponentCompilationService {
         verbosity: Level,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             component_service,
             keep_container,
             verbosity,
@@ -57,15 +56,13 @@ impl DockerComponentCompilationService {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn ComponentCompilationServiceEnvVars + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         keep_container: bool,
         verbosity: Level,
     ) -> Self {
         info!("Starting golem-component-compilation-service container");
 
-        let env_vars = env_vars
-            .env_vars(
+        let env_vars = super::env_vars(
                 Self::HTTP_PORT.as_u16(),
                 Self::GRPC_PORT.as_u16(),
                 component_service,

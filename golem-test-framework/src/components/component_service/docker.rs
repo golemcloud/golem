@@ -18,7 +18,7 @@ use crate::components::component_service::{
 };
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
-use crate::components::NETWORK;
+use crate::components::docker::NETWORK;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;

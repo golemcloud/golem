@@ -21,7 +21,7 @@ use crate::components::worker_service::{
     new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
     ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
 };
-use crate::components::NETWORK;
+use crate::components::docker::{get_docker_container_name, NETWORK};
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;
@@ -36,6 +36,7 @@ use tracing::{info, Level};
 pub struct DockerWorkerService {
     container: Arc<Mutex<Option<ContainerAsync<GolemWorkerServiceImage>>>>,
     keep_container: bool,
+    private_host: String,
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
@@ -47,7 +48,6 @@ pub struct DockerWorkerService {
 }
 
 impl DockerWorkerService {
-    const NAME: &'static str = "golem_worker_service";
     const HTTP_PORT: ContainerPort = ContainerPort::Tcp(8082);
     const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9092);
     const CUSTOM_REQUEST_PORT: ContainerPort = ContainerPort::Tcp(9093);
@@ -99,20 +99,23 @@ impl DockerWorkerService {
             Self::CUSTOM_REQUEST_PORT,
             env_vars,
         )
-        .with_container_name(Self::NAME)
         .with_network(NETWORK)
         .start()
         .await
         .expect("Failed to start golem-worker-service container");
 
+        let private_host = get_docker_container_name(container.id()).await;
+
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)
             .await
             .expect("Failed to get public HTTP port");
+
         let public_grpc_port = container
             .get_host_port_ipv4(Self::GRPC_PORT)
             .await
             .expect("Failed to get public gRPC port");
+
         let public_custom_request_port = container
             .get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
             .await
@@ -120,6 +123,7 @@ impl DockerWorkerService {
 
         Self {
             container: Arc::new(Mutex::new(Some(container))),
+            private_host,
             public_http_port,
             public_grpc_port,
             public_custom_request_port,
@@ -180,7 +184,7 @@ impl WorkerService for DockerWorkerService {
     }
 
     fn private_host(&self) -> String {
-        Self::NAME.to_string()
+        self.private_host.clone()
     }
 
     fn private_http_port(&self) -> u16 {

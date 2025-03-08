@@ -20,10 +20,9 @@ use crate::components::k8s::{
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{
-    new_client, wait_for_startup, WorkerExecutor, WorkerExecutorEnvVars,
+    new_client, wait_for_startup, WorkerExecutor,
 };
 use crate::components::worker_service::WorkerService;
-use crate::components::GolemEnvVars;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -66,7 +65,6 @@ impl K8sWorkerExecutor {
         shared_client: bool,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             namespace,
             routing_type,
             idx,
@@ -83,7 +81,6 @@ impl K8sWorkerExecutor {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         idx: usize,
@@ -100,8 +97,7 @@ impl K8sWorkerExecutor {
 
         let name = &format!("golem-worker-executor-{idx}");
 
-        let env_vars = env_vars
-            .env_vars(
+        let env_vars = super::env_vars(
                 Self::HTTP_PORT,
                 Self::GRPC_PORT,
                 component_service,

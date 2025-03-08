@@ -24,7 +24,7 @@ use tracing::Level;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 
 use crate::components::redis::Redis;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 
 pub mod docker;
 pub mod k8s;
@@ -69,43 +69,27 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
 }
 
-#[async_trait]
-pub trait ShardManagerEnvVars {
-    async fn env_vars(
-        &self,
-        number_of_shards_override: Option<usize>,
-        http_port: u16,
-        grpc_port: u16,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> HashMap<String, String>;
-}
+async fn env_vars(
+    number_of_shards_override: Option<usize>,
+    http_port: u16,
+    grpc_port: u16,
+    redis: Arc<dyn Redis + Send + Sync + 'static>,
+    verbosity: Level,
+) -> HashMap<String, String> {
+    let mut builder = EnvVarBuilder::golem_service(verbosity)
+        .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
+        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with("GOLEM__PERSISTENCE__TYPE", "Redis".to_string())
+        .with("GOLEM__PERSISTENCE__CONFIG__HOST", redis.private_host())
+        .with(
+            "GOLEM__PERSISTENCE__CONFIG__PORT",
+            redis.private_port().to_string(),
+        )
+        .with_str("GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX", redis.prefix());
 
-#[async_trait]
-impl ShardManagerEnvVars for GolemEnvVars {
-    async fn env_vars(
-        &self,
-        number_of_shards_override: Option<usize>,
-        http_port: u16,
-        grpc_port: u16,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> HashMap<String, String> {
-        let mut builder = EnvVarBuilder::golem_service(verbosity)
-            .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
-            .with("GOLEM__HTTP_PORT", http_port.to_string())
-            .with("GOLEM__PERSISTENCE__TYPE", "Redis".to_string())
-            .with("GOLEM__PERSISTENCE__CONFIG__HOST", redis.private_host())
-            .with(
-                "GOLEM__PERSISTENCE__CONFIG__PORT",
-                redis.private_port().to_string(),
-            )
-            .with_str("GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX", redis.prefix());
-
-        if let Some(number_of_shards) = number_of_shards_override {
-            builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
-        }
-
-        builder.build()
+    if let Some(number_of_shards) = number_of_shards_override {
+        builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
     }
+
+    builder.build()
 }

@@ -23,7 +23,7 @@ use tracing::info;
 
 use crate::components::docker::KillContainer;
 use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
-use crate::components::NETWORK;
+use crate::components::docker::{get_docker_container_name, NETWORK};
 
 pub struct DockerPostgresRdb {
     container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::postgres::Postgres>>>>,
@@ -32,7 +32,6 @@ pub struct DockerPostgresRdb {
 }
 
 impl DockerPostgresRdb {
-    const DEFAULT_NAME: &'static str = "golem_postgres";
     const DEFAULT_PORT: u16 = 5432;
     const DEFAULT_USERNAME: &'static str = "postgres";
     const DEFAULT_PASSWORD: &'static str = "postgres";
@@ -45,18 +44,18 @@ impl DockerPostgresRdb {
         let password = Self::DEFAULT_PASSWORD;
         let username = Self::DEFAULT_USERNAME;
         let port = Self::DEFAULT_PORT;
-        let name = Self::DEFAULT_NAME;
 
         let container = testcontainers_modules::postgres::Postgres::default()
             .with_tag("12")
             .with_env_var("POSTGRES_DB", database)
             .with_env_var("POSTGRES_PASSWORD", password)
             .with_env_var("POSTGRES_USER", username)
-            .with_container_name(name)
             .with_network(NETWORK)
             .start()
             .await
             .expect("Failed to start Postgres container");
+
+        let private_host = get_docker_container_name(container.id()).await;
 
         let public_port = container
             .get_host_port_ipv4(port)
@@ -66,7 +65,7 @@ impl DockerPostgresRdb {
         let info = PostgresInfo {
             public_host: "localhost".to_string(),
             public_port,
-            private_host: name.to_string(),
+            private_host,
             private_port: port,
             database_name: database.to_string(),
             username: username.to_string(),

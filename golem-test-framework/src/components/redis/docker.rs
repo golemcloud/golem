@@ -24,25 +24,23 @@ use tracing::info;
 
 use crate::components::docker::KillContainer;
 use crate::components::redis::Redis;
-use crate::components::NETWORK;
+use crate::components::docker::{get_docker_container_name, NETWORK};
 
 pub struct DockerRedis {
     container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::redis::Redis>>>>,
     keep_container: bool,
     prefix: String,
     valid: AtomicBool,
+    private_host: String,
     public_port: u16,
 }
 
 impl DockerRedis {
-    const NAME: &'static str = "golem_redis";
-
     pub async fn new(prefix: String, keep_container: bool) -> Self {
         info!("Starting Redis container");
 
         let container = testcontainers_modules::redis::Redis::default()
             .with_tag("7.2")
-            .with_container_name(Self::NAME)
             .with_network(NETWORK)
             .start()
             .await
@@ -55,11 +53,14 @@ impl DockerRedis {
 
         super::wait_for_startup("localhost", public_port, Duration::from_secs(10));
 
+        let private_host = get_docker_container_name(container.id()).await;
+
         Self {
             container: Arc::new(Mutex::new(Some(container))),
             keep_container,
             prefix,
             valid: AtomicBool::new(true),
+            private_host,
             public_port,
         }
     }
@@ -74,7 +75,7 @@ impl Redis for DockerRedis {
     }
 
     fn private_host(&self) -> String {
-        Self::NAME.to_string()
+        self.private_host.clone()
     }
 
     fn private_port(&self) -> u16 {

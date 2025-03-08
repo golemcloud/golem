@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::components::component_compilation_service::{
-    wait_for_startup, ComponentCompilationService, ComponentCompilationServiceEnvVars,
+    wait_for_startup, ComponentCompilationService,
 };
-use crate::components::{ChildProcessLogger, GolemEnvVars};
+use crate::components::{ChildProcessLogger};
 use async_trait::async_trait;
 
 use std::path::Path;
@@ -46,7 +46,6 @@ impl SpawnedComponentCompilationService {
         err_level: Level,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             executable,
             working_directory,
             http_port,
@@ -60,7 +59,6 @@ impl SpawnedComponentCompilationService {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn ComponentCompilationServiceEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -79,8 +77,7 @@ impl SpawnedComponentCompilationService {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
             .envs(
-                env_vars
-                    .env_vars(http_port, grpc_port, component_service, verbosity)
+                super::env_vars(http_port, grpc_port, component_service, verbosity)
                     .await,
             )
             .stdin(Stdio::piped())

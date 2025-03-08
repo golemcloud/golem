@@ -23,7 +23,7 @@ use tracing::info;
 
 use crate::components::docker::KillContainer;
 use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
-use crate::components::NETWORK;
+use crate::components::docker::{get_docker_container_name, NETWORK};
 
 pub struct DockerMysqlRdb {
     container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::mysql::Mysql>>>>,
@@ -32,7 +32,6 @@ pub struct DockerMysqlRdb {
 }
 
 impl DockerMysqlRdb {
-    const DEFAULT_NAME: &'static str = "golem_mysql";
     const DEFAULT_PORT: u16 = 3306;
     const DEFAULT_USERNAME: &'static str = "mysql";
     const DEFAULT_PASSWORD: &'static str = "mysql";
@@ -45,18 +44,18 @@ impl DockerMysqlRdb {
         let password = Self::DEFAULT_PASSWORD;
         let username = Self::DEFAULT_USERNAME;
         let port = Self::DEFAULT_PORT;
-        let name = Self::DEFAULT_NAME;
 
         let container = testcontainers_modules::mysql::Mysql::default()
             .with_tag("8")
             .with_env_var("MYSQL_PASSWORD", password)
             .with_env_var("MYSQL_USER", username)
             .with_env_var("MYSQL_DATABASE", database)
-            .with_container_name(name)
             .with_network(NETWORK)
             .start()
             .await
             .expect("Failed to start Mysql container");
+
+        let private_host = get_docker_container_name(container.id()).await;
 
         let public_port = container
             .get_host_port_ipv4(port)
@@ -66,7 +65,7 @@ impl DockerMysqlRdb {
         let info = MysqlInfo {
             public_host: "localhost".to_string(),
             public_port,
-            private_host: name.to_string(),
+            private_host,
             private_port: port,
             database_name: database.to_string(),
             username: username.to_string(),
