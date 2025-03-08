@@ -30,6 +30,8 @@ message PluginTypeSpecificDefinition {
   oneof definition {
     ComponentTransformerDefinition component_transformer = 1;
     OplogProcessorDefinition oplog_processor = 2;
+    LibraryPluginDefinition library = 3;
+    AppPluginDefinition app = 4;
   }
 }
 
@@ -43,4 +45,12 @@ message ComponentTransformerDefinition {
 message OplogProcessorDefinition {
   golem.component.ComponentId component_id = 1;
   uint64 component_version = 2;
+}
+
+message LibraryPluginDefinition {
+  string blob_storage_key = 1;
+}
+
+message AppPluginDefinition {
+  string blob_storage_key = 1;
 }

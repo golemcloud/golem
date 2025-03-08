@@ -47,6 +47,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 uuid = { workspace = true }
+wac-graph = { workspace = true }
 
 [dev-dependencies]
 fastrand = "2.3.0"

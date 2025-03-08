@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{path::PathBuf, pin::Pin, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace, ReplayableStream};
+use crate::replayable_stream::{ContentHash, ReplayableStream};
+use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use bytes::Bytes;
-use futures::TryStreamExt;
+use futures::stream::BoxStream;
 use golem_common::model::{AccountId, InitialComponentFileKey};
 use tracing::debug;
 
@@ -59,10 +60,7 @@ impl InitialComponentFilesService {
         &self,
         account_id: &AccountId,
         key: &InitialComponentFileKey,
-    ) -> Result<
-        Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send + Sync>>>,
-        String,
-    > {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         self.blob_storage
             .get_stream(
                 INITIAL_COMPONENT_FILES_LABEL,
@@ -78,11 +76,9 @@ impl InitialComponentFilesService {
     pub async fn put_if_not_exists(
         &self,
         account_id: &AccountId,
-        data: &impl ReplayableStream<Item = Result<Bytes, String>>,
+        data: impl ReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<InitialComponentFileKey, String> {
-        let hash = content_hash_stream(data)
-            .await
-            .map_err(|err| format!("Failed to hash content: {}", err))?;
+        let hash = data.content_hash().await?;
 
         let key = PathBuf::from(hash.clone());
 
@@ -110,30 +106,10 @@ impl InitialComponentFilesService {
                         account_id: account_id.clone(),
                     },
                     &key,
-                    data,
+                    &data.erased(),
                 )
                 .await?;
         };
         Ok(InitialComponentFileKey(hash))
     }
 }
-
-async fn content_hash_stream(
-    stream: &impl ReplayableStream<Item = Result<Bytes, String>>,
-) -> Result<String, HashingError> {
-    let stream = stream.make_stream().await.map_err(HashingError)?;
-    let stream = stream.map_ok(|b| b.to_vec()).map_err(HashingError);
-    let hash = async_hash::hash_try_stream::<async_hash::Sha256, _, _, _>(stream).await?;
-    Ok(hex::encode(hash))
-}
-
-#[derive(Debug, Clone)]
-struct HashingError(String);
-
-impl std::fmt::Display for HashingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Hashing error: {}", self.0)
-    }
-}
-
-impl std::error::Error for HashingError {}

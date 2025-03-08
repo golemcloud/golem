@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod initial_component_files;
+pub mod plugin_wasm_files;
 pub mod routing_table;

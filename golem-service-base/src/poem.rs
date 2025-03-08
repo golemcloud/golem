@@ -17,13 +17,18 @@ use std::{
     fmt::{self, Debug, Formatter},
 };
 
+use bytes::{Bytes, BytesMut};
 use poem::web::Field as PoemField;
 use tempfile::NamedTempFile;
 
+use futures::StreamExt;
 use poem_openapi::{
     registry::{MetaSchema, MetaSchemaRef},
     types::{ParseError, ParseFromMultipartField, ParseResult, Type},
 };
+use tokio_util::codec::{BytesCodec, FramedRead};
+
+use crate::replayable_stream::ReplayableStream;
 
 /// A uploaded file for multipart.
 ///
@@ -121,4 +126,32 @@ async fn field_to_tempfile(field: PoemField) -> Result<NamedTempFile, std::io::E
     tokio::io::copy(&mut reader, &mut tokio_file).await?;
 
     Ok(file)
+}
+
+impl ReplayableStream for TempFileUpload {
+    type Item = Result<Bytes, String>;
+    type Error = String;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<impl futures::Stream<Item = Self::Item> + Send + 'static, Self::Error> {
+        let reopened = self
+            .file
+            .reopen()
+            .map_err(|e| format!("Failed to reopen file: {e}"))?;
+        let tokio_file = tokio::fs::File::from_std(reopened);
+        let read = FramedRead::new(tokio_file, BytesCodec::new()).map(|br| {
+            br.map(BytesMut::freeze)
+                .map_err(|e| format!("Failed reading file contents: {e}"))
+        });
+        Ok(read)
+    }
+
+    async fn length(&self) -> Result<u64, String> {
+        let len = tokio::fs::metadata(&self.file)
+            .await
+            .map_err(|e| format!("Failed getting file metadata: {e}"))?
+            .len();
+        Ok(len)
+    }
 }

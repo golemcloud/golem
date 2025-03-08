@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod component;
+pub mod plugin;
 
 use bincode::{Decode, Encode};
 pub use component::*;

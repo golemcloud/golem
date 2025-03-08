@@ -1,0 +1,28 @@
+[package]
+name = "app-and-library-plugin-app"
+version = "0.0.1"
+edition = "2021"
+
+[package.metadata.component.target]
+path = "wit"
+world = "app"
+
+[package.metadata.component.target.dependencies]
+"it:app-and-library-plugin-library" = { path = "../library/wit" }
+
+[dependencies]
+once_cell = "1.19.0"
+rand = "0.8.5"
+
+[dependencies.uuid]
+version = "1.7.0"
+features = ["v4", "serde"]
+
+[dependencies.wit-bindgen-rt]
+version = "0.26.0"
+features = ["bitflags"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []

@@ -34,6 +34,7 @@ use golem_component_service_base::service::plugin::{PluginService, PluginService
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
@@ -108,6 +109,9 @@ impl Services {
         let initial_component_files_service: Arc<InitialComponentFilesService> =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
+        let plugin_wasm_files_service: Arc<PluginWasmFilesService> =
+            Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let object_store: Arc<dyn ComponentObjectStore + Sync + Send> =
             Arc::new(LoggedComponentObjectStore::new(
                 BlobStorageComponentObjectStore::new(blob_storage.clone()),
@@ -125,7 +129,10 @@ impl Services {
 
         let plugin_service: Arc<
             dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
-        > = Arc::new(PluginServiceDefault::new(plugin_repo));
+        > = Arc::new(PluginServiceDefault::new(
+            plugin_repo,
+            plugin_wasm_files_service.clone(),
+        ));
 
         let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
             Arc::new(ComponentServiceDefault::new(
@@ -134,6 +141,7 @@ impl Services {
                 compilation_service.clone(),
                 initial_component_files_service.clone(),
                 plugin_service.clone(),
+                plugin_wasm_files_service.clone(),
             ));
 
         Ok(Services {

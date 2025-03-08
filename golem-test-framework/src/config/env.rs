@@ -40,6 +40,7 @@ use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, GolemClientProtocol, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
@@ -176,6 +177,7 @@ pub struct EnvBasedTestDependencies {
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -486,6 +488,8 @@ impl EnvBasedTestDependencies {
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         Self {
             config: config.clone(),
             rdb,
@@ -498,6 +502,7 @@ impl EnvBasedTestDependencies {
             worker_executor_cluster,
             blob_storage,
             initial_component_files_service,
+            plugin_wasm_files_service,
         }
     }
 }
@@ -548,6 +553,10 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
     }
 }
 
