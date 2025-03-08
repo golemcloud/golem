@@ -16,8 +16,8 @@ use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     PluginServiceClient,
 };
+use crate::components::docker::get_docker_container_name;
 use crate::components::docker::NETWORK;
-use crate::components::docker::{get_docker_container_name, ContainerLifecycle};
 use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;

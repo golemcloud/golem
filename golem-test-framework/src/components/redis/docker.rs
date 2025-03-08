@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::redis::Redis;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -19,8 +21,6 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
-use crate::components::docker::{get_docker_container_name, NETWORK};
-use crate::components::redis::Redis;
 
 pub struct DockerRedis {
     _container: ContainerAsync<testcontainers_modules::redis::Redis>,

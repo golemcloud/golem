@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use tracing::info;
-use crate::components::docker::{get_docker_container_name, NETWORK};
-use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 
 pub struct DockerPostgresRdb {
     _container: ContainerAsync<testcontainers_modules::postgres::Postgres>,

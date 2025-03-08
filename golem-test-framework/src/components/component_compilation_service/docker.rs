@@ -16,16 +16,14 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::components::component_compilation_service::ComponentCompilationService;
+use crate::components::component_service::ComponentService;
+use crate::components::docker::NETWORK;
 use async_trait::async_trait;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, Image, ImageExt};
 use tracing::{info, Level};
-
-use crate::components::component_compilation_service::ComponentCompilationService;
-use crate::components::component_service::ComponentService;
-use crate::components::docker::ContainerLifecycle;
-use crate::components::docker::NETWORK;
 
 pub struct DockerComponentCompilationService {
     _container: ContainerAsync<GolemComponentCompilationServiceImage>,
