@@ -150,7 +150,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding,
     ) -> Result<Self, Self::Error> {
-        let binding_type = value.binding_type.ok_or("Missing binding_type")?;
+        let binding_type = value
+            .binding_type
+            .unwrap_or(ProtoGatewayBindingType::Default.into());
 
         let binding_type = ProtoGatewayBindingType::try_from(binding_type)
             .map_err(|e| format!("Failed to convert binding type: {}", e))?;
@@ -240,7 +242,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         .transpose()?,
                 };
 
-                let binding_type = value.binding_type.ok_or("Missing binding_type")?;
+                let binding_type = value
+                    .binding_type
+                    .unwrap_or(ProtoGatewayBindingType::Default.into());
 
                 if binding_type == 0 {
                     Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
