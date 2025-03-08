@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::CoreTokenResponse;
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
+use std::collections::HashMap;
 use std::sync::Arc;
-use url::Url;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
@@ -31,7 +31,7 @@ pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 pub trait AuthCallBackBindingHandler {
     async fn handle_auth_call_back(
         &self,
-        api_url: &Url,
+        query_params: &HashMap<String, String>,
         security_scheme: &SecuritySchemeWithProviderMetadata,
         gateway_session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
@@ -123,23 +123,15 @@ pub struct DefaultAuthCallBack;
 impl AuthCallBackBindingHandler for DefaultAuthCallBack {
     async fn handle_auth_call_back(
         &self,
-        api_url: &Url,
+        query_params: &HashMap<String, String>,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
-        let query_pairs = api_url.query_pairs();
-
-        let mut code = None;
-        let mut state = None;
-
-        for (k, v) in query_pairs {
-            if k == "code" {
-                code = Some(AuthorizationCode::new(v.to_string()))
-            } else if k == "state" {
-                state = Some(v.to_string())
-            }
-        }
+        let code = query_params
+            .get("code")
+            .map(|c| AuthorizationCode::new(c.to_string()));
+        let state = query_params.get("state").cloned();
 
         let authorisation_code = code.ok_or(AuthorisationError::CodeNotFound)?;
         let state = state.ok_or(AuthorisationError::StateNotFound)?;

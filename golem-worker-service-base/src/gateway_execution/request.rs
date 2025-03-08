@@ -35,9 +35,12 @@ pub struct RichRequest {
 }
 
 impl RichRequest {
-    pub fn url(&self) -> Result<url::Url, String> {
-        url::Url::parse(&self.underlying.uri().to_string())
-            .map_err(|e| format!("Failed parsing url: {e}"))
+    pub fn query_params(&self) -> HashMap<String, String> {
+        self.underlying
+            .uri()
+            .query()
+            .map(query_components_from_str)
+            .unwrap_or_default()
     }
 
     pub async fn add_auth_details(
@@ -84,14 +87,7 @@ impl RichRequest {
     }
 
     fn request_query_values(&self) -> Result<RequestQueryValues, String> {
-        let query_key_values = self
-            .underlying
-            .uri()
-            .query()
-            .map(query_components_from_str)
-            .unwrap_or_default();
-
-        RequestQueryValues::from(&query_key_values, &self.query_info)
+        RequestQueryValues::from(&self.query_params(), &self.query_info)
             .map_err(|e| format!("Failed to extract query values, missing: [{}]", e.join(",")))
     }
 
