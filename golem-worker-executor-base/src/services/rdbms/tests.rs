@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::{types as mysql_types, MysqlType};
 use crate::services::rdbms::postgres::{types as postgres_types, PostgresType};
 use crate::services::rdbms::{DbResult, DbRow, Error};
@@ -45,7 +46,13 @@ async fn mysql() -> DockerMysqlRdb {
 
 #[test_dep]
 fn rdbms_service() -> RdbmsServiceDefault {
-    RdbmsServiceDefault::default()
+    RdbmsServiceDefault::new(RdbmsConfig {
+        pool: RdbmsPoolConfig {
+            max_connections: 100,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
 }
 
 #[derive(Clone, Debug)]

@@ -14,11 +14,11 @@
 
 use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
-    ComponentServiceEnvVars, PluginServiceClient,
+    PluginServiceClient,
 };
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
-use crate::components::{GolemEnvVars, NETWORK};
+use crate::components::NETWORK;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;
@@ -57,7 +57,6 @@ impl DockerComponentService {
     ) -> Self {
         Self::new_base(
             component_directory,
-            Box::new(GolemEnvVars()),
             component_compilation_service,
             rdb,
             verbosity,
@@ -69,7 +68,6 @@ impl DockerComponentService {
 
     pub async fn new_base(
         component_directory: PathBuf,
-        env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
@@ -78,15 +76,15 @@ impl DockerComponentService {
     ) -> Self {
         info!("Starting golem-component-service container");
 
-        let env_vars = env_vars
-            .env_vars(
-                Self::HTTP_PORT.as_u16(),
-                Self::GRPC_PORT.as_u16(),
-                component_compilation_service,
-                rdb,
-                verbosity,
-            )
-            .await;
+        let env_vars = super::env_vars(
+            Self::HTTP_PORT.as_u16(),
+            Self::GRPC_PORT.as_u16(),
+            component_compilation_service,
+            rdb,
+            verbosity,
+            true,
+        )
+        .await;
 
         let container = GolemComponentServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
             .with_container_name(Self::NAME)

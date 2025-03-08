@@ -42,10 +42,14 @@ pub enum DbInfo {
 }
 
 impl DbInfo {
-    pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
+    pub fn env(
+        &self,
+        service_namespace: &str,
+        private_connection: bool,
+    ) -> HashMap<String, String> {
         match self {
-            DbInfo::Postgres(pg) => pg.env(service_namespace),
-            DbInfo::Mysql(m) => m.env(service_namespace),
+            DbInfo::Postgres(pg) => pg.env(service_namespace, private_connection),
+            DbInfo::Mysql(m) => m.env(service_namespace, private_connection),
             DbInfo::Sqlite(db_path) => [
                 ("GOLEM__DB__TYPE".to_string(), "Sqlite".to_string()),
                 (
@@ -90,7 +94,11 @@ pub struct PostgresInfo {
 }
 
 impl PostgresInfo {
-    pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
+    pub fn env(
+        &self,
+        service_namespace: &str,
+        private_connection: bool,
+    ) -> HashMap<String, String> {
         HashMap::from([
             ("GOLEM__DB__TYPE".to_string(), "Postgres".to_string()),
             (
@@ -99,11 +107,19 @@ impl PostgresInfo {
             ),
             (
                 "GOLEM__DB__CONFIG__HOST".to_string(),
-                self.private_host.clone(),
+                if private_connection {
+                    self.private_host.clone()
+                } else {
+                    self.public_host.clone()
+                },
             ),
             (
                 "GOLEM__DB__CONFIG__PORT".to_string(),
-                self.private_port.to_string(),
+                if private_connection {
+                    self.private_port.to_string()
+                } else {
+                    self.public_port.to_string()
+                },
             ),
             (
                 "GOLEM__DB__CONFIG__SCHEMA".to_string(),
@@ -208,7 +224,11 @@ pub struct MysqlInfo {
 }
 
 impl MysqlInfo {
-    pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
+    pub fn env(
+        &self,
+        service_namespace: &str,
+        private_connection: bool,
+    ) -> HashMap<String, String> {
         HashMap::from([
             ("GOLEM__DB__TYPE".to_string(), "Mysql".to_string()),
             (
@@ -217,11 +237,19 @@ impl MysqlInfo {
             ),
             (
                 "GOLEM__DB__CONFIG__HOST".to_string(),
-                self.private_host.clone(),
+                if private_connection {
+                    self.private_host.clone()
+                } else {
+                    self.public_host.clone()
+                },
             ),
             (
                 "GOLEM__DB__CONFIG__PORT".to_string(),
-                self.private_port.to_string(),
+                if private_connection {
+                    self.private_port.to_string()
+                } else {
+                    self.public_port.to_string()
+                },
             ),
             (
                 "GOLEM__DB__CONFIG__SCHEMA".to_string(),

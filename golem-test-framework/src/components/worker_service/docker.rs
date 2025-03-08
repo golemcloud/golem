@@ -19,9 +19,9 @@ use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
     new_api_definition_client, new_api_deployment_client, new_api_security_client,
     new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
-    ApiSecurityServiceClient, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+    ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
 };
-use crate::components::{GolemEnvVars, NETWORK};
+use crate::components::NETWORK;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;
@@ -61,7 +61,6 @@ impl DockerWorkerService {
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             component_service,
             shard_manager,
             rdb,
@@ -73,7 +72,6 @@ impl DockerWorkerService {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn WorkerServiceEnvVars + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -83,17 +81,17 @@ impl DockerWorkerService {
     ) -> Self {
         info!("Starting golem-worker-service container");
 
-        let env_vars = env_vars
-            .env_vars(
-                Self::HTTP_PORT.as_u16(),
-                Self::GRPC_PORT.as_u16(),
-                Self::CUSTOM_REQUEST_PORT.as_u16(),
-                component_service,
-                shard_manager,
-                rdb,
-                verbosity,
-            )
-            .await;
+        let env_vars = super::env_vars(
+            Self::HTTP_PORT.as_u16(),
+            Self::GRPC_PORT.as_u16(),
+            Self::CUSTOM_REQUEST_PORT.as_u16(),
+            component_service,
+            shard_manager,
+            rdb,
+            verbosity,
+            true,
+        )
+        .await;
 
         let container = GolemWorkerServiceImage::new(
             Self::GRPC_PORT,
