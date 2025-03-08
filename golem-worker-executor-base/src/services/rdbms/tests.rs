@@ -406,7 +406,7 @@ async fn postgres_create_insert_select_test(
                 .into_iter()
                 .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
                 .collect(),
-            None,
+            Some(TransactionEnd::Commit),
         ),
     )
     .await;
