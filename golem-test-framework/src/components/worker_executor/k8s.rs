@@ -19,9 +19,7 @@ use crate::components::k8s::{
 };
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor::{
-    new_client, wait_for_startup, WorkerExecutor,
-};
+use crate::components::worker_executor::{new_client, wait_for_startup, WorkerExecutor};
 use crate::components::worker_service::WorkerService;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
@@ -98,15 +96,15 @@ impl K8sWorkerExecutor {
         let name = &format!("golem-worker-executor-{idx}");
 
         let env_vars = super::env_vars(
-                Self::HTTP_PORT,
-                Self::GRPC_PORT,
-                component_service,
-                shard_manager,
-                worker_service,
-                redis,
-                verbosity,
-            )
-            .await;
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            component_service,
+            shard_manager,
+            worker_service,
+            redis,
+            verbosity,
+        )
+        .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

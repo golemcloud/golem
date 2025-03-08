@@ -16,9 +16,9 @@ use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     PluginServiceClient,
 };
-use crate::components::docker::KillContainer;
-use crate::components::rdb::Rdb;
 use crate::components::docker::NETWORK;
+use crate::components::docker::{get_docker_container_name, ContainerLifecycle};
+use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;
@@ -28,13 +28,12 @@ use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
 use tracing::{info, Level};
 
 pub struct DockerComponentService {
     component_directory: PathBuf,
-    container: Arc<Mutex<Option<ContainerAsync<GolemComponentServiceImage>>>>,
-    keep_container: bool,
+    _container: ContainerAsync<GolemComponentServiceImage>,
+    private_host: String,
     public_http_port: u16,
     public_grpc_port: u16,
     client_protocol: GolemClientProtocol,
@@ -43,7 +42,6 @@ pub struct DockerComponentService {
 }
 
 impl DockerComponentService {
-    const NAME: &'static str = "golem_component_service";
     const HTTP_PORT: ContainerPort = ContainerPort::Tcp(8081);
     const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9091);
 
@@ -52,7 +50,6 @@ impl DockerComponentService {
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        keep_container: bool,
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
@@ -60,7 +57,6 @@ impl DockerComponentService {
             component_compilation_service,
             rdb,
             verbosity,
-            keep_container,
             client_protocol,
         )
         .await
@@ -71,7 +67,6 @@ impl DockerComponentService {
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        keep_container: bool,
         client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting golem-component-service container");
@@ -87,16 +82,18 @@ impl DockerComponentService {
         .await;
 
         let container = GolemComponentServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
-            .with_container_name(Self::NAME)
             .with_network(NETWORK)
             .start()
             .await
             .expect("Failed to start golem-component-service container");
 
+        let private_host = get_docker_container_name(container.id()).await;
+
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)
             .await
             .expect("Failed to get public HTTP port");
+
         let public_grpc_port = container
             .get_host_port_ipv4(Self::GRPC_PORT)
             .await
@@ -104,8 +101,8 @@ impl DockerComponentService {
 
         Self {
             component_directory,
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            _container: container,
+            private_host,
             public_http_port,
             public_grpc_port,
             client_protocol,
@@ -146,7 +143,7 @@ impl ComponentService for DockerComponentService {
     }
 
     fn private_host(&self) -> String {
-        Self::NAME.to_string()
+        self.private_host.to_string()
     }
 
     fn private_http_port(&self) -> u16 {
@@ -169,9 +166,7 @@ impl ComponentService for DockerComponentService {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 }
 
 #[derive(Debug)]

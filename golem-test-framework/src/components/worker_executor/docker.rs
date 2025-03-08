@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
-use crate::components::worker_executor::{new_client, WorkerExecutor};
-use crate::components::docker::{get_docker_container_name, NETWORK};
-use async_trait::async_trait;
-use std::borrow::Cow;
 use crate::components::component_service::ComponentService;
-use crate::components::docker::KillContainer;
+use crate::components::docker::ContainerLifecycle;
+use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
+use crate::components::worker_executor::{new_client, WorkerExecutor};
 use crate::components::worker_service::WorkerService;
+use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
@@ -37,10 +37,8 @@ pub struct DockerWorkerExecutor {
     grpc_port: u16,
     public_http_port: u16,
     public_grpc_port: u16,
-    container: Arc<Mutex<Option<ContainerAsync<WorkerExecutorImage>>>>,
-    keep_container: bool,
+    container: Arc<Mutex<ContainerAsync<WorkerExecutorImage>>>,
     client: Option<WorkerExecutorClient<Channel>>,
-    env_vars: HashMap<String, String>,
 }
 
 impl DockerWorkerExecutor {
@@ -53,7 +51,6 @@ impl DockerWorkerExecutor {
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
-        keep_container: bool,
     ) -> Self {
         Self::new_base(
             http_port,
@@ -64,7 +61,6 @@ impl DockerWorkerExecutor {
             worker_service,
             verbosity,
             shared_client,
-            keep_container,
         )
         .await
     }
@@ -78,20 +74,19 @@ impl DockerWorkerExecutor {
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
-        keep_container: bool,
     ) -> Self {
         info!("Starting golem-worker-executor container");
 
         let env_vars = super::env_vars(
-                http_port,
-                grpc_port,
-                component_service,
-                shard_manager,
-                worker_service,
-                redis,
-                verbosity,
-            )
-            .await;
+            http_port,
+            grpc_port,
+            component_service,
+            shard_manager,
+            worker_service,
+            redis,
+            verbosity,
+        )
+        .await;
 
         let container = WorkerExecutorImage::new(
             ContainerPort::Tcp(grpc_port),
@@ -121,8 +116,7 @@ impl DockerWorkerExecutor {
             grpc_port,
             public_http_port,
             public_grpc_port,
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            container: Arc::new(Mutex::new(container)),
             client: if shared_client {
                 Some(
                     new_client("localhost", public_grpc_port)
@@ -132,8 +126,15 @@ impl DockerWorkerExecutor {
             } else {
                 None
             },
-            env_vars,
         }
+    }
+
+    pub async fn stop(&self) {
+        self.container.stop().await
+    }
+
+    pub async fn start(&self) {
+        self.container.start().await
     }
 }
 
@@ -170,9 +171,7 @@ impl WorkerExecutor for DockerWorkerExecutor {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 
     async fn restart(&self) {
         self.container.restart().await

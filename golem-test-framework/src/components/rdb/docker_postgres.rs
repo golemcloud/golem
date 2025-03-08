@@ -14,20 +14,15 @@
 
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
-use tokio::sync::Mutex;
 use tracing::info;
-
-use crate::components::docker::KillContainer;
-use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 
 pub struct DockerPostgresRdb {
-    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::postgres::Postgres>>>>,
-    keep_container: bool,
+    _container: ContainerAsync<testcontainers_modules::postgres::Postgres>,
     info: PostgresInfo,
 }
 
@@ -37,7 +32,7 @@ impl DockerPostgresRdb {
     const DEFAULT_PASSWORD: &'static str = "postgres";
     const DEFAULT_DATABASE: &'static str = "postgres";
 
-    pub async fn new(keep_container: bool) -> Self {
+    pub async fn new() -> Self {
         info!("Starting Postgres container");
 
         let database = Self::DEFAULT_DATABASE;
@@ -46,7 +41,7 @@ impl DockerPostgresRdb {
         let port = Self::DEFAULT_PORT;
 
         let container = testcontainers_modules::postgres::Postgres::default()
-            .with_tag("12")
+            .with_tag("14-alpine")
             .with_env_var("POSTGRES_DB", database)
             .with_env_var("POSTGRES_PASSWORD", password)
             .with_env_var("POSTGRES_USER", username)
@@ -75,8 +70,7 @@ impl DockerPostgresRdb {
         postgres_wait_for_startup(&info, Duration::from_secs(30)).await;
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            _container: container,
             info,
         }
     }
@@ -96,10 +90,7 @@ impl Rdb for DockerPostgresRdb {
         DbInfo::Postgres(self.info.clone())
     }
 
-    async fn kill(&self) {
-        info!("Stopping Postgres container");
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 }
 
 impl Debug for DockerPostgresRdb {

@@ -75,12 +75,12 @@ impl K8sComponentCompilationService {
         info!("Starting Golem Component Compilation Service pod");
 
         let env_vars = super::env_vars(
-                Self::HTTP_PORT,
-                Self::GRPC_PORT,
-                component_service,
-                verbosity,
-            )
-            .await;
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            component_service,
+            verbosity,
+        )
+        .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

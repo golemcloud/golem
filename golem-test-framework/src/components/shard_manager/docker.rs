@@ -23,18 +23,16 @@ use testcontainers::{ContainerAsync, Image, ImageExt};
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
-use crate::components::docker::KillContainer;
-use crate::components::redis::Redis;
-use crate::components::shard_manager::{ShardManager};
+use crate::components::docker::ContainerLifecycle;
 use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::redis::Redis;
+use crate::components::shard_manager::ShardManager;
 
 pub struct DockerShardManager {
-    container: Arc<Mutex<Option<ContainerAsync<ShardManagerImage>>>>,
-    keep_container: bool,
+    container: Arc<Mutex<ContainerAsync<ShardManagerImage>>>,
     container_name: String,
     public_http_port: u16,
     public_grpc_port: u16,
-    env_vars: HashMap<String, String>,
 }
 
 impl DockerShardManager {
@@ -45,33 +43,25 @@ impl DockerShardManager {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         number_of_shards_override: Option<usize>,
         verbosity: Level,
-        keep_container: bool,
     ) -> Self {
-        Self::new_base(
-            number_of_shards_override,
-            redis,
-            verbosity,
-            keep_container,
-        )
-        .await
+        Self::new_base(number_of_shards_override, redis, verbosity).await
     }
 
     pub async fn new_base(
         number_of_shards_override: Option<usize>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         verbosity: Level,
-        keep_container: bool,
     ) -> Self {
         info!("Starting golem-shard-manager container");
 
         let env_vars = super::env_vars(
-                number_of_shards_override,
-                Self::HTTP_PORT.as_u16(),
-                Self::GRPC_PORT.as_u16(),
-                redis,
-                verbosity,
-            )
-            .await;
+            number_of_shards_override,
+            Self::HTTP_PORT.as_u16(),
+            Self::GRPC_PORT.as_u16(),
+            redis,
+            verbosity,
+        )
+        .await;
 
         let mut image = ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars.clone())
             .with_network(NETWORK);
@@ -98,12 +88,10 @@ impl DockerShardManager {
             .expect("Failed to get public gRPC port");
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            container: Arc::new(Mutex::new(container)),
             container_name: private_host,
             public_http_port,
             public_grpc_port,
-            env_vars,
         }
     }
 }
@@ -134,9 +122,7 @@ impl ShardManager for DockerShardManager {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 
     async fn restart(&self, number_of_shards_override: Option<usize>) {
         if number_of_shards_override.is_some() {

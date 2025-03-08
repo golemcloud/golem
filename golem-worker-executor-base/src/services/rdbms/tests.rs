@@ -36,12 +36,12 @@ use uuid::Uuid;
 
 #[test_dep]
 async fn postgres() -> DockerPostgresRdb {
-    DockerPostgresRdb::new(true).await
+    DockerPostgresRdb::new().await
 }
 
 #[test_dep]
 async fn mysql() -> DockerMysqlRdb {
-    DockerMysqlRdb::new(true).await
+    DockerMysqlRdb::new().await
 }
 
 #[test_dep]

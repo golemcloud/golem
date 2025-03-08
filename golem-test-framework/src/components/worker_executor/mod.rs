@@ -80,14 +80,14 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
 }
 
 async fn env_vars(
-        http_port: u16,
-        grpc_port: u16,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> HashMap<String, String> {
+    http_port: u16,
+    grpc_port: u16,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+    worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    redis: Arc<dyn Redis + Send + Sync + 'static>,
+    verbosity: Level,
+) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("ENVIRONMENT", "local")
         .with_str("WASMTIME_BACKTRACE_DETAILS", "1")

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
-use crate::components::docker::KillContainer;
+use crate::components::docker::{get_docker_container_name, NETWORK};
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
@@ -21,7 +21,6 @@ use crate::components::worker_service::{
     new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
     ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
 };
-use crate::components::docker::{get_docker_container_name, NETWORK};
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;
@@ -30,12 +29,10 @@ use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
 use tracing::{info, Level};
 
 pub struct DockerWorkerService {
-    container: Arc<Mutex<Option<ContainerAsync<GolemWorkerServiceImage>>>>,
-    keep_container: bool,
+    _container: ContainerAsync<GolemWorkerServiceImage>,
     private_host: String,
     public_http_port: u16,
     public_grpc_port: u16,
@@ -57,7 +54,6 @@ impl DockerWorkerService {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        keep_container: bool,
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
@@ -65,7 +61,6 @@ impl DockerWorkerService {
             shard_manager,
             rdb,
             verbosity,
-            keep_container,
             client_protocol,
         )
         .await
@@ -76,7 +71,6 @@ impl DockerWorkerService {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        keep_container: bool,
         client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting golem-worker-service container");
@@ -122,7 +116,7 @@ impl DockerWorkerService {
             .expect("Failed to get public custom request port");
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
+            _container: container,
             private_host,
             public_http_port,
             public_grpc_port,
@@ -142,7 +136,6 @@ impl DockerWorkerService {
                 public_http_port,
             )
             .await,
-            keep_container,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 "localhost",
@@ -215,9 +208,7 @@ impl WorkerService for DockerWorkerService {
         self.public_custom_request_port
     }
 
-    async fn kill(&self) {
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 }
 
 #[derive(Debug)]

@@ -15,7 +15,7 @@
 use crate::components::component_compilation_service::{
     wait_for_startup, ComponentCompilationService,
 };
-use crate::components::{ChildProcessLogger};
+use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
 use std::path::Path;
@@ -76,10 +76,7 @@ impl SpawnedComponentCompilationService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(
-                super::env_vars(http_port, grpc_port, component_service, verbosity)
-                    .await,
-            )
+            .envs(super::env_vars(http_port, grpc_port, component_service, verbosity).await)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

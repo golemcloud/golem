@@ -31,6 +31,7 @@ pub mod sqlite;
 #[async_trait]
 pub trait Rdb {
     fn info(&self) -> DbInfo;
+    async fn kill(&self);
 }
 
 #[derive(Debug)]

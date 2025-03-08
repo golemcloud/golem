@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::worker_executor::{
-    new_client, wait_for_startup, WorkerExecutor,
-};
+use crate::components::worker_executor::{new_client, wait_for_startup, WorkerExecutor};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
@@ -127,15 +125,15 @@ impl SpawnedWorkerExecutor {
             .current_dir(working_directory)
             .envs(
                 super::env_vars(
-                        http_port,
-                        grpc_port,
-                        component_service,
-                        shard_manager,
-                        worker_service,
-                        redis,
-                        verbosity,
-                    )
-                    .await,
+                    http_port,
+                    grpc_port,
+                    component_service,
+                    shard_manager,
+                    worker_service,
+                    redis,
+                    verbosity,
+                )
+                .await,
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

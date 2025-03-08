@@ -14,21 +14,16 @@
 
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::redis::REDIS_PORT;
-use tokio::sync::Mutex;
 use tracing::info;
-
-use crate::components::docker::KillContainer;
-use crate::components::redis::Redis;
 use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::redis::Redis;
 
 pub struct DockerRedis {
-    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::redis::Redis>>>>,
-    keep_container: bool,
+    _container: ContainerAsync<testcontainers_modules::redis::Redis>,
     prefix: String,
     valid: AtomicBool,
     private_host: String,
@@ -36,7 +31,7 @@ pub struct DockerRedis {
 }
 
 impl DockerRedis {
-    pub async fn new(prefix: String, keep_container: bool) -> Self {
+    pub async fn new(prefix: String) -> Self {
         info!("Starting Redis container");
 
         let container = testcontainers_modules::redis::Redis::default()
@@ -56,8 +51,7 @@ impl DockerRedis {
         let private_host = get_docker_container_name(container.id()).await;
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            _container: container,
             prefix,
             valid: AtomicBool::new(true),
             private_host,
@@ -94,8 +88,5 @@ impl Redis for DockerRedis {
         &self.prefix
     }
 
-    async fn kill(&self) {
-        info!("Stopping Redis container");
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 }

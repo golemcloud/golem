@@ -20,19 +20,15 @@ use async_trait::async_trait;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
 use tracing::{info, Level};
 
-use crate::components::component_compilation_service::{
-    ComponentCompilationService,
-};
+use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_service::ComponentService;
-use crate::components::docker::KillContainer;
-use crate::components::docker::{NETWORK};
+use crate::components::docker::ContainerLifecycle;
+use crate::components::docker::NETWORK;
 
 pub struct DockerComponentCompilationService {
-    container: Arc<Mutex<Option<ContainerAsync<GolemComponentCompilationServiceImage>>>>,
-    keep_container: bool,
+    _container: ContainerAsync<GolemComponentCompilationServiceImage>,
     public_http_port: u16,
     public_grpc_port: u16,
 }
@@ -44,35 +40,27 @@ impl DockerComponentCompilationService {
 
     pub async fn new(
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        keep_container: bool,
         verbosity: Level,
     ) -> Self {
-        Self::new_base(
-            component_service,
-            keep_container,
-            verbosity,
-        )
-        .await
+        Self::new_base(component_service, verbosity).await
     }
 
     pub async fn new_base(
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        keep_container: bool,
         verbosity: Level,
     ) -> Self {
         info!("Starting golem-component-compilation-service container");
 
         let env_vars = super::env_vars(
-                Self::HTTP_PORT.as_u16(),
-                Self::GRPC_PORT.as_u16(),
-                component_service,
-                verbosity,
-            )
-            .await;
+            Self::HTTP_PORT.as_u16(),
+            Self::GRPC_PORT.as_u16(),
+            component_service,
+            verbosity,
+        )
+        .await;
 
         let container =
             GolemComponentCompilationServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
-                .with_container_name(Self::NAME)
                 .with_network(NETWORK)
                 .start()
                 .await
@@ -82,14 +70,14 @@ impl DockerComponentCompilationService {
             .get_host_port_ipv4(Self::HTTP_PORT)
             .await
             .expect("Failed to get public HTTP port");
+
         let public_grpc_port = container
             .get_host_port_ipv4(Self::GRPC_PORT)
             .await
             .expect("Failed to get public gRPC port");
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            _container: container,
             public_http_port,
             public_grpc_port,
         }
@@ -122,9 +110,7 @@ impl ComponentCompilationService for DockerComponentCompilationService {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 }
 
 #[derive(Debug)]

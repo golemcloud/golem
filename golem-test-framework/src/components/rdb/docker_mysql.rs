@@ -14,20 +14,17 @@
 
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
-use tokio::sync::Mutex;
 use tracing::info;
 
-use crate::components::docker::KillContainer;
-use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
+use crate::components::docker::ContainerLifecycle;
 use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
 
 pub struct DockerMysqlRdb {
-    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::mysql::Mysql>>>>,
-    keep_container: bool,
+    _container: ContainerAsync<testcontainers_modules::mysql::Mysql>,
     info: MysqlInfo,
 }
 
@@ -37,7 +34,7 @@ impl DockerMysqlRdb {
     const DEFAULT_PASSWORD: &'static str = "mysql";
     const DEFAULT_DATABASE: &'static str = "mysql";
 
-    pub async fn new(keep_container: bool) -> Self {
+    pub async fn new() -> Self {
         info!("Starting Mysql container");
 
         let database = Self::DEFAULT_DATABASE;
@@ -75,8 +72,7 @@ impl DockerMysqlRdb {
         mysql_wait_for_startup(&info, Duration::from_secs(60)).await;
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            _container: container,
             info,
         }
     }
@@ -96,10 +92,7 @@ impl Rdb for DockerMysqlRdb {
         DbInfo::Mysql(self.info.clone())
     }
 
-    async fn kill(&self) {
-        info!("Stopping Mysql container");
-        self.container.kill().await;
-    }
+    async fn kill(&self) {}
 }
 
 impl Debug for DockerMysqlRdb {

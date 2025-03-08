@@ -23,7 +23,7 @@ use tracing::Level;
 
 use crate::components::redis::Redis;
 use crate::components::shard_manager::{wait_for_startup, ShardManager};
-use crate::components::{ChildProcessLogger};
+use crate::components::ChildProcessLogger;
 
 pub struct SpawnedShardManager {
     http_port: u16,
@@ -125,13 +125,13 @@ impl SpawnedShardManager {
             .current_dir(working_directory)
             .envs(
                 super::env_vars(
-                        number_of_shards_override,
-                        http_port,
-                        grpc_port,
-                        redis,
-                        verbosity,
-                    )
-                    .await,
+                    number_of_shards_override,
+                    http_port,
+                    grpc_port,
+                    redis,
+                    verbosity,
+                )
+                .await,
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -75,7 +75,7 @@ impl K8sPostgresRdb {
                 }],
                 "containers": [{
                     "name": "postgres",
-                    "image": "postgres:12",
+                    "image": "postgres:14",
                     "env": [
                         {"name": "POSTGRES_DB", "value": "postgres"},
                         {"name": "POSTGRES_USER", "value": "postgres"},
