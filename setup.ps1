@@ -28,11 +28,6 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 $arch = if ([System.Environment]::Is64BitOperatingSystem) { "win64" } else { "win32" }
 Write-Output "Detected architecture: $arch"
 
-# Install Visual Studio Build Tools using Winget (installs only the installer)
-Write-Output "Installing Visual Studio Build Tools..."
-winget install -e --id Microsoft.VisualStudio.2022.BuildTools --silent --accept-package-agreements --accept-source-agreements
-Write-Output "Visual Studio Build Tools installation complete."
-
 # Install Rust using winget
 Write-Output "Installing Rust..."
 winget install -e --id Rustlang.Rustup --silent --accept-package-agreements
@@ -50,7 +45,7 @@ Write-Output "CMake installation complete."
 
 # Install Protobuf manually (since it's not available via winget)
 Write-Output "Downloading Protobuf..."
-$protobufUrl = "https://github.com/protocolbuffers/protobuf/releases/download/v30.0-rc2/protoc-30.0-rc-2-$arch.zip"
+$protobufUrl = "https://github.com/protocolbuffers/protobuf/releases/download/v30.0/protoc-30.0-$arch.zip"
 $protobufZipPath = "C:\dev\protobuf.zip"
 $protobufExtractPath = "C:\dev\protobuf"
 

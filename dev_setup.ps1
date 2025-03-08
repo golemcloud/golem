@@ -70,7 +70,7 @@ Write-Output "CMake installation complete."
 
 # Install Protobuf manually (since it's not available via winget)
 Write-Output "Downloading Protobuf..."
-$protobufUrl = "https://github.com/protocolbuffers/protobuf/releases/download/v30.0-rc2/protoc-30.0-rc-2-$arch.zip"
+$protobufUrl = "https://github.com/protocolbuffers/protobuf/releases/download/v30.0/protoc-30.0-$arch.zip"
 $protobufZipPath = "C:\dev\protobuf.zip"
 $protobufExtractPath = "C:\dev\protobuf"
 
