@@ -16,20 +16,17 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::redis::Redis;
+use crate::components::shard_manager::ShardManager;
 use async_trait::async_trait;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
+use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
-use crate::components::docker::ContainerLifecycle;
-use crate::components::docker::{get_docker_container_name, NETWORK};
-use crate::components::redis::Redis;
-use crate::components::shard_manager::ShardManager;
-
 pub struct DockerShardManager {
-    container: Arc<Mutex<ContainerAsync<ShardManagerImage>>>,
+    container: ContainerHandle<ShardManagerImage>,
     container_name: String,
     public_http_port: u16,
     public_grpc_port: u16,
@@ -88,7 +85,7 @@ impl DockerShardManager {
             .expect("Failed to get public gRPC port");
 
         Self {
-            container: Arc::new(Mutex::new(container)),
+            container: ContainerHandle::new(container),
             container_name: private_host,
             public_http_port,
             public_grpc_port,
@@ -122,7 +119,9 @@ impl ShardManager for DockerShardManager {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 
     async fn restart(&self, number_of_shards_override: Option<usize>) {
         if number_of_shards_override.is_some() {

@@ -18,15 +18,15 @@ use std::sync::Arc;
 
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_service::ComponentService;
-use crate::components::docker::NETWORK;
+use crate::components::docker::{ContainerHandle, NETWORK};
 use async_trait::async_trait;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
+use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
 pub struct DockerComponentCompilationService {
-    _container: ContainerAsync<GolemComponentCompilationServiceImage>,
+    container: ContainerHandle<GolemComponentCompilationServiceImage>,
     public_http_port: u16,
     public_grpc_port: u16,
 }
@@ -75,7 +75,7 @@ impl DockerComponentCompilationService {
             .expect("Failed to get public gRPC port");
 
         Self {
-            _container: container,
+            container: ContainerHandle::new(container),
             public_http_port,
             public_grpc_port,
         }
@@ -108,7 +108,9 @@ impl ComponentCompilationService for DockerComponentCompilationService {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 }
 
 #[derive(Debug)]

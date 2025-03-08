@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
-use crate::components::docker::ContainerLifecycle;
-use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{new_client, WorkerExecutor};
@@ -26,8 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
+use testcontainers::{Image, ImageExt};
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
@@ -35,7 +33,7 @@ pub struct DockerWorkerExecutor {
     name: String,
     public_http_port: u16,
     public_grpc_port: u16,
-    container: Arc<Mutex<ContainerAsync<WorkerExecutorImage>>>,
+    container: ContainerHandle<WorkerExecutorImage>,
     client: Option<WorkerExecutorClient<Channel>>,
 }
 
@@ -106,7 +104,7 @@ impl DockerWorkerExecutor {
             name,
             public_http_port,
             public_grpc_port,
-            container: Arc::new(Mutex::new(container)),
+            container: ContainerHandle::new(container),
             client: if shared_client {
                 Some(
                     new_client("localhost", public_grpc_port)
@@ -161,7 +159,9 @@ impl WorkerExecutor for DockerWorkerExecutor {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 
     async fn restart(&self) {
         self.container.restart().await

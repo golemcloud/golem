@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
 use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::ImageExt;
 use tracing::info;
 
 pub struct DockerPostgresRdb {
-    _container: ContainerAsync<testcontainers_modules::postgres::Postgres>,
+    container: ContainerHandle<testcontainers_modules::postgres::Postgres>,
     info: PostgresInfo,
 }
 
@@ -70,7 +70,7 @@ impl DockerPostgresRdb {
         postgres_wait_for_startup(&info, Duration::from_secs(30)).await;
 
         Self {
-            _container: container,
+            container: ContainerHandle::new(container),
             info,
         }
     }
@@ -90,7 +90,9 @@ impl Rdb for DockerPostgresRdb {
         DbInfo::Postgres(self.info.clone())
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 }
 
 impl Debug for DockerPostgresRdb {

@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
 use crate::components::redis::Redis;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::ImageExt;
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
 
 pub struct DockerRedis {
-    _container: ContainerAsync<testcontainers_modules::redis::Redis>,
+    container: ContainerHandle<testcontainers_modules::redis::Redis>,
     prefix: String,
     valid: AtomicBool,
     private_host: String,
@@ -51,7 +51,7 @@ impl DockerRedis {
         let private_host = get_docker_container_name(container.id()).await;
 
         Self {
-            _container: container,
+            container: ContainerHandle::new(container),
             prefix,
             valid: AtomicBool::new(true),
             private_host,
@@ -88,5 +88,7 @@ impl Redis for DockerRedis {
         &self.prefix
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 }

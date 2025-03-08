@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
-use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
@@ -28,11 +28,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
+use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
 pub struct DockerWorkerService {
-    _container: ContainerAsync<GolemWorkerServiceImage>,
+    container: ContainerHandle<GolemWorkerServiceImage>,
     private_host: String,
     public_http_port: u16,
     public_grpc_port: u16,
@@ -116,7 +116,7 @@ impl DockerWorkerService {
             .expect("Failed to get public custom request port");
 
         Self {
-            _container: container,
+            container: ContainerHandle::new(container),
             private_host,
             public_http_port,
             public_grpc_port,
@@ -208,7 +208,9 @@ impl WorkerService for DockerWorkerService {
         self.public_custom_request_port
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 }
 
 #[derive(Debug)]

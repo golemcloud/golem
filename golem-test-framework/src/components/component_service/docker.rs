@@ -16,8 +16,8 @@ use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     PluginServiceClient,
 };
-use crate::components::docker::get_docker_container_name;
 use crate::components::docker::NETWORK;
+use crate::components::docker::{get_docker_container_name, ContainerHandle};
 use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
@@ -27,12 +27,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
+use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
 pub struct DockerComponentService {
     component_directory: PathBuf,
-    _container: ContainerAsync<GolemComponentServiceImage>,
+    container: ContainerHandle<GolemComponentServiceImage>,
     private_host: String,
     public_http_port: u16,
     public_grpc_port: u16,
@@ -101,7 +101,7 @@ impl DockerComponentService {
 
         Self {
             component_directory,
-            _container: container,
+            container: ContainerHandle::new(container),
             private_host,
             public_http_port,
             public_grpc_port,
@@ -166,7 +166,9 @@ impl ComponentService for DockerComponentService {
         self.public_grpc_port
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 }
 
 #[derive(Debug)]

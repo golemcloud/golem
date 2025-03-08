@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
 use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::ImageExt;
 use tracing::info;
 
 pub struct DockerMysqlRdb {
-    _container: ContainerAsync<testcontainers_modules::mysql::Mysql>,
+    container: ContainerHandle<testcontainers_modules::mysql::Mysql>,
     info: MysqlInfo,
 }
 
@@ -70,7 +70,7 @@ impl DockerMysqlRdb {
         mysql_wait_for_startup(&info, Duration::from_secs(60)).await;
 
         Self {
-            _container: container,
+            container: ContainerHandle::new(container),
             info,
         }
     }
@@ -90,7 +90,9 @@ impl Rdb for DockerMysqlRdb {
         DbInfo::Mysql(self.info.clone())
     }
 
-    async fn kill(&self) {}
+    async fn kill(&self) {
+        self.container.kill().await
+    }
 }
 
 impl Debug for DockerMysqlRdb {
