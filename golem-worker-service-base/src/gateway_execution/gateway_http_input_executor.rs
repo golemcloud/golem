@@ -229,13 +229,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         request: &RichRequest,
     ) -> GatewayHttpResult<AuthorisationSuccess> {
-        let url = request
-            .url()
-            .map_err(|e| GatewayHttpError::BadRequest(format!("Failed getting url: {e}")))?;
-
         self.auth_call_back_binding_handler
             .handle_auth_call_back(
-                &url,
+                &request.query_params(),
                 security_scheme_with_metadata,
                 &self.gateway_session_store,
                 &self.identity_provider,
