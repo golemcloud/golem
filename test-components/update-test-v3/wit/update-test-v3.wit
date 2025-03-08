@@ -6,8 +6,8 @@ interface api {
 }
 
 world update-test-v3 {
-  export golem:api/save-snapshot@0.2.0;
-  export golem:api/load-snapshot@0.2.0;
+  export golem:api/save-snapshot@0.2.2;
+  export golem:api/load-snapshot@0.2.2;
 
   export api;
 }

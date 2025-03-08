@@ -4095,11 +4095,26 @@ components:
             $ref: '#/components/schemas/ValueAndType'
         idempotency_key:
           type: string
+        trace_id:
+          type: string
+        trace_states:
+          type: array
+          items:
+            type: string
+        invocation_context:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
       required:
       - timestamp
       - function_name
       - request
       - idempotency_key
+      - trace_id
+      - trace_states
+      - invocation_context
     ExportedFunctionParameters:
       type: object
       properties:
@@ -4151,6 +4166,17 @@ components:
       - Greater
       - LessEqual
       - Less
+    FinishSpanParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        span_id:
+          type: string
+      required:
+      - timestamp
+      - span_id
     FlatComponentFileSystemNode:
       type: object
       properties:
@@ -5125,6 +5151,26 @@ components:
       - Facebook
       - Microsoft
       - Gitlab
+    PublicAttributeValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          String: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
+    PublicAttributeValue_StringAttributeValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: String
+            type: string
+            enum:
+            - String
+        required:
+        - type
+      - $ref: '#/components/schemas/StringAttributeValue'
     PublicDurableFunctionType:
       discriminator:
         propertyName: type
@@ -5165,6 +5211,37 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
+    PublicExternalSpanData:
+      type: object
+      properties:
+        span_id:
+          type: string
+      required:
+      - span_id
+    PublicLocalSpanData:
+      type: object
+      properties:
+        span_id:
+          type: string
+        start:
+          type: string
+          format: date-time
+        parent_id:
+          type: string
+        linked_context:
+          type: integer
+          format: uint64
+        attributes:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PublicAttributeValue'
+        inherited:
+          type: boolean
+      required:
+      - span_id
+      - start
+      - attributes
+      - inherited
     PublicOplogEntry:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5207,6 +5284,9 @@ components:
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
           Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
           CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+          StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+          FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5238,6 +5318,9 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5381,6 +5464,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/FailedUpdateParameters'
+    PublicOplogEntry_FinishSpanParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FinishSpan
+            type: string
+            enum:
+            - FinishSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/FinishSpanParameters'
     PublicOplogEntry_GrowMemoryParameters:
       allOf:
       - type: object
@@ -5477,6 +5572,30 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/RevertParameters'
+    PublicOplogEntry_SetSpanAttributeParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SetSpanAttribute
+            type: string
+            enum:
+            - SetSpanAttribute
+        required:
+        - type
+      - $ref: '#/components/schemas/SetSpanAttributeParameters'
+    PublicOplogEntry_StartSpanParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StartSpan
+            type: string
+            enum:
+            - StartSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/StartSpanParameters'
     PublicOplogEntry_SuccessfulUpdateParameters:
       allOf:
       - type: object
@@ -5524,6 +5643,40 @@ components:
       - min_delay
       - max_delay
       - multiplier
+    PublicSpanData:
+      discriminator:
+        propertyName: type
+        mapping:
+          LocalSpan: '#/components/schemas/PublicSpanData_PublicLocalSpanData'
+          ExternalSpan: '#/components/schemas/PublicSpanData_PublicExternalSpanData'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicSpanData_PublicLocalSpanData'
+      - $ref: '#/components/schemas/PublicSpanData_PublicExternalSpanData'
+    PublicSpanData_PublicExternalSpanData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExternalSpan
+            type: string
+            enum:
+            - ExternalSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicExternalSpanData'
+    PublicSpanData_PublicLocalSpanData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: LocalSpan
+            type: string
+            enum:
+            - LocalSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicLocalSpanData'
     PublicUpdateDescription:
       discriminator:
         propertyName: type
@@ -5763,6 +5916,23 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+    SetSpanAttributeParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        span_id:
+          type: string
+        key:
+          type: string
+        value:
+          $ref: '#/components/schemas/PublicAttributeValue'
+      required:
+      - timestamp
+      - span_id
+      - key
+      - value
     ShardId:
       type: object
       properties:
@@ -5781,6 +5951,33 @@ components:
             format: uint8
       required:
       - payload
+    StartSpanParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        span_id:
+          type: string
+        parent_id:
+          type: string
+        linked_context:
+          type: string
+        attributes:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PublicAttributeValue'
+      required:
+      - timestamp
+      - span_id
+      - attributes
+    StringAttributeValue:
+      type: object
+      properties:
+        value:
+          type: string
+      required:
+      - value
     StringFilterComparator:
       type: string
       enum:

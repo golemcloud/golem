@@ -19,12 +19,13 @@ use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
     CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
     ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
-    PublicDurableFunctionType, PublicRetryConfig, PublicWorkerInvocation, ResourceParameters,
-    RevertParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters,
-    TimestampParameter, WriteRemoteBatchedParameters,
+    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
+    PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
+    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
 };
 use golem_common::model::Timestamp;
 
@@ -77,11 +78,20 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 function_name,
                 request,
                 idempotency_key,
+                trace_id,
+                trace_states,
+                invocation_context,
             }) => Self::ExportedFunctionInvoked(oplog::ExportedFunctionInvokedParameters {
                 timestamp: timestamp.into(),
                 function_name,
                 request: request.into_iter().map(|v| v.into()).collect(),
                 idempotency_key: idempotency_key.value,
+                trace_id: trace_id.to_string(),
+                trace_states,
+                invocation_context: invocation_context
+                    .into_iter()
+                    .map(|inner| inner.into_iter().map(|span| span.into()).collect())
+                    .collect(),
             }),
             PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
                 timestamp,
@@ -242,29 +252,54 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::Revert(RevertParameters {
                 timestamp,
                 dropped_region,
-            }) => {
-                // TODO: Adding new entries to the WIT oplog-entry variant breaks the interface so for now we don't support the new entries and mark them as fake Log entries instead
-                Self::Log(oplog::LogParameters {
-                    timestamp: timestamp.into(),
-                    level: oplog::LogLevel::Info,
-                    context: "Revert".to_string(),
-                    message: format!("Reverted worker by deleting oplog region {dropped_region}"),
-                })
-            }
+            }) => Self::Revert(oplog::RevertParameters {
+                timestamp: timestamp.into(),
+                start: dropped_region.start.into(),
+                end: dropped_region.end.into(),
+            }),
             PublicOplogEntry::CancelInvocation(CancelInvocationParameters {
                 timestamp,
                 idempotency_key,
-            }) => {
-                // TODO: Adding new entries to the WIT oplog-entry variant breaks the interface so for now we don't support the new entries and mark them as fake Log entries instead
-                Self::Log(oplog::LogParameters {
+            }) => Self::CancelInvocation(oplog::CancelInvocationParameters {
+                timestamp: timestamp.into(),
+                idempotency_key: idempotency_key.to_string(),
+            }),
+            PublicOplogEntry::StartSpan(StartSpanParameters {
+                timestamp,
+                span_id,
+                parent_id,
+                linked_context,
+                attributes,
+            }) => Self::StartSpan(oplog::StartSpanParameters {
+                timestamp: timestamp.into(),
+                span_id: span_id.to_string(),
+                parent: parent_id.map(|id| id.to_string()),
+                linked_context: linked_context.map(|id| id.to_string()),
+                attributes: attributes
+                    .into_iter()
+                    .map(|(k, v)| oplog::Attribute {
+                        key: k,
+                        value: v.into(),
+                    })
+                    .collect(),
+            }),
+            PublicOplogEntry::FinishSpan(FinishSpanParameters { timestamp, span_id }) => {
+                Self::FinishSpan(oplog::FinishSpanParameters {
                     timestamp: timestamp.into(),
-                    level: oplog::LogLevel::Info,
-                    context: "CancelInvocation".to_string(),
-                    message: format!(
-                        "Cancelled pending invocation with idempotency key {idempotency_key}"
-                    ),
+                    span_id: span_id.to_string(),
                 })
             }
+            PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParameters {
+                timestamp,
+                span_id,
+                key,
+                value,
+            }) => Self::SetSpanAttribute(oplog::SetSpanAttributeParameters {
+                timestamp: timestamp.into(),
+                span_id: span_id.to_string(),
+                key,
+                value: value.into(),
+            }),
         }
     }
 }
@@ -357,6 +392,41 @@ impl From<PluginInstallationDescription> for oplog::PluginInstallationDescriptio
             name: value.plugin_name,
             version: value.plugin_version,
             parameters: value.parameters.into_iter().collect(),
+        }
+    }
+}
+
+impl From<PublicSpanData> for oplog::SpanData {
+    fn from(value: PublicSpanData) -> Self {
+        match value {
+            PublicSpanData::LocalSpan(local_span) => Self::LocalSpan(oplog::LocalSpanData {
+                span_id: local_span.span_id.to_string(),
+                start: local_span.start.into(),
+                parent: local_span.parent_id.map(|id| id.to_string()),
+                linked_context: local_span.linked_context,
+                attributes: local_span
+                    .attributes
+                    .into_iter()
+                    .map(|(k, v)| oplog::Attribute {
+                        key: k,
+                        value: v.into(),
+                    })
+                    .collect(),
+                inherited: local_span.inherited,
+            }),
+            PublicSpanData::ExternalSpan(external_span) => {
+                Self::ExternalSpan(oplog::ExternalSpanData {
+                    span_id: external_span.span_id.to_string(),
+                })
+            }
+        }
+    }
+}
+
+impl From<PublicAttributeValue> for oplog::AttributeValue {
+    fn from(value: PublicAttributeValue) -> Self {
+        match value {
+            PublicAttributeValue::String(StringAttributeValue { value }) => Self::String(value),
         }
     }
 }

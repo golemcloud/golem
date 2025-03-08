@@ -42,19 +42,19 @@ pub mod exports {
                     fn save() -> _rt::Vec<u8>;
                 }
                 #[doc(hidden)]
-                macro_rules! __export_golem_api_save_snapshot_0_2_0_cabi {
+                macro_rules! __export_golem_api_save_snapshot_0_2_2_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[export_name =
-                        "golem:api/save-snapshot@0.2.0#save"] unsafe extern "C" fn
+                        "golem:api/save-snapshot@0.2.2#save"] unsafe extern "C" fn
                         export_save() -> * mut u8 { $($path_to_types)*::
                         _export_save_cabi::<$ty > () } #[export_name =
-                        "cabi_post_golem:api/save-snapshot@0.2.0#save"] unsafe extern "C"
+                        "cabi_post_golem:api/save-snapshot@0.2.2#save"] unsafe extern "C"
                         fn _post_return_save(arg0 : * mut u8,) { $($path_to_types)*::
                         __post_return_save::<$ty > (arg0) } };
                     };
                 }
                 #[doc(hidden)]
-                pub(crate) use __export_golem_api_save_snapshot_0_2_0_cabi;
+                pub(crate) use __export_golem_api_save_snapshot_0_2_2_cabi;
                 #[repr(align(4))]
                 struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
                 static mut _RET_AREA: _RetArea = _RetArea(
@@ -192,7 +192,7 @@ macro_rules! __export_update_test_v2_impl {
         exports::golem::component::api::__export_golem_component_api_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::component::api);
         $($path_to_types_root)*::
-        exports::golem::api::save_snapshot::__export_golem_api_save_snapshot_0_2_0_cabi!($ty
+        exports::golem::api::save_snapshot::__export_golem_api_save_snapshot_0_2_2_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::api::save_snapshot);
     };
 }
@@ -206,7 +206,7 @@ pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 303] = *b"\
 A\x04\x01B\x06\x01@\x01\x08speed-msw\0w\x04\0\x02f1\x01\0\x01@\0\0w\x04\0\x02f2\x01\
 \x01\x04\0\x02f3\x01\x01\x04\0\x02f4\x01\x01\x04\0\x13golem:component/api\x05\0\x01\
 B\x03\x01p}\x01@\0\0\0\x04\0\x04save\x01\x01\x04\0\x1dgolem:api/save-snapshot@0.\
-2.0\x05\x01\x04\0\x1egolem:component/update-test-v2\x04\0\x0b\x14\x01\0\x0eupdat\
+2.2\x05\x01\x04\0\x1egolem:component/update-test-v2\x04\0\x0b\x14\x01\0\x0eupdat\
 e-test-v2\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.\
 220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]

@@ -215,7 +215,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (remote_worker_id, demand) =
                 create_rpc_target(&mut store, target_worker_urn).await?;
 
-            let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+            let span =
+                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
 
             let handle = register_wasm_rpc_entry(
                 &mut store,
@@ -238,7 +239,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (remote_worker_id, demand) =
                 create_rpc_target(&mut store, target_worker_urn.clone()).await?;
 
-            let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+            let span =
+                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
 
             // First creating a resource for invoking the constructor (to avoid having to make a special case)
             let handle = register_wasm_rpc_entry(
@@ -264,7 +266,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (remote_worker_id, demand) =
                 create_rpc_target(&mut store, target_worker_urn).await?;
 
-            let span = create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id)?;
+            let span =
+                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
 
             let handle = {
                 let mut wasi = store.data_mut().as_wasi_view();
@@ -495,7 +498,7 @@ async fn drop_linked_resource<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRes
     }
 
     if let Some(span_id) = span_id {
-        store.data_mut().finish_span(&span_id)?;
+        store.data_mut().finish_span(&span_id).await?;
     }
 
     Ok(())

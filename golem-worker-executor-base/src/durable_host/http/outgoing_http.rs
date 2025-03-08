@@ -16,14 +16,13 @@ use crate::durable_host::http::serialized::{SerializableHttpMethod, Serializable
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan};
+use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::headers::TraceContextHeaders;
 use std::collections::HashMap;
-use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::types;
 use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
@@ -45,12 +44,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await
             .map_err(|err| HttpError::trap(anyhow!(err)))?;
 
-        let span = self
-            .state
-            .invocation_context
-            .start_span(&self.state.current_span_id, None)
-            .map_err(|err| HttpError::trap(anyhow!(err)))?;
-
         let host_request = self.table().get(&request)?;
         let uri = format!(
             "{}{}",
@@ -62,8 +55,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         );
         let method = host_request.method.clone().into();
 
-        setup_outgoing_http_request_span(&span, &uri, &method);
-
         let mut headers: HashMap<String, String> = host_request
             .headers
             .iter()
@@ -74,6 +65,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 )
             })
             .collect();
+
+        let span = self
+            .start_span(&outgoing_http_request_span_attributes(&uri, &method))
+            .await
+            .map_err(|err| HttpError::trap(anyhow!(err)))?;
 
         if self.state.forward_trace_context_headers {
             let invocation_context = self
@@ -128,21 +124,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-fn setup_outgoing_http_request_span(
-    span: &Arc<InvocationContextSpan>,
+fn outgoing_http_request_span_attributes(
     uri: &str,
     method: &SerializableHttpMethod,
-) {
-    span.set_attribute(
-        "name".to_string(),
-        AttributeValue::String("outgoing-http-request".to_string()),
-    );
-    span.set_attribute(
-        "request.uri".to_string(),
-        AttributeValue::String(uri.to_string()),
-    );
-    span.set_attribute(
-        "request.method".to_string(),
-        AttributeValue::String(method.to_string()),
-    );
+) -> Vec<(String, AttributeValue)> {
+    vec![
+        (
+            "name".to_string(),
+            AttributeValue::String("outgoing-http-request".to_string()),
+        ),
+        (
+            "request.uri".to_string(),
+            AttributeValue::String(uri.to_string()),
+        ),
+        (
+            "request.method".to_string(),
+            AttributeValue::String(method.to_string()),
+        ),
+    ]
 }

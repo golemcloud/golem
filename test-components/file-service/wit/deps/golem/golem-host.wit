@@ -1,9 +1,9 @@
-package golem:api@0.2.0;
+package golem:api@0.2.2;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use golem:rpc/types@0.1.0.{uri};
+    use golem:rpc/types@0.1.3.{uri};
     use wasi:clocks/monotonic-clock@0.2.0.{duration};
 
     /// An index into the persistent log storing all performed operations of a worker

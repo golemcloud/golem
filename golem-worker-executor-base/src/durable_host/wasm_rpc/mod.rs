@@ -71,7 +71,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     .generate_unique_local_worker_id(remote_worker_id)
                     .await?;
 
-                let span = create_rpc_connection_span(self, &remote_worker_id)?;
+                let span = create_rpc_connection_span(self, &remote_worker_id).await?;
 
                 let remote_worker_id =
                     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
@@ -137,7 +137,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
         let span =
-            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)?;
+            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
+                .await?;
 
         let durability = Durability::<TypeAnnotatedValue, SerializableError>::new(
             self,
@@ -224,7 +225,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
         };
 
-        self.finish_span(span.span_id())?;
+        self.finish_span(span.span_id()).await?;
 
         match result {
             Ok(wit_value) => Ok(Ok(wit_value)),
@@ -281,7 +282,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
         let span =
-            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)?;
+            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
+                .await?;
 
         let durability = Durability::<(), SerializableError>::new(
             self,
@@ -326,7 +328,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         };
 
-        self.finish_span(span.span_id())?;
+        self.finish_span(span.span_id()).await?;
 
         match result {
             Ok(result) => Ok(Ok(result)),
@@ -387,7 +389,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
         let span =
-            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)?;
+            create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
+                .await?;
 
         let worker_id = self.worker_id().clone();
         let request = SerializableInvokeRequest {
@@ -575,7 +578,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().delete(rep)?;
         let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
         if let Ok(payload) = payload {
-            self.finish_span(payload.span_id())?;
+            self.finish_span(payload.span_id()).await?;
         }
 
         Ok(())
@@ -700,18 +703,19 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let rpc = self.rpc();
         let component_service = self.state.component_service.clone();
 
+        let span_id = {
+            let entry = self.table().get_mut(&this)?;
+            let entry = entry
+                .payload
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
+                .unwrap();
+            entry.span_id().clone()
+        };
+
         let handle = this.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
-            let span_id = {
-                let entry = self.table().get_mut(&this)?;
-                let entry = entry
-                    .payload
-                    .as_any_mut()
-                    .downcast_mut::<FutureInvokeResultState>()
-                    .unwrap();
-                entry.span_id().clone()
-            };
             let stack = self
                 .state
                 .invocation_context
@@ -743,13 +747,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     let result =
                         std::mem::replace(entry, FutureInvokeResultState::Consumed { request });
                     if let FutureInvokeResultState::Completed {
-                        request,
-                        result,
-                        span_id,
+                        request, result, ..
                     } = result
                     {
-                        self.finish_span(&span_id)?;
-
                         match result {
                             Ok(Ok(result)) => (
                                 Ok(Some(Ok(result.clone()))),
@@ -853,7 +853,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize RPC response: {err}"));
 
-                if matches!(
+                if !matches!(
                     serializable_invoke_result,
                     SerializableInvokeResult::Pending
                 ) {
@@ -868,7 +868,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             warn!("No matching BeginRemoteWrite index was found when RPC response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
                         }
                     }
+
+                    self.finish_span(&span_id).await?;
                 }
+
                 self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
 
@@ -910,6 +913,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
                         }
                     }
+
+                    self.finish_span(&span_id).await?;
                 }
 
                 match serialized_invoke_result {
@@ -1162,44 +1167,47 @@ impl UrnExtensions for Uri {
     }
 }
 
-pub fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
+pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
     ctx: &mut Ctx,
     target_worker_id: &WorkerId,
 ) -> anyhow::Result<Arc<InvocationContextSpan>> {
-    Ok(ctx.start_span(&[
-        (
-            "name".to_string(),
-            AttributeValue::String("rpc-connection".to_string()),
-        ),
-        (
-            "target_worker_id".to_string(),
-            AttributeValue::String(target_worker_id.to_string()),
-        ),
-    ])?)
+    Ok(ctx
+        .start_span(&[
+            (
+                "name".to_string(),
+                AttributeValue::String("rpc-connection".to_string()),
+            ),
+            (
+                "target_worker_id".to_string(),
+                AttributeValue::String(target_worker_id.to_string()),
+            ),
+        ])
+        .await?)
 }
 
-pub fn create_invocation_span<Ctx: InvocationContextManagement>(
+pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
     ctx: &mut Ctx,
     connection_span_id: &SpanId,
     function_name: &str,
     idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<Arc<InvocationContextSpan>> {
-    warn!("create_invocation_span in connection_span_id: {connection_span_id}");
-    Ok(ctx.start_child_span(
-        connection_span_id,
-        &[
-            (
-                "name".to_string(),
-                AttributeValue::String("rpc-invocation".to_string()),
-            ),
-            (
-                "function_name".to_string(),
-                AttributeValue::String(function_name.to_string()),
-            ),
-            (
-                "idempotency_key".to_string(),
-                AttributeValue::String(idempotency_key.to_string()),
-            ),
-        ],
-    )?)
+    Ok(ctx
+        .start_child_span(
+            connection_span_id,
+            &[
+                (
+                    "name".to_string(),
+                    AttributeValue::String("rpc-invocation".to_string()),
+                ),
+                (
+                    "function_name".to_string(),
+                    AttributeValue::String(function_name.to_string()),
+                ),
+                (
+                    "idempotency_key".to_string(),
+                    AttributeValue::String(idempotency_key.to_string()),
+                ),
+            ],
+        )
+        .await?)
 }

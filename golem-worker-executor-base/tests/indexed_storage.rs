@@ -410,7 +410,7 @@ async fn scan_with_no_pattern_paginated(
         r1.extend(chunk);
         cursor = next;
 
-        if r1.len() == 1 || cursor == 0 {
+        if !r1.is_empty() || cursor == 0 {
             break;
         }
     }

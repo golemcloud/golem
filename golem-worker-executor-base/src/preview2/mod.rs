@@ -29,6 +29,8 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/bucket": super::durable_host::keyvalue::types::BucketEntry,
         "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
+        "golem:api/context/span": super::durable_host::golem::invocation_context_api::SpanEntry,
+        "golem:api/context/invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
         "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,

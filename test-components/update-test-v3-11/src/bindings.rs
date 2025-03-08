@@ -42,19 +42,19 @@ pub mod exports {
                     fn save() -> _rt::Vec<u8>;
                 }
                 #[doc(hidden)]
-                macro_rules! __export_golem_api_save_snapshot_1_1_0_cabi {
+                macro_rules! __export_golem_api_save_snapshot_1_1_5_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[export_name =
-                        "golem:api/save-snapshot@1.1.0#save"] unsafe extern "C" fn
+                        "golem:api/save-snapshot@1.1.5#save"] unsafe extern "C" fn
                         export_save() -> * mut u8 { $($path_to_types)*::
                         _export_save_cabi::<$ty > () } #[export_name =
-                        "cabi_post_golem:api/save-snapshot@1.1.0#save"] unsafe extern "C"
+                        "cabi_post_golem:api/save-snapshot@1.1.5#save"] unsafe extern "C"
                         fn _post_return_save(arg0 : * mut u8,) { $($path_to_types)*::
                         __post_return_save::<$ty > (arg0) } };
                     };
                 }
                 #[doc(hidden)]
-                pub(crate) use __export_golem_api_save_snapshot_1_1_0_cabi;
+                pub(crate) use __export_golem_api_save_snapshot_1_1_5_cabi;
                 #[repr(align(4))]
                 struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
                 static mut _RET_AREA: _RetArea = _RetArea(
@@ -116,19 +116,19 @@ pub mod exports {
                     fn load(bytes: _rt::Vec<u8>) -> Result<(), _rt::String>;
                 }
                 #[doc(hidden)]
-                macro_rules! __export_golem_api_load_snapshot_1_1_0_cabi {
+                macro_rules! __export_golem_api_load_snapshot_1_1_5_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[export_name =
-                        "golem:api/load-snapshot@1.1.0#load"] unsafe extern "C" fn
+                        "golem:api/load-snapshot@1.1.5#load"] unsafe extern "C" fn
                         export_load(arg0 : * mut u8, arg1 : usize,) -> * mut u8 {
                         $($path_to_types)*:: _export_load_cabi::<$ty > (arg0, arg1) }
-                        #[export_name = "cabi_post_golem:api/load-snapshot@1.1.0#load"]
+                        #[export_name = "cabi_post_golem:api/load-snapshot@1.1.5#load"]
                         unsafe extern "C" fn _post_return_load(arg0 : * mut u8,) {
                         $($path_to_types)*:: __post_return_load::<$ty > (arg0) } };
                     };
                 }
                 #[doc(hidden)]
-                pub(crate) use __export_golem_api_load_snapshot_1_1_0_cabi;
+                pub(crate) use __export_golem_api_load_snapshot_1_1_5_cabi;
                 #[repr(align(4))]
                 struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
                 static mut _RET_AREA: _RetArea = _RetArea(
@@ -243,10 +243,10 @@ macro_rules! __export_update_test_v3_impl {
     };
     ($ty:ident with_types_in $($path_to_types_root:tt)*) => {
         $($path_to_types_root)*::
-        exports::golem::api::save_snapshot::__export_golem_api_save_snapshot_1_1_0_cabi!($ty
+        exports::golem::api::save_snapshot::__export_golem_api_save_snapshot_1_1_5_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::api::save_snapshot);
         $($path_to_types_root)*::
-        exports::golem::api::load_snapshot::__export_golem_api_load_snapshot_1_1_0_cabi!($ty
+        exports::golem::api::load_snapshot::__export_golem_api_load_snapshot_1_1_5_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::api::load_snapshot);
         $($path_to_types_root)*::
         exports::golem::component::api::__export_golem_component_api_cabi!($ty
@@ -261,8 +261,8 @@ pub(crate) use __export_update_test_v3_impl as export;
 pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 354] = *b"\
 \0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdd\x01\x01A\x02\x01\
 A\x06\x01B\x03\x01p}\x01@\0\0\0\x04\0\x04save\x01\x01\x04\0\x1dgolem:api/save-sn\
-apshot@1.1.0\x05\0\x01B\x04\x01p}\x01j\0\x01s\x01@\x01\x05bytes\0\0\x01\x04\0\x04\
-load\x01\x02\x04\0\x1dgolem:api/load-snapshot@1.1.0\x05\x01\x01B\x04\x01@\0\0w\x04\
+apshot@1.1.5\x05\0\x01B\x04\x01p}\x01j\0\x01s\x01@\x01\x05bytes\0\0\x01\x04\0\x04\
+load\x01\x02\x04\0\x1dgolem:api/load-snapshot@1.1.5\x05\x01\x01B\x04\x01@\0\0w\x04\
 \0\x03get\x01\0\x01@\x01\x05valuew\0w\x04\0\x03set\x01\x01\x04\0\x13golem:compon\
 ent/api\x05\x02\x04\0\x1egolem:component/update-test-v3\x04\0\x0b\x14\x01\0\x0eu\
 pdate-test-v3\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\

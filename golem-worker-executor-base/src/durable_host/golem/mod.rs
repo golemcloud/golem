@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod invocation_context_api;
 pub mod v1x;
 
 use anyhow::anyhow;

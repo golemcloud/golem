@@ -43,6 +43,8 @@ pub fn oplog_entry() {
         },
     };
 
+    // TODO: ExportedFunctionInvocation, StartSpan, FinishSpan
+
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("oplog_entry_revert", &mut mint, oe31);
     backward_compatible("oplog_entry_cancel_pending_invocation", &mut mint, oe32);
