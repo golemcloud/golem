@@ -32,8 +32,6 @@ pub struct DockerWorkerExecutorCluster {
 
 impl DockerWorkerExecutorCluster {
     async fn make_worker_executor(
-        http_port: u16,
-        grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -43,8 +41,6 @@ impl DockerWorkerExecutorCluster {
     ) -> Arc<DockerWorkerExecutor> {
         Arc::new(
             DockerWorkerExecutor::new(
-                http_port,
-                grpc_port,
                 redis,
                 component_service,
                 shard_manager,
@@ -58,8 +54,6 @@ impl DockerWorkerExecutorCluster {
 
     pub async fn new(
         size: usize,
-        base_http_port: u16,
-        base_grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -70,13 +64,8 @@ impl DockerWorkerExecutorCluster {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
 
-        for i in 0..size {
-            let http_port = base_http_port + i as u16;
-            let grpc_port = base_grpc_port + i as u16;
-
+        for _ in 0..size {
             let worker_executor_join = tokio::spawn(Self::make_worker_executor(
-                http_port,
-                grpc_port,
                 redis.clone(),
                 component_service.clone(),
                 shard_manager.clone(),

@@ -41,7 +41,7 @@ impl DockerPostgresRdb {
         let port = Self::DEFAULT_PORT;
 
         let container = testcontainers_modules::postgres::Postgres::default()
-            .with_tag("14-alpine")
+            .with_tag("14")
             .with_env_var("POSTGRES_DB", database)
             .with_env_var("POSTGRES_PASSWORD", password)
             .with_env_var("POSTGRES_USER", username)

@@ -372,8 +372,6 @@ impl EnvBasedTestDependencies {
             Arc::new(
                 DockerWorkerExecutorCluster::new(
                     config.worker_executor_cluster_size,
-                    9000,
-                    9100,
                     redis,
                     component_service,
                     shard_manager,

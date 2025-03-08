@@ -234,10 +234,6 @@ pub enum TestMode {
     Docker {
         #[arg(long, default_value = "")]
         redis_prefix: String,
-        #[arg(long, default_value = "9000")]
-        worker_executor_base_http_port: u16,
-        #[arg(long, default_value = "9100")]
-        worker_executor_base_grpc_port: u16,
         #[arg(long, default_value = "false")]
         compilation_service_disabled: bool,
     },
@@ -339,8 +335,6 @@ impl CliTestDependencies {
         params: CliParams,
         cluster_size: usize,
         redis_prefix: &str,
-        worker_executor_base_http_port: u16,
-        worker_executor_base_grpc_port: u16,
         compilation_service_disabled: bool,
     ) -> Self {
         let params_clone = params.clone();
@@ -413,8 +407,6 @@ impl CliTestDependencies {
             Arc::new(
                 DockerWorkerExecutorCluster::new(
                     cluster_size,
-                    worker_executor_base_http_port,
-                    worker_executor_base_grpc_port,
                     redis.clone(),
                     component_service.clone(),
                     shard_manager.clone(),
@@ -1018,16 +1010,12 @@ impl CliTestDependencies {
             }
             TestMode::Docker {
                 redis_prefix,
-                worker_executor_base_http_port,
-                worker_executor_base_grpc_port,
                 compilation_service_disabled,
             } => {
                 Self::make_docker(
                     params.clone(),
                     cluster_size,
                     redis_prefix,
-                    *worker_executor_base_http_port,
-                    *worker_executor_base_grpc_port,
                     *compilation_service_disabled,
                 )
                 .await
