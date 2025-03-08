@@ -22,6 +22,7 @@ use golem_common::SafeDisplay;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use urlencoding::decode;
 
 const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
 
@@ -268,7 +269,11 @@ fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
         let key_value: Vec<&str> = part.split('=').map(|x| x.trim()).collect();
 
         if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
-            query_components.insert(key.to_string(), value.to_string());
+            decode(value)
+                .map(|decoded_value| {
+                    query_components.insert(key.to_string(), decoded_value.to_string())
+                })
+                .unwrap_or_else(|_| query_components.insert(key.to_string(), value.to_string()));
         }
     }
 
