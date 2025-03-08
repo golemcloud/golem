@@ -14,7 +14,7 @@
 
 use crate::components::rdb::Rdb;
 use crate::components::{
-    new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder, GolemEnvVars,
+    new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
 };
 use crate::config::GolemClientProtocol;
 use anyhow::{anyhow, Context as AnyhowContext};
@@ -870,56 +870,41 @@ async fn wait_for_startup(
     }
 }
 
-#[async_trait]
-pub trait ComponentServiceEnvVars {
-    async fn env_vars(
-        &self,
-        http_port: u16,
-        grpc_port: u16,
-        component_compilation_service: Option<(&str, u16)>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> HashMap<String, String>;
-}
+async fn env_vars(
+    http_port: u16,
+    grpc_port: u16,
+    component_compilation_service: Option<(&str, u16)>,
+    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+    verbosity: Level,
+    private_rdb_connection: bool,
+) -> HashMap<String, String> {
+    let mut builder = EnvVarBuilder::golem_service(verbosity)
+        .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
+        .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
+        .with_str(
+            "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
+            "/tmp/ittest-local-object-store/golem",
+        )
+        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+        .with_str(
+            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+            "/tmp/ittest-local-object-store/golem",
+        )
+        .with("GOLEM__GRPC_PORT", grpc_port.to_string())
+        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with_all(rdb.info().env("golem_component", private_rdb_connection));
 
-#[async_trait]
-impl ComponentServiceEnvVars for GolemEnvVars {
-    async fn env_vars(
-        &self,
-        http_port: u16,
-        grpc_port: u16,
-        component_compilation_service: Option<(&str, u16)>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> HashMap<String, String> {
-        let mut builder = EnvVarBuilder::golem_service(verbosity)
-            .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
-            .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
-            .with_str(
-                "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
-                "/tmp/ittest-local-object-store/golem",
-            )
-            .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
-            .with_str(
-                "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
-                "/tmp/ittest-local-object-store/golem",
-            )
-            .with("GOLEM__GRPC_PORT", grpc_port.to_string())
-            .with("GOLEM__HTTP_PORT", http_port.to_string())
-            .with_all(rdb.info().env("golem_component"));
+    match component_compilation_service {
+        Some((host, port)) => {
+            builder = builder
+                .with_str("GOLEM__COMPILATION__TYPE", "Enabled")
+                .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
+                .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
+        }
+        _ => builder = builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
+    };
 
-        match component_compilation_service {
-            Some((host, port)) => {
-                builder = builder
-                    .with_str("GOLEM__COMPILATION__TYPE", "Enabled")
-                    .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
-                    .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
-            }
-            _ => builder = builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
-        };
-
-        builder.build()
-    }
+    builder.build()
 }
 
 #[derive(Debug)]

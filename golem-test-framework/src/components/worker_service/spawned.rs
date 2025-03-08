@@ -18,9 +18,9 @@ use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
     new_api_definition_client, new_api_deployment_client, new_api_security_client,
     new_worker_client, wait_for_startup, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
-    ApiSecurityServiceClient, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+    ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
 };
-use crate::components::{ChildProcessLogger, GolemEnvVars};
+use crate::components::ChildProcessLogger;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::path::Path;
@@ -59,7 +59,6 @@ impl SpawnedWorkerService {
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             executable,
             working_directory,
             http_port,
@@ -77,7 +76,6 @@ impl SpawnedWorkerService {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn WorkerServiceEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -100,17 +98,17 @@ impl SpawnedWorkerService {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
             .envs(
-                env_vars
-                    .env_vars(
-                        http_port,
-                        grpc_port,
-                        custom_request_port,
-                        component_service,
-                        shard_manager,
-                        rdb,
-                        verbosity,
-                    )
-                    .await,
+                super::env_vars(
+                    http_port,
+                    grpc_port,
+                    custom_request_port,
+                    component_service,
+                    shard_manager,
+                    rdb,
+                    verbosity,
+                    false,
+                )
+                .await,
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
