@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::{types as mysql_types, MysqlType};
 use crate::services::rdbms::postgres::{types as postgres_types, PostgresType};
 use crate::services::rdbms::{DbResult, DbRow, Error};
@@ -21,33 +22,37 @@ use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::{ComponentId, WorkerId};
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
-use golem_test_framework::components::rdb::{RdbConnection, RdbsConnections};
+use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use mac_address::MacAddress;
 use serde_json::json;
-use std::collections::{Bound, HashMap};
+use std::collections::Bound;
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
-use tokio::task::JoinSet;
 use uuid::Uuid;
 
 #[test_dep]
-async fn postgres() -> DockerPostgresRdbs {
-    DockerPostgresRdbs::new(3, 5434, true, false).await
+async fn postgres() -> DockerPostgresRdb {
+    DockerPostgresRdb::new().await
 }
 
 #[test_dep]
-async fn mysql() -> DockerMysqlRdbs {
-    DockerMysqlRdbs::new(3, 3307, true, false).await
+async fn mysql() -> DockerMysqlRdb {
+    DockerMysqlRdb::new().await
 }
 
 #[test_dep]
 fn rdbms_service() -> RdbmsServiceDefault {
-    RdbmsServiceDefault::default()
+    RdbmsServiceDefault::new(RdbmsConfig {
+        pool: RdbmsPoolConfig {
+            max_connections: 100,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -197,25 +202,11 @@ impl<T: RdbmsType + Clone> RdbmsTest<T> {
 }
 
 #[test]
-async fn postgres_par_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
-    rdbms_par_test(
-        rdbms_service.postgres(),
-        postgres.host_connection_strings(),
-        3,
-        RdbmsTest::new(
-            vec![StatementTest::execute_test("SELECT 1", vec![], Some(1))],
-            None,
-        ),
-    )
-    .await
-}
-
-#[test]
 async fn postgres_transaction_tests(
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let db_address = postgres.rdbs[0].host_connection_string();
+    let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
     let create_table_statement = r#"
@@ -332,10 +323,10 @@ async fn postgres_transaction_tests(
 
 #[test]
 async fn postgres_create_insert_select_test(
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let db_address = postgres.rdbs[1].host_connection_string();
+    let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
     let statements = vec![
@@ -415,7 +406,7 @@ async fn postgres_create_insert_select_test(
                 .into_iter()
                 .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
                 .collect(),
-            None,
+            Some(TransactionEnd::Commit),
         ),
     )
     .await;
@@ -988,10 +979,10 @@ async fn postgres_create_insert_select_test(
 
 #[test]
 async fn postgres_create_insert_select_array_test(
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let db_address = postgres.rdbs[1].host_connection_string();
+    let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
     let statements = vec![
@@ -1143,7 +1134,7 @@ async fn postgres_create_insert_select_array_test(
                 .into_iter()
                 .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
                 .collect(),
-            None,
+            Some(TransactionEnd::Commit),
         ),
     )
     .await;
@@ -1860,10 +1851,9 @@ async fn postgres_create_insert_select_array_test(
 }
 
 #[test]
-async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
+async fn postgres_schema_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsServiceDefault) {
     let rdbms = rdbms_service.postgres();
-
-    let db_address = postgres.rdbs[2].host_connection_string();
+    let db_address = postgres.public_connection_string();
 
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS test1.components
@@ -1894,22 +1884,8 @@ async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &Rdb
 }
 
 #[test]
-async fn mysql_par_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
-    rdbms_par_test(
-        rdbms_service.mysql(),
-        mysql.host_connection_strings(),
-        3,
-        RdbmsTest::new(
-            vec![StatementTest::execute_test("SELECT 1", vec![], Some(0))],
-            None,
-        ),
-    )
-    .await
-}
-
-#[test]
-async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
-    let db_address = mysql.rdbs[0].host_connection_string();
+async fn mysql_transaction_tests(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
     let create_table_statement = r#"
@@ -2022,10 +1998,10 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
 
 #[test]
 async fn mysql_create_insert_select_test(
-    mysql: &DockerMysqlRdbs,
+    mysql: &DockerMysqlRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let db_address = mysql.rdbs[1].clone().host_connection_string();
+    let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS data_types
@@ -2616,66 +2592,6 @@ fn check_test_results<T: RdbmsType + Clone>(
     }
 }
 
-async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
-    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
-    db_addresses: Vec<String>,
-    count: u8,
-    test: RdbmsTest<T>,
-) {
-    let mut fibers = JoinSet::new();
-    for db_address in &db_addresses {
-        for _ in 0..count {
-            let rdbms_clone = rdbms.clone();
-            let db_address_clone = db_address.clone();
-            let test_clone = test.clone();
-            let _ = fibers.spawn(async move {
-                let worker_id = new_worker_id();
-
-                let connection = rdbms_clone.create(&db_address_clone, &worker_id).await;
-
-                let pool_key = connection.unwrap();
-
-                let result =
-                    execute_rdbms_test(rdbms_clone.clone(), &pool_key, &worker_id, test_clone)
-                        .await;
-
-                (worker_id, pool_key, result)
-            });
-        }
-    }
-
-    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, Error>>> =
-        HashMap::new();
-    let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
-
-    while let Some(res) = fibers.join_next().await {
-        let (worker_id, pool_key, result_execute) = res.unwrap();
-        workers_results.insert(worker_id.clone(), result_execute);
-        workers_pools.insert(worker_id.clone(), pool_key);
-    }
-
-    let rdbms_status = rdbms.status();
-
-    for (worker_id, pool_key) in workers_pools.clone() {
-        let _ = rdbms.remove(&pool_key, &worker_id);
-    }
-
-    check!(rdbms_status.pools.len() == db_addresses.len());
-
-    for (worker_id, pool_key) in workers_pools {
-        let worker_ids = rdbms_status.pools.get(&pool_key);
-
-        check!(
-            worker_ids.is_some_and(|ids| ids.contains(&worker_id)),
-            "worker {worker_id} found in pool {pool_key}"
-        );
-    }
-
-    for (worker_id, result) in workers_results {
-        check_test_results(&worker_id, test.clone(), result);
-    }
-}
-
 #[test]
 async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
@@ -2695,10 +2611,10 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
 
 #[test]
 async fn postgres_query_err_test(
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let db_address = postgres.rdbs[1].host_connection_string();
+    let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
     rdbms_query_err_test(
@@ -2737,10 +2653,10 @@ async fn postgres_query_err_test(
 
 #[test]
 async fn postgres_execute_err_test(
-    postgres: &DockerPostgresRdbs,
+    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let db_address = postgres.rdbs[1].host_connection_string();
+    let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
     rdbms_execute_err_test(
@@ -2770,8 +2686,8 @@ async fn postgres_execute_err_test(
 }
 
 #[test]
-async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
-    let db_address = mysql.rdbs[1].clone().host_connection_string();
+async fn mysql_query_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
     rdbms_query_err_test(
@@ -2797,8 +2713,8 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
 }
 
 #[test]
-async fn mysql_execute_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
-    let db_address = mysql.rdbs[1].clone().host_connection_string();
+async fn mysql_execute_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
     rdbms_execute_err_test(

@@ -26,33 +26,27 @@ use tokio::sync::Mutex;
 use tracing::{info, Level};
 
 pub struct DockerWorkerExecutorCluster {
-    worker_executors: Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>,
+    worker_executors: Vec<Arc<DockerWorkerExecutor>>,
     stopped_indices: Arc<Mutex<HashSet<usize>>>,
 }
 
 impl DockerWorkerExecutorCluster {
     async fn make_worker_executor(
-        http_port: u16,
-        grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
-        keep_container: bool,
-    ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
+    ) -> Arc<DockerWorkerExecutor> {
         Arc::new(
             DockerWorkerExecutor::new(
-                http_port,
-                grpc_port,
                 redis,
                 component_service,
                 shard_manager,
                 worker_service,
                 verbosity,
                 shared_client,
-                keep_container,
             )
             .await,
         )
@@ -60,33 +54,24 @@ impl DockerWorkerExecutorCluster {
 
     pub async fn new(
         size: usize,
-        base_http_port: u16,
-        base_grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
-        keep_containers: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
 
-        for i in 0..size {
-            let http_port = base_http_port + i as u16;
-            let grpc_port = base_grpc_port + i as u16;
-
+        for _ in 0..size {
             let worker_executor_join = tokio::spawn(Self::make_worker_executor(
-                http_port,
-                grpc_port,
                 redis.clone(),
                 component_service.clone(),
                 shard_manager.clone(),
                 worker_service.clone(),
                 verbosity,
                 shared_client,
-                keep_containers,
             ));
 
             worker_executors_joins.push(worker_executor_join);
@@ -128,20 +113,23 @@ impl WorkerExecutorCluster for DockerWorkerExecutorCluster {
     async fn stop(&self, index: usize) {
         let mut stopped = self.stopped_indices.lock().await;
         if !stopped.contains(&index) {
-            self.worker_executors[index].kill().await;
+            self.worker_executors[index].stop().await;
             stopped.insert(index);
         }
     }
 
     async fn start(&self, index: usize) {
         if self.stopped_indices().await.contains(&index) {
-            self.worker_executors[index].restart().await;
+            self.worker_executors[index].start().await;
             self.stopped_indices.lock().await.remove(&index);
         }
     }
 
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>> {
-        self.worker_executors.to_vec()
+        self.worker_executors
+            .iter()
+            .map(|we| we.clone() as Arc<dyn WorkerExecutor + Send + Sync + 'static>)
+            .collect()
     }
 
     async fn stopped_indices(&self) -> Vec<usize> {

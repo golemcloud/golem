@@ -14,14 +14,13 @@
 
 use crate::components::component_service::{
     new_component_client, new_plugin_client, wait_for_startup, ComponentService,
-    ComponentServiceClient, ComponentServiceEnvVars, PluginServiceClient,
+    ComponentServiceClient, PluginServiceClient,
 };
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
 use crate::components::rdb::Rdb;
-use crate::components::GolemEnvVars;
 use crate::config::GolemClientProtocol;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
@@ -68,7 +67,6 @@ impl K8sComponentService {
     ) -> Self {
         Self::new_base(
             component_directory,
-            Box::new(GolemEnvVars()),
             namespace,
             routing_type,
             verbosity,
@@ -83,7 +81,6 @@ impl K8sComponentService {
 
     pub async fn new_base(
         component_directory: PathBuf,
-        env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
@@ -95,15 +92,15 @@ impl K8sComponentService {
     ) -> Self {
         info!("Starting Golem Component Service pod");
 
-        let env_vars = env_vars
-            .env_vars(
-                Self::HTTP_PORT,
-                Self::GRPC_PORT,
-                component_compilation_service,
-                rdb,
-                verbosity,
-            )
-            .await;
+        let env_vars = super::env_vars(
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            component_compilation_service,
+            rdb,
+            verbosity,
+            true,
+        )
+        .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

@@ -22,8 +22,8 @@ use tracing::info;
 use tracing::Level;
 
 use crate::components::redis::Redis;
-use crate::components::shard_manager::{wait_for_startup, ShardManager, ShardManagerEnvVars};
-use crate::components::{ChildProcessLogger, GolemEnvVars};
+use crate::components::shard_manager::{wait_for_startup, ShardManager};
+use crate::components::ChildProcessLogger;
 
 pub struct SpawnedShardManager {
     http_port: u16,
@@ -34,7 +34,6 @@ pub struct SpawnedShardManager {
     executable: PathBuf,
     working_directory: PathBuf,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
-    env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
     verbosity: Level,
     out_level: Level,
     err_level: Level,
@@ -53,7 +52,6 @@ impl SpawnedShardManager {
         err_level: Level,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             executable,
             working_directory,
             number_of_shards_override,
@@ -68,7 +66,6 @@ impl SpawnedShardManager {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
         number_of_shards_override: Option<usize>,
@@ -86,7 +83,6 @@ impl SpawnedShardManager {
         }
 
         let (child, logger) = Self::start(
-            env_vars.as_ref(),
             executable,
             working_directory,
             number_of_shards_override,
@@ -108,7 +104,6 @@ impl SpawnedShardManager {
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
             redis,
-            env_vars,
             verbosity,
             out_level,
             err_level,
@@ -116,7 +111,6 @@ impl SpawnedShardManager {
     }
 
     async fn start(
-        env_vars: &(dyn ShardManagerEnvVars + Send + Sync + 'static),
         executable: &Path,
         working_directory: &Path,
         number_of_shards_override: Option<usize>,
@@ -130,15 +124,14 @@ impl SpawnedShardManager {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
             .envs(
-                env_vars
-                    .env_vars(
-                        number_of_shards_override,
-                        http_port,
-                        grpc_port,
-                        redis,
-                        verbosity,
-                    )
-                    .await,
+                super::env_vars(
+                    number_of_shards_override,
+                    http_port,
+                    grpc_port,
+                    redis,
+                    verbosity,
+                )
+                .await,
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -195,7 +188,6 @@ impl ShardManager for SpawnedShardManager {
             *self.number_of_shards_override.read().unwrap();
 
         let (child, logger) = Self::start(
-            self.env_vars.as_ref(),
             &self.executable,
             &self.working_directory,
             number_of_shards_override,
