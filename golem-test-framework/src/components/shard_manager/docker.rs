@@ -135,29 +135,14 @@ impl ShardManager for DockerShardManager {
     }
 
     async fn kill(&self) {
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await;
     }
 
     async fn restart(&self, number_of_shards_override: Option<usize>) {
         if number_of_shards_override.is_some() {
             panic!("number_of_shards_override not supported for docker")
         }
-
-        let mut image =
-            ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, self.env_vars.clone())
-                .with_container_name(self.container_name.clone())
-                .with_network(NETWORK);
-
-        if let Some(number_of_shards) = number_of_shards_override {
-            image = image.with_env_var("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string())
-        }
-
-        let container = image
-            .start()
-            .await
-            .expect("Failed to start golem-shard-manager container");
-
-        self.container.lock().await.replace(container);
+        self.container.restart().await
     }
 }
 

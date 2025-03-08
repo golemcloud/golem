@@ -98,7 +98,7 @@ impl Rdb for DockerPostgresRdb {
 
     async fn kill(&self) {
         info!("Stopping Postgres container");
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await;
     }
 }
 

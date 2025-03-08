@@ -96,6 +96,6 @@ impl Redis for DockerRedis {
 
     async fn kill(&self) {
         info!("Stopping Redis container");
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await;
     }
 }

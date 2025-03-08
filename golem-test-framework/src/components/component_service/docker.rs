@@ -170,7 +170,7 @@ impl ComponentService for DockerComponentService {
     }
 
     async fn kill(&self) {
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await;
     }
 }
 

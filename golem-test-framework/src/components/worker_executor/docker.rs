@@ -171,22 +171,11 @@ impl WorkerExecutor for DockerWorkerExecutor {
     }
 
     async fn kill(&self) {
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await;
     }
 
     async fn restart(&self) {
-        let container = WorkerExecutorImage::new(
-            ContainerPort::Tcp(self.grpc_port),
-            ContainerPort::Tcp(self.http_port),
-            self.env_vars.clone(),
-        )
-        .with_container_name(&self.name)
-        .with_network(NETWORK)
-        .start()
-        .await
-        .expect("Failed to start golem-worker-executor container");
-
-        self.container.lock().await.replace(container);
+        self.container.restart().await
     }
 }
 

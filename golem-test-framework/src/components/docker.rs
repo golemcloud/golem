@@ -7,25 +7,29 @@ pub(super) const NETWORK: &str = "golem_test_network";
 
 #[async_trait]
 pub trait KillContainer {
-    async fn kill(&self, keep: bool);
+    async fn restart(&self);
+    async fn kill(&self);
 }
 
 #[async_trait]
 impl<I: Image> KillContainer for Arc<Mutex<Option<ContainerAsync<I>>>> {
-    async fn kill(&self, keep: bool) {
+    async fn kill(&self) {
         if let Some(container) = self.lock().await.take() {
             let id = container.id().to_string();
-            if keep {
-                container
-                    .stop()
-                    .await
-                    .unwrap_or_else(|_| panic!("Failed to stop container {id}"));
-            } else {
-                container
-                    .rm()
-                    .await
-                    .unwrap_or_else(|_| panic!("Failed to remove container {id}"));
-            }
+            container
+                .rm()
+                .await
+                .unwrap_or_else(|_| panic!("Failed to remove container {id}"));
+        }
+    }
+
+    async fn restart(&self) {
+        let guard = self.lock().await;
+        if let Some(ref c) = *guard {
+            c.stop().await.expect("failed to stop container");
+            c.start().await.expect("failed to start the container again");
+        } else {
+            panic!("container was already removed")
         }
     }
 }

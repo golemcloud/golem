@@ -98,7 +98,7 @@ impl Rdb for DockerMysqlRdb {
 
     async fn kill(&self) {
         info!("Stopping Mysql container");
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await;
     }
 }
 

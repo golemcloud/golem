@@ -216,7 +216,7 @@ impl WorkerService for DockerWorkerService {
     }
 
     async fn kill(&self) {
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await;
     }
 }
 
