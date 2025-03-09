@@ -12,37 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::redis::Redis;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::ImageExt;
 use testcontainers_modules::redis::REDIS_PORT;
-use tokio::sync::Mutex;
 use tracing::info;
 
-use crate::components::docker::KillContainer;
-use crate::components::redis::Redis;
-use crate::components::NETWORK;
-
 pub struct DockerRedis {
-    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::redis::Redis>>>>,
-    keep_container: bool,
+    container: ContainerHandle<testcontainers_modules::redis::Redis>,
     prefix: String,
     valid: AtomicBool,
+    private_host: String,
     public_port: u16,
 }
 
 impl DockerRedis {
-    const NAME: &'static str = "golem_redis";
-
-    pub async fn new(prefix: String, keep_container: bool) -> Self {
+    pub async fn new(prefix: String) -> Self {
         info!("Starting Redis container");
 
         let container = testcontainers_modules::redis::Redis::default()
             .with_tag("7.2")
-            .with_container_name(Self::NAME)
             .with_network(NETWORK)
             .start()
             .await
@@ -55,11 +48,13 @@ impl DockerRedis {
 
         super::wait_for_startup("localhost", public_port, Duration::from_secs(10));
 
+        let private_host = get_docker_container_name(container.id()).await;
+
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            container: ContainerHandle::new(container),
             prefix,
             valid: AtomicBool::new(true),
+            private_host,
             public_port,
         }
     }
@@ -74,7 +69,7 @@ impl Redis for DockerRedis {
     }
 
     fn private_host(&self) -> String {
-        Self::NAME.to_string()
+        self.private_host.clone()
     }
 
     fn private_port(&self) -> u16 {
@@ -94,7 +89,6 @@ impl Redis for DockerRedis {
     }
 
     async fn kill(&self) {
-        info!("Stopping Redis container");
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await
     }
 }

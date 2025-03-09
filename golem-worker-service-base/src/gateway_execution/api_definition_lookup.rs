@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_api_deployment::ApiSiteString;
-use crate::service::gateway::api_deployment::ApiDeploymentService;
+use crate::service::gateway::api_deployment::{ApiDeploymentError, ApiDeploymentService};
 use async_trait::async_trait;
 use golem_common::model::HasAccountId;
+use golem_common::SafeDisplay;
 use tracing::error;
 
 // To lookup the set of API Definitions based on an incoming input.
@@ -31,14 +31,20 @@ pub trait HttpApiDefinitionsLookup<Namespace> {
     async fn get(
         &self,
         host: &ApiSiteString,
-    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError>;
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError<Namespace>>;
 }
 
-pub struct ApiDefinitionLookupError(pub String);
+pub enum ApiDefinitionLookupError<Namespace> {
+    ApiDeploymentError(ApiDeploymentError<Namespace>),
+    UnknownSite(ApiSiteString),
+}
 
-impl Display for ApiDefinitionLookupError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ApiDefinitionLookupError: {}", self.0)
+impl<Namespace> SafeDisplay for ApiDefinitionLookupError<Namespace> {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ApiDefinitionLookupError::ApiDeploymentError(err) => err.to_string(),
+            ApiDefinitionLookupError::UnknownSite(_) => "Unknown authority".to_string(),
+        }
     }
 }
 
@@ -61,24 +67,20 @@ impl<AuthCtx, Namespace: HasAccountId + Send + Sync> HttpApiDefinitionsLookup<Na
     async fn get(
         &self,
         host: &ApiSiteString,
-    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError> {
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError<Namespace>>
+    {
         let http_api_defs = self
             .deployment_service
             .get_all_definitions_by_site(host)
             .await
             .map_err(|err| {
-                error!("Error getting API definitions from the repo: {}", err);
-                ApiDefinitionLookupError(format!(
-                    "Error getting API definitions from the repo: {}",
-                    err
-                ))
+                error!("Failed to lookup API definitions: {}", err);
+                ApiDefinitionLookupError::ApiDeploymentError(err)
             })?;
 
         if http_api_defs.is_empty() {
-            return Err(ApiDefinitionLookupError(format!(
-                "API deployment with site: {} not found",
-                &host
-            )));
+            error!("No API definitions found for site: {}", host);
+            return Err(ApiDefinitionLookupError::UnknownSite(host.clone()));
         }
 
         Ok(http_api_defs)
