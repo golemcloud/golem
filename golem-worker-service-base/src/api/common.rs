@@ -249,7 +249,7 @@ mod conversion {
     impl<Namespace: Display> From<ApiDeploymentError<Namespace>> for ApiEndpointError {
         fn from(error: ApiDeploymentError<Namespace>) -> Self {
             match error {
-                ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
+                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => {
                     ApiEndpointError::not_found(error)
                 }
                 ApiDeploymentError::ApiDeploymentNotFound(_, _) => {

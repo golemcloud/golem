@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::ApiDefinitionId;
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::*;
 
 use std::collections::{HashMap, HashSet};
@@ -87,8 +87,8 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiDeploymentError<Namespace> {
-    #[error("Unknown API: {1}")]
-    ApiDefinitionNotFound(Namespace, ApiDefinitionId),
+    #[error("Unknown API {1}/{2}")]
+    ApiDefinitionNotFound(Namespace, ApiDefinitionId, ApiVersion),
     #[error("Unknown authority or domain: {1}")]
     ApiDeploymentNotFound(Namespace, ApiSiteString),
     #[error("API deployment conflict error: {0}")]
@@ -121,7 +121,7 @@ impl<Namespace> From<RepoError> for ApiDeploymentError<Namespace> {
 impl<Namespace: Display> SafeDisplay for ApiDeploymentError<Namespace> {
     fn to_safe_string(&self) -> String {
         match self {
-            ApiDeploymentError::ApiDefinitionNotFound(_, _) => self.to_string(),
+            ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => self.to_string(),
             ApiDeploymentError::ApiDeploymentNotFound(_, _) => self.to_string(),
             ApiDeploymentError::ApiDeploymentConflict(_) => self.to_string(),
             ApiDeploymentError::ApiDefinitionsConflict(_) => self.to_string(),
@@ -698,6 +698,7 @@ where
                     return Err(ApiDeploymentError::ApiDefinitionNotFound(
                         deployment_request.namespace.clone(),
                         api_key_to_deploy.id.clone(),
+                        api_key_to_deploy.version.clone(),
                     ));
                 }
             }
