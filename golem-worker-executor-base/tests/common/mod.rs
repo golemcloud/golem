@@ -51,11 +51,14 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{plugins, All, HasAll, HasConfig, HasOplogService};
+use golem_worker_executor_base::services::{
+    plugins, rdbms, All, HasAll, HasConfig, HasOplogService,
+};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
 
@@ -70,7 +73,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
-use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
@@ -684,6 +689,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
@@ -708,6 +714,7 @@ impl WorkerCtx for TestWorkerCtx {
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             event_service,
             oplog_service,
             oplog,
@@ -933,6 +940,32 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+impl InvocationContextManagement for TestWorkerCtx {
+    fn start_span(
+        &mut self,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        self.durable_ctx.start_span(initial_attributes)
+    }
+
+    fn start_child_span(
+        &mut self,
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        self.durable_ctx
+            .start_child_span(parent, initial_attributes)
+    }
+
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
+    }
+
+    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id)
+    }
+}
+
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     fn create_active_workers(
@@ -940,6 +973,16 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
+    }
+
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> (
+        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn PluginsObservations>,
+    ) {
+        plugins::default_configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(
@@ -955,16 +998,6 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_storage,
             plugin_observations,
         )
-    }
-
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> (
-        Arc<dyn Plugins<DefaultGolemTypes>>,
-        Arc<dyn PluginsObservations>,
-    ) {
-        plugins::default_configured(&golem_config.plugin_service)
     }
 
     async fn create_services(
@@ -983,6 +1016,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator<TestWorkerCtx> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -1012,6 +1046,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             shard_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -1042,6 +1077,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             shard_manager_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -1067,6 +1103,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             oplog_service,
             rpc,
             scheduler_service,

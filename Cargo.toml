@@ -68,6 +68,8 @@ exclude = [
     "test-components/wasi-http-incoming-request-handler-state",
     "test-components/write-stderr",
     "test-components/write-stdout",
+    "test-components/rdbms-service",
+    "app/desktop/src-tauri"
 ]
 
 [workspace.dependencies]
@@ -81,7 +83,7 @@ async_zip = "0.0.17"
 aws-config = "1.5.10"
 aws-sdk-s3 = "1.65.0"
 axum = { version = "0.7.9", features = ["multipart"] }
-bigdecimal = "0.4.7"
+bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 bytes = "1.9.0"
 cap-std = "3.4.2" # keep in sync with wasmtime
@@ -163,13 +165,20 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
+sqlx-core = { version = "0.8" }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",
     "postgres",
+    "mysql",
     "uuid",
     "migrate",
     "chrono",
+    "json",
+    "bigdecimal",
+    "mac_address",
+    "bit-vec",
+    "ipnetwork"
 ] }
 strum = "0.26.3"
 strum_macros = "0.26.4"
@@ -181,6 +190,7 @@ testcontainers-modules = { version = "0.11.4", features = [
     "postgres",
     "redis",
     "minio",
+    "mysql"
 ] }
 test-r = { version = "2.1.0", default-features = true }
 thiserror = "2.0.6"
@@ -213,6 +223,7 @@ tracing-subscriber = { version = "0.3.19", features = [
 tracing-test = "0.2.5"
 typed-path = "0.10.0"
 url = "2.5.4"
+urlencoding = "2.1.3"
 uuid = { version = "1.11.0", features = ["serde", "v4", "v5"] }
 wasm-wave = "0.222.0"
 wasmtime = { version = "=27.0.0", features = ["component-model"] }

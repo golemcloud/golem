@@ -52,8 +52,10 @@ pub fn oplog_entry() {
 #[test_r::non_flaky(100)]
 pub async fn timestamped_worker_invocation() {
     let timestamp = Timestamp::from(1724701938466);
-    let root_span =
-        InvocationContextSpan::new_at(Some(SpanId(NonZeroU64::new(4567).unwrap())), timestamp);
+    let root_span = InvocationContextSpan::local()
+        .with_start(timestamp)
+        .with_span_id(SpanId(NonZeroU64::new(4567).unwrap()))
+        .build();
     root_span.set_attribute(
         "key".to_string(),
         AttributeValue::String("value".to_string()),

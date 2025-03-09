@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_refinement::precise_types::{
-    ErrType, ListType, OkType, OptionalType, RecordType, TupleType, VariantType,
+    ErrType, ListType, OkType, OptionalType, RangeType, RecordType, TupleType, VariantType,
 };
 use crate::InferredType;
 
@@ -45,8 +45,23 @@ impl ExtractInnerType for ListType {
     }
 }
 
+impl ExtractInnerType for RangeType {
+    fn inner_type(&self) -> InferredType {
+        self.0.clone()
+    }
+}
+
 pub trait ExtractInnerTypes {
     fn inner_types(&self) -> Vec<InferredType>;
+}
+
+impl ExtractInnerTypes for RangeType {
+    fn inner_types(&self) -> Vec<InferredType> {
+        match &self.1 {
+            Some(typ) => vec![self.0.clone(), typ.clone()],
+            None => vec![self.0.clone()],
+        }
+    }
 }
 
 impl ExtractInnerTypes for TupleType {

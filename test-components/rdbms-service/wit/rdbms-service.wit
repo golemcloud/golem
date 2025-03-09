@@ -1,0 +1,52 @@
+package golem:it;
+
+interface api {
+  use wasi:rdbms/postgres@0.0.1.{db-result as postgres-db-result};
+  use wasi:rdbms/mysql@0.0.1.{db-result as mysql-db-result};
+
+  enum transaction-end {
+    commit,
+    rollback,
+    none
+  }
+
+  enum statement-action {
+    execute,
+    query,
+    query-stream
+  }
+
+  record statement {
+    statement: string,
+    params: list<string>,
+    action: statement-action,
+    sleep: option<u64>
+  }
+
+  variant mysql-result {
+     execute(u64),
+     query(mysql-db-result)
+  }
+
+  variant postgres-result {
+    execute(u64),
+    query(postgres-db-result)
+  }
+
+  check: func() -> string;
+
+  mysql-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<result<mysql-result, string>>, string>;
+
+  mysql-executions: func(statements: list<statement>) -> result<list<result<mysql-result, string>>, string>;
+
+  postgres-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<result<postgres-result, string>>, string>;
+
+  postgres-executions: func(statements: list<statement>) -> result<list<result<postgres-result, string>>, string>;
+
+}
+
+world rdbms-service {
+  import wasi:rdbms/postgres@0.0.1;
+  import wasi:rdbms/mysql@0.0.1;
+  export api;
+}

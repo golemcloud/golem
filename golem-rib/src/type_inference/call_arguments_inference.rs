@@ -427,7 +427,7 @@ mod function_parameters_inference_tests {
         expr.infer_function_call_types(&function_type_registry)
             .unwrap();
 
-        let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
+        let let_binding = Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None);
 
         let call_expr = Expr::call_worker_function(
             DynamicParsedFunctionName {
@@ -446,6 +446,7 @@ mod function_parameters_inference_tests {
             exprs: vec![let_binding, call_expr],
             inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
+            type_annotation: None,
         };
 
         assert_eq!(expr, expected);

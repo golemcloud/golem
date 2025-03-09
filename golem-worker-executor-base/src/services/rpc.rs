@@ -24,13 +24,14 @@ use crate::services::plugins::Plugins;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
-    shard, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
+    active_workers, blob_store, component, golem_config, key_value, oplog, promise, rdbms,
+    scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
     HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins,
-    HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    HasPromiseService, HasRdbmsService, HasRpc, HasRunningWorkerEnumerationService,
+    HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
+    HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -291,6 +292,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     shard_service: Arc<dyn shard::ShardService + Send + Sync>,
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+    rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
@@ -320,6 +322,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             shard_service: self.shard_service.clone(),
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
+            rdbms_service: self.rdbms_service.clone(),
             oplog_service: self.oplog_service.clone(),
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
@@ -482,6 +485,13 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DirectWorkerInvocationRpc<Ctx> 
     }
 }
 
+impl<Ctx: WorkerCtx> HasRdbmsService for DirectWorkerInvocationRpc<Ctx> {
+    fn rdbms_service(&self) -> Arc<dyn rdbms::RdbmsService + Send + Sync> {
+        self.rdbms_service.clone()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -505,6 +515,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
@@ -531,6 +542,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             oplog_service,
             scheduler_service,
             worker_activator,

@@ -139,6 +139,24 @@ impl TypeRefinement for ListType {
     }
 }
 
+impl TypeRefinement for RangeType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>>
+    where
+        Self: Sized,
+    {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            if let InferredType::Range { from, to } = inferred_type {
+                Some(RangeType(
+                    from.deref().clone(),
+                    to.as_ref().map(|t| t.deref().clone()),
+                ))
+            } else {
+                None
+            }
+        })
+    }
+}
+
 impl TypeRefinement for TupleType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {

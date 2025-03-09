@@ -34,6 +34,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
+use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
@@ -47,8 +48,9 @@ use crate::worker::invocation::{find_first_available_function, invoke_worker, In
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationHooks,
-    InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement,
+    WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -58,7 +60,9 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
-use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription,
     WorkerError, WorkerResourceId,
@@ -117,6 +121,7 @@ pub mod wasm_rpc;
 
 mod durability;
 mod dynamic_linking;
+pub mod rdbms;
 mod replay_state;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
@@ -134,6 +139,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata<Ctx::Types>,
@@ -144,6 +150,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
@@ -217,6 +224,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_enumeration_service,
                 key_value_service,
                 blob_store_service,
+                rdbms_service,
                 component_service,
                 plugins,
                 config.clone(),
@@ -745,7 +753,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         let (invocation_context, current_span_id) =
             InvocationContext::from_stack(invocation_context).map_err(GolemError::runtime)?;
 
-        self.state.invocation_context = invocation_context;
+        self.state.invocation_context.switch_to(invocation_context);
         self.state.current_span_id = current_span_id;
 
         Ok(())
@@ -755,6 +763,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         self.state
             .invocation_context
             .get_stack(&self.state.current_span_id)
+            .unwrap()
     }
 
     fn is_live(&self) -> bool {
@@ -1233,6 +1242,73 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
+    fn start_span(
+        &mut self,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        let span_id = self.state.current_span_id.clone();
+        self.start_child_span(&span_id, initial_attributes)
+    }
+
+    fn start_child_span(
+        &mut self,
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        let current_span_id = &self.state.current_span_id;
+        let span = self
+            .state
+            .invocation_context
+            .start_span(current_span_id, None)
+            .map_err(GolemError::runtime)?;
+
+        if current_span_id != parent
+            && !self
+                .state
+                .invocation_context
+                .has_in_stack(current_span_id, parent)
+        {
+            // The parent span is not in the current invocation stack. This can happen if it was created in a previous
+            // invocation and stored in some global state.
+            // To preserve the current invocation context stack but also have the information from the desired parent
+            // span, we add a _link_ to the newly created span.
+
+            self.state
+                .invocation_context
+                .add_link(span.span_id(), parent)
+                .map_err(GolemError::runtime)?;
+        };
+
+        for (name, value) in initial_attributes {
+            span.set_attribute(name.clone(), value.clone());
+        }
+
+        // TODO: write an open span entry to the oplog, or read the persisted span in replay mode
+
+        Ok(span)
+    }
+
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        let _ = self
+            .state
+            .invocation_context
+            .finish_span(span_id)
+            .map_err(GolemError::runtime);
+        Ok(())
+    }
+
+    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        // TODO: if live mode write a close span entry to the oplog
+        let _ = self
+            .state
+            .invocation_context
+            .finish_span(span_id)
+            .map_err(GolemError::runtime);
+        Ok(())
+    }
+}
+
 pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
     fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
@@ -1292,6 +1368,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .data_mut()
                             .set_current_idempotency_key(idempotency_key)
                             .await;
+
+                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
                         store
                             .as_context_mut()
                             .data_mut()
@@ -1307,6 +1385,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         )
                         .instrument(span)
                         .await;
+
+                        for span_id in local_span_ids {
+                            store.as_context_mut().data_mut().finish_span(&span_id)?;
+                        }
+                        for span_id in inherited_span_ids {
+                            store.as_context_mut().data_mut().remove_span(&span_id)?;
+                        }
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
@@ -1857,6 +1942,7 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+    rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
     component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
     plugins: Arc<dyn Plugins<Ctx::Types>>,
     config: Arc<GolemConfig>,
@@ -1899,6 +1985,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
         component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
         config: Arc<GolemConfig>,
@@ -1929,6 +2016,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             component_service,
             plugins,
             config,

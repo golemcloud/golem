@@ -41,7 +41,7 @@ mod internal {
                     variable_id,
                     inferred_type,
                     source_span,
-                    ..
+                    type_annotation,
                 } => {
                     if enum_cases.cases.contains(&variable_id.name()) {
                         *expr = Expr::Call {
@@ -50,6 +50,7 @@ mod internal {
                             args: vec![],
                             inferred_type: inferred_type.clone(),
                             source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
                         };
                     }
                 }

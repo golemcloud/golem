@@ -29,6 +29,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
+use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
@@ -40,7 +41,9 @@ use crate::services::{
 use crate::worker::{RetryDecision, Worker};
 use crate::GolemTypes;
 use async_trait::async_trait;
-use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -70,6 +73,7 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + DynamicLinking<Self>
+    + InvocationContextManagement
     + Send
     + Sync
     + Sized
@@ -118,6 +122,7 @@ pub trait WorkerCtx:
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
@@ -224,11 +229,13 @@ pub trait InvocationManagement {
     /// Gets the invocation key associated with the current invocation of the worker.
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
 
+    /// Sets (overwrites) the current invocation context stack
     async fn set_current_invocation_context(
         &mut self,
         invocation_context: InvocationContextStack,
     ) -> Result<(), GolemError>;
 
+    /// Gets the current invocation context stack
     async fn get_current_invocation_context(&self) -> InvocationContextStack;
 
     /// Returns whether we are in live mode where we are executing new calls.
@@ -430,6 +437,25 @@ pub trait FileSystemReading {
         path: &ComponentFilePath,
     ) -> Result<ListDirectoryResult, GolemError>;
     async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError>;
+}
+
+/// Functions to manipulate and query the current invocation context
+pub trait InvocationContextManagement {
+    fn start_span(
+        &mut self,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError>;
+    fn start_child_span(
+        &mut self,
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError>;
+
+    /// Removes an inherited span without finishing it
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
+
+    /// Removes and finishes a local span
+    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
 }
 
 #[async_trait]

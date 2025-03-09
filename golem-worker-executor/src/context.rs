@@ -15,7 +15,9 @@
 use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
@@ -45,6 +47,7 @@ use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::plugins::Plugins;
 use golem_worker_executor_base::services::promise::PromiseService;
+use golem_worker_executor_base::services::rdbms::RdbmsService;
 use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
@@ -56,7 +59,8 @@ use golem_worker_executor_base::services::{
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::DefaultGolemTypes;
 use std::collections::HashSet;
@@ -330,6 +334,7 @@ impl WorkerCtx for Context {
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         _active_workers: Arc<ActiveWorkers<Context>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
@@ -354,6 +359,7 @@ impl WorkerCtx for Context {
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             event_service,
             oplog_service,
             oplog,
@@ -584,5 +590,31 @@ impl DynamicLinking<Context> for Context {
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
+    }
+}
+
+impl InvocationContextManagement for Context {
+    fn start_span(
+        &mut self,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        self.durable_ctx.start_span(initial_attributes)
+    }
+
+    fn start_child_span(
+        &mut self,
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
+    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+        self.durable_ctx
+            .start_child_span(parent, initial_attributes)
+    }
+
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
+    }
+
+    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id)
     }
 }

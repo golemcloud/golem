@@ -82,6 +82,7 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+urlencoding = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
 log = "0.4.22"

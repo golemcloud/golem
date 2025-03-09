@@ -484,7 +484,7 @@ mod comprehensive_test {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiled_expr = compiler::compile(&expr, &component_metadata::component_metadata())
+        let compiled_expr = compiler::compile(expr, &component_metadata::component_metadata())
             .unwrap()
             .byte_code;
 

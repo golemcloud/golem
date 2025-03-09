@@ -94,6 +94,14 @@ access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 host = "localhost"
 port = 9007
 
+[rdbms.pool]
+eviction_period = "2m"
+eviction_ttl = "10m"
+max_connections = 20
+
+[rdbms.query]
+query_batch = 50
+
 [retry]
 max_attempts = 3
 max_delay = "1s"
@@ -168,6 +176,7 @@ without_time = false
 # 
 # [blob_storage.config]
 # compilation_cache_bucket = "golem-compiled-components"
+# components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
 # custom_data_bucket = "custom-data"
 # initial_component_files_bucket = "golem-initial-component-files"
@@ -261,6 +270,14 @@ without_time = false
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # host = "localhost"
 # port = 9007
+# 
+# [rdbms.pool]
+# eviction_period = "2m"
+# eviction_ttl = "10m"
+# max_connections = 20
+# 
+# [rdbms.query]
+# query_batch = 50
 # 
 # [retry]
 # max_attempts = 3
@@ -391,6 +408,14 @@ without_time = false
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # host = "localhost"
 # port = 9007
+# 
+# [rdbms.pool]
+# eviction_period = "2m"
+# eviction_ttl = "10m"
+# max_connections = 20
+# 
+# [rdbms.query]
+# query_batch = 50
 # 
 # [retry]
 # max_attempts = 3

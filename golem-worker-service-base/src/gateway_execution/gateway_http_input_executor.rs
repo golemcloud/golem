@@ -26,7 +26,9 @@ use crate::gateway_binding::{
     IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::{
+    ApiDefinitionLookupError, HttpApiDefinitionsLookup,
+};
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -36,11 +38,13 @@ use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSucc
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
+use crate::service::gateway::api_deployment::ApiDeploymentError;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::IdempotencyKey;
+use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
@@ -229,13 +233,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         request: &RichRequest,
     ) -> GatewayHttpResult<AuthorisationSuccess> {
-        let url = request
-            .url()
-            .map_err(|e| GatewayHttpError::BadRequest(format!("Failed getting url: {e}")))?;
-
         self.auth_call_back_binding_handler
             .handle_auth_call_back(
-                &url,
+                &request.query_params(),
                 security_scheme_with_metadata,
                 &self.gateway_session_store,
                 &self.identity_provider,
@@ -290,8 +290,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         &self,
         script: &InvocationContextCompiled,
         request_value: &serde_json::Map<String, Value>,
-        request_attributes: HashMap<String, AttributeValue>,
-    ) -> GatewayHttpResult<(Option<TraceId>, Arc<InvocationContextSpan>)> {
+    ) -> GatewayHttpResult<(Option<TraceId>, HashMap<String, ValueAndType>)> {
         let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
             .await
             .map_err(GatewayHttpError::BadRequest)?;
@@ -305,15 +304,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             ))?;
         let record: HashMap<String, ValueAndType> = HashMap::from_iter(value);
 
-        let span_id = record
-            .get("span_id")
-            .or(record.get("span-id"))
-            .map(to_attribute_value)
-            .transpose()?
-            .map(SpanId::from_attribute_value)
-            .transpose()
-            .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Span ID: {err}")))?;
-
         let trace_id = record
             .get("trace_id")
             .or(record.get("trace-id"))
@@ -323,7 +313,28 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .transpose()
             .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Trace ID: {err}")))?;
 
-        let span = InvocationContextSpan::new_with_attributes(span_id, request_attributes);
+        Ok((trace_id, record))
+    }
+
+    fn materialize_user_invocation_context(
+        record: HashMap<String, ValueAndType>,
+        parent: Option<Arc<InvocationContextSpan>>,
+        request_attributes: HashMap<String, AttributeValue>,
+    ) -> GatewayHttpResult<Arc<InvocationContextSpan>> {
+        let span_id = record
+            .get("span_id")
+            .or(record.get("span-id"))
+            .map(to_attribute_value)
+            .transpose()?
+            .map(SpanId::from_attribute_value)
+            .transpose()
+            .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Span ID: {err}")))?;
+
+        let span = InvocationContextSpan::local()
+            .span_id(span_id)
+            .parent(parent)
+            .with_attributes(request_attributes)
+            .build();
 
         for (key, value) in record {
             if key != "span_id" && key != "span-id" && key != "trace_id" && key != "trace-id" {
@@ -331,7 +342,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             }
         }
 
-        Ok((trace_id, span))
+        Ok(span)
     }
 
     async fn get_worker_detail(
@@ -374,15 +385,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         {
             let request_attributes = extract_request_attributes(&request.underlying);
 
-            let (user_defined_trace_id, user_defined_span) = self
-                .evaluate_invocation_context_rib_script(
-                    invocation_context_compiled,
-                    request_value,
-                    request_attributes,
-                )
-                .await?;
-
             let trace_context_headers = TraceContextHeaders::parse(request.underlying.headers());
+
+            let (user_defined_trace_id, user_defined_span) = self
+                .evaluate_invocation_context_rib_script(invocation_context_compiled, request_value)
+                .await?;
 
             match (trace_context_headers, &user_defined_trace_id) {
                 (Some(ctx), None) => {
@@ -392,15 +399,30 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                         InvocationContextSpan::external_parent(ctx.parent_id),
                         ctx.trace_states,
                     );
+                    let user_defined_span = Self::materialize_user_invocation_context(
+                        user_defined_span,
+                        Some(ctx.spans.first().clone()),
+                        request_attributes,
+                    )?;
                     ctx.push(user_defined_span);
                     ctx
                 }
                 (_, Some(trace_id)) => {
                     // Forced a new trace, ignoring the trace context in the headers
+                    let user_defined_span = Self::materialize_user_invocation_context(
+                        user_defined_span,
+                        None,
+                        request_attributes,
+                    )?;
                     InvocationContextStack::new(trace_id.clone(), user_defined_span, Vec::new())
                 }
                 (None, _) => {
                     // No trace context in headers, starting a new trace
+                    let user_defined_span = Self::materialize_user_invocation_context(
+                        user_defined_span,
+                        None,
+                        request_attributes,
+                    )?;
                     InvocationContextStack::new(
                         user_defined_trace_id.unwrap_or_else(TraceId::generate),
                         user_defined_span,
@@ -525,11 +547,12 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             Err(api_defs_lookup_error) => {
                 error!(
                     "API request host: {} - error: {}",
-                    authority, api_defs_lookup_error
+                    authority,
+                    api_defs_lookup_error.to_safe_string()
                 );
-                return poem::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string("Internal error".to_string()));
+
+                return api_defs_lookup_error
+                    .to_response_from_safe_display(get_status_code_from_api_lookup_error);
             }
         };
 
@@ -676,5 +699,35 @@ fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue>
         _ => Err(GatewayHttpError::BadRequest(
             "Invocation context values must be string".to_string(),
         )),
+    }
+}
+
+fn get_status_code_from_api_lookup_error<Namespace>(
+    error: &ApiDefinitionLookupError<Namespace>,
+) -> StatusCode {
+    match &error {
+        ApiDefinitionLookupError::ApiDeploymentError(err) => {
+            // In the context of APIDefinitionLookup (which occurs for an actual incoming request),
+            // we have a different set of http response status code
+            // for API deployment errors
+            match &err {
+                ApiDeploymentError::ApiDeploymentNotFound(_, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDefinitionNotFound(_, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDeploymentConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+
+                ApiDeploymentError::ComponentConstraintCreateError(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+
+                ApiDeploymentError::ApiDefinitionsConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalRepoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalConversionError { .. } => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }
+        ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
     }
 }

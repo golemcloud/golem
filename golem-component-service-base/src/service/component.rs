@@ -1237,12 +1237,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         if let Some(component) = component {
             info!(owner = %owner, component_id = %component.versioned_component_id, "Download component as stream");
 
-            let stream = self
-                .object_store
+            self.object_store
                 .get_stream(&component.protected_object_store_key())
-                .await;
-
-            Ok(stream)
+                .await
+                .map_err(|e| {
+                    ComponentError::component_store_error("Error downloading component", e)
+                })
         } else {
             Err(ComponentError::UnknownComponentId(component_id.clone()))
         }

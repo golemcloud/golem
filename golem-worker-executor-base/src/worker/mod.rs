@@ -35,8 +35,8 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
-    HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasPromiseService, HasRdbmsService, HasRpc, HasSchedulerService, HasWasmtimeEngine,
+    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -286,6 +286,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
         })
+    }
+
+    pub fn worker_id(&self) -> WorkerId {
+        self.owned_worker_id.worker_id()
     }
 
     pub fn oom_retry_config(&self) -> &RetryConfig {
@@ -1534,6 +1538,7 @@ impl RunningWorker {
             parent.worker_enumeration_service(),
             parent.key_value_service(),
             parent.blob_store_service(),
+            parent.rdbms_service(),
             parent.event_service.clone(),
             parent.active_workers(),
             parent.oplog_service(),

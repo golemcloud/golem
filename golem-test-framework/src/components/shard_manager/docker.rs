@@ -16,28 +16,23 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::redis::Redis;
+use crate::components::shard_manager::ShardManager;
 use async_trait::async_trait;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
+use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
-use crate::components::docker::KillContainer;
-use crate::components::redis::Redis;
-use crate::components::shard_manager::{ShardManager, ShardManagerEnvVars};
-use crate::components::{GolemEnvVars, NETWORK};
-
 pub struct DockerShardManager {
-    container: Arc<Mutex<Option<ContainerAsync<ShardManagerImage>>>>,
-    keep_container: bool,
+    container: ContainerHandle<ShardManagerImage>,
+    container_name: String,
     public_http_port: u16,
     public_grpc_port: u16,
-    env_vars: HashMap<String, String>,
 }
 
 impl DockerShardManager {
-    const NAME: &'static str = "golem_shard_manager";
     const HTTP_PORT: ContainerPort = ContainerPort::Tcp(9021);
     const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9020);
 
@@ -45,39 +40,27 @@ impl DockerShardManager {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         number_of_shards_override: Option<usize>,
         verbosity: Level,
-        keep_container: bool,
     ) -> Self {
-        Self::new_base(
-            Box::new(GolemEnvVars()),
-            number_of_shards_override,
-            redis,
-            verbosity,
-            keep_container,
-        )
-        .await
+        Self::new_base(number_of_shards_override, redis, verbosity).await
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
         number_of_shards_override: Option<usize>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         verbosity: Level,
-        keep_container: bool,
     ) -> Self {
         info!("Starting golem-shard-manager container");
 
-        let env_vars = env_vars
-            .env_vars(
-                number_of_shards_override,
-                Self::HTTP_PORT.as_u16(),
-                Self::GRPC_PORT.as_u16(),
-                redis,
-                verbosity,
-            )
-            .await;
+        let env_vars = super::env_vars(
+            number_of_shards_override,
+            Self::HTTP_PORT.as_u16(),
+            Self::GRPC_PORT.as_u16(),
+            redis,
+            verbosity,
+        )
+        .await;
 
         let mut image = ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars.clone())
-            .with_container_name(Self::NAME)
             .with_network(NETWORK);
 
         if let Some(number_of_shards) = number_of_shards_override {
@@ -89,21 +72,23 @@ impl DockerShardManager {
             .await
             .expect("Failed to start golem-shard-manager container");
 
+        let private_host = get_docker_container_name(container.id()).await;
+
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)
             .await
             .expect("Failed to get public HTTP port");
+
         let public_grpc_port = container
             .get_host_port_ipv4(Self::GRPC_PORT)
             .await
             .expect("Failed to get public gRPC port");
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            container: ContainerHandle::new(container),
+            container_name: private_host,
             public_http_port,
             public_grpc_port,
-            env_vars,
         }
     }
 }
@@ -111,7 +96,7 @@ impl DockerShardManager {
 #[async_trait]
 impl ShardManager for DockerShardManager {
     fn private_host(&self) -> String {
-        Self::NAME.to_string()
+        self.container_name.clone()
     }
 
     fn private_http_port(&self) -> u16 {
@@ -135,29 +120,14 @@ impl ShardManager for DockerShardManager {
     }
 
     async fn kill(&self) {
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await
     }
 
     async fn restart(&self, number_of_shards_override: Option<usize>) {
         if number_of_shards_override.is_some() {
             panic!("number_of_shards_override not supported for docker")
         }
-
-        let mut image =
-            ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, self.env_vars.clone())
-                .with_container_name(Self::NAME)
-                .with_network(NETWORK);
-
-        if let Some(number_of_shards) = number_of_shards_override {
-            image = image.with_env_var("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string())
-        }
-
-        let container = image
-            .start()
-            .await
-            .expect("Failed to start golem-shard-manager container");
-
-        self.container.lock().await.replace(container);
+        self.container.restart().await
     }
 }
 

@@ -12,121 +12,99 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
-use crate::components::worker_executor::{new_client, WorkerExecutor, WorkerExecutorEnvVars};
-use crate::components::{GolemEnvVars, NETWORK};
-use async_trait::async_trait;
-use std::borrow::Cow;
-
 use crate::components::component_service::ComponentService;
-use crate::components::docker::KillContainer;
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
+use crate::components::worker_executor::{new_client, WorkerExecutor};
 use crate::components::worker_service::WorkerService;
+use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
+use testcontainers::{Image, ImageExt};
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct DockerWorkerExecutor {
     name: String,
-    http_port: u16,
-    grpc_port: u16,
     public_http_port: u16,
     public_grpc_port: u16,
-    container: Arc<Mutex<Option<ContainerAsync<WorkerExecutorImage>>>>,
-    keep_container: bool,
+    container: ContainerHandle<WorkerExecutorImage>,
     client: Option<WorkerExecutorClient<Channel>>,
-    env_vars: HashMap<String, String>,
 }
 
 impl DockerWorkerExecutor {
+    pub const HTTP_PORT: ContainerPort = ContainerPort::Tcp(8082);
+    pub const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9000);
+
     pub async fn new(
-        http_port: u16,
-        grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
-        keep_container: bool,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
-            http_port,
-            grpc_port,
             redis,
             component_service,
             shard_manager,
             worker_service,
             verbosity,
             shared_client,
-            keep_container,
         )
         .await
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
-        http_port: u16,
-        grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
-        keep_container: bool,
     ) -> Self {
         info!("Starting golem-worker-executor container");
 
-        let env_vars = env_vars
-            .env_vars(
-                http_port,
-                grpc_port,
-                component_service,
-                shard_manager,
-                worker_service,
-                redis,
-                verbosity,
-            )
-            .await;
-
-        let name = format!("golem-worker-executor-{grpc_port}");
-
-        let container = WorkerExecutorImage::new(
-            ContainerPort::Tcp(grpc_port),
-            ContainerPort::Tcp(http_port),
-            env_vars.clone(),
+        let env_vars = super::env_vars(
+            Self::HTTP_PORT.as_u16(),
+            Self::GRPC_PORT.as_u16(),
+            component_service,
+            shard_manager,
+            worker_service,
+            redis,
+            verbosity,
         )
-        .with_container_name(&name)
-        .with_network(NETWORK)
-        .start()
-        .await
-        .expect("Failed to start golem-worker-executor container");
+        .await;
+
+        let container =
+            WorkerExecutorImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars.clone())
+                .with_network(NETWORK)
+                .start()
+                .await
+                .expect("Failed to start golem-worker-executor container");
+
+        let name = get_docker_container_name(container.id()).await;
 
         let public_http_port = container
-            .get_host_port_ipv4(http_port)
+            .get_host_port_ipv4(Self::HTTP_PORT)
             .await
             .expect("Failed to get public HTTP port");
+
         let public_grpc_port = container
-            .get_host_port_ipv4(grpc_port)
+            .get_host_port_ipv4(Self::GRPC_PORT)
             .await
             .expect("Failed to get public gRPC port");
 
         Self {
             name,
-            http_port,
-            grpc_port,
             public_http_port,
             public_grpc_port,
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
+            container: ContainerHandle::new(container),
             client: if shared_client {
                 Some(
                     new_client("localhost", public_grpc_port)
@@ -136,8 +114,15 @@ impl DockerWorkerExecutor {
             } else {
                 None
             },
-            env_vars,
         }
+    }
+
+    pub async fn stop(&self) {
+        self.container.stop().await
+    }
+
+    pub async fn start(&self) {
+        self.container.start().await
     }
 }
 
@@ -155,11 +140,11 @@ impl WorkerExecutor for DockerWorkerExecutor {
     }
 
     fn private_http_port(&self) -> u16 {
-        self.http_port
+        Self::HTTP_PORT.as_u16()
     }
 
     fn private_grpc_port(&self) -> u16 {
-        self.grpc_port
+        Self::GRPC_PORT.as_u16()
     }
 
     fn public_host(&self) -> String {
@@ -175,22 +160,11 @@ impl WorkerExecutor for DockerWorkerExecutor {
     }
 
     async fn kill(&self) {
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await
     }
 
     async fn restart(&self) {
-        let container = WorkerExecutorImage::new(
-            ContainerPort::Tcp(self.grpc_port),
-            ContainerPort::Tcp(self.http_port),
-            self.env_vars.clone(),
-        )
-        .with_container_name(&self.name)
-        .with_network(NETWORK)
-        .start()
-        .await
-        .expect("Failed to start golem-worker-executor container");
-
-        self.container.lock().await.replace(container);
+        self.container.restart().await
     }
 }
 

@@ -167,9 +167,10 @@ mod invalid_syntax_tests {
           result"#;
         let result = Expr::from_text(input);
         let expected_error = [
-            "Parse error at line: 5, column: 27",
-            "Unexpected `:`",
-            "Expected whitespace or `}`",
+            "Parse error at line: 5, column: 29",
+            "Unexpected `,`",
+            "Unexpected `b`",
+            "Expected s8, u8, s16, u16, s32, u32, s64, u64, f32, f64, char, string, bool, list, tuple, option, result or whitespaces",
             "",
         ]
         .join("\n");

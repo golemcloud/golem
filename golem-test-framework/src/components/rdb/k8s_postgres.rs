@@ -16,7 +16,7 @@ use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
-use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -33,8 +33,7 @@ pub struct K8sPostgresRdb {
     pod: Arc<Mutex<Option<K8sPod>>>,
     service: Arc<Mutex<Option<K8sService>>>,
     routing: Arc<Mutex<Option<K8sRouting>>>,
-    host: String,
-    port: u16,
+    info: PostgresInfo,
 }
 
 impl K8sPostgresRdb {
@@ -76,7 +75,7 @@ impl K8sPostgresRdb {
                 }],
                 "containers": [{
                     "name": "postgres",
-                    "image": "postgres:12",
+                    "image": "postgres:14",
                     "env": [
                         {"name": "POSTGRES_DB", "value": "postgres"},
                         {"name": "POSTGRES_USER", "value": "postgres"},
@@ -127,17 +126,21 @@ impl K8sPostgresRdb {
             routing: managed_routing,
         } = Routing::create("golem-postgres", 5432, namespace, routing_type).await;
 
-        let host = format!("golem-postgres.{}.svc.cluster.local", &namespace.0);
-        let port = 5432;
+        let info = PostgresInfo {
+            public_host: local_host.to_string(),
+            public_port: local_port,
+            private_host: "golem-postgres".to_string(),
+            private_port: 5432,
+            database_name: "postgres".to_string(),
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+        };
 
-        wait_for_startup(&local_host, local_port, timeout).await;
-
-        info!("Test Postgres started on private host {host}:{port}, accessible from localhost as {local_host}:{local_port}");
+        postgres_wait_for_startup(&info, timeout).await;
 
         Self {
             _namespace: namespace.clone(),
-            host,
-            port,
+            info,
             pod: Arc::new(Mutex::new(Some(managed_pod))),
             service: Arc::new(Mutex::new(Some(managed_service))),
             routing: Arc::new(Mutex::new(Some(managed_routing))),
@@ -148,14 +151,7 @@ impl K8sPostgresRdb {
 #[async_trait]
 impl Rdb for K8sPostgresRdb {
     fn info(&self) -> DbInfo {
-        DbInfo::Postgres(PostgresInfo {
-            host: self.host.clone(),
-            port: self.port,
-            host_port: self.port,
-            database_name: "postgres".to_string(),
-            username: "postgres".to_string(),
-            password: "postgres".to_string(),
-        })
+        DbInfo::Postgres(self.info.clone())
     }
 
     async fn kill(&self) {

@@ -990,6 +990,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -1040,7 +1041,16 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.8.0",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -3224,6 +3234,8 @@ dependencies = [
  "golem-wasm-rpc",
  "hex",
  "http 1.2.0",
+ "http-body 1.0.1",
+ "http-body-util",
  "humantime-serde",
  "hyper 1.5.2",
  "lazy_static",
@@ -3331,12 +3343,12 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sqlx",
  "tempfile",
  "test-r",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
- "tokio-postgres",
  "tokio-stream",
  "tokio-tungstenite",
  "tonic",
@@ -3438,6 +3450,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert2",
+ "async-dropper-simple",
  "async-fs",
  "async-lock",
  "async-mutex",
@@ -3448,7 +3461,9 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "axum",
+ "bigdecimal",
  "bincode",
+ "bit-vec 0.6.3",
  "bitflags 2.8.0",
  "bytes 1.9.0",
  "cap-fs-ext",
@@ -3486,6 +3501,7 @@ dependencies = [
  "itertools 0.13.0",
  "lazy_static",
  "log",
+ "mac_address",
  "md5",
  "metrohash",
  "nonempty-collections",
@@ -3500,6 +3516,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "sqlx-core",
  "sysinfo",
  "system-interface",
  "tempfile",
@@ -3516,6 +3533,7 @@ dependencies = [
  "tonic-reflection",
  "tracing",
  "tracing-subscriber",
+ "try_match",
  "url",
  "uuid",
  "wasmtime",
@@ -3643,6 +3661,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "urlencoding",
  "uuid",
  "wasm-wave",
 ]
@@ -4435,6 +4454,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 
 [[package]]
+name = "ipnetwork"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf466541e9d546596ee94f9f69590f89473455f88372423e0008fc1a7daf100e"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "is-terminal"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4841,6 +4869,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mac_address"
+version = "1.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0aeb26bf5e836cc1c341c8106051b573f1766dfa05aa87f0b98be5e51b02303"
+dependencies = [
+ "nix 0.29.0",
+ "serde",
+ "winapi",
+]
+
+[[package]]
 name = "mach2"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4905,6 +4944,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2cffa4ad52c6f791f4f8b15f0c05f9824b2ced1160e88cc393d64fff9a8ac64"
 dependencies = [
  "rustix",
+]
+
+[[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]
@@ -5026,6 +5074,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -6083,7 +6132,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14cae93065090804185d3b75f0bf93b8eeda30c7a9b4a33d3bdb3988d6229e50"
 dependencies = [
  "bit-set",
- "bit-vec",
+ "bit-vec 0.8.0",
  "bitflags 2.8.0",
  "lazy_static",
  "num-traits",
@@ -7284,6 +7333,8 @@ version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a007b6936676aa9ab40207cde35daab0a04b823be8ae004368c0793b96a61e0"
 dependencies = [
+ "bigdecimal",
+ "bit-vec 0.6.3",
  "bytes 1.9.0",
  "chrono",
  "crc",
@@ -7297,7 +7348,9 @@ dependencies = [
  "hashbrown 0.15.2",
  "hashlink",
  "indexmap 2.7.0",
+ "ipnetwork",
  "log",
+ "mac_address",
  "memchr",
  "once_cell",
  "percent-encoding",
@@ -7360,6 +7413,7 @@ checksum = "4560278f0e00ce64938540546f59f590d60beee33fffbd3b9cd47851e5fff233"
 dependencies = [
  "atoi",
  "base64 0.22.1",
+ "bigdecimal",
  "bitflags 2.8.0",
  "byteorder",
  "bytes 1.9.0",
@@ -7404,6 +7458,8 @@ checksum = "c5b98a57f363ed6764d5b3a12bfedf62f07aa16e1856a7ddc2a0bb190a959613"
 dependencies = [
  "atoi",
  "base64 0.22.1",
+ "bigdecimal",
+ "bit-vec 0.6.3",
  "bitflags 2.8.0",
  "byteorder",
  "chrono",
@@ -7417,10 +7473,13 @@ dependencies = [
  "hkdf",
  "hmac",
  "home",
+ "ipnetwork",
  "itoa",
  "log",
+ "mac_address",
  "md-5",
  "memchr",
+ "num-bigint",
  "once_cell",
  "rand",
  "serde",
@@ -8345,6 +8404,26 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "try_match"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b065c869a3f832418e279aa4c1d7088f9d5d323bde15a60a08e20c2cd4549082"
+dependencies = [
+ "try_match_inner",
+]
+
+[[package]]
+name = "try_match_inner"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9c81686f7ab4065ccac3df7a910c4249f8c0f3fb70421d6ddec19b9311f63f9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.96",
+]
 
 [[package]]
 name = "tungstenite"
