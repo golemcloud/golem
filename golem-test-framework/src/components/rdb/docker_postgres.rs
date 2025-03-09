@@ -79,6 +79,15 @@ impl DockerPostgresRdb {
         self.info.public_connection_string()
     }
 
+    pub fn public_connection_string_to_db(&self, db_name: &str) -> String {
+        let db_info = PostgresInfo {
+            database_name: db_name.to_string(),
+            ..self.info.clone()
+        };
+
+        db_info.public_connection_string()
+    }
+
     pub fn private_connection_string(&self) -> String {
         self.info.private_connection_string()
     }
