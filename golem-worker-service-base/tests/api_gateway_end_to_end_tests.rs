@@ -719,6 +719,118 @@ async fn test_api_def_with_security_for_valid_input() {
     assert_eq!(result, expected);
 }
 
+/// regression test for: https://zivergeteam.slack.com/archives/C057S2E4XT5/p1741430776997879
+#[test]
+async fn test_api_def_with_security_for_valid_input_relative_callback() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let email: string = request.auth.email;
+      { body: response, headers: {email: email} }
+    "#;
+
+    let identity_provider = TestIdentityProvider::get_provider_with_valid_id_token();
+
+    let base_url = Url::parse("https://localhost").unwrap();
+    let auth_call_back_url = "/auth/callback";
+    let absolute_auth_call_back_url =
+        RedirectUrl::from_url(base_url.join(auth_call_back_url).unwrap());
+
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
+        "/foo/{user-id}",
+        worker_name,
+        response_mapping,
+        &absolute_auth_call_back_url,
+        &identity_provider,
+    )
+    .await;
+
+    let session_store = internal::get_session_store();
+
+    let initial_response_to_identity_provider = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &identity_provider,
+    )
+    .await;
+
+    let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
+
+    let initial_redirect_location = initial_redirect_response_headers
+        .get(LOCATION)
+        .expect("Expecting location")
+        .to_str()
+        .expect("Location should be a string");
+
+    let url = Url::parse(initial_redirect_location)
+        .expect("Expect the initial redirection to be a full URL");
+
+    let query_components = ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
+
+    let initial_redirect_data = security::get_initial_redirect_data(&query_components);
+
+    // Manually create the request to hit auth_call_back endpoint by assuming we are identity-provider
+    let call_back_request_from_identity_provider =
+        security::request_from_identity_provider_to_auth_call_back_endpoint(
+            initial_redirect_data.state.as_str(),
+            "foo_code", // Decided by IdentityProvider
+            initial_redirect_data.scope.as_str(),
+            auth_call_back_url,
+            "localhost",
+        );
+
+    // Execute it against the API Gateway
+    // If successful, then it implies auth call back is successful and we get another redirect response.
+    // This time, the redirect response will have a location that points to the original protected resource.
+    let final_redirect_response = execute(
+        call_back_request_from_identity_provider,
+        &api_specification,
+        &session_store,
+        &identity_provider,
+    )
+    .await;
+
+    let redirect_response_headers = final_redirect_response.headers();
+
+    // Manually calling it back as we are the browser
+    let api_request = security::create_request_from_redirect(redirect_response_headers).await;
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &identity_provider,
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.function_name,
+        test_response.function_params,
+        test_response.user_email,
+    );
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ]),
+        Some("bob@example.com".to_string()),
+    );
+
+    assert_eq!(result, expected);
+}
+
 #[test]
 async fn test_api_def_with_cors_preflight_for_valid_input() {
     let empty_headers = HeaderMap::new();
@@ -1759,8 +1871,10 @@ mod internal {
         async fn get(
             &self,
             _input: &ApiSiteString,
-        ) -> Result<Vec<CompiledHttpApiDefinition<DefaultNamespace>>, ApiDefinitionLookupError>
-        {
+        ) -> Result<
+            Vec<CompiledHttpApiDefinition<DefaultNamespace>>,
+            ApiDefinitionLookupError<DefaultNamespace>,
+        > {
             Ok(vec![self.api_definition.clone()])
         }
     }

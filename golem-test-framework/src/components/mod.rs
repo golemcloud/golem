@@ -39,8 +39,6 @@ pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
 
-const NETWORK: &str = "golem_test_network";
-
 pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,
     _err_handle: JoinHandle<()>,
@@ -235,9 +233,6 @@ impl EnvVarBuilder {
         self.env_vars
     }
 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct GolemEnvVars();
 
 fn new_reqwest_client() -> reqwest::Client {
     reqwest::ClientBuilder::new()

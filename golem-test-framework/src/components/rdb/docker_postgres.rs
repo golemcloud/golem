@@ -12,89 +12,91 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
-use tokio::sync::Mutex;
+use testcontainers::ImageExt;
 use tracing::info;
 
-use crate::components::docker::KillContainer;
-use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
-use crate::components::NETWORK;
-
 pub struct DockerPostgresRdb {
-    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::postgres::Postgres>>>>,
-    keep_container: bool,
-    host: String,
-    port: u16,
-    host_port: u16,
+    container: ContainerHandle<testcontainers_modules::postgres::Postgres>,
+    info: PostgresInfo,
 }
 
 impl DockerPostgresRdb {
     const DEFAULT_PORT: u16 = 5432;
+    const DEFAULT_USERNAME: &'static str = "postgres";
+    const DEFAULT_PASSWORD: &'static str = "postgres";
+    const DEFAULT_DATABASE: &'static str = "postgres";
 
-    // TODO: can we simplify this and get rid of local_env (and always use localhost and exposed ports)?
-    pub async fn new(local_env: bool, keep_container: bool) -> Self {
+    pub async fn new() -> Self {
         info!("Starting Postgres container");
 
-        let name = "golem_postgres";
-        let image = testcontainers_modules::postgres::Postgres::default().with_tag("12");
+        let database = Self::DEFAULT_DATABASE;
+        let password = Self::DEFAULT_PASSWORD;
+        let username = Self::DEFAULT_USERNAME;
+        let port = Self::DEFAULT_PORT;
 
-        let image = if local_env {
-            image
-        } else {
-            image.with_container_name(name).with_network(NETWORK)
-        };
-
-        let container = image
+        let container = testcontainers_modules::postgres::Postgres::default()
+            .with_tag("14")
+            .with_env_var("POSTGRES_DB", database)
+            .with_env_var("POSTGRES_PASSWORD", password)
+            .with_env_var("POSTGRES_USER", username)
+            .with_network(NETWORK)
             .start()
             .await
             .expect("Failed to start Postgres container");
 
-        let host = if local_env { "localhost" } else { name };
-        let port = if local_env {
-            container
-                .get_host_port_ipv4(Self::DEFAULT_PORT)
-                .await
-                .expect("Failed to get host port")
-        } else {
-            Self::DEFAULT_PORT
-        };
+        let private_host = get_docker_container_name(container.id()).await;
 
-        let host_port = container
-            .get_host_port_ipv4(Self::DEFAULT_PORT)
+        let public_port = container
+            .get_host_port_ipv4(port)
             .await
             .expect("Failed to get host port");
 
-        wait_for_startup("localhost", host_port, Duration::from_secs(30)).await;
+        let info = PostgresInfo {
+            public_host: "localhost".to_string(),
+            public_port,
+            private_host,
+            private_port: port,
+            database_name: database.to_string(),
+            username: username.to_string(),
+            password: password.to_string(),
+        };
+
+        postgres_wait_for_startup(&info, Duration::from_secs(30)).await;
 
         Self {
-            container: Arc::new(Mutex::new(Some(container))),
-            keep_container,
-            host: host.to_string(),
-            port,
-            host_port,
+            container: ContainerHandle::new(container),
+            info,
         }
+    }
+
+    pub fn public_connection_string(&self) -> String {
+        self.info.public_connection_string()
+    }
+
+    pub fn private_connection_string(&self) -> String {
+        self.info.private_connection_string()
     }
 }
 
 #[async_trait]
 impl Rdb for DockerPostgresRdb {
     fn info(&self) -> DbInfo {
-        DbInfo::Postgres(PostgresInfo {
-            host: self.host.clone(),
-            port: self.port,
-            host_port: self.host_port,
-            database_name: "postgres".to_string(),
-            username: "postgres".to_string(),
-            password: "postgres".to_string(),
-        })
+        DbInfo::Postgres(self.info.clone())
     }
 
     async fn kill(&self) {
-        info!("Stopping Postgres container");
-        self.container.kill(self.keep_container).await;
+        self.container.kill().await
+    }
+}
+
+impl Debug for DockerPostgresRdb {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DockerPostgresRdb")
     }
 }

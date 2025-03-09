@@ -22,9 +22,8 @@ use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
     new_api_definition_client, new_api_deployment_client, new_api_security_client,
     new_worker_client, wait_for_startup, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
-    ApiSecurityServiceClient, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+    ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
 };
-use crate::components::GolemEnvVars;
 use crate::config::GolemClientProtocol;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
@@ -71,7 +70,6 @@ impl K8sWorkerService {
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
-            Box::new(GolemEnvVars()),
             namespace,
             routing_type,
             verbosity,
@@ -86,7 +84,6 @@ impl K8sWorkerService {
     }
 
     pub async fn new_base(
-        env_vars: Box<dyn WorkerServiceEnvVars + Send + Sync + 'static>,
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
@@ -99,17 +96,18 @@ impl K8sWorkerService {
     ) -> Self {
         info!("Starting Golem Worker Service pod");
 
-        let env_vars = env_vars
-            .env_vars(
-                Self::HTTP_PORT,
-                Self::GRPC_PORT,
-                Self::CUSTOM_REQUEST_PORT,
-                component_service,
-                shard_manager,
-                rdb,
-                verbosity,
-            )
-            .await;
+        let env_vars = super::env_vars(
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            Self::CUSTOM_REQUEST_PORT,
+            component_service,
+            shard_manager,
+            rdb,
+            verbosity,
+            true,
+        )
+        .await;
+
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

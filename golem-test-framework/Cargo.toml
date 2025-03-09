@@ -46,10 +46,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 tempfile = { workspace = true }
+sqlx = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true }
-tokio-postgres = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tonic = { workspace = true }

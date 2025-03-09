@@ -54,7 +54,7 @@ use crate::services::worker_enumeration::{
     RunningWorkerEnumerationServiceDefault, WorkerEnumerationService,
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use crate::services::{shard_manager, All, HasConfig};
+use crate::services::{rdbms, shard_manager, All, HasConfig};
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -107,6 +107,7 @@ pub struct RunDetails {
 /// of its services.
 /// With a valid `Bootstrap` implementation the service can be started with the `run` method.
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
@@ -195,6 +196,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -490,6 +492,9 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             .expect("Access token must be an UUID"),
     ));
 
+    let rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync> =
+        Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));
+
     let events = Arc::new(Events::new(
         golem_config.limits.invocation_result_broadcast_capacity,
     ));
@@ -545,6 +550,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             lazy_worker_activator.clone(),
             oplog_service,
             scheduler_service,

@@ -14,10 +14,10 @@
 
 use crate::components::component_service::{
     new_component_client, new_plugin_client, wait_for_startup, ComponentService,
-    ComponentServiceClient, ComponentServiceEnvVars, PluginServiceClient,
+    ComponentServiceClient, PluginServiceClient,
 };
 use crate::components::rdb::Rdb;
-use crate::components::{ChildProcessLogger, GolemEnvVars};
+use crate::components::ChildProcessLogger;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -54,7 +54,6 @@ impl SpawnedComponentService {
     ) -> Self {
         Self::new_base(
             component_directory,
-            Box::new(GolemEnvVars()),
             executable,
             working_directory,
             http_port,
@@ -71,7 +70,6 @@ impl SpawnedComponentService {
 
     pub async fn new_base(
         component_directory: PathBuf,
-        env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -92,15 +90,15 @@ impl SpawnedComponentService {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
             .envs(
-                env_vars
-                    .env_vars(
-                        http_port,
-                        grpc_port,
-                        component_compilation_service_port.map(|p| ("localhost", p)),
-                        rdb,
-                        verbosity,
-                    )
-                    .await,
+                super::env_vars(
+                    http_port,
+                    grpc_port,
+                    component_compilation_service_port.map(|p| ("localhost", p)),
+                    rdb,
+                    verbosity,
+                    false,
+                )
+                .await,
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

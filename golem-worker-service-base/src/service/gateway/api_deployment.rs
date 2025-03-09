@@ -87,9 +87,9 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiDeploymentError<Namespace> {
-    #[error("API definition not found: {1}")]
+    #[error("Unknown API: {1}")]
     ApiDefinitionNotFound(Namespace, ApiDefinitionId),
-    #[error("API deployment not found: {1}")]
+    #[error("Unknown authority or domain: {1}")]
     ApiDeploymentNotFound(Namespace, ApiSiteString),
     #[error("API deployment conflict error: {0}")]
     ApiDeploymentConflict(ApiSiteString),
