@@ -222,7 +222,7 @@ mod conversion {
                 ApiDefinitionServiceError::ApiDefinitionNotFound(_) => {
                     ApiEndpointError::not_found(error)
                 }
-                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => {
+                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_, _) => {
                     ApiEndpointError::already_exists(error)
                 }
                 ApiDefinitionServiceError::ApiDefinitionDeployed(_) => {
@@ -326,7 +326,7 @@ mod conversion {
                         error: error.to_safe_string(),
                     })),
                 },
-                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => ApiDefinitionError {
+                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_, _) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
                         error: error.to_safe_string(),
                     })),

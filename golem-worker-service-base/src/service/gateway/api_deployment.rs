@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use async_trait::async_trait;
 
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledAuthCallBackRoute, CompiledHttpApiDefinition, HttpApiDefinition, Route,
@@ -262,7 +262,6 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
         <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
     {
-        // Find conflicts
         let deployed_defs = self
             .get_definitions_by_site(&deployment.namespace, &(&deployment.site.clone()).into())
             .await?;
@@ -277,24 +276,11 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
             }
         }
 
-        let new_auth_call_back_routes = new_deployment.auth_call_back_routes.clone();
-
-        let already_deployed_call_back_routes = new_auth_call_back_routes
-            .iter()
-            .filter(|new_auth_call_back_route| {
-                !deployed_auth_call_back_routes
-                    .iter()
-                    .any(|deployed_auth_call_back_route| {
-                        new_auth_call_back_route == &deployed_auth_call_back_route
-                    })
-            })
-            .collect::<Vec<_>>();
-
         let all_definitions = new_deployment
             .api_defs_to_deploy
             .iter()
             .map(|def| {
-                def.remove_auth_call_back_routes(already_deployed_call_back_routes.as_slice())
+                def.remove_auth_call_back_routes(deployed_auth_call_back_routes.as_slice())
             })
             .chain(deployed_defs)
             .collect::<Vec<_>>();

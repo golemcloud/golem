@@ -236,7 +236,7 @@ pub struct CompiledHttpApiDefinition<Namespace> {
 impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
     pub fn remove_auth_call_back_routes(
         &self,
-        auth_routes: &[&CompiledAuthCallBackRoute],
+        auth_routes: &[CompiledAuthCallBackRoute],
     ) -> CompiledHttpApiDefinition<Namespace> {
         let new_routes = self
             .routes
