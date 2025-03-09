@@ -26,7 +26,9 @@ use crate::gateway_binding::{
     IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::{
+    ApiDefinitionLookupError, HttpApiDefinitionsLookup,
+};
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -36,11 +38,13 @@ use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSucc
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
+use crate::service::gateway::api_deployment::ApiDeploymentError;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::IdempotencyKey;
+use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
@@ -543,11 +547,12 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             Err(api_defs_lookup_error) => {
                 error!(
                     "API request host: {} - error: {}",
-                    authority, api_defs_lookup_error
+                    authority,
+                    api_defs_lookup_error.to_safe_string()
                 );
-                return poem::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string("Internal error".to_string()));
+
+                return api_defs_lookup_error
+                    .to_response_from_safe_display(get_status_code_from_api_lookup_error);
             }
         };
 
@@ -694,5 +699,35 @@ fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue>
         _ => Err(GatewayHttpError::BadRequest(
             "Invocation context values must be string".to_string(),
         )),
+    }
+}
+
+fn get_status_code_from_api_lookup_error<Namespace>(
+    error: &ApiDefinitionLookupError<Namespace>,
+) -> StatusCode {
+    match &error {
+        ApiDefinitionLookupError::ApiDeploymentError(err) => {
+            // In the context of APIDefinitionLookup (which occurs for an actual incoming request),
+            // we have a different set of http response status code
+            // for API deployment errors
+            match &err {
+                ApiDeploymentError::ApiDeploymentNotFound(_, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDefinitionNotFound(_, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDeploymentConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+
+                ApiDeploymentError::ComponentConstraintCreateError(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+
+                ApiDeploymentError::ApiDefinitionsConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalRepoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalConversionError { .. } => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }
+        ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
     }
 }
