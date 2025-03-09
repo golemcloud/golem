@@ -279,9 +279,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         let all_definitions = new_deployment
             .api_defs_to_deploy
             .iter()
-            .map(|def| {
-                def.remove_auth_call_back_routes(deployed_auth_call_back_routes.as_slice())
-            })
+            .map(|def| def.remove_auth_call_back_routes(deployed_auth_call_back_routes.as_slice()))
             .chain(deployed_defs)
             .collect::<Vec<_>>();
 
