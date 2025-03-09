@@ -1871,8 +1871,10 @@ mod internal {
         async fn get(
             &self,
             _input: &ApiSiteString,
-        ) -> Result<Vec<CompiledHttpApiDefinition<DefaultNamespace>>, ApiDefinitionLookupError>
-        {
+        ) -> Result<
+            Vec<CompiledHttpApiDefinition<DefaultNamespace>>,
+            ApiDefinitionLookupError<DefaultNamespace>,
+        > {
             Ok(vec![self.api_definition.clone()])
         }
     }
