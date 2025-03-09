@@ -38,7 +38,9 @@ use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginWasmFileKey,
+};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
@@ -51,7 +53,9 @@ use golem_common::model::{
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
+use golem_common::widen_infallible;
 use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -234,6 +238,8 @@ pub trait TestDsl {
         }
         added_files
     }
+
+    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey>;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -526,10 +532,36 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await
             .expect("Failed to read file");
         let bytes = Bytes::from(data);
+
+        let stream = bytes
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible);
+
         self.initial_component_files_service()
-            .put_if_not_exists(account_id, &bytes)
+            .put_if_not_exists(account_id, stream)
             .await
             .expect("Failed to add initial component file")
+    }
+
+    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let data = tokio::fs::read(&source_path)
+            .await
+            .map_err(|e| anyhow!("Failed to read file: {e}"))?;
+
+        let bytes = Bytes::from(data);
+
+        let stream = bytes
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible);
+
+        let key = self
+            .plugin_wasm_files_service()
+            .put_if_not_exists(&AccountId::placeholder(), stream)
+            .await
+            .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
+
+        Ok(key)
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
@@ -1809,6 +1841,8 @@ pub trait TestDslUnsafe {
         files: &[(&str, &str, ComponentFilePermissions)],
     ) -> Vec<(PathBuf, InitialComponentFile)>;
 
+    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey;
+
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
         &self,
@@ -2003,6 +2037,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
         <T as TestDsl>::store_component_with_id(self, name, component_id).await
+    }
+
+    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
+        <T as TestDsl>::add_plugin_wasm(self, name)
+            .await
+            .expect("Failed to add plugin wasm")
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {

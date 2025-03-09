@@ -79,6 +79,18 @@ impl<
 #[cfg(not(feature = "poem"))]
 impl<T> PoemTypeRequirements for T {}
 
+#[cfg(feature = "poem")]
+pub trait PoemMultipartTypeRequirements: poem_openapi::types::ParseFromMultipartField {}
+
+#[cfg(not(feature = "poem"))]
+pub trait PoemMultipartTypeRequirements {}
+
+#[cfg(feature = "poem")]
+impl<T: poem_openapi::types::ParseFromMultipartField> PoemMultipartTypeRequirements for T {}
+
+#[cfg(not(feature = "poem"))]
+impl<T> PoemMultipartTypeRequirements for T {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Timestamp(iso8601_timestamp::Timestamp);

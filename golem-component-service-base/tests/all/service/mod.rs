@@ -40,6 +40,7 @@ use golem_component_service_base::service::component_object_store::ComponentObje
 use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
@@ -101,10 +102,21 @@ fn initial_component_files_service(
 }
 
 #[test_dep]
+fn plugin_wasm_files_service(
+    blob_storage: &Arc<dyn BlobStorage + Send + Sync>,
+) -> Arc<PluginWasmFilesService> {
+    Arc::new(PluginWasmFilesService::new(blob_storage.clone()))
+}
+
+#[test_dep]
 fn plugin_service(
     plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    library_plugin_files_service: &Arc<PluginWasmFilesService>,
 ) -> Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
-    Arc::new(PluginServiceDefault::new(plugin_repo.clone()))
+    Arc::new(PluginServiceDefault::new(
+        plugin_repo.clone(),
+        library_plugin_files_service.clone(),
+    ))
 }
 
 #[test_dep]
@@ -114,6 +126,7 @@ fn component_service(
     component_compilation_service: &Arc<dyn ComponentCompilationService + Send + Sync>,
     initial_component_files_service: &Arc<InitialComponentFilesService>,
     plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    plugin_wasm_files_service: &Arc<PluginWasmFilesService>,
     _tracing: &Tracing,
 ) -> Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync> {
     Arc::new(ComponentServiceDefault::new(
@@ -122,6 +135,7 @@ fn component_service(
         component_compilation_service.clone(),
         initial_component_files_service.clone(),
         plugin_service.clone(),
+        plugin_wasm_files_service.clone(),
     ))
 }
 

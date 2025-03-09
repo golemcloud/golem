@@ -12,15 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::plugin::{
+    PluginDefinitionCreation, PluginTypeSpecificCreation, PluginWasmFileReference,
+};
 use crate::repo::plugin::{PluginRecord, PluginRepo};
 use crate::service::component::ComponentError;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::model::plugin::{PluginDefinition, PluginOwner, PluginScope};
+use golem_common::model::plugin::{
+    AppPluginDefinition, LibraryPluginDefinition, PluginDefinition, PluginOwner, PluginScope,
+    PluginTypeSpecificDefinition, PluginWasmFileKey,
+};
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +42,8 @@ pub enum PluginError {
     ComponentNotFound { component_id: ComponentId },
     #[error("Failed to get available scopes: {error}")]
     FailedToGetAvailableScopes { error: String },
+    #[error("Blob Storage error: {0}")]
+    BlobStorageError(String),
     #[error("Plugin not found: {plugin_name}@{plugin_version}")]
     PluginNotFound {
         plugin_name: String,
@@ -67,6 +76,7 @@ impl SafeDisplay for PluginError {
             Self::FailedToGetAvailableScopes { .. } => self.to_string(),
             Self::PluginNotFound { .. } => self.to_string(),
             Self::InvalidScope { .. } => self.to_string(),
+            Self::BlobStorageError(_) => self.to_string(),
         }
     }
 }
@@ -105,6 +115,11 @@ impl From<PluginError> for golem_api_grpc::proto::golem::component::v1::Componen
                     error: value.to_safe_string(),
                 })),
             },
+            PluginError::BlobStorageError { .. } => Self {
+                error: Some(component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })),
+            },
         }
     }
 }
@@ -135,7 +150,7 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
     /// Registers a new plugin
     async fn create_plugin(
         &self,
-        plugin: PluginDefinition<Owner, Scope>,
+        plugin: PluginDefinitionCreation<Owner, Scope>,
     ) -> Result<(), PluginError>;
 
     /// Gets a registered plugin belonging to a given `owner`, identified by its `name` and `version`
@@ -152,11 +167,18 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
 
 pub struct PluginServiceDefault<Owner: PluginOwner, Scope: PluginScope> {
     plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
+    plugin_wasm_files: Arc<PluginWasmFilesService>,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
-    pub fn new(plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>) -> Self {
-        Self { plugin_repo }
+    pub fn new(
+        plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
+        library_plugin_files: Arc<PluginWasmFilesService>,
+    ) -> Self {
+        Self {
+            plugin_repo,
+            plugin_wasm_files: library_plugin_files,
+        }
     }
 
     fn decode_plugin_definitions(
@@ -167,6 +189,24 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> 
             .map(PluginDefinition::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| PluginError::conversion_error("plugin", e))
+    }
+
+    async fn store_plugin_wasm(
+        &self,
+        data: &PluginWasmFileReference,
+        owner: &Owner,
+    ) -> Result<PluginWasmFileKey, PluginError> {
+        match data {
+            PluginWasmFileReference::BlobStorage(key) => Ok(key.clone()),
+            PluginWasmFileReference::Data(stream) => {
+                let key = self
+                    .plugin_wasm_files
+                    .put_if_not_exists(&owner.account_id(), stream)
+                    .await
+                    .map_err(PluginError::BlobStorageError)?;
+                Ok(key)
+            }
+        }
     }
 }
 
@@ -220,9 +260,27 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
 
     async fn create_plugin(
         &self,
-        plugin: PluginDefinition<Owner, Scope>,
+        plugin: PluginDefinitionCreation<Owner, Scope>,
     ) -> Result<(), PluginError> {
-        let record: PluginRecord<Owner, Scope> = plugin.into();
+        let type_specific_definition = match &plugin.specs {
+            PluginTypeSpecificCreation::OplogProcessor(inner) => {
+                PluginTypeSpecificDefinition::OplogProcessor(inner.clone())
+            }
+            PluginTypeSpecificCreation::ComponentTransformer(inner) => {
+                PluginTypeSpecificDefinition::ComponentTransformer(inner.clone())
+            }
+            PluginTypeSpecificCreation::App(inner) => {
+                let blob_storage_key = self.store_plugin_wasm(&inner.data, &plugin.owner).await?;
+                PluginTypeSpecificDefinition::App(AppPluginDefinition { blob_storage_key })
+            }
+            PluginTypeSpecificCreation::Library(inner) => {
+                let blob_storage_key = self.store_plugin_wasm(&inner.data, &plugin.owner).await?;
+                PluginTypeSpecificDefinition::Library(LibraryPluginDefinition { blob_storage_key })
+            }
+        };
+
+        let definition = plugin.into_definition(type_specific_definition);
+        let record: PluginRecord<Owner, Scope> = definition.into();
         self.plugin_repo.create(&record).await?;
         Ok(())
     }

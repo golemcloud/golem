@@ -27,6 +27,7 @@ pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ pub trait TestDependencies {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService>;
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
 
     async fn kill_all(&self) {
         self.worker_executor_cluster().kill_all().await;

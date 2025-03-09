@@ -15,8 +15,9 @@
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::plugin::{
-    ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginOwner,
-    PluginScope, PluginTypeSpecificDefinition,
+    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
+    OplogProcessorDefinition, PluginDefinition, PluginOwner, PluginScope,
+    PluginTypeSpecificDefinition, PluginWasmFileKey,
 };
 use golem_common::model::ComponentId;
 use golem_common::repo::RowMeta;
@@ -51,6 +52,9 @@ pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
     // for OplogProcessor plugin type
     component_id: Option<Uuid>,
     component_version: Option<i64>,
+
+    // for LibraryPlugin plugin type
+    blob_storage_key: Option<String>,
 
     #[allow(dead_code)]
     deleted: bool,
@@ -103,6 +107,13 @@ impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>
                 }
                 _ => None,
             },
+
+            blob_storage_key: match &value.specs {
+                PluginTypeSpecificDefinition::Library(def) => Some(def.blob_storage_key.0.clone()),
+                PluginTypeSpecificDefinition::App(def) => Some(def.blob_storage_key.0.clone()),
+                _ => None,
+            },
+
             deleted: false,
         }
     }
@@ -137,6 +148,20 @@ impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
                     .component_version
                     .map(|i| i as u64)
                     .ok_or("component_version is required for OplogProcessor rows")?,
+            }),
+            2 => PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: PluginWasmFileKey(
+                    value
+                        .blob_storage_key
+                        .ok_or("blob_storage_key is required for LibraryPlugin rows")?,
+                ),
+            }),
+            3 => PluginTypeSpecificDefinition::App(AppPluginDefinition {
+                blob_storage_key: PluginWasmFileKey(
+                    value
+                        .blob_storage_key
+                        .ok_or("blob_storage_key is required for AppPlugin rows")?,
+                ),
             }),
             other => return Err(format!("Invalid plugin type: {other}")),
         };
@@ -339,6 +364,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("json_schema");
         column_list.push("validate_url");
         column_list.push("transform_url");
+        column_list.push("blob_storage_key");
         column_list.push("component_id");
         column_list.push("component_version");
         column_list.push("deleted");
@@ -376,6 +402,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("json_schema");
         column_list.push("validate_url");
         column_list.push("transform_url");
+        column_list.push("blob_storage_key");
         column_list.push("component_id");
         column_list.push("component_version");
         column_list.push("deleted");
@@ -424,6 +451,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("json_schema");
         column_list.push("validate_url");
         column_list.push("transform_url");
+        column_list.push("blob_storage_key");
         column_list.push("component_id");
         column_list.push("component_version");
         column_list.push("deleted");
@@ -462,6 +490,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("json_schema");
         column_list.push("validate_url");
         column_list.push("transform_url");
+        column_list.push("blob_storage_key");
         column_list.push("component_id");
         column_list.push("component_version");
         column_list.push("deleted");
@@ -483,6 +512,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         value_list.push_bind(&record.json_schema);
         value_list.push_bind(&record.validate_url);
         value_list.push_bind(&record.transform_url);
+        value_list.push_bind(&record.blob_storage_key);
         value_list.push_bind(record.component_id);
         value_list.push_bind(record.component_version);
         value_list.push_bind(false);
@@ -520,6 +550,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("json_schema");
         column_list.push("validate_url");
         column_list.push("transform_url");
+        column_list.push("blob_storage_key");
         column_list.push("component_id");
         column_list.push("component_version");
         column_list.push("deleted");

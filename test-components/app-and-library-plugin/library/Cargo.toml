@@ -1,0 +1,17 @@
+[package]
+name = "app-and-library-plugin-library"
+version = "0.0.1"
+edition = "2021"
+
+[package.metadata.component.target]
+path = "wit"
+world = "library"
+
+[dependencies.wit-bindgen-rt]
+version = "0.26.0"
+features = ["bitflags"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
