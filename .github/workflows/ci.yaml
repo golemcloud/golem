@@ -29,7 +29,8 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-      - uses: valeriangalliat/action-sshd-cloudflared@v3
+      - name: Setup upterm session
+        uses: lhotari/action-upterm@v1
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
