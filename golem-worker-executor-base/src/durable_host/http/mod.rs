@@ -14,7 +14,7 @@
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use golem_common::model::oplog::DurableFunctionType;
 use tracing::warn;
 
@@ -45,12 +45,8 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
             }
         }
 
-        ctx.state
-            .invocation_context
-            .finish_span(&state.span_id)
-            .map_err(|err| GolemError::Runtime {
-                details: format!("Failed to close outgoing http request span: {err}"),
-            })?;
+        warn!("Finishing outgoing http request span: {:?}", state.span_id);
+        ctx.finish_span(&state.span_id).await?;
     } else {
         warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);
     }

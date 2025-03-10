@@ -57,6 +57,7 @@ pub mod keyvalue;
 pub mod measure_test_component_mem;
 pub mod observability;
 pub mod rdbms;
+pub mod rdbms_service;
 pub mod revert;
 pub mod rust_rpc;
 pub mod rust_rpc_stubless;

@@ -20,12 +20,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use crate::error::GolemError;
+use crate::model::ExecutionStatus;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 pub use blob::BlobOplogArchiveService;
 use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
 };
@@ -37,9 +40,6 @@ use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use tracing::Instrument;
-
-use crate::error::GolemError;
-use crate::model::ExecutionStatus;
 
 mod blob;
 mod compressed;
@@ -263,6 +263,7 @@ pub trait OplogOps: Oplog {
         function_name: String,
         request: &R,
         idempotency_key: IdempotencyKey,
+        invocation_context: InvocationContextStack,
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
 
@@ -272,6 +273,9 @@ pub trait OplogOps: Oplog {
             function_name,
             request: payload,
             idempotency_key,
+            invocation_context: invocation_context.to_oplog_data(),
+            trace_id: invocation_context.trace_id,
+            trace_states: invocation_context.trace_states,
         };
         self.add(entry.clone()).await;
         Ok(entry)
