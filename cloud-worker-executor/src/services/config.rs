@@ -81,11 +81,11 @@ pub struct CloudComponentServiceConfig {
 
 impl CloudComponentServiceConfig {
     pub fn component_url(&self) -> Url {
-        build_url("component", &self.project_host, self.project_port)
+        build_url("component", &self.host, self.port)
     }
 
     pub fn component_uri(&self) -> Uri {
-        build_uri("component", &self.project_host, self.project_port)
+        build_uri("component", &self.host, self.port)
     }
 
     pub fn project_url(&self) -> Url {

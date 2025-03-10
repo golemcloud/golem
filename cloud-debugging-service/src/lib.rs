@@ -94,6 +94,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
     ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
         let compiled_component_service =
             compiled_component::configured(&golem_config.compiled_component_service, blob_storage);
+
         let component_service_config = &self.debug_config.component_service;
         let component_cache_config = &self.debug_config.component_cache;
 
@@ -101,6 +102,14 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
             .access_token
             .parse::<Uuid>()
             .expect("Access token must be an UUID");
+
+        info!(
+            "Creating component service with config: {{ host: {}, port: {}, project_host: {}, project_port: {} }}",
+            component_service_config.host,
+            component_service_config.port,
+            component_service_config.project_host,
+            component_service_config.project_port
+        );
 
         Arc::new(ComponentServiceCloudGrpc::new(
             component_service_config.component_uri(),

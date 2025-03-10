@@ -100,6 +100,14 @@ impl Bootstrap<Context> for ServerBootstrap {
             .parse::<Uuid>()
             .expect("Access token must be an UUID");
 
+        info!(
+            "Creating component service with config: {{ host: {}, port: {}, project_host: {}, project_port: {} }}",
+            component_service_config.host,
+            component_service_config.port,
+            component_service_config.project_host,
+            component_service_config.project_port
+        );
+
         Arc::new(ComponentServiceCloudGrpc::new(
             component_service_config.component_uri(),
             component_service_config.project_uri(),
