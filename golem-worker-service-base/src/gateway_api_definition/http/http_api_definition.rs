@@ -244,7 +244,7 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
             .filter(|route| {
                 route
                     .as_auth_callback_route()
-                    .map(|auth_route| !auth_routes.contains(&&auth_route))
+                    .map(|auth_route| !auth_routes.contains(&auth_route))
                     .unwrap_or(true)
             })
             .cloned()
