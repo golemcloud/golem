@@ -21,7 +21,7 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: blacksmith-16vcpu-ubuntu-2204
     env:
       CARGO_BUILD_JOBS: 6
     steps:
@@ -37,11 +37,11 @@ jobs:
     - uses: davidB/rust-cargo-make@v1
     - uses: cargo-bins/cargo-binstall@main
     - name: Install cargo-component
-      run: cargo binstall --no-confirm cargo-component@0.20.0
+      run: cargo install cargo-component@0.20.0
     - name: Install wasm-tools
-      run: cargo binstall --force --locked wasm-tools@1.223.0
+      run: cargo install --force --locked wasm-tools@1.223.0
     - name: Install wit-bindgen
-      run: cargo binstall --force --locked wit-bindgen-cli@0.37.0
+      run: cargo install --force --locked wit-bindgen-cli@0.37.0
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
       with:
@@ -61,7 +61,7 @@ jobs:
     - uses: acifani/setup-tinygo@v2.0.0
       with:
         tinygo-version: '0.35.0'
-    - uses: Swatinem/rust-cache@v2
+    - uses: useblacksmith/rust-cache@v3
       with:
         shared-key: debug
         cache-all-crates: true
