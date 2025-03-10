@@ -1,0 +1,18 @@
+[config]
+skip_core_tasks = true
+
+[env]
+CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
+
+[tasks.build]
+description = "Builds all components"
+command = "cargo"
+args = ["component", "build", "--release"]
+
+[tasks.copy]
+dependencies = ["build"]
+condition = { env_set = ["CARGO_MAKE_CRATE_CURRENT_WORKSPACE_MEMBER"] }
+script_runner = "@duckscript"
+script = """
+cp ../target/wasm32-wasip1/release/app_and_library_plugin_${CARGO_MAKE_CRATE_CURRENT_WORKSPACE_MEMBER}.wasm ../../app_and_library_plugin_${CARGO_MAKE_CRATE_CURRENT_WORKSPACE_MEMBER}.wasm
+"""

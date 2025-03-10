@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -107,6 +108,7 @@ pub struct WorkerExecutorPerTestDependencies {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
 }
 
@@ -157,6 +159,10 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
     }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
 }
 
 pub struct WorkerExecutorTestDependencies {
@@ -165,6 +171,7 @@ pub struct WorkerExecutorTestDependencies {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
 }
 
@@ -196,6 +203,8 @@ impl WorkerExecutorTestDependencies {
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         Self {
             redis,
             redis_monitor,
@@ -203,6 +212,7 @@ impl WorkerExecutorTestDependencies {
             component_service,
             blob_storage,
             initial_component_files_service,
+            plugin_wasm_files_service,
         }
     }
 
@@ -235,6 +245,7 @@ impl WorkerExecutorTestDependencies {
             component_directory: self.component_directory.clone(),
             blob_storage: self.blob_storage.clone(),
             initial_component_files_service: self.initial_component_files_service.clone(),
+            plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
         }
     }
 }
@@ -285,6 +296,10 @@ impl TestDependencies for WorkerExecutorTestDependencies {
 
     fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
         self.blob_storage.clone()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
     }
 }
 

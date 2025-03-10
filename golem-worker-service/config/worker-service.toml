@@ -202,6 +202,7 @@ multiplier = 10.0
 # initial_component_files_bucket = "golem-initial-component-files"
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
+# plugin_wasm_files_bucket = "golem-plugin-wasm-files"
 # region = "us-east-1"
 # use_minio_credentials = false
 # 

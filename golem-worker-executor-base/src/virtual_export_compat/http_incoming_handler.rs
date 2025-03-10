@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::convert::Infallible;
-
 use crate::error::GolemError;
 use bytes::Bytes;
 use golem_common::virtual_exports::http_incoming_handler::*;
+use golem_common::widen_infallible;
 use golem_wasm_rpc::Value;
 use http::{HeaderName, HeaderValue};
 use http_body_util::combinators::BoxBody;
@@ -90,9 +89,9 @@ pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, Gole
         };
 
         let with_trailers = body.with_trailers(async { converted_trailers });
-        BoxBody::new(with_trailers.map_err(hyper_error_from_infallible))
+        BoxBody::new(with_trailers.map_err(widen_infallible))
     } else {
-        BoxBody::new(http_body_util::Empty::new().map_err(hyper_error_from_infallible))
+        BoxBody::new(http_body_util::Empty::new().map_err(widen_infallible))
     };
 
     let hyper_request = builder
@@ -163,8 +162,4 @@ pub async fn http_response_to_output(
     };
 
     Ok(response.to_value())
-}
-
-fn hyper_error_from_infallible(_infallible: Infallible) -> hyper::Error {
-    unreachable!()
 }
