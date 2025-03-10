@@ -689,7 +689,7 @@ component_service_pid=$!
 popd || exit
 
 pushd golem-worker-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &
+RUST_LOG=debug,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &
 worker_service_pid=$!
 popd || exit
 

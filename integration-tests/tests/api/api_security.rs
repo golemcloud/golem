@@ -47,7 +47,7 @@ fn new_security_scheme() -> SecuritySchemeData {
         scheme_identifier: format!("security-scheme-{}", Uuid::new_v4()),
         client_id: "client_id".to_string(),
         client_secret: "super_secret".to_string(),
-        redirect_url: "http://localhost/redirect-url".to_string(),
+        redirect_url: format!("http://localhost/{}", Uuid::new_v4()),
         scopes: vec!["custom-scope-1".to_string(), "custom-scope-2".to_string()],
     }
 }

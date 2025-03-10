@@ -713,7 +713,7 @@ fn get_status_code_from_api_lookup_error<Namespace>(
             match &err {
                 ApiDeploymentError::ApiDeploymentNotFound(_, _) => StatusCode::NOT_FOUND,
 
-                ApiDeploymentError::ApiDefinitionNotFound(_, _) => StatusCode::NOT_FOUND,
+                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => StatusCode::NOT_FOUND,
 
                 ApiDeploymentError::ApiDeploymentConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
