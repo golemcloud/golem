@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
-use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, DockerNetwork};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{new_client, WorkerExecutor};
@@ -42,25 +42,7 @@ impl DockerWorkerExecutor {
     pub const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9000);
 
     pub async fn new(
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-        verbosity: Level,
-        shared_client: bool,
-    ) -> Self {
-        Self::new_base(
-            redis,
-            component_service,
-            shard_manager,
-            worker_service,
-            verbosity,
-            shared_client,
-        )
-        .await
-    }
-
-    pub async fn new_base(
+        network: Arc<DockerNetwork>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -83,12 +65,12 @@ impl DockerWorkerExecutor {
 
         let container =
             WorkerExecutorImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars.clone())
-                .with_network(NETWORK)
+                .with_network(network.name())
                 .start()
                 .await
                 .expect("Failed to start golem-worker-executor container");
 
-        let name = get_docker_container_name(container.id()).await;
+        let name = get_docker_container_name(&network, container.id()).await;
 
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)
@@ -104,7 +86,7 @@ impl DockerWorkerExecutor {
             name,
             public_http_port,
             public_grpc_port,
-            container: ContainerHandle::new(container),
+            container: ContainerHandle::new(container, network),
             client: if shared_client {
                 Some(
                     new_client("localhost", public_grpc_port)

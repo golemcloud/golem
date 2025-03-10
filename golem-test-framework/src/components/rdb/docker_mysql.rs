@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, DockerNetwork};
 use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ImageExt;
@@ -32,7 +33,7 @@ impl DockerMysqlRdb {
     const DEFAULT_PASSWORD: &'static str = "mysql";
     const DEFAULT_DATABASE: &'static str = "mysql";
 
-    pub async fn new() -> Self {
+    pub async fn new(network: Arc<DockerNetwork>) -> Self {
         info!("Starting Mysql container");
 
         let database = Self::DEFAULT_DATABASE;
@@ -45,12 +46,12 @@ impl DockerMysqlRdb {
             .with_env_var("MYSQL_PASSWORD", password)
             .with_env_var("MYSQL_USER", username)
             .with_env_var("MYSQL_DATABASE", database)
-            .with_network(NETWORK)
+            .with_network(network.name())
             .start()
             .await
             .expect("Failed to start Mysql container");
 
-        let private_host = get_docker_container_name(container.id()).await;
+        let private_host = get_docker_container_name(&network, container.id()).await;
 
         let public_port = container
             .get_host_port_ipv4(port)
@@ -70,7 +71,7 @@ impl DockerMysqlRdb {
         mysql_wait_for_startup(&info, Duration::from_secs(60)).await;
 
         Self {
-            container: ContainerHandle::new(container),
+            container: ContainerHandle::new(container, network),
             info,
         }
     }

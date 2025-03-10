@@ -19,8 +19,8 @@ use crate::components::component_compilation_service::ComponentCompilationServic
 use crate::components::component_service::docker::DockerComponentService;
 use crate::components::component_service::spawned::SpawnedComponentService;
 use crate::components::component_service::ComponentService;
+use crate::components::docker::{create_docker_test_network, DockerNetwork};
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
-use crate::components::rdb::sqlite::SqliteRdb;
 use crate::components::rdb::Rdb;
 use crate::components::redis::docker::DockerRedis;
 use crate::components::redis::provided::ProvidedRedis;
@@ -43,6 +43,7 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::Level;
@@ -159,7 +160,7 @@ impl Default for EnvBasedTestDependenciesConfig {
 
 #[derive(Clone)]
 pub struct EnvBasedTestDependencies {
-    config: Arc<EnvBasedTestDependenciesConfig>,
+    mode: Arc<DependenciesMode>,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
@@ -179,45 +180,55 @@ impl Debug for EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    async fn make_rdb(
-        config: Arc<EnvBasedTestDependenciesConfig>,
-    ) -> Arc<dyn Rdb + Send + Sync + 'static> {
-        match config.db_type {
-            DbType::Sqlite => {
-                let sqlite_path = Path::new("../target/golem_test_db");
-                Arc::new(SqliteRdb::new(sqlite_path))
-            }
-            DbType::Postgres => Arc::new(DockerPostgresRdb::new().await),
+    async fn make_rdb(mode: Arc<DependenciesMode>) -> Arc<dyn Rdb + Send + Sync + 'static> {
+        match mode.deref() {
+            DependenciesMode::Docker { config, network } => match config.db_type {
+                DbType::Sqlite => {
+                    panic!("sqlite not supported in docker mode")
+                }
+                DbType::Postgres => Arc::new(DockerPostgresRdb::new(network.clone()).await),
+            },
+            DependenciesMode::Spawned { config } => match config.db_type {
+                DbType::Sqlite => {
+                    panic!("sqlite not supported in docker mode")
+                }
+                DbType::Postgres => {
+                    let network = create_docker_test_network().await;
+                    Arc::new(DockerPostgresRdb::new(Arc::new(network)).await)
+                }
+            },
         }
     }
 
-    async fn make_redis(
-        config: Arc<EnvBasedTestDependenciesConfig>,
-    ) -> Arc<dyn Redis + Send + Sync + 'static> {
-        let prefix = config.redis_key_prefix.clone();
-        if config.golem_docker_services {
-            Arc::new(DockerRedis::new(prefix).await)
-        } else {
-            let host = config.redis_host.clone();
-            let port = config.redis_port;
+    async fn make_redis(mode: Arc<DependenciesMode>) -> Arc<dyn Redis + Send + Sync + 'static> {
+        match mode.deref() {
+            DependenciesMode::Docker { config, network } => {
+                Arc::new(DockerRedis::new(network.clone(), config.redis_key_prefix.clone()).await)
+            }
+            DependenciesMode::Spawned { config } => {
+                let prefix = config.redis_key_prefix.clone();
+                let host = config.redis_host.clone();
+                let port = config.redis_port;
 
-            if components::redis::check_if_running(&host, port) {
-                Arc::new(ProvidedRedis::new(host, port, prefix))
-            } else {
-                Arc::new(SpawnedRedis::new(
-                    port,
-                    prefix,
-                    config.default_stdout_level(),
-                    config.default_stderr_level(),
-                ))
+                if components::redis::check_if_running(&host, port) {
+                    Arc::new(ProvidedRedis::new(host, port, prefix))
+                } else {
+                    Arc::new(SpawnedRedis::new(
+                        port,
+                        prefix,
+                        config.default_stdout_level(),
+                        config.default_stderr_level(),
+                    ))
+                }
             }
         }
     }
 
     async fn make_redis_monitor(
-        config: Arc<EnvBasedTestDependenciesConfig>,
+        mode: Arc<DependenciesMode>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+        let config = mode.config();
         Arc::new(SpawnedRedisMonitor::new(
             redis,
             config.redis_monitor_stdout_level(),
@@ -226,20 +237,20 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_shard_manager(
-        config: Arc<EnvBasedTestDependenciesConfig>,
+        mode: Arc<DependenciesMode>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn ShardManager + Send + Sync + 'static> {
-        if config.golem_docker_services {
-            Arc::new(
+        match mode.deref() {
+            DependenciesMode::Docker { config, network } => Arc::new(
                 DockerShardManager::new(
+                    network.clone(),
                     redis,
                     config.number_of_shards_override,
                     config.default_verbosity(),
                 )
                 .await,
-            )
-        } else {
-            Arc::new(
+            ),
+            DependenciesMode::Spawned { config } => Arc::new(
                 SpawnedShardManager::new(
                     Path::new("../target/debug/golem-shard-manager"),
                     Path::new("../golem-shard-manager"),
@@ -252,17 +263,18 @@ impl EnvBasedTestDependencies {
                     config.default_stderr_level(),
                 )
                 .await,
-            )
+            ),
         }
     }
 
     async fn make_component_service(
-        config: Arc<EnvBasedTestDependenciesConfig>,
+        mode: Arc<DependenciesMode>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
-        if config.golem_docker_services {
-            Arc::new(
+        match mode.deref() {
+            DependenciesMode::Docker { config, network } => Arc::new(
                 DockerComponentService::new(
+                    network.clone(),
                     config.golem_test_components.clone(),
                     Some((
                         DockerComponentCompilationService::NAME,
@@ -273,9 +285,8 @@ impl EnvBasedTestDependencies {
                     config.golem_client_protocol,
                 )
                 .await,
-            )
-        } else {
-            Arc::new(
+            ),
+            DependenciesMode::Spawned { config } => Arc::new(
                 SpawnedComponentService::new(
                     config.golem_test_components.clone(),
                     Path::new("../target/debug/golem-component-service"),
@@ -290,24 +301,24 @@ impl EnvBasedTestDependencies {
                     config.golem_client_protocol,
                 )
                 .await,
-            )
+            ),
         }
     }
 
     async fn make_component_compilation_service(
-        config: Arc<EnvBasedTestDependenciesConfig>,
+        mode: Arc<DependenciesMode>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
-        if config.golem_docker_services {
-            Arc::new(
+        match mode.deref() {
+            DependenciesMode::Docker { config, network } => Arc::new(
                 DockerComponentCompilationService::new(
+                    network.clone(),
                     component_service,
                     config.default_verbosity(),
                 )
                 .await,
-            )
-        } else {
-            Arc::new(
+            ),
+            DependenciesMode::Spawned { config } => Arc::new(
                 SpawnedComponentCompilationService::new(
                     Path::new("../target/debug/golem-component-compilation-service"),
                     Path::new("../golem-component-compilation-service"),
@@ -319,19 +330,20 @@ impl EnvBasedTestDependencies {
                     config.default_stderr_level(),
                 )
                 .await,
-            )
+            ),
         }
     }
 
     async fn make_worker_service(
-        config: Arc<EnvBasedTestDependenciesConfig>,
+        mode: Arc<DependenciesMode>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
-        if config.golem_docker_services {
-            Arc::new(
+        match mode.deref() {
+            DependenciesMode::Docker { config, network } => Arc::new(
                 DockerWorkerService::new(
+                    network.clone(),
                     component_service,
                     shard_manager,
                     rdb,
@@ -339,9 +351,8 @@ impl EnvBasedTestDependencies {
                     config.golem_client_protocol,
                 )
                 .await,
-            )
-        } else {
-            Arc::new(
+            ),
+            DependenciesMode::Spawned { config } => Arc::new(
                 SpawnedWorkerService::new(
                     Path::new("../target/debug/golem-worker-service"),
                     Path::new("../golem-worker-service"),
@@ -357,20 +368,21 @@ impl EnvBasedTestDependencies {
                     config.golem_client_protocol,
                 )
                 .await,
-            )
+            ),
         }
     }
 
     async fn make_worker_executor_cluster(
-        config: Arc<EnvBasedTestDependenciesConfig>,
+        mode: Arc<DependenciesMode>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
-        if config.golem_docker_services {
-            Arc::new(
+        match mode.deref() {
+            DependenciesMode::Docker { config, network } => Arc::new(
                 DockerWorkerExecutorCluster::new(
+                    network.clone(),
                     config.worker_executor_cluster_size,
                     redis,
                     component_service,
@@ -380,9 +392,8 @@ impl EnvBasedTestDependencies {
                     config.shared_client,
                 )
                 .await,
-            )
-        } else {
-            Arc::new(
+            ),
+            DependenciesMode::Spawned { config } => Arc::new(
                 SpawnedWorkerExecutorCluster::new(
                     config.worker_executor_cluster_size,
                     9000,
@@ -399,28 +410,34 @@ impl EnvBasedTestDependencies {
                     config.shared_client,
                 )
                 .await,
-            )
+            ),
         }
     }
 
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> Self {
-        let config = Arc::new(config);
+        let mode = if config.golem_docker_services {
+            let network = Arc::new(create_docker_test_network().await);
+            DependenciesMode::Docker { config, network }
+        } else {
+            DependenciesMode::Spawned { config }
+        };
+        let mode = Arc::new(mode);
 
-        let redis = Self::make_redis(config.clone()).await;
+        let redis = Self::make_redis(mode.clone()).await;
         {
             let mut connection = redis.get_connection(0);
             redis::cmd("FLUSHALL").exec(&mut connection).unwrap();
         }
 
         let rdb_and_component_service_join = {
-            let config = config.clone();
+            let mode = mode.clone();
 
             tokio::spawn(async move {
-                let rdb = Self::make_rdb(config.clone()).await;
+                let rdb = Self::make_rdb(mode.clone()).await;
                 let component_service =
-                    Self::make_component_service(config.clone(), rdb.clone()).await;
+                    Self::make_component_service(mode.clone(), rdb.clone()).await;
                 let component_compilation_service = Self::make_component_compilation_service(
-                    config.clone(),
+                    mode.clone(),
                     component_service.clone(),
                 )
                 .await;
@@ -429,9 +446,9 @@ impl EnvBasedTestDependencies {
         };
 
         let redis_monitor_join =
-            tokio::spawn(Self::make_redis_monitor(config.clone(), redis.clone()));
+            tokio::spawn(Self::make_redis_monitor(mode.clone(), redis.clone()));
         let shard_manager_join =
-            tokio::spawn(Self::make_shard_manager(config.clone(), redis.clone()));
+            tokio::spawn(Self::make_shard_manager(mode.clone(), redis.clone()));
 
         let (rdb, component_service, component_compilation_service) =
             rdb_and_component_service_join
@@ -441,14 +458,14 @@ impl EnvBasedTestDependencies {
         let shard_manager = shard_manager_join.await.expect("Failed to join");
 
         let worker_service = Self::make_worker_service(
-            config.clone(),
+            mode.clone(),
             component_service.clone(),
             shard_manager.clone(),
             rdb.clone(),
         )
         .await;
         let worker_executor_cluster = Self::make_worker_executor_cluster(
-            config.clone(),
+            mode.clone(),
             component_service.clone(),
             shard_manager.clone(),
             worker_service.clone(),
@@ -467,7 +484,7 @@ impl EnvBasedTestDependencies {
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         Self {
-            config: config.clone(),
+            mode,
             rdb,
             redis,
             redis_monitor,
@@ -501,7 +518,7 @@ impl TestDependencies for EnvBasedTestDependencies {
     }
 
     fn component_directory(&self) -> &Path {
-        &self.config.golem_test_components
+        &self.mode.config().golem_test_components
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
@@ -543,4 +560,23 @@ fn opt_env_var_bool(name: &str) -> Option<bool> {
             "false" => Some(false),
             _ => None,
         })
+}
+
+enum DependenciesMode {
+    Docker {
+        config: EnvBasedTestDependenciesConfig,
+        network: Arc<DockerNetwork>,
+    },
+    Spawned {
+        config: EnvBasedTestDependenciesConfig,
+    },
+}
+
+impl DependenciesMode {
+    fn config(&self) -> &EnvBasedTestDependenciesConfig {
+        match self {
+            Self::Docker { config, .. } => config,
+            Self::Spawned { config } => config,
+        }
+    }
 }

@@ -85,6 +85,7 @@ aws-sdk-s3 = "1.65.0"
 axum = { version = "0.7.9", features = ["multipart"] }
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
+bollard = { version = "0.18.1" }
 bytes = "1.9.0"
 cap-std = "3.4.2" # keep in sync with wasmtime
 chrono = { version = "0.4.39", features = ["serde"] }

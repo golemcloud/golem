@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
-use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::docker::{get_docker_container_name, ContainerHandle, DockerNetwork};
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
@@ -50,23 +50,7 @@ impl DockerWorkerService {
     const CUSTOM_REQUEST_PORT: ContainerPort = ContainerPort::Tcp(9093);
 
     pub async fn new(
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-        client_protocol: GolemClientProtocol,
-    ) -> Self {
-        Self::new_base(
-            component_service,
-            shard_manager,
-            rdb,
-            verbosity,
-            client_protocol,
-        )
-        .await
-    }
-
-    pub async fn new_base(
+        network: Arc<DockerNetwork>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -93,12 +77,12 @@ impl DockerWorkerService {
             Self::CUSTOM_REQUEST_PORT,
             env_vars,
         )
-        .with_network(NETWORK)
+        .with_network(network.name())
         .start()
         .await
         .expect("Failed to start golem-worker-service container");
 
-        let private_host = get_docker_container_name(container.id()).await;
+        let private_host = get_docker_container_name(&network, container.id()).await;
 
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)
@@ -116,7 +100,7 @@ impl DockerWorkerService {
             .expect("Failed to get public custom request port");
 
         Self {
-            container: ContainerHandle::new(container),
+            container: ContainerHandle::new(container, network),
             private_host,
             public_http_port,
             public_grpc_port,

@@ -16,6 +16,7 @@ use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::{ComponentId, WorkerId};
+use golem_test_framework::components::docker::{create_docker_test_network, DockerNetwork};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor_base::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
@@ -37,13 +38,18 @@ use test_r::{test, test_dep};
 use uuid::Uuid;
 
 #[test_dep]
-async fn postgres() -> DockerPostgresRdb {
-    DockerPostgresRdb::new().await
+async fn docker_network() -> Arc<DockerNetwork> {
+    Arc::new(create_docker_test_network().await)
 }
 
 #[test_dep]
-async fn mysql() -> DockerMysqlRdb {
-    DockerMysqlRdb::new().await
+async fn postgres(network: &Arc<DockerNetwork>) -> DockerPostgresRdb {
+    DockerPostgresRdb::new(network.clone()).await
+}
+
+#[test_dep]
+async fn mysql(network: &Arc<DockerNetwork>) -> DockerMysqlRdb {
+    DockerMysqlRdb::new(network.clone()).await
 }
 
 #[test_dep]

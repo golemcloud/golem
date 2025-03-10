@@ -35,6 +35,7 @@ use crate::components::component_service::k8s::K8sComponentService;
 use crate::components::component_service::provided::ProvidedComponentService;
 use crate::components::component_service::spawned::SpawnedComponentService;
 use crate::components::component_service::ComponentService;
+use crate::components::docker::create_docker_test_network;
 use crate::components::k8s::{aws_nlb_service_annotations, K8sNamespace, K8sRoutingType};
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
@@ -339,11 +340,14 @@ impl CliTestDependencies {
     ) -> Self {
         let params_clone = params.clone();
 
+        let network = Arc::new(create_docker_test_network().await);
+
         let rdb_and_component_service_join = {
             let component_directory = PathBuf::from(&params.component_directory);
+            let network = network.clone();
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new().await);
+                    Arc::new(DockerPostgresRdb::new(network.clone()).await);
 
                 let component_compilation_service = if !compilation_service_disabled {
                     Some((
@@ -356,6 +360,7 @@ impl CliTestDependencies {
 
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     DockerComponentService::new(
+                        network.clone(),
                         component_directory,
                         component_compilation_service,
                         rdb.clone(),
@@ -369,6 +374,7 @@ impl CliTestDependencies {
                     dyn ComponentCompilationService + Send + Sync + 'static,
                 > = Arc::new(
                     DockerComponentCompilationService::new(
+                        network.clone(),
                         component_service.clone(),
                         params_clone.service_verbosity(),
                     )
@@ -380,12 +386,18 @@ impl CliTestDependencies {
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
-            Arc::new(DockerRedis::new(redis_prefix.to_string()).await);
+            Arc::new(DockerRedis::new(network.clone(), redis_prefix.to_string()).await);
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
         let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-            DockerShardManager::new(redis.clone(), None, params.service_verbosity()).await,
+            DockerShardManager::new(
+                network.clone(),
+                redis.clone(),
+                None,
+                params.service_verbosity(),
+            )
+            .await,
         );
 
         let (rdb, component_service, component_compilation_service) =
@@ -395,6 +407,7 @@ impl CliTestDependencies {
 
         let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
             DockerWorkerService::new(
+                network.clone(),
                 component_service.clone(),
                 shard_manager.clone(),
                 rdb.clone(),
@@ -406,6 +419,7 @@ impl CliTestDependencies {
         let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
             Arc::new(
                 DockerWorkerExecutorCluster::new(
+                    network.clone(),
                     cluster_size,
                     redis.clone(),
                     component_service.clone(),
@@ -476,9 +490,11 @@ impl CliTestDependencies {
             let build_root = build_root.clone();
             let component_directory = PathBuf::from(&params.component_directory);
 
+            let docker_network = Arc::new(create_docker_test_network().await);
+
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new().await);
+                    Arc::new(DockerPostgresRdb::new(docker_network).await);
 
                 let component_compilation_service_port = if !compilation_service_disabled {
                     Some(component_compilation_service_grpc_port)

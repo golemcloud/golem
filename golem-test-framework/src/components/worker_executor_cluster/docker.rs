@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
+use crate::components::docker::DockerNetwork;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::docker::DockerWorkerExecutor;
@@ -32,6 +33,7 @@ pub struct DockerWorkerExecutorCluster {
 
 impl DockerWorkerExecutorCluster {
     async fn make_worker_executor(
+        network: Arc<DockerNetwork>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -41,6 +43,7 @@ impl DockerWorkerExecutorCluster {
     ) -> Arc<DockerWorkerExecutor> {
         Arc::new(
             DockerWorkerExecutor::new(
+                network,
                 redis,
                 component_service,
                 shard_manager,
@@ -53,6 +56,7 @@ impl DockerWorkerExecutorCluster {
     }
 
     pub async fn new(
+        network: Arc<DockerNetwork>,
         size: usize,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
@@ -66,6 +70,7 @@ impl DockerWorkerExecutorCluster {
 
         for _ in 0..size {
             let worker_executor_join = tokio::spawn(Self::make_worker_executor(
+                network.clone(),
                 redis.clone(),
                 component_service.clone(),
                 shard_manager.clone(),
