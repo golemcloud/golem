@@ -71,7 +71,9 @@ use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, r#enum, record, result, result_err, str, tuple, u16, u32, u64, u8,
     unit_case, variant,
 };
-use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeVariant};
+use golem_wasm_ast::analysis::{
+    AnalysedFunctionParameter, AnalysedType, NameOptionTypePair, TypeVariant,
+};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
     parse_type_annotated_value, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
@@ -383,9 +385,16 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
                         format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                     )?;
-                let request = function
-                    .parameters
-                    .iter()
+
+                let parsed = ParsedFunctionName::parse(&function_name)?;
+                let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
+                    if parsed.function().is_indexed_resource() {
+                        Box::new(function.parameters.iter().skip(1))
+                    } else {
+                        Box::new(function.parameters.iter())
+                    };
+
+                let request = param_types
                     .zip(params)
                     .map(|(param, value)| ValueAndType::new(value, param.typ.clone()))
                     .collect();
@@ -432,9 +441,16 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
-                let request = function
-                    .parameters
-                    .iter()
+
+                let parsed = ParsedFunctionName::parse(&function_name)?;
+                let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
+                    if parsed.function().is_indexed_resource() {
+                        Box::new(function.parameters.iter().skip(1))
+                    } else {
+                        Box::new(function.parameters.iter())
+                    };
+
+                let request = param_types
                     .zip(params)
                     .map(|(param, value)| ValueAndType::new(value, param.typ.clone()))
                     .collect();

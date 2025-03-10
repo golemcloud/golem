@@ -967,7 +967,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
     ) -> Result<(), GolemError> {
         let mut queue = self.queue.write().await;
-        queue.retain(|inv| !inv.matches_idempotency_key(&idempotency_key));
+        for item in queue.iter_mut() {
+            if item.matches_idempotency_key(&idempotency_key) {
+                if let QueuedWorkerInvocation::External { canceled, .. } = item {
+                    *canceled = true;
+                }
+            }
+        }
 
         self.oplog
             .add_and_commit(OplogEntry::cancel_pending_invocation(idempotency_key))
