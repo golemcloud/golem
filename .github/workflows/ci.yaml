@@ -43,10 +43,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup upterm session
-        uses: lhotari/action-upterm@v1
       - name: Build all targets
         run: cargo make --profile ci build
+      - name: Setup upterm session
+        uses: lhotari/action-upterm@v1
       - name: Unit tests
         run: cargo make --profile ci unit-tests
       - name: Get docker logs
