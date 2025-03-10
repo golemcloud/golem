@@ -28,12 +28,13 @@ use golem_worker_executor_base::services::rdbms::{Rdbms, RdbmsServiceDefault, Rd
 use golem_worker_executor_base::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use mac_address::MacAddress;
 use serde_json::json;
-use std::collections::Bound;
+use std::collections::{Bound, HashMap};
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 #[test_dep]
@@ -2846,6 +2847,147 @@ fn test_rdbms_pool_key_masked_address() {
     let key =
         RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&secret=xyz").unwrap();
     check!(key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&secret=*****");
+}
+
+#[test]
+async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = mysql.public_connection_string();
+    let rdbms = rdbms_service.mysql();
+    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
+        mysql.public_connection_string_to_db(&db_name)
+    })
+    .await;
+    db_addresses.push(db_address);
+
+    rdbms_par_test(
+        rdbms,
+        db_addresses,
+        3,
+        RdbmsTest::new(
+            vec![StatementTest::execute_test("SELECT 1", vec![], Some(0))],
+            None,
+        ),
+    )
+    .await
+}
+
+#[test]
+async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = postgres.public_connection_string();
+    let rdbms = rdbms_service.postgres();
+    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
+        postgres.public_connection_string_to_db(&db_name)
+    })
+    .await;
+    db_addresses.push(db_address);
+
+    rdbms_par_test(
+        rdbms,
+        db_addresses,
+        3,
+        RdbmsTest::new(
+            vec![StatementTest::execute_test("SELECT 1", vec![], Some(1))],
+            None,
+        ),
+    )
+    .await
+}
+
+async fn create_test_databases<T: RdbmsType + Clone + 'static>(
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    db_address: &str,
+    count: u8,
+    to_db_address: impl Fn(String) -> String,
+) -> Vec<String> {
+    let worker_id = new_worker_id();
+
+    let connection = rdbms.create(db_address, &worker_id).await;
+    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    let pool_key = connection.unwrap();
+
+    let mut values: Vec<String> = Vec::with_capacity(count as usize);
+
+    for i in 0..count {
+        let db_name = format!("test_db_{}", i);
+
+        let r = rdbms
+            .execute(
+                &pool_key,
+                &worker_id,
+                &format!("CREATE DATABASE {}", db_name),
+                vec![],
+            )
+            .await;
+
+        check!(r.is_ok(), "db creation {} is ok", db_name);
+
+        let address = to_db_address(db_name);
+        values.push(address);
+    }
+
+    let _ = rdbms.remove(&pool_key, &worker_id);
+
+    values
+}
+
+async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    db_addresses: Vec<String>,
+    count: u8,
+    test: RdbmsTest<T>,
+) {
+    let mut fibers = JoinSet::new();
+    for db_address in &db_addresses {
+        for _ in 0..count {
+            let rdbms_clone = rdbms.clone();
+            let db_address_clone = db_address.clone();
+            let test_clone = test.clone();
+            let _ = fibers.spawn(async move {
+                let worker_id = new_worker_id();
+
+                let connection = rdbms_clone.create(&db_address_clone, &worker_id).await;
+
+                let pool_key = connection.unwrap();
+
+                let result =
+                    execute_rdbms_test(rdbms_clone.clone(), &pool_key, &worker_id, test_clone)
+                        .await;
+
+                (worker_id, pool_key, result)
+            });
+        }
+    }
+
+    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, Error>>> =
+        HashMap::new();
+    let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
+
+    while let Some(res) = fibers.join_next().await {
+        let (worker_id, pool_key, result_execute) = res.unwrap();
+        workers_results.insert(worker_id.clone(), result_execute);
+        workers_pools.insert(worker_id.clone(), pool_key);
+    }
+
+    let rdbms_status = rdbms.status();
+
+    for (worker_id, pool_key) in workers_pools.clone() {
+        let _ = rdbms.remove(&pool_key, &worker_id);
+    }
+
+    check!(rdbms_status.pools.len() == db_addresses.len());
+
+    for (worker_id, pool_key) in workers_pools {
+        let worker_ids = rdbms_status.pools.get(&pool_key);
+
+        check!(
+            worker_ids.is_some_and(|ids| ids.contains(&worker_id)),
+            "worker {worker_id} found in pool {pool_key}"
+        );
+    }
+
+    for (worker_id, result) in workers_results {
+        check_test_results(&worker_id, test.clone(), result);
+    }
 }
 
 fn new_worker_id() -> WorkerId {

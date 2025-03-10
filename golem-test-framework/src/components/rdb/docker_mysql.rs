@@ -28,7 +28,7 @@ pub struct DockerMysqlRdb {
 
 impl DockerMysqlRdb {
     const DEFAULT_PORT: u16 = 3306;
-    const DEFAULT_USERNAME: &'static str = "mysql";
+    const DEFAULT_USERNAME: &'static str = "root";
     const DEFAULT_PASSWORD: &'static str = "mysql";
     const DEFAULT_DATABASE: &'static str = "mysql";
 
@@ -42,8 +42,7 @@ impl DockerMysqlRdb {
 
         let container = testcontainers_modules::mysql::Mysql::default()
             .with_tag("8")
-            .with_env_var("MYSQL_PASSWORD", password)
-            .with_env_var("MYSQL_USER", username)
+            .with_env_var("MYSQL_ROOT_PASSWORD", password)
             .with_env_var("MYSQL_DATABASE", database)
             .with_network(NETWORK)
             .start()
@@ -77,6 +76,15 @@ impl DockerMysqlRdb {
 
     pub fn public_connection_string(&self) -> String {
         self.info.public_connection_string()
+    }
+
+    pub fn public_connection_string_to_db(&self, db_name: &str) -> String {
+        let db_info = MysqlInfo {
+            database_name: db_name.to_string(),
+            ..self.info.clone()
+        };
+
+        db_info.public_connection_string()
     }
 
     pub fn private_connection_string(&self) -> String {
