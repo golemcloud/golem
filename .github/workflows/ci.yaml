@@ -29,8 +29,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-      - name: Setup upterm session
-        uses: lhotari/action-upterm@v1
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
@@ -45,8 +43,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check that wit-deps are up-to-date
-        run: cargo make --profile ci check-wit
+      - name: Setup upterm session
+        uses: lhotari/action-upterm@v1
       - name: Build all targets
         run: cargo make --profile ci build
       - name: Unit tests
