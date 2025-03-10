@@ -3089,10 +3089,7 @@ async fn cancelling_pending_invocations(
     check!(cancel4.is_err()); // cannot cancel a non-existing invocation
     check!(final_result == vec![Value::U64(12)]);
 
-    // FIXME: This is currently failing due to a value / type mismatch when parsing an external invocation:
-    // ValueAndType { value: Record([Record([Record([Record([U64(3560302769035693415), U64(13755298306296285132)])]), String("cancel-pending-invocations")]), U64(12)]), typ: Handle(TypeHandle { resource_id: AnalysedResourceId(0), mode: Borrowed }) }
-    //
-    // executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 /// Test resolving a component_id from the name.
