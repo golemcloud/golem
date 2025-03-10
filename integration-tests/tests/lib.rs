@@ -21,7 +21,6 @@ use test_r::test_dep;
 test_r::enable!();
 
 mod fork;
-mod invocation_context;
 mod plugins;
 mod worker;
 

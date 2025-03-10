@@ -22,7 +22,9 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::headers::TraceContextHeaders;
+use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
+use std::str::FromStr;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::types;
 use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
@@ -77,9 +79,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .invocation_context
                 .get_stack(span.span_id())
                 .unwrap();
+            let host_request = self.table().get_mut(&request)?;
+
             let trace_context_headers =
                 TraceContextHeaders::from_invocation_context(invocation_context);
             for (key, value) in trace_context_headers.to_raw_headers_map() {
+                host_request.headers.insert(
+                    HeaderName::from_str(&key).unwrap(),
+                    HeaderValue::from_str(&value).unwrap(),
+                );
                 headers.insert(key, value);
             }
         }
