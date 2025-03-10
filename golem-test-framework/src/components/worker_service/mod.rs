@@ -16,7 +16,7 @@ use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::{
-    new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder, GolemEnvVars,
+    new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
 };
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
@@ -1382,66 +1382,49 @@ async fn wait_for_startup(
     }
 }
 
-#[async_trait]
-pub trait WorkerServiceEnvVars {
-    async fn env_vars(
-        &self,
-        http_port: u16,
-        grpc_port: u16,
-        custom_request_port: u16,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> HashMap<String, String>;
-}
-
-#[async_trait]
-impl WorkerServiceEnvVars for GolemEnvVars {
-    async fn env_vars(
-        &self,
-        http_port: u16,
-        grpc_port: u16,
-        custom_request_port: u16,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> HashMap<String, String> {
-        EnvVarBuilder::golem_service(verbosity)
-            .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
-            .with_str(
-                "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
-                "/tmp/ittest-local-object-store/golem",
-            )
-            .with(
-                "GOLEM__COMPONENT_SERVICE__HOST",
-                component_service.private_host(),
-            )
-            .with(
-                "GOLEM__COMPONENT_SERVICE__PORT",
-                component_service.private_grpc_port().to_string(),
-            )
-            .with_str(
-                "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
-                "5C832D93-FF85-4A8F-9803-513950FDFDB1",
-            )
-            .with_str("ENVIRONMENT", "local")
-            .with_str("GOLEM__ENVIRONMENT", "ittest")
-            .with("GOLEM__ROUTING_TABLE__HOST", shard_manager.private_host())
-            .with(
-                "GOLEM__ROUTING_TABLE__PORT",
-                shard_manager.private_grpc_port().to_string(),
-            )
-            .with(
-                "GOLEM__CUSTOM_REQUEST_PORT",
-                custom_request_port.to_string(),
-            )
-            .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
-            .with("GOLEM__PORT", http_port.to_string())
-            .with_all(rdb.info().env("golem_worker"))
-            .build()
-    }
+async fn env_vars(
+    http_port: u16,
+    grpc_port: u16,
+    custom_request_port: u16,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+    verbosity: Level,
+    rdb_private_connection: bool,
+) -> HashMap<String, String> {
+    EnvVarBuilder::golem_service(verbosity)
+        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+        .with_str(
+            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+            "/tmp/ittest-local-object-store/golem",
+        )
+        .with(
+            "GOLEM__COMPONENT_SERVICE__HOST",
+            component_service.private_host(),
+        )
+        .with(
+            "GOLEM__COMPONENT_SERVICE__PORT",
+            component_service.private_grpc_port().to_string(),
+        )
+        .with_str(
+            "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
+            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
+        )
+        .with_str("ENVIRONMENT", "local")
+        .with_str("GOLEM__ENVIRONMENT", "ittest")
+        .with("GOLEM__ROUTING_TABLE__HOST", shard_manager.private_host())
+        .with(
+            "GOLEM__ROUTING_TABLE__PORT",
+            shard_manager.private_grpc_port().to_string(),
+        )
+        .with(
+            "GOLEM__CUSTOM_REQUEST_PORT",
+            custom_request_port.to_string(),
+        )
+        .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
+        .with("GOLEM__PORT", http_port.to_string())
+        .with_all(rdb.info().env("golem_worker", rdb_private_connection))
+        .build()
 }
 
 fn http_worker_metadata_to_grpc(
