@@ -913,6 +913,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .map(|value| value.clone().into())
                 .collect();
 
+            let stack = self.get_current_invocation_context().await;
+
             self.state
                 .oplog
                 .add_exported_function_invoked(
@@ -921,6 +923,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     self.get_current_idempotency_key().await.ok_or(anyhow!(
                         "No active invocation key is associated with the worker"
                     ))?,
+                    stack,
                 )
                 .await
                 .unwrap_or_else(|err| {
@@ -1242,26 +1245,61 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
-    fn start_span(
+    async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         let span_id = self.state.current_span_id.clone();
-        self.start_child_span(&span_id, initial_attributes)
+        let span = self.start_child_span(&span_id, initial_attributes).await?;
+        self.state.current_span_id = span.span_id().clone();
+        Ok(span)
     }
 
-    fn start_child_span(
+    async fn start_child_span(
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         let current_span_id = &self.state.current_span_id;
-        let span = self
+
+        let is_live = self.is_live();
+
+        // Using try_get_oplog_entry here to preserve backward compatibility - starting and finishing
+        // spans has been added to existing operations (such as wasi-http and rpc) and old oplogs
+        // does not have the StartSpan/FinishSpan paris persisted.
+        let span = if is_live {
+            self.state
+                .invocation_context
+                .start_span(current_span_id, None)
+                .map_err(GolemError::runtime)?
+        } else if let Some((_, entry)) = self
             .state
-            .invocation_context
-            .start_span(current_span_id, None)
-            .map_err(GolemError::runtime)?;
+            .replay_state
+            .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
+            .await
+        {
+            let (timestamp, span_id) = match entry {
+                OplogEntry::StartSpan {
+                    timestamp, span_id, ..
+                } => (timestamp, span_id),
+                _ => unreachable!(),
+            };
+
+            let span = InvocationContextSpan::local()
+                .with_span_id(span_id)
+                .with_start(timestamp)
+                .with_parent(self.state.invocation_context.get(current_span_id).unwrap())
+                .build();
+            self.state.invocation_context.add_span(span.clone());
+            span
+        } else {
+            self.state
+                .invocation_context
+                .start_span(current_span_id, None)
+                .map_err(GolemError::runtime)?
+        };
 
         if current_span_id != parent
             && !self
@@ -1284,12 +1322,33 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span.set_attribute(name.clone(), value.clone());
         }
 
-        // TODO: write an open span entry to the oplog, or read the persisted span in replay mode
+        if is_live {
+            self.state
+                .oplog
+                .add(OplogEntry::start_span(
+                    span.start().unwrap_or(Timestamp::now_utc()),
+                    span.span_id().clone(),
+                    Some(current_span_id.clone()),
+                    span.linked_context().map(|link| link.span_id().clone()),
+                    HashMap::from_iter(initial_attributes.iter().cloned()),
+                ))
+                .await;
+        }
 
         Ok(span)
     }
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        if &self.state.current_span_id == span_id {
+            self.state.current_span_id = self
+                .state
+                .invocation_context
+                .get(span_id)
+                .unwrap()
+                .parent()
+                .map(|p| p.span_id().clone())
+                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
+        }
         let _ = self
             .state
             .invocation_context
@@ -1298,13 +1357,63 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
-        // TODO: if live mode write a close span entry to the oplog
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        if self.is_live() {
+            self.state
+                .oplog
+                .add(OplogEntry::finish_span(span_id.clone()))
+                .await;
+        } else {
+            // Using try_get_oplog_entry here to preserve backward compatibility - starting and finishing
+            // spans has been added to existing operations (such as wasi-http and rpc) and old oplogs
+            // does not have the StartSpan/FinishSpan paris persisted.
+            let _ = self
+                .state
+                .replay_state
+                .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::FinishSpan { .. }))
+                .await;
+        }
+
+        if &self.state.current_span_id == span_id {
+            self.state.current_span_id = self
+                .state
+                .invocation_context
+                .get(span_id)
+                .unwrap()
+                .parent()
+                .map(|p| p.span_id().clone())
+                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
+        }
         let _ = self
             .state
             .invocation_context
             .finish_span(span_id)
             .map_err(GolemError::runtime);
+        Ok(())
+    }
+
+    async fn set_span_attribute(
+        &mut self,
+        span_id: &SpanId,
+        key: &str,
+        value: AttributeValue,
+    ) -> Result<(), GolemError> {
+        self.state
+            .invocation_context
+            .set_attribute(span_id, key.to_string(), value.clone())
+            .map_err(GolemError::runtime)?;
+        if self.is_live() {
+            self.state
+                .oplog
+                .add(OplogEntry::set_span_attribute(
+                    span_id.clone(),
+                    key.to_string(),
+                    value,
+                ))
+                .await;
+        } else {
+            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
+        }
         Ok(())
     }
 }
@@ -1386,8 +1495,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .instrument(span)
                         .await;
 
+                        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
+                        // as it would add FinishSpan oplog entries without corersponding StartSpan ones. Instead,
+                        // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
+                        // are finished at ExportedFunctionCompleted.
                         for span_id in local_span_ids {
-                            store.as_context_mut().data_mut().finish_span(&span_id)?;
+                            store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
                         for span_id in inherited_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
@@ -1897,6 +2010,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     break;
                 }
             }
+            Some((_, OplogEntry::ExportedFunctionInvokedV1 { .. })) => break,
             Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
             _ => {}
         }

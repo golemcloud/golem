@@ -945,29 +945,42 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+#[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
-    fn start_span(
+    async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
-        self.durable_ctx.start_span(initial_attributes)
+        self.durable_ctx.start_span(initial_attributes).await
     }
 
-    fn start_child_span(
+    async fn start_child_span(
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         self.durable_ctx
             .start_child_span(parent, initial_attributes)
+            .await
     }
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
         self.durable_ctx.remove_span(span_id)
     }
 
-    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
-        self.durable_ctx.finish_span(span_id)
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id).await
+    }
+
+    async fn set_span_attribute(
+        &mut self,
+        span_id: &SpanId,
+        key: &str,
+        value: AttributeValue,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx
+            .set_span_attribute(span_id, key, value)
+            .await
     }
 }
 
@@ -1127,6 +1140,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_api_0_2_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(
             &mut linker,
