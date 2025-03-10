@@ -207,7 +207,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             .as_ref()
         {
             Ok(wit_deps) => Ok(wit_deps),
-            Err(err) => Err(anyhow!("Failed to init wit dependency resolver: {}", err)),
+            Err(err) => Err(anyhow!("Failed to init wit dependency resolver: {:#}", err)),
         }
     }
 
