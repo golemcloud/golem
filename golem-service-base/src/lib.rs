@@ -22,6 +22,7 @@ pub mod migration;
 pub mod model;
 pub mod observability;
 pub mod poem;
+pub mod replayable_stream;
 pub mod repo;
 pub mod service;
 pub mod storage;

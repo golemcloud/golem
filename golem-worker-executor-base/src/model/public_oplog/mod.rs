@@ -46,17 +46,20 @@ use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::exports::{find_resource_site, function_by_name};
+use golem_common::model::invocation_context::TraceId;
 use golem_common::model::lucene::Query;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
     CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
     ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
-    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
-    SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicExternalSpanData,
+    PublicLocalSpanData, PublicOplogEntry, PublicSpanData, PublicUpdateDescription,
+    PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
+    TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
@@ -68,7 +71,9 @@ use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, r#enum, record, result, result_err, str, tuple, u16, u32, u64, u8,
     unit_case, variant,
 };
-use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeVariant};
+use golem_wasm_ast::analysis::{
+    AnalysedFunctionParameter, AnalysedType, NameOptionTypePair, TypeVariant,
+};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
     parse_type_annotated_value, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
@@ -353,7 +358,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     },
                 ))
             }
-            OplogEntry::ExportedFunctionInvoked {
+            OplogEntry::ExportedFunctionInvokedV1 {
                 timestamp,
                 function_name,
                 request,
@@ -380,9 +385,16 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
                         format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                     )?;
-                let request = function
-                    .parameters
-                    .iter()
+
+                let parsed = ParsedFunctionName::parse(&function_name)?;
+                let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
+                    if parsed.function().is_indexed_resource() {
+                        Box::new(function.parameters.iter().skip(1))
+                    } else {
+                        Box::new(function.parameters.iter())
+                    };
+
+                let request = param_types
                     .zip(params)
                     .map(|(param, value)| ValueAndType::new(value, param.typ.clone()))
                     .collect();
@@ -393,6 +405,65 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         function_name,
                         request,
                         idempotency_key,
+                        trace_id: TraceId::generate(),
+                        trace_states: vec![],
+                        invocation_context: vec![],
+                    },
+                ))
+            }
+            OplogEntry::ExportedFunctionInvoked {
+                timestamp,
+                function_name,
+                request,
+                idempotency_key,
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => {
+                let payload_bytes = oplog_service
+                    .download_payload(owned_worker_id, &request)
+                    .await?;
+                let proto_params: Vec<golem_wasm_rpc::protobuf::Val> =
+                    core_try_deserialize(&payload_bytes)?.unwrap_or_default();
+                let params = proto_params
+                    .into_iter()
+                    .map(Value::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let metadata = components
+                    .get_metadata(
+                        &owned_worker_id.account_id,
+                        &owned_worker_id.worker_id.component_id,
+                        Some(component_version),
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
+                    format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
+                )?;
+
+                let parsed = ParsedFunctionName::parse(&function_name)?;
+                let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
+                    if parsed.function().is_indexed_resource() {
+                        Box::new(function.parameters.iter().skip(1))
+                    } else {
+                        Box::new(function.parameters.iter())
+                    };
+
+                let request = param_types
+                    .zip(params)
+                    .map(|(param, value)| ValueAndType::new(value, param.typ.clone()))
+                    .collect();
+
+                Ok(PublicOplogEntry::ExportedFunctionInvoked(
+                    ExportedFunctionInvokedParameters {
+                        timestamp,
+                        function_name,
+                        request,
+                        idempotency_key,
+                        trace_id,
+                        trace_states,
+                        invocation_context: encode_span_data(&invocation_context),
                     },
                 ))
             }
@@ -743,6 +814,38 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 CancelInvocationParameters {
                     timestamp,
                     idempotency_key,
+                },
+            )),
+            OplogEntry::StartSpan {
+                timestamp,
+                span_id,
+                parent_id,
+                linked_context_id,
+                attributes,
+            } => Ok(PublicOplogEntry::StartSpan(StartSpanParameters {
+                timestamp,
+                span_id,
+                parent_id,
+                linked_context: linked_context_id,
+                attributes: attributes.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            })),
+            OplogEntry::FinishSpan { timestamp, span_id } => {
+                Ok(PublicOplogEntry::FinishSpan(FinishSpanParameters {
+                    timestamp,
+                    span_id,
+                }))
+            }
+            OplogEntry::SetSpanAttribute {
+                timestamp,
+                span_id,
+                key,
+                value,
+            } => Ok(PublicOplogEntry::SetSpanAttribute(
+                SetSpanAttributeParameters {
+                    timestamp,
+                    span_id,
+                    key,
+                    value: value.into(),
                 },
             )),
         }
@@ -2572,4 +2675,61 @@ fn bucket_and_keys(bucket: String, keys: Vec<String>) -> ValueAndType {
         ]),
         record(vec![field("bucket", str()), field("keys", list(str()))]),
     )
+}
+
+fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
+    let mut result = Vec::new();
+    let mut current = Vec::new();
+
+    for span in spans.iter().rev() {
+        match span {
+            SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                linked_context,
+                attributes,
+                inherited,
+            } => {
+                let linked_context = if let Some(linked_context) = linked_context {
+                    let id = result.len() as u64;
+                    let encoded_linked_context = encode_span_data(linked_context);
+                    result.extend(encoded_linked_context);
+                    Some(id)
+                } else {
+                    None
+                };
+                let span_data = PublicSpanData::LocalSpan(PublicLocalSpanData {
+                    span_id: span_id.clone(),
+                    start: *start,
+                    parent_id: parent_id.clone(),
+                    linked_context,
+                    attributes: attributes
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone().into()))
+                        .collect(),
+                    inherited: *inherited,
+                });
+                current.insert(0, span_data);
+            }
+            SpanData::ExternalSpan { span_id } => {
+                let span_data = PublicSpanData::ExternalSpan(PublicExternalSpanData {
+                    span_id: span_id.clone(),
+                });
+                current.insert(0, span_data);
+            }
+        }
+    }
+
+    for stack in &mut result {
+        for span in stack {
+            if let PublicSpanData::LocalSpan(ref mut local_span) = span {
+                if let Some(linked_id) = &mut local_span.linked_context {
+                    *linked_id += 1;
+                }
+            }
+        }
+    }
+    result.insert(0, current);
+    result
 }

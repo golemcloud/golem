@@ -780,7 +780,7 @@ pub fn oplog_entry() {
         wrapped_function_type: DurableFunctionType::ReadLocal,
     };
 
-    let oe3 = OplogEntry::ExportedFunctionInvoked {
+    let oe3 = OplogEntry::ExportedFunctionInvokedV1 {
         timestamp: Timestamp::from(1724701938466),
         function_name: "test:pkg/iface.{fn}".to_string(),
         request: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),

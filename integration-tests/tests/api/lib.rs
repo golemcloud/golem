@@ -11,10 +11,12 @@ mod api_definition;
 mod api_deployment;
 mod api_security;
 mod component;
+mod invocation_context;
 mod worker;
 
 tag_suite!(api_security, http_only);
 tag_suite!(api_deployment, http_only);
+tag_suite!(invocation_context, http_only);
 
 pub struct Tracing;
 

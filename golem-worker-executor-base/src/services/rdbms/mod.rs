@@ -17,9 +17,6 @@ pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;
 
-#[cfg(test)]
-mod tests;
-
 use crate::error::GolemError;
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
@@ -63,7 +60,7 @@ pub trait RdbmsType: Debug + Display + Default + Send {
 
 #[derive(Clone)]
 pub struct RdbmsStatus {
-    pools: HashMap<RdbmsPoolKey, HashSet<WorkerId>>,
+    pub pools: HashMap<RdbmsPoolKey, HashSet<WorkerId>>,
 }
 
 impl Display for RdbmsStatus {
@@ -366,7 +363,7 @@ impl<T: RdbmsType> DbResult<T> {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn from(
+    pub async fn from(
         result_set: Arc<dyn DbResultStream<T> + Send + Sync>,
     ) -> Result<DbResult<T>, Error> {
         let columns = result_set.get_columns().await?;
