@@ -5,7 +5,7 @@
   "requiresGolemHostWIT": true,
   "requiresWASI": true,
   "witDepsPaths": [
-    "common-wit-deps"
+    "wit/deps"
   ],
   "transform": false
 }

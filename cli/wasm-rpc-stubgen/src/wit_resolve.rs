@@ -302,9 +302,7 @@ impl ResolvedWitApplication {
                     .collect();
 
                 let source_contained_package_deps = {
-                    let deps_path =
-                        Path::new(&app.component_properties(component_name, profile).source_wit)
-                            .join("deps");
+                    let deps_path = source_wit_dir.join("deps");
                     if !deps_path.exists() {
                         HashSet::new()
                     } else {

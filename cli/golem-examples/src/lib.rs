@@ -140,7 +140,6 @@ pub fn instantiate_example(
         };
 
         fs::create_dir_all(&adapter_dir)?;
-        println!("{:?}", &ADAPTERS.entries().iter().collect::<Vec<_>>());
         copy(
             &ADAPTERS,
             adapter_path,
