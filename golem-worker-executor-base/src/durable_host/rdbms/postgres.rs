@@ -21,14 +21,14 @@ use crate::durable_host::rdbms::{
     FromRdbmsValue, RdbmsConnection, RdbmsResultStreamEntry, RdbmsTransactionEntry,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::preview2::wasi::rdbms::postgres::{
+use crate::preview2::golem::rdbms::postgres::{
     Composite, CompositeType, Datebound, Daterange, DbColumn, DbColumnType, DbResult, DbRow,
     DbValue, Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
     HostDbResultStream, HostDbTransaction, HostLazyDbColumnType, HostLazyDbValue, Int4bound,
     Int4range, Int8bound, Int8range, Interval, Numbound, Numrange, Range, RangeType, Tsbound,
     Tsrange, Tstzbound, Tstzrange, ValueBound, ValuesRange,
 };
-use crate::preview2::wasi::rdbms::types::Timetz;
+use crate::preview2::golem::rdbms::types::Timetz;
 use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
 use crate::workerctx::WorkerCtx;

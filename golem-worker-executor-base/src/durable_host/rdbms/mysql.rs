@@ -21,7 +21,7 @@ use crate::durable_host::rdbms::{
     FromRdbmsValue, RdbmsConnection, RdbmsResultStreamEntry, RdbmsTransactionEntry,
 };
 use crate::durable_host::DurableWorkerCtx;
-use crate::preview2::wasi::rdbms::mysql::{
+use crate::preview2::golem::rdbms::mysql::{
     DbColumn, DbColumnType, DbResult, DbRow, DbValue, Error, Host, HostDbConnection,
     HostDbResultStream, HostDbTransaction,
 };
@@ -433,7 +433,7 @@ impl FromRdbmsValue<mysql_types::DbValue> for DbValue {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::preview2::wasi::rdbms::mysql::{DbColumnType, DbValue};
+    use crate::preview2::golem::rdbms::mysql::{DbColumnType, DbValue};
     use crate::services::rdbms::mysql::types as mysql_types;
     use assert2::check;
     use test_r::test;

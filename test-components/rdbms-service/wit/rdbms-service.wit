@@ -1,8 +1,8 @@
 package golem:it;
 
 interface api {
-  use wasi:rdbms/postgres@0.0.1.{db-result as postgres-db-result};
-  use wasi:rdbms/mysql@0.0.1.{db-result as mysql-db-result};
+  use golem:rdbms/postgres@0.0.1.{db-result as postgres-db-result};
+  use golem:rdbms/mysql@0.0.1.{db-result as mysql-db-result};
 
   enum transaction-end {
     commit,
@@ -46,7 +46,7 @@ interface api {
 }
 
 world rdbms-service {
-  import wasi:rdbms/postgres@0.0.1;
-  import wasi:rdbms/mysql@0.0.1;
+  import golem:rdbms/postgres@0.0.1;
+  import golem:rdbms/mysql@0.0.1;
   export api;
 }
