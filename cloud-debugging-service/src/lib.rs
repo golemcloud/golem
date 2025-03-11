@@ -41,7 +41,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
 };
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{compiled_component, plugins, All, HasConfig};
+use golem_worker_executor_base::services::{compiled_component, plugins, rdbms, All, HasConfig};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::{Bootstrap, GolemTypes};
 use prometheus::Registry;
@@ -165,6 +165,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator<DebugContext<CloudGolemTypes>> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -218,6 +219,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
             shard_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             // When it comes to fork, it reads using the debug oplog service
             // (the worker instance's oplog) but writes using the live oplog service)
             oplog_service.clone(),
@@ -250,6 +252,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
             shard_manager_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             debug_oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -276,6 +279,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             debug_oplog_service,
             rpc,
             scheduler_service,

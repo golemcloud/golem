@@ -40,6 +40,7 @@ use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::plugins::Plugins;
 use golem_worker_executor_base::services::promise::PromiseService;
+use golem_worker_executor_base::services::rdbms::RdbmsService;
 use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
@@ -72,6 +73,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
@@ -96,6 +98,7 @@ impl WorkerCtx for TestWorkerCtx {
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             event_service,
             oplog_service,
             oplog,

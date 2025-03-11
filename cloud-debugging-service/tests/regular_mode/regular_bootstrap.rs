@@ -15,6 +15,7 @@ use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor_base::services::promise::PromiseService;
+use golem_worker_executor_base::services::rdbms::RdbmsService;
 use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
@@ -86,6 +87,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator<TestWorkerCtx> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -115,6 +117,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             shard_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -145,6 +148,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             shard_manager_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -170,6 +174,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             oplog_service,
             rpc,
             scheduler_service,

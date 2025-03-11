@@ -8,9 +8,9 @@ use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor_base::services::golem_config::{
     ActiveWorkersConfig, CompiledComponentServiceConfig, GolemConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, PluginServiceConfig, SchedulerConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig,
-    WorkerServiceGrpcConfig,
+    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, PluginServiceConfig, RdbmsConfig,
+    SchedulerConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    SuspendConfig, WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -34,6 +34,7 @@ pub struct DebugConfig {
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
+    pub rdbms: RdbmsConfig,
     pub grpc_address: String,
     pub port: u16,
     pub http_address: String,
@@ -63,6 +64,7 @@ impl DebugConfig {
             scheduler: self.scheduler,
             public_worker_api: self.public_worker_api,
             memory: self.memory,
+            rdbms: self.rdbms,
             grpc_address: self.grpc_address,
             port: self.port,
             http_address: self.http_address,
@@ -93,6 +95,7 @@ impl Default for DebugConfig {
             scheduler: default_golem_config.scheduler,
             public_worker_api: default_golem_config.public_worker_api,
             memory: default_golem_config.memory,
+            rdbms: default_golem_config.rdbms,
             grpc_address: default_golem_config.grpc_address,
             port: default_golem_config.port,
             http_address: default_golem_config.http_address,

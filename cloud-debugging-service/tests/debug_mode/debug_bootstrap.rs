@@ -13,7 +13,6 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component;
 use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::file_loader::FileLoader;
@@ -38,6 +37,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::All;
+use golem_worker_executor_base::services::{component, rdbms};
 use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -120,6 +120,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator<DebugContext<DefaultGolemTypes>> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -172,6 +173,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
             shard_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -202,6 +204,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
             shard_manager_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             debug_oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -228,6 +231,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
             shard_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             debug_oplog_service,
             rpc,
             scheduler_service,
