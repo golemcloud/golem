@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
@@ -93,4 +94,8 @@ impl Display for SafeString {
 
 pub fn safe(value: String) -> impl SafeDisplay {
     SafeString(value)
+}
+
+pub fn widen_infallible<T>(_inf: Infallible) -> T {
+    panic!("impossible")
 }

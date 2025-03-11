@@ -13,6 +13,7 @@ pub mod golem {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
+            pub type Uri = super::super::super::golem::rpc::types::Uri;
             pub type Duration = super::super::super::wasi::clocks::monotonic_clock::Duration;
             /// An index into the persistent log storing all performed operations of a worker
             pub type OplogIndex = u64;
@@ -1812,6 +1813,245 @@ pub mod golem {
                         result4_0,
                         result4_1,
                     );
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the component-id for a given component reference.
+            /// Returns none when no component with the specified reference exists.
+            /// The syntax of the component reference is implementation dependent.
+            ///
+            /// Golem OSS: "{component_name}"
+            /// Golem Cloud:
+            /// 1: "{component_name}" -> will resolve in current account and project
+            /// 2: "{project_name}/{component_name}" -> will resolve in current account
+            /// 3: "{account_id}/{project_name}/{component_name}"
+            pub fn resolve_component_id(
+                component_reference: &str,
+            ) -> Option<ComponentId> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let vec0 = component_reference;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    extern "C" {
+                        #[link_name = "resolve-component-id"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i64>();
+                                let l4 = *ptr1.add(16).cast::<i64>();
+                                ComponentId {
+                                    uuid: Uuid {
+                                        high_bits: l3 as u64,
+                                        low_bits: l4 as u64,
+                                    },
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the worker-id for a given component and worker name.
+            /// Returns none when no component for the specified reference exists.
+            pub fn resolve_worker_id(
+                component_reference: &str,
+                worker_name: &str,
+            ) -> Option<WorkerId> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 32]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
+                    let vec0 = component_reference;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = worker_name;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    extern "C" {
+                        #[link_name = "resolve-worker-id"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1.cast_mut(), len1, ptr2);
+                    let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                    match l3 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l4 = *ptr2.add(8).cast::<i64>();
+                                let l5 = *ptr2.add(16).cast::<i64>();
+                                let l6 = *ptr2.add(24).cast::<*mut u8>();
+                                let l7 = *ptr2.add(28).cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(
+                                    l6.cast(),
+                                    len8,
+                                    len8,
+                                );
+                                WorkerId {
+                                    component_id: ComponentId {
+                                        uuid: Uuid {
+                                            high_bits: l4 as u64,
+                                            low_bits: l5 as u64,
+                                        },
+                                    },
+                                    worker_name: _rt::string_lift(bytes8),
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the worker-id for a given component and worker name.
+            /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
+            pub fn resolve_worker_id_strict(
+                component_reference: &str,
+                worker_name: &str,
+            ) -> Option<WorkerId> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 32]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
+                    let vec0 = component_reference;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = worker_name;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    extern "C" {
+                        #[link_name = "resolve-worker-id-strict"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1.cast_mut(), len1, ptr2);
+                    let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                    match l3 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l4 = *ptr2.add(8).cast::<i64>();
+                                let l5 = *ptr2.add(16).cast::<i64>();
+                                let l6 = *ptr2.add(24).cast::<*mut u8>();
+                                let l7 = *ptr2.add(28).cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(
+                                    l6.cast(),
+                                    len8,
+                                    len8,
+                                );
+                                WorkerId {
+                                    component_id: ComponentId {
+                                        uuid: Uuid {
+                                            high_bits: l4 as u64,
+                                            low_bits: l5 as u64,
+                                        },
+                                    },
+                                    worker_name: _rt::string_lift(bytes8),
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Construct an uri for a given worker id.
+            pub fn worker_uri(worker_id: &WorkerId) -> Uri {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let WorkerId {
+                        component_id: component_id0,
+                        worker_name: worker_name0,
+                    } = worker_id;
+                    let ComponentId { uuid: uuid1 } = component_id0;
+                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                    let vec3 = worker_name0;
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    extern "C" {
+                        #[link_name = "worker-uri"]
+                        fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        _rt::as_i64(high_bits2),
+                        _rt::as_i64(low_bits2),
+                        ptr3.cast_mut(),
+                        len3,
+                        ptr4,
+                    );
+                    let l5 = *ptr4.add(0).cast::<*mut u8>();
+                    let l6 = *ptr4.add(4).cast::<usize>();
+                    let len7 = l6;
+                    let bytes7 = _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+                    super::super::super::golem::rpc::types::Uri {
+                        value: _rt::string_lift(bytes7),
+                    }
                 }
             }
         }
@@ -6892,8 +7132,8 @@ pub(crate) use __export_promise_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:it:promise:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 4954] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdc%\x01A\x02\x01A\x12\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5134] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x90'\x01A\x02\x01A\x12\
 \x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\
 \x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-\
 clock@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\
@@ -6942,7 +7182,7 @@ nstant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\
 \x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\
 \0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-du\
 ration\x01\x0a\x03\0!wasi:clocks/monotonic-clock@0.2.0\x05\x05\x02\x03\0\x02\x03\
-uri\x02\x03\0\x02\x09wit-value\x02\x03\0\x03\x08duration\x01Br\x02\x03\x02\x01\x06\
+uri\x02\x03\0\x02\x09wit-value\x02\x03\0\x03\x08duration\x01B{\x02\x03\x02\x01\x06\
 \x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x07\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\
 \x01\x08\x04\0\x08duration\x03\0\x04\x01w\x04\0\x0boplog-index\x03\0\x06\x01w\x04\
 \0\x11component-version\x03\0\x08\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04u\
@@ -6988,13 +7228,16 @@ rker-id\x0f\x0etarget-version\x09\x04mode\x1a\x01\0\x04\0\x0dupdate-worker\x01T\
 @\0\07\x04\0\x11get-self-metadata\x01U\x01k7\x01@\x01\x09worker-id\x0f\0\xd6\0\x04\
 \0\x13get-worker-metadata\x01W\x01@\x03\x10source-worker-id\x0f\x10target-worker\
 -id\x0f\x11oplog-idx-cut-off\x07\x01\0\x04\0\x0bfork-worker\x01X\x01@\x02\x09wor\
-ker-id\x0f\x0drevert-target:\x01\0\x04\0\x0drevert-worker\x01Y\x03\0\x14golem:ap\
-i/host@1.1.5\x05\x09\x02\x03\0\x04\x0apromise-id\x01B\x0a\x02\x03\x02\x01\x0a\x04\
-\0\x0apromise-id\x03\0\0\x01@\0\0\x01\x04\0\x06create\x01\x02\x01p}\x01@\x01\x02\
-id\x01\0\x03\x04\0\x05await\x01\x04\x01k\x03\x01@\x01\x02id\x01\0\x05\x04\0\x04p\
-oll\x01\x06\x04\0\x0cgolem:it/api\x05\x0b\x04\0\x10golem:it/promise\x04\0\x0b\x0d\
-\x01\0\x07promise\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-compone\
-nt\x070.220.0\x10wit-bindgen-rust\x060.36.0";
+ker-id\x0f\x0drevert-target:\x01\0\x04\0\x0drevert-worker\x01Y\x01k\x0d\x01@\x01\
+\x13component-references\0\xda\0\x04\0\x14resolve-component-id\x01[\x01k\x0f\x01\
+@\x02\x13component-references\x0bworker-names\0\xdc\0\x04\0\x11resolve-worker-id\
+\x01]\x04\0\x18resolve-worker-id-strict\x01]\x01@\x01\x09worker-id\x0f\0\x01\x04\
+\0\x0aworker-uri\x01^\x03\0\x14golem:api/host@1.1.5\x05\x09\x02\x03\0\x04\x0apro\
+mise-id\x01B\x0a\x02\x03\x02\x01\x0a\x04\0\x0apromise-id\x03\0\0\x01@\0\0\x01\x04\
+\0\x06create\x01\x02\x01p}\x01@\x01\x02id\x01\0\x03\x04\0\x05await\x01\x04\x01k\x03\
+\x01@\x01\x02id\x01\0\x05\x04\0\x04poll\x01\x06\x04\0\x0cgolem:it/api\x05\x0b\x04\
+\0\x10golem:it/promise\x04\0\x0b\x0d\x01\0\x07promise\x03\0\0\0G\x09producers\x01\
+\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

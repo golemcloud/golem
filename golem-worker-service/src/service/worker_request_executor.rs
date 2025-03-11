@@ -98,7 +98,12 @@ impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerReques
                 worker_request_params.idempotency_key,
                 worker_request_params.function_name,
                 invoke_parameters,
-                None,
+                Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                    parent: None,
+                    args: vec![],
+                    env: Default::default(),
+                    tracing: Some(worker_request_params.invocation_context.into()),
+                }),
                 empty_worker_metadata(),
             )
             .await
