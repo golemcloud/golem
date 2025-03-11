@@ -508,11 +508,11 @@ pub mod api_deployment {
             for api_defs in &self.api_definitions {
                 printdoc!(
                     "
-                    API deployment on {} with definition {}/{}
+                    API {}/{} deployed at {}
                     ",
-                    format_message_highlight(&format_site(self)),
                     format_message_highlight(&api_defs.id),
                     format_message_highlight(&api_defs.version),
+                    format_message_highlight(&format_site(self)),
                 );
             }
         }
