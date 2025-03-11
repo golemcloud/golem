@@ -1449,6 +1449,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<RetryDecision, GolemError> {
         let mut number_of_replayed_functions = 0;
 
+        dbg!("Resuming replay");
+        dbg!(store.as_context().data().durable_ctx().state.replay_state.last_replayed_index());
+        dbg!(store.as_context().data().durable_ctx().state.replay_state.replay_target());
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
 
@@ -2113,7 +2116,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         component_metadata: ComponentMetadata<Ctx::Types>,
         total_linear_memory_size: u64,
     ) -> Self {
-        dbg!("Creating new PrivateDurableWorkerState... the last oplog index", last_oplog_index);
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
             oplog_service.clone(),
