@@ -1,10 +1,10 @@
 mod bindings;
 
 use crate::bindings::exports::golem::it::api::*;
-use crate::bindings::wasi::rdbms::postgres::{DbConnection as PostgresDbConnection};
-use crate::bindings::wasi::rdbms::postgres::{DbValue as PostgresDbValue, LazyDbValue as PostgresLazyDbValue, DbColumnType as PostgresDbColumnType, DbColumn as PostgresDbColumn, DbRow as PostgresDbRow, DbResult as PostgresDbResult};
-use crate::bindings::wasi::rdbms::mysql::{DbConnection as MysqlDbConnection};
-use crate::bindings::wasi::rdbms::mysql::{DbValue as MysqlDbValue, DbRow as MysqlDbRow, DbResult as MysqlDbResult};
+use crate::bindings::golem::rdbms::postgres::{DbConnection as PostgresDbConnection};
+use crate::bindings::golem::rdbms::postgres::{DbValue as PostgresDbValue, LazyDbValue as PostgresLazyDbValue, DbColumnType as PostgresDbColumnType, DbColumn as PostgresDbColumn, DbRow as PostgresDbRow, DbResult as PostgresDbResult};
+use crate::bindings::golem::rdbms::mysql::{DbConnection as MysqlDbConnection};
+use crate::bindings::golem::rdbms::mysql::{DbValue as MysqlDbValue, DbRow as MysqlDbRow, DbResult as MysqlDbResult};
 
 fn get_mysql_db_url() -> Result<String, String> {
     std::env::var("DB_MYSQL_URL").map_err(|_| "DB_MYSQL_URL is not set".to_string())
