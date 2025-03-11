@@ -269,7 +269,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
                     self.invocation(message).await
                 }
-                WorkerCommand::ResumeReplay => self.resume_replay().await,
+                WorkerCommand::ResumeReplay => {
+                    dbg!("Resuming replay within invocation loop");
+                    dbg!(self.store.as_context().data().durable_ctx().state.replay_state.last_replayed_index());
+                    dbg!(self.store.as_context().data().durable_ctx().state.replay_state.replay_target());
+                    self.resume_replay().await
+                },
                 WorkerCommand::Interrupt(kind) => self.interrupt(kind).await,
             };
             match outcome {
