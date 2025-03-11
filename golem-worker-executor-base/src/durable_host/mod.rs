@@ -1447,7 +1447,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
     ) -> Result<RetryDecision, GolemError> {
-        dbg!("resuming again....");
+        dbg!("resuming again....{}", store.as_context().data().durable_ctx().state.replay_state.last_replayed_index());
         let mut number_of_replayed_functions = 0;
 
         let resume_result = loop {
