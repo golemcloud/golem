@@ -1050,6 +1050,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.component_type(),
                 )
                 .await;
+            let mut execution_status = self.execution_status.write().unwrap();
+            execution_status.set_last_known_status(recalculated_status.clone());
 
             Ok(())
         }
