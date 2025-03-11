@@ -1452,6 +1452,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
 
+            dbg!(cont);
+
             if cont {
                 let oplog_entry = store
                     .as_context_mut()

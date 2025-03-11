@@ -127,6 +127,7 @@ impl ReplayState {
         condition: impl FnOnce(&OplogEntry) -> bool,
     ) -> Option<(OplogIndex, OplogEntry)> {
         let saved_replay_idx = self.last_replayed_index.get();
+        dbg!(saved_replay_idx);
         let saved_next_skipped_region = {
             let internal = self.internal.read().await;
             internal.next_skipped_region.clone()
@@ -139,7 +140,9 @@ impl ReplayState {
             // Skipping hint entries and recording log entries
             let mut logs = HashSet::new();
             while self.is_replay() {
+                dbg!("in while loop");
                 let saved_replay_idx = self.last_replayed_index.get();
+                dbg!(saved_replay_idx.clone());
                 let saved_next_skipped_region = {
                     let internal = self.internal.read().await;
                     internal.next_skipped_region.clone()
