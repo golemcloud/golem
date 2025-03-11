@@ -1,4 +1,4 @@
-package wasi:rdbms@0.0.1;
+package golem:rdbms@0.0.1;
 
 world imports {
      import postgres;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::preview2::wasi::rdbms::types::{
+use crate::preview2::golem::rdbms::types::{
     Date, IpAddress, MacAddress, Time, Timestamp, Timestamptz, Uuid,
 };
 use chrono::{Datelike, Offset, Timelike};

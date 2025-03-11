@@ -3,7 +3,7 @@
 //   * runtime_path: "wit_bindgen_rt"
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
-pub mod wasi {
+pub mod golem {
     pub mod rdbms {
         #[allow(dead_code, clippy::all)]
         pub mod types {
@@ -158,14 +158,14 @@ pub mod wasi {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
-            pub type Date = super::super::super::wasi::rdbms::types::Date;
-            pub type Time = super::super::super::wasi::rdbms::types::Time;
-            pub type Timetz = super::super::super::wasi::rdbms::types::Timetz;
-            pub type Timestamp = super::super::super::wasi::rdbms::types::Timestamp;
-            pub type Timestamptz = super::super::super::wasi::rdbms::types::Timestamptz;
-            pub type Uuid = super::super::super::wasi::rdbms::types::Uuid;
-            pub type IpAddress = super::super::super::wasi::rdbms::types::IpAddress;
-            pub type MacAddress = super::super::super::wasi::rdbms::types::MacAddress;
+            pub type Date = super::super::super::golem::rdbms::types::Date;
+            pub type Time = super::super::super::golem::rdbms::types::Time;
+            pub type Timetz = super::super::super::golem::rdbms::types::Timetz;
+            pub type Timestamp = super::super::super::golem::rdbms::types::Timestamp;
+            pub type Timestamptz = super::super::super::golem::rdbms::types::Timestamptz;
+            pub type Uuid = super::super::super::golem::rdbms::types::Uuid;
+            pub type IpAddress = super::super::super::golem::rdbms::types::IpAddress;
+            pub type MacAddress = super::super::super::golem::rdbms::types::MacAddress;
             #[derive(Clone)]
             pub enum Error {
                 ConnectionFailure(_rt::String),
@@ -533,7 +533,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]lazy-db-value"]
                             fn drop(_: u32);
@@ -830,7 +830,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]lazy-db-column-type"]
                             fn drop(_: u32);
@@ -1128,7 +1128,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]db-result-stream"]
                             fn drop(_: u32);
@@ -1165,7 +1165,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]db-connection"]
                             fn drop(_: u32);
@@ -1202,7 +1202,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]db-transaction"]
                             fn drop(_: u32);
@@ -1288,11 +1288,11 @@ pub mod wasi {
                             }
                             DbValue::Timestamp(e) => {
                                 *ptr0.add(0).cast::<u8>() = (11i32) as u8;
-                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                let super::super::super::golem::rdbms::types::Timestamp {
                                     date: date5,
                                     time: time5,
                                 } = e;
-                                let super::super::super::wasi::rdbms::types::Date {
+                                let super::super::super::golem::rdbms::types::Date {
                                     year: year6,
                                     month: month6,
                                     day: day6,
@@ -1300,7 +1300,7 @@ pub mod wasi {
                                 *ptr0.add(8).cast::<i32>() = _rt::as_i32(year6);
                                 *ptr0.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
                                 *ptr0.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
-                                let super::super::super::wasi::rdbms::types::Time {
+                                let super::super::super::golem::rdbms::types::Time {
                                     hour: hour7,
                                     minute: minute7,
                                     second: second7,
@@ -1313,15 +1313,15 @@ pub mod wasi {
                             }
                             DbValue::Timestamptz(e) => {
                                 *ptr0.add(0).cast::<u8>() = (12i32) as u8;
-                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                let super::super::super::golem::rdbms::types::Timestamptz {
                                     timestamp: timestamp8,
                                     offset: offset8,
                                 } = e;
-                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                let super::super::super::golem::rdbms::types::Timestamp {
                                     date: date9,
                                     time: time9,
                                 } = timestamp8;
-                                let super::super::super::wasi::rdbms::types::Date {
+                                let super::super::super::golem::rdbms::types::Date {
                                     year: year10,
                                     month: month10,
                                     day: day10,
@@ -1329,7 +1329,7 @@ pub mod wasi {
                                 *ptr0.add(8).cast::<i32>() = _rt::as_i32(year10);
                                 *ptr0.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
                                 *ptr0.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
-                                let super::super::super::wasi::rdbms::types::Time {
+                                let super::super::super::golem::rdbms::types::Time {
                                     hour: hour11,
                                     minute: minute11,
                                     second: second11,
@@ -1343,7 +1343,7 @@ pub mod wasi {
                             }
                             DbValue::Date(e) => {
                                 *ptr0.add(0).cast::<u8>() = (13i32) as u8;
-                                let super::super::super::wasi::rdbms::types::Date {
+                                let super::super::super::golem::rdbms::types::Date {
                                     year: year12,
                                     month: month12,
                                     day: day12,
@@ -1354,7 +1354,7 @@ pub mod wasi {
                             }
                             DbValue::Time(e) => {
                                 *ptr0.add(0).cast::<u8>() = (14i32) as u8;
-                                let super::super::super::wasi::rdbms::types::Time {
+                                let super::super::super::golem::rdbms::types::Time {
                                     hour: hour13,
                                     minute: minute13,
                                     second: second13,
@@ -1367,11 +1367,11 @@ pub mod wasi {
                             }
                             DbValue::Timetz(e) => {
                                 *ptr0.add(0).cast::<u8>() = (15i32) as u8;
-                                let super::super::super::wasi::rdbms::types::Timetz {
+                                let super::super::super::golem::rdbms::types::Timetz {
                                     time: time14,
                                     offset: offset14,
                                 } = e;
-                                let super::super::super::wasi::rdbms::types::Time {
+                                let super::super::super::golem::rdbms::types::Time {
                                     hour: hour15,
                                     minute: minute15,
                                     second: second15,
@@ -1436,7 +1436,7 @@ pub mod wasi {
                             }
                             DbValue::Uuid(e) => {
                                 *ptr0.add(0).cast::<u8>() = (22i32) as u8;
-                                let super::super::super::wasi::rdbms::types::Uuid {
+                                let super::super::super::golem::rdbms::types::Uuid {
                                     high_bits: high_bits22,
                                     low_bits: low_bits22,
                                 } = e;
@@ -1445,7 +1445,7 @@ pub mod wasi {
                             }
                             DbValue::Inet(e) => {
                                 *ptr0.add(0).cast::<u8>() = (23i32) as u8;
-                                use super::super::super::wasi::rdbms::types::IpAddress as V25;
+                                use super::super::super::golem::rdbms::types::IpAddress as V25;
                                 match e {
                                     V25::Ipv4(e) => {
                                         *ptr0.add(8).cast::<u8>() = (0i32) as u8;
@@ -1480,7 +1480,7 @@ pub mod wasi {
                             }
                             DbValue::Cidr(e) => {
                                 *ptr0.add(0).cast::<u8>() = (24i32) as u8;
-                                use super::super::super::wasi::rdbms::types::IpAddress as V28;
+                                use super::super::super::golem::rdbms::types::IpAddress as V28;
                                 match e {
                                     V28::Ipv4(e) => {
                                         *ptr0.add(8).cast::<u8>() = (0i32) as u8;
@@ -1515,7 +1515,7 @@ pub mod wasi {
                             }
                             DbValue::Macaddr(e) => {
                                 *ptr0.add(0).cast::<u8>() = (25i32) as u8;
-                                let super::super::super::wasi::rdbms::types::MacAddress {
+                                let super::super::super::golem::rdbms::types::MacAddress {
                                     octets: octets29,
                                 } = e;
                                 let (t30_0, t30_1, t30_2, t30_3, t30_4, t30_5) = octets29;
@@ -1698,11 +1698,11 @@ pub mod wasi {
                                 match start40 {
                                     Tsbound::Included(e) => {
                                         *ptr0.add(8).cast::<u8>() = (0i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date41,
                                             time: time41,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year42,
                                             month: month42,
                                             day: day42,
@@ -1710,7 +1710,7 @@ pub mod wasi {
                                         *ptr0.add(12).cast::<i32>() = _rt::as_i32(year42);
                                         *ptr0.add(16).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                         *ptr0.add(17).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour43,
                                             minute: minute43,
                                             second: second43,
@@ -1723,11 +1723,11 @@ pub mod wasi {
                                     }
                                     Tsbound::Excluded(e) => {
                                         *ptr0.add(8).cast::<u8>() = (1i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date44,
                                             time: time44,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year45,
                                             month: month45,
                                             day: day45,
@@ -1735,7 +1735,7 @@ pub mod wasi {
                                         *ptr0.add(12).cast::<i32>() = _rt::as_i32(year45);
                                         *ptr0.add(16).cast::<u8>() = (_rt::as_i32(month45)) as u8;
                                         *ptr0.add(17).cast::<u8>() = (_rt::as_i32(day45)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour46,
                                             minute: minute46,
                                             second: second46,
@@ -1753,11 +1753,11 @@ pub mod wasi {
                                 match end40 {
                                     Tsbound::Included(e) => {
                                         *ptr0.add(28).cast::<u8>() = (0i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date47,
                                             time: time47,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year48,
                                             month: month48,
                                             day: day48,
@@ -1765,7 +1765,7 @@ pub mod wasi {
                                         *ptr0.add(32).cast::<i32>() = _rt::as_i32(year48);
                                         *ptr0.add(36).cast::<u8>() = (_rt::as_i32(month48)) as u8;
                                         *ptr0.add(37).cast::<u8>() = (_rt::as_i32(day48)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour49,
                                             minute: minute49,
                                             second: second49,
@@ -1778,11 +1778,11 @@ pub mod wasi {
                                     }
                                     Tsbound::Excluded(e) => {
                                         *ptr0.add(28).cast::<u8>() = (1i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date50,
                                             time: time50,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year51,
                                             month: month51,
                                             day: day51,
@@ -1790,7 +1790,7 @@ pub mod wasi {
                                         *ptr0.add(32).cast::<i32>() = _rt::as_i32(year51);
                                         *ptr0.add(36).cast::<u8>() = (_rt::as_i32(month51)) as u8;
                                         *ptr0.add(37).cast::<u8>() = (_rt::as_i32(day51)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour52,
                                             minute: minute52,
                                             second: second52,
@@ -1812,15 +1812,15 @@ pub mod wasi {
                                 match start53 {
                                     Tstzbound::Included(e) => {
                                         *ptr0.add(8).cast::<u8>() = (0i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp54,
                                             offset: offset54,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date55,
                                             time: time55,
                                         } = timestamp54;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year56,
                                             month: month56,
                                             day: day56,
@@ -1828,7 +1828,7 @@ pub mod wasi {
                                         *ptr0.add(12).cast::<i32>() = _rt::as_i32(year56);
                                         *ptr0.add(16).cast::<u8>() = (_rt::as_i32(month56)) as u8;
                                         *ptr0.add(17).cast::<u8>() = (_rt::as_i32(day56)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour57,
                                             minute: minute57,
                                             second: second57,
@@ -1842,15 +1842,15 @@ pub mod wasi {
                                     }
                                     Tstzbound::Excluded(e) => {
                                         *ptr0.add(8).cast::<u8>() = (1i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp58,
                                             offset: offset58,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date59,
                                             time: time59,
                                         } = timestamp58;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year60,
                                             month: month60,
                                             day: day60,
@@ -1858,7 +1858,7 @@ pub mod wasi {
                                         *ptr0.add(12).cast::<i32>() = _rt::as_i32(year60);
                                         *ptr0.add(16).cast::<u8>() = (_rt::as_i32(month60)) as u8;
                                         *ptr0.add(17).cast::<u8>() = (_rt::as_i32(day60)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour61,
                                             minute: minute61,
                                             second: second61,
@@ -1877,15 +1877,15 @@ pub mod wasi {
                                 match end53 {
                                     Tstzbound::Included(e) => {
                                         *ptr0.add(32).cast::<u8>() = (0i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp62,
                                             offset: offset62,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date63,
                                             time: time63,
                                         } = timestamp62;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year64,
                                             month: month64,
                                             day: day64,
@@ -1893,7 +1893,7 @@ pub mod wasi {
                                         *ptr0.add(36).cast::<i32>() = _rt::as_i32(year64);
                                         *ptr0.add(40).cast::<u8>() = (_rt::as_i32(month64)) as u8;
                                         *ptr0.add(41).cast::<u8>() = (_rt::as_i32(day64)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour65,
                                             minute: minute65,
                                             second: second65,
@@ -1907,15 +1907,15 @@ pub mod wasi {
                                     }
                                     Tstzbound::Excluded(e) => {
                                         *ptr0.add(32).cast::<u8>() = (1i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp66,
                                             offset: offset66,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date67,
                                             time: time67,
                                         } = timestamp66;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year68,
                                             month: month68,
                                             day: day68,
@@ -1923,7 +1923,7 @@ pub mod wasi {
                                         *ptr0.add(36).cast::<i32>() = _rt::as_i32(year68);
                                         *ptr0.add(40).cast::<u8>() = (_rt::as_i32(month68)) as u8;
                                         *ptr0.add(41).cast::<u8>() = (_rt::as_i32(day68)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour69,
                                             minute: minute69,
                                             second: second69,
@@ -1946,7 +1946,7 @@ pub mod wasi {
                                 match start70 {
                                     Datebound::Included(e) => {
                                         *ptr0.add(8).cast::<u8>() = (0i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year71,
                                             month: month71,
                                             day: day71,
@@ -1957,7 +1957,7 @@ pub mod wasi {
                                     }
                                     Datebound::Excluded(e) => {
                                         *ptr0.add(8).cast::<u8>() = (1i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year72,
                                             month: month72,
                                             day: day72,
@@ -1973,7 +1973,7 @@ pub mod wasi {
                                 match end70 {
                                     Datebound::Included(e) => {
                                         *ptr0.add(20).cast::<u8>() = (0i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year73,
                                             month: month73,
                                             day: day73,
@@ -1984,7 +1984,7 @@ pub mod wasi {
                                     }
                                     Datebound::Excluded(e) => {
                                         *ptr0.add(20).cast::<u8>() = (1i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year74,
                                             month: month74,
                                             day: day74,
@@ -2132,7 +2132,7 @@ pub mod wasi {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[constructor]lazy-db-value"]
                             fn wit_import(_: *mut u8) -> i32;
@@ -2162,7 +2162,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]lazy-db-value.get"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2288,13 +2288,13 @@ pub mod wasi {
                                     let l25 = i32::from(*ptr0.add(17).cast::<u8>());
                                     let l26 = i32::from(*ptr0.add(18).cast::<u8>());
                                     let l27 = *ptr0.add(20).cast::<i32>();
-                                    super::super::super::wasi::rdbms::types::Timestamp {
-                                        date: super::super::super::wasi::rdbms::types::Date {
+                                    super::super::super::golem::rdbms::types::Timestamp {
+                                        date: super::super::super::golem::rdbms::types::Date {
                                             year: l21,
                                             month: l22 as u8,
                                             day: l23 as u8,
                                         },
-                                        time: super::super::super::wasi::rdbms::types::Time {
+                                        time: super::super::super::golem::rdbms::types::Time {
                                             hour: l24 as u8,
                                             minute: l25 as u8,
                                             second: l26 as u8,
@@ -2314,14 +2314,14 @@ pub mod wasi {
                                     let l33 = i32::from(*ptr0.add(18).cast::<u8>());
                                     let l34 = *ptr0.add(20).cast::<i32>();
                                     let l35 = *ptr0.add(24).cast::<i32>();
-                                    super::super::super::wasi::rdbms::types::Timestamptz {
-                                        timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                            date: super::super::super::wasi::rdbms::types::Date {
+                                    super::super::super::golem::rdbms::types::Timestamptz {
+                                        timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                            date: super::super::super::golem::rdbms::types::Date {
                                                 year: l28,
                                                 month: l29 as u8,
                                                 day: l30 as u8,
                                             },
-                                            time: super::super::super::wasi::rdbms::types::Time {
+                                            time: super::super::super::golem::rdbms::types::Time {
                                                 hour: l31 as u8,
                                                 minute: l32 as u8,
                                                 second: l33 as u8,
@@ -2338,7 +2338,7 @@ pub mod wasi {
                                     let l36 = *ptr0.add(8).cast::<i32>();
                                     let l37 = i32::from(*ptr0.add(12).cast::<u8>());
                                     let l38 = i32::from(*ptr0.add(13).cast::<u8>());
-                                    super::super::super::wasi::rdbms::types::Date {
+                                    super::super::super::golem::rdbms::types::Date {
                                         year: l36,
                                         month: l37 as u8,
                                         day: l38 as u8,
@@ -2352,7 +2352,7 @@ pub mod wasi {
                                     let l40 = i32::from(*ptr0.add(9).cast::<u8>());
                                     let l41 = i32::from(*ptr0.add(10).cast::<u8>());
                                     let l42 = *ptr0.add(12).cast::<i32>();
-                                    super::super::super::wasi::rdbms::types::Time {
+                                    super::super::super::golem::rdbms::types::Time {
                                         hour: l39 as u8,
                                         minute: l40 as u8,
                                         second: l41 as u8,
@@ -2368,8 +2368,8 @@ pub mod wasi {
                                     let l45 = i32::from(*ptr0.add(10).cast::<u8>());
                                     let l46 = *ptr0.add(12).cast::<i32>();
                                     let l47 = *ptr0.add(16).cast::<i32>();
-                                    super::super::super::wasi::rdbms::types::Timetz {
-                                        time: super::super::super::wasi::rdbms::types::Time {
+                                    super::super::super::golem::rdbms::types::Timetz {
+                                        time: super::super::super::golem::rdbms::types::Time {
                                             hour: l43 as u8,
                                             minute: l44 as u8,
                                             second: l45 as u8,
@@ -2462,7 +2462,7 @@ pub mod wasi {
                                 let e260 = {
                                     let l66 = *ptr0.add(8).cast::<i64>();
                                     let l67 = *ptr0.add(16).cast::<i64>();
-                                    super::super::super::wasi::rdbms::types::Uuid {
+                                    super::super::super::golem::rdbms::types::Uuid {
                                         high_bits: l66 as u64,
                                         low_bits: l67 as u64,
                                     }
@@ -2472,7 +2472,7 @@ pub mod wasi {
                             23 => {
                                 let e260 = {
                                     let l68 = i32::from(*ptr0.add(8).cast::<u8>());
-                                    use super::super::super::wasi::rdbms::types::IpAddress as V81;
+                                    use super::super::super::golem::rdbms::types::IpAddress as V81;
                                     let v81 = match l68 {
                                         0 => {
                                             let e81 = {
@@ -2516,7 +2516,7 @@ pub mod wasi {
                             24 => {
                                 let e260 = {
                                     let l82 = i32::from(*ptr0.add(8).cast::<u8>());
-                                    use super::super::super::wasi::rdbms::types::IpAddress as V95;
+                                    use super::super::super::golem::rdbms::types::IpAddress as V95;
                                     let v95 = match l82 {
                                         0 => {
                                             let e95 = {
@@ -2565,7 +2565,7 @@ pub mod wasi {
                                     let l99 = i32::from(*ptr0.add(11).cast::<u8>());
                                     let l100 = i32::from(*ptr0.add(12).cast::<u8>());
                                     let l101 = i32::from(*ptr0.add(13).cast::<u8>());
-                                    super::super::super::wasi::rdbms::types::MacAddress {
+                                    super::super::super::golem::rdbms::types::MacAddress {
                                         octets: (
                                             l96 as u8,
                                             l97 as u8,
@@ -2809,13 +2809,13 @@ pub mod wasi {
                                                 let l147 = i32::from(*ptr0.add(21).cast::<u8>());
                                                 let l148 = i32::from(*ptr0.add(22).cast::<u8>());
                                                 let l149 = *ptr0.add(24).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                    date: super::super::super::golem::rdbms::types::Date {
                                                         year: l143,
                                                         month: l144 as u8,
                                                         day: l145 as u8,
                                                     },
-                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                    time: super::super::super::golem::rdbms::types::Time {
                                                         hour: l146 as u8,
                                                         minute: l147 as u8,
                                                         second: l148 as u8,
@@ -2834,13 +2834,13 @@ pub mod wasi {
                                                 let l154 = i32::from(*ptr0.add(21).cast::<u8>());
                                                 let l155 = i32::from(*ptr0.add(22).cast::<u8>());
                                                 let l156 = *ptr0.add(24).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                    date: super::super::super::golem::rdbms::types::Date {
                                                         year: l150,
                                                         month: l151 as u8,
                                                         day: l152 as u8,
                                                     },
-                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                    time: super::super::super::golem::rdbms::types::Time {
                                                         hour: l153 as u8,
                                                         minute: l154 as u8,
                                                         second: l155 as u8,
@@ -2866,13 +2866,13 @@ pub mod wasi {
                                                 let l163 = i32::from(*ptr0.add(41).cast::<u8>());
                                                 let l164 = i32::from(*ptr0.add(42).cast::<u8>());
                                                 let l165 = *ptr0.add(44).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                    date: super::super::super::golem::rdbms::types::Date {
                                                         year: l159,
                                                         month: l160 as u8,
                                                         day: l161 as u8,
                                                     },
-                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                    time: super::super::super::golem::rdbms::types::Time {
                                                         hour: l162 as u8,
                                                         minute: l163 as u8,
                                                         second: l164 as u8,
@@ -2891,13 +2891,13 @@ pub mod wasi {
                                                 let l170 = i32::from(*ptr0.add(41).cast::<u8>());
                                                 let l171 = i32::from(*ptr0.add(42).cast::<u8>());
                                                 let l172 = *ptr0.add(44).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                    date: super::super::super::golem::rdbms::types::Date {
                                                         year: l166,
                                                         month: l167 as u8,
                                                         day: l168 as u8,
                                                     },
-                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                    time: super::super::super::golem::rdbms::types::Time {
                                                         hour: l169 as u8,
                                                         minute: l170 as u8,
                                                         second: l171 as u8,
@@ -2930,14 +2930,14 @@ pub mod wasi {
                                                 let l180 = i32::from(*ptr0.add(22).cast::<u8>());
                                                 let l181 = *ptr0.add(24).cast::<i32>();
                                                 let l182 = *ptr0.add(28).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamptz {
-                                                    timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                        date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamptz {
+                                                    timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                        date: super::super::super::golem::rdbms::types::Date {
                                                             year: l175,
                                                             month: l176 as u8,
                                                             day: l177 as u8,
                                                         },
-                                                        time: super::super::super::wasi::rdbms::types::Time {
+                                                        time: super::super::super::golem::rdbms::types::Time {
                                                             hour: l178 as u8,
                                                             minute: l179 as u8,
                                                             second: l180 as u8,
@@ -2959,14 +2959,14 @@ pub mod wasi {
                                                 let l188 = i32::from(*ptr0.add(22).cast::<u8>());
                                                 let l189 = *ptr0.add(24).cast::<i32>();
                                                 let l190 = *ptr0.add(28).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamptz {
-                                                    timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                        date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamptz {
+                                                    timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                        date: super::super::super::golem::rdbms::types::Date {
                                                             year: l183,
                                                             month: l184 as u8,
                                                             day: l185 as u8,
                                                         },
-                                                        time: super::super::super::wasi::rdbms::types::Time {
+                                                        time: super::super::super::golem::rdbms::types::Time {
                                                             hour: l186 as u8,
                                                             minute: l187 as u8,
                                                             second: l188 as u8,
@@ -2995,14 +2995,14 @@ pub mod wasi {
                                                 let l198 = i32::from(*ptr0.add(46).cast::<u8>());
                                                 let l199 = *ptr0.add(48).cast::<i32>();
                                                 let l200 = *ptr0.add(52).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamptz {
-                                                    timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                        date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamptz {
+                                                    timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                        date: super::super::super::golem::rdbms::types::Date {
                                                             year: l193,
                                                             month: l194 as u8,
                                                             day: l195 as u8,
                                                         },
-                                                        time: super::super::super::wasi::rdbms::types::Time {
+                                                        time: super::super::super::golem::rdbms::types::Time {
                                                             hour: l196 as u8,
                                                             minute: l197 as u8,
                                                             second: l198 as u8,
@@ -3024,14 +3024,14 @@ pub mod wasi {
                                                 let l206 = i32::from(*ptr0.add(46).cast::<u8>());
                                                 let l207 = *ptr0.add(48).cast::<i32>();
                                                 let l208 = *ptr0.add(52).cast::<i32>();
-                                                super::super::super::wasi::rdbms::types::Timestamptz {
-                                                    timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                        date: super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Timestamptz {
+                                                    timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                        date: super::super::super::golem::rdbms::types::Date {
                                                             year: l201,
                                                             month: l202 as u8,
                                                             day: l203 as u8,
                                                         },
-                                                        time: super::super::super::wasi::rdbms::types::Time {
+                                                        time: super::super::super::golem::rdbms::types::Time {
                                                             hour: l204 as u8,
                                                             minute: l205 as u8,
                                                             second: l206 as u8,
@@ -3064,7 +3064,7 @@ pub mod wasi {
                                                 let l211 = *ptr0.add(12).cast::<i32>();
                                                 let l212 = i32::from(*ptr0.add(16).cast::<u8>());
                                                 let l213 = i32::from(*ptr0.add(17).cast::<u8>());
-                                                super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Date {
                                                     year: l211,
                                                     month: l212 as u8,
                                                     day: l213 as u8,
@@ -3077,7 +3077,7 @@ pub mod wasi {
                                                 let l214 = *ptr0.add(12).cast::<i32>();
                                                 let l215 = i32::from(*ptr0.add(16).cast::<u8>());
                                                 let l216 = i32::from(*ptr0.add(17).cast::<u8>());
-                                                super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Date {
                                                     year: l214,
                                                     month: l215 as u8,
                                                     day: l216 as u8,
@@ -3097,7 +3097,7 @@ pub mod wasi {
                                                 let l219 = *ptr0.add(24).cast::<i32>();
                                                 let l220 = i32::from(*ptr0.add(28).cast::<u8>());
                                                 let l221 = i32::from(*ptr0.add(29).cast::<u8>());
-                                                super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Date {
                                                     year: l219,
                                                     month: l220 as u8,
                                                     day: l221 as u8,
@@ -3110,7 +3110,7 @@ pub mod wasi {
                                                 let l222 = *ptr0.add(24).cast::<i32>();
                                                 let l223 = i32::from(*ptr0.add(28).cast::<u8>());
                                                 let l224 = i32::from(*ptr0.add(29).cast::<u8>());
-                                                super::super::super::wasi::rdbms::types::Date {
+                                                super::super::super::golem::rdbms::types::Date {
                                                     year: l222,
                                                     month: l223 as u8,
                                                     day: l224 as u8,
@@ -3733,7 +3733,7 @@ pub mod wasi {
                             }
                         };
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[constructor]lazy-db-column-type"]
                             fn wit_import(
@@ -3781,7 +3781,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]lazy-db-column-type.get"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -3947,7 +3947,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-result-stream.get-columns"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -4148,7 +4148,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-result-stream.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -4295,13 +4295,13 @@ pub mod wasi {
                                                                 let l30 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l31 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l32 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l26,
                                                                         month: l27 as u8,
                                                                         day: l28 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l29 as u8,
                                                                         minute: l30 as u8,
                                                                         second: l31 as u8,
@@ -4321,14 +4321,14 @@ pub mod wasi {
                                                                 let l38 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l39 = *base.add(20).cast::<i32>();
                                                                 let l40 = *base.add(24).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                    timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                        date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamptz {
+                                                                    timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                        date: super::super::super::golem::rdbms::types::Date {
                                                                             year: l33,
                                                                             month: l34 as u8,
                                                                             day: l35 as u8,
                                                                         },
-                                                                        time: super::super::super::wasi::rdbms::types::Time {
+                                                                        time: super::super::super::golem::rdbms::types::Time {
                                                                             hour: l36 as u8,
                                                                             minute: l37 as u8,
                                                                             second: l38 as u8,
@@ -4345,7 +4345,7 @@ pub mod wasi {
                                                                 let l41 = *base.add(8).cast::<i32>();
                                                                 let l42 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l43 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Date {
                                                                     year: l41,
                                                                     month: l42 as u8,
                                                                     day: l43 as u8,
@@ -4359,7 +4359,7 @@ pub mod wasi {
                                                                 let l45 = i32::from(*base.add(9).cast::<u8>());
                                                                 let l46 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l47 = *base.add(12).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Time {
                                                                     hour: l44 as u8,
                                                                     minute: l45 as u8,
                                                                     second: l46 as u8,
@@ -4375,8 +4375,8 @@ pub mod wasi {
                                                                 let l50 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l51 = *base.add(12).cast::<i32>();
                                                                 let l52 = *base.add(16).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timetz {
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Timetz {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l48 as u8,
                                                                         minute: l49 as u8,
                                                                         second: l50 as u8,
@@ -4469,7 +4469,7 @@ pub mod wasi {
                                                             let e265 = {
                                                                 let l71 = *base.add(8).cast::<i64>();
                                                                 let l72 = *base.add(16).cast::<i64>();
-                                                                super::super::super::wasi::rdbms::types::Uuid {
+                                                                super::super::super::golem::rdbms::types::Uuid {
                                                                     high_bits: l71 as u64,
                                                                     low_bits: l72 as u64,
                                                                 }
@@ -4479,7 +4479,7 @@ pub mod wasi {
                                                         23 => {
                                                             let e265 = {
                                                                 let l73 = i32::from(*base.add(8).cast::<u8>());
-                                                                use super::super::super::wasi::rdbms::types::IpAddress as V86;
+                                                                use super::super::super::golem::rdbms::types::IpAddress as V86;
                                                                 let v86 = match l73 {
                                                                     0 => {
                                                                         let e86 = {
@@ -4523,7 +4523,7 @@ pub mod wasi {
                                                         24 => {
                                                             let e265 = {
                                                                 let l87 = i32::from(*base.add(8).cast::<u8>());
-                                                                use super::super::super::wasi::rdbms::types::IpAddress as V100;
+                                                                use super::super::super::golem::rdbms::types::IpAddress as V100;
                                                                 let v100 = match l87 {
                                                                     0 => {
                                                                         let e100 = {
@@ -4572,7 +4572,7 @@ pub mod wasi {
                                                                 let l104 = i32::from(*base.add(11).cast::<u8>());
                                                                 let l105 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l106 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::MacAddress {
+                                                                super::super::super::golem::rdbms::types::MacAddress {
                                                                     octets: (
                                                                         l101 as u8,
                                                                         l102 as u8,
@@ -4816,13 +4816,13 @@ pub mod wasi {
                                                                             let l152 = i32::from(*base.add(21).cast::<u8>());
                                                                             let l153 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l154 = *base.add(24).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l148,
                                                                                     month: l149 as u8,
                                                                                     day: l150 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l151 as u8,
                                                                                     minute: l152 as u8,
                                                                                     second: l153 as u8,
@@ -4841,13 +4841,13 @@ pub mod wasi {
                                                                             let l159 = i32::from(*base.add(21).cast::<u8>());
                                                                             let l160 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l161 = *base.add(24).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l155,
                                                                                     month: l156 as u8,
                                                                                     day: l157 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l158 as u8,
                                                                                     minute: l159 as u8,
                                                                                     second: l160 as u8,
@@ -4873,13 +4873,13 @@ pub mod wasi {
                                                                             let l168 = i32::from(*base.add(41).cast::<u8>());
                                                                             let l169 = i32::from(*base.add(42).cast::<u8>());
                                                                             let l170 = *base.add(44).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l164,
                                                                                     month: l165 as u8,
                                                                                     day: l166 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l167 as u8,
                                                                                     minute: l168 as u8,
                                                                                     second: l169 as u8,
@@ -4898,13 +4898,13 @@ pub mod wasi {
                                                                             let l175 = i32::from(*base.add(41).cast::<u8>());
                                                                             let l176 = i32::from(*base.add(42).cast::<u8>());
                                                                             let l177 = *base.add(44).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l171,
                                                                                     month: l172 as u8,
                                                                                     day: l173 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l174 as u8,
                                                                                     minute: l175 as u8,
                                                                                     second: l176 as u8,
@@ -4937,14 +4937,14 @@ pub mod wasi {
                                                                             let l185 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l186 = *base.add(24).cast::<i32>();
                                                                             let l187 = *base.add(28).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l180,
                                                                                         month: l181 as u8,
                                                                                         day: l182 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l183 as u8,
                                                                                         minute: l184 as u8,
                                                                                         second: l185 as u8,
@@ -4966,14 +4966,14 @@ pub mod wasi {
                                                                             let l193 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l194 = *base.add(24).cast::<i32>();
                                                                             let l195 = *base.add(28).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l188,
                                                                                         month: l189 as u8,
                                                                                         day: l190 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l191 as u8,
                                                                                         minute: l192 as u8,
                                                                                         second: l193 as u8,
@@ -5002,14 +5002,14 @@ pub mod wasi {
                                                                             let l203 = i32::from(*base.add(46).cast::<u8>());
                                                                             let l204 = *base.add(48).cast::<i32>();
                                                                             let l205 = *base.add(52).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l198,
                                                                                         month: l199 as u8,
                                                                                         day: l200 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l201 as u8,
                                                                                         minute: l202 as u8,
                                                                                         second: l203 as u8,
@@ -5031,14 +5031,14 @@ pub mod wasi {
                                                                             let l211 = i32::from(*base.add(46).cast::<u8>());
                                                                             let l212 = *base.add(48).cast::<i32>();
                                                                             let l213 = *base.add(52).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l206,
                                                                                         month: l207 as u8,
                                                                                         day: l208 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l209 as u8,
                                                                                         minute: l210 as u8,
                                                                                         second: l211 as u8,
@@ -5071,7 +5071,7 @@ pub mod wasi {
                                                                             let l216 = *base.add(12).cast::<i32>();
                                                                             let l217 = i32::from(*base.add(16).cast::<u8>());
                                                                             let l218 = i32::from(*base.add(17).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l216,
                                                                                 month: l217 as u8,
                                                                                 day: l218 as u8,
@@ -5084,7 +5084,7 @@ pub mod wasi {
                                                                             let l219 = *base.add(12).cast::<i32>();
                                                                             let l220 = i32::from(*base.add(16).cast::<u8>());
                                                                             let l221 = i32::from(*base.add(17).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l219,
                                                                                 month: l220 as u8,
                                                                                 day: l221 as u8,
@@ -5104,7 +5104,7 @@ pub mod wasi {
                                                                             let l224 = *base.add(24).cast::<i32>();
                                                                             let l225 = i32::from(*base.add(28).cast::<u8>());
                                                                             let l226 = i32::from(*base.add(29).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l224,
                                                                                 month: l225 as u8,
                                                                                 day: l226 as u8,
@@ -5117,7 +5117,7 @@ pub mod wasi {
                                                                             let l227 = *base.add(24).cast::<i32>();
                                                                             let l228 = i32::from(*base.add(28).cast::<u8>());
                                                                             let l229 = i32::from(*base.add(29).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l227,
                                                                                 month: l228 as u8,
                                                                                 day: l229 as u8,
@@ -5345,7 +5345,7 @@ pub mod wasi {
                         let len0 = vec0.len();
                         let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[static]db-connection.open"]
                             fn wit_import(_: *mut u8, _: usize, _: *mut u8);
@@ -5550,11 +5550,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (11i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date5,
                                             time: time5,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year6,
                                             month: month6,
                                             day: day6,
@@ -5562,7 +5562,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year6);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour7,
                                             minute: minute7,
                                             second: second7,
@@ -5575,15 +5575,15 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamptz(e) => {
                                         *base.add(0).cast::<u8>() = (12i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp8,
                                             offset: offset8,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date9,
                                             time: time9,
                                         } = timestamp8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year10,
                                             month: month10,
                                             day: day10,
@@ -5591,7 +5591,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year10);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour11,
                                             minute: minute11,
                                             second: second11,
@@ -5605,7 +5605,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year12,
                                             month: month12,
                                             day: day12,
@@ -5616,7 +5616,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour13,
                                             minute: minute13,
                                             second: second13,
@@ -5629,11 +5629,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timetz(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timetz {
+                                        let super::super::super::golem::rdbms::types::Timetz {
                                             time: time14,
                                             offset: offset14,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour15,
                                             minute: minute15,
                                             second: second15,
@@ -5698,7 +5698,7 @@ pub mod wasi {
                                     }
                                     DbValue::Uuid(e) => {
                                         *base.add(0).cast::<u8>() = (22i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Uuid {
+                                        let super::super::super::golem::rdbms::types::Uuid {
                                             high_bits: high_bits22,
                                             low_bits: low_bits22,
                                         } = e;
@@ -5707,7 +5707,7 @@ pub mod wasi {
                                     }
                                     DbValue::Inet(e) => {
                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V25;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V25;
                                         match e {
                                             V25::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -5742,7 +5742,7 @@ pub mod wasi {
                                     }
                                     DbValue::Cidr(e) => {
                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V28;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V28;
                                         match e {
                                             V28::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -5777,7 +5777,7 @@ pub mod wasi {
                                     }
                                     DbValue::Macaddr(e) => {
                                         *base.add(0).cast::<u8>() = (25i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::MacAddress {
+                                        let super::super::super::golem::rdbms::types::MacAddress {
                                             octets: octets29,
                                         } = e;
                                         let (t30_0, t30_1, t30_2, t30_3, t30_4, t30_5) = octets29;
@@ -5960,11 +5960,11 @@ pub mod wasi {
                                         match start40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date41,
                                                     time: time41,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year42,
                                                     month: month42,
                                                     day: day42,
@@ -5972,7 +5972,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year42);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour43,
                                                     minute: minute43,
                                                     second: second43,
@@ -5985,11 +5985,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date44,
                                                     time: time44,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year45,
                                                     month: month45,
                                                     day: day45,
@@ -5997,7 +5997,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year45);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month45)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day45)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour46,
                                                     minute: minute46,
                                                     second: second46,
@@ -6015,11 +6015,11 @@ pub mod wasi {
                                         match end40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date47,
                                                     time: time47,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year48,
                                                     month: month48,
                                                     day: day48,
@@ -6027,7 +6027,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year48);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month48)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day48)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour49,
                                                     minute: minute49,
                                                     second: second49,
@@ -6040,11 +6040,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date50,
                                                     time: time50,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year51,
                                                     month: month51,
                                                     day: day51,
@@ -6052,7 +6052,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year51);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month51)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day51)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour52,
                                                     minute: minute52,
                                                     second: second52,
@@ -6074,15 +6074,15 @@ pub mod wasi {
                                         match start53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp54,
                                                     offset: offset54,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date55,
                                                     time: time55,
                                                 } = timestamp54;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year56,
                                                     month: month56,
                                                     day: day56,
@@ -6090,7 +6090,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year56);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month56)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day56)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour57,
                                                     minute: minute57,
                                                     second: second57,
@@ -6104,15 +6104,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp58,
                                                     offset: offset58,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date59,
                                                     time: time59,
                                                 } = timestamp58;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year60,
                                                     month: month60,
                                                     day: day60,
@@ -6120,7 +6120,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year60);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month60)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day60)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour61,
                                                     minute: minute61,
                                                     second: second61,
@@ -6139,15 +6139,15 @@ pub mod wasi {
                                         match end53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp62,
                                                     offset: offset62,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date63,
                                                     time: time63,
                                                 } = timestamp62;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year64,
                                                     month: month64,
                                                     day: day64,
@@ -6155,7 +6155,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year64);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month64)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day64)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour65,
                                                     minute: minute65,
                                                     second: second65,
@@ -6169,15 +6169,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp66,
                                                     offset: offset66,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date67,
                                                     time: time67,
                                                 } = timestamp66;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year68,
                                                     month: month68,
                                                     day: day68,
@@ -6185,7 +6185,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year68);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month68)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day68)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour69,
                                                     minute: minute69,
                                                     second: second69,
@@ -6208,7 +6208,7 @@ pub mod wasi {
                                         match start70 {
                                             Datebound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year71,
                                                     month: month71,
                                                     day: day71,
@@ -6219,7 +6219,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year72,
                                                     month: month72,
                                                     day: day72,
@@ -6235,7 +6235,7 @@ pub mod wasi {
                                         match end70 {
                                             Datebound::Included(e) => {
                                                 *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year73,
                                                     month: month73,
                                                     day: day73,
@@ -6246,7 +6246,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year74,
                                                     month: month74,
                                                     day: day74,
@@ -6397,7 +6397,7 @@ pub mod wasi {
                         }
                         let ptr88 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.query"]
                             fn wit_import(
@@ -6748,13 +6748,13 @@ pub mod wasi {
                                                                 let l152 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l153 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l154 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l148,
                                                                         month: l149 as u8,
                                                                         day: l150 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l151 as u8,
                                                                         minute: l152 as u8,
                                                                         second: l153 as u8,
@@ -6774,14 +6774,14 @@ pub mod wasi {
                                                                 let l160 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l161 = *base.add(20).cast::<i32>();
                                                                 let l162 = *base.add(24).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                    timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                        date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamptz {
+                                                                    timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                        date: super::super::super::golem::rdbms::types::Date {
                                                                             year: l155,
                                                                             month: l156 as u8,
                                                                             day: l157 as u8,
                                                                         },
-                                                                        time: super::super::super::wasi::rdbms::types::Time {
+                                                                        time: super::super::super::golem::rdbms::types::Time {
                                                                             hour: l158 as u8,
                                                                             minute: l159 as u8,
                                                                             second: l160 as u8,
@@ -6798,7 +6798,7 @@ pub mod wasi {
                                                                 let l163 = *base.add(8).cast::<i32>();
                                                                 let l164 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l165 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Date {
                                                                     year: l163,
                                                                     month: l164 as u8,
                                                                     day: l165 as u8,
@@ -6812,7 +6812,7 @@ pub mod wasi {
                                                                 let l167 = i32::from(*base.add(9).cast::<u8>());
                                                                 let l168 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l169 = *base.add(12).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Time {
                                                                     hour: l166 as u8,
                                                                     minute: l167 as u8,
                                                                     second: l168 as u8,
@@ -6828,8 +6828,8 @@ pub mod wasi {
                                                                 let l172 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l173 = *base.add(12).cast::<i32>();
                                                                 let l174 = *base.add(16).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timetz {
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Timetz {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l170 as u8,
                                                                         minute: l171 as u8,
                                                                         second: l172 as u8,
@@ -6922,7 +6922,7 @@ pub mod wasi {
                                                             let e387 = {
                                                                 let l193 = *base.add(8).cast::<i64>();
                                                                 let l194 = *base.add(16).cast::<i64>();
-                                                                super::super::super::wasi::rdbms::types::Uuid {
+                                                                super::super::super::golem::rdbms::types::Uuid {
                                                                     high_bits: l193 as u64,
                                                                     low_bits: l194 as u64,
                                                                 }
@@ -6932,7 +6932,7 @@ pub mod wasi {
                                                         23 => {
                                                             let e387 = {
                                                                 let l195 = i32::from(*base.add(8).cast::<u8>());
-                                                                use super::super::super::wasi::rdbms::types::IpAddress as V208;
+                                                                use super::super::super::golem::rdbms::types::IpAddress as V208;
                                                                 let v208 = match l195 {
                                                                     0 => {
                                                                         let e208 = {
@@ -6976,7 +6976,7 @@ pub mod wasi {
                                                         24 => {
                                                             let e387 = {
                                                                 let l209 = i32::from(*base.add(8).cast::<u8>());
-                                                                use super::super::super::wasi::rdbms::types::IpAddress as V222;
+                                                                use super::super::super::golem::rdbms::types::IpAddress as V222;
                                                                 let v222 = match l209 {
                                                                     0 => {
                                                                         let e222 = {
@@ -7025,7 +7025,7 @@ pub mod wasi {
                                                                 let l226 = i32::from(*base.add(11).cast::<u8>());
                                                                 let l227 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l228 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::MacAddress {
+                                                                super::super::super::golem::rdbms::types::MacAddress {
                                                                     octets: (
                                                                         l223 as u8,
                                                                         l224 as u8,
@@ -7269,13 +7269,13 @@ pub mod wasi {
                                                                             let l274 = i32::from(*base.add(21).cast::<u8>());
                                                                             let l275 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l276 = *base.add(24).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l270,
                                                                                     month: l271 as u8,
                                                                                     day: l272 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l273 as u8,
                                                                                     minute: l274 as u8,
                                                                                     second: l275 as u8,
@@ -7294,13 +7294,13 @@ pub mod wasi {
                                                                             let l281 = i32::from(*base.add(21).cast::<u8>());
                                                                             let l282 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l283 = *base.add(24).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l277,
                                                                                     month: l278 as u8,
                                                                                     day: l279 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l280 as u8,
                                                                                     minute: l281 as u8,
                                                                                     second: l282 as u8,
@@ -7326,13 +7326,13 @@ pub mod wasi {
                                                                             let l290 = i32::from(*base.add(41).cast::<u8>());
                                                                             let l291 = i32::from(*base.add(42).cast::<u8>());
                                                                             let l292 = *base.add(44).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l286,
                                                                                     month: l287 as u8,
                                                                                     day: l288 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l289 as u8,
                                                                                     minute: l290 as u8,
                                                                                     second: l291 as u8,
@@ -7351,13 +7351,13 @@ pub mod wasi {
                                                                             let l297 = i32::from(*base.add(41).cast::<u8>());
                                                                             let l298 = i32::from(*base.add(42).cast::<u8>());
                                                                             let l299 = *base.add(44).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l293,
                                                                                     month: l294 as u8,
                                                                                     day: l295 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l296 as u8,
                                                                                     minute: l297 as u8,
                                                                                     second: l298 as u8,
@@ -7390,14 +7390,14 @@ pub mod wasi {
                                                                             let l307 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l308 = *base.add(24).cast::<i32>();
                                                                             let l309 = *base.add(28).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l302,
                                                                                         month: l303 as u8,
                                                                                         day: l304 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l305 as u8,
                                                                                         minute: l306 as u8,
                                                                                         second: l307 as u8,
@@ -7419,14 +7419,14 @@ pub mod wasi {
                                                                             let l315 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l316 = *base.add(24).cast::<i32>();
                                                                             let l317 = *base.add(28).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l310,
                                                                                         month: l311 as u8,
                                                                                         day: l312 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l313 as u8,
                                                                                         minute: l314 as u8,
                                                                                         second: l315 as u8,
@@ -7455,14 +7455,14 @@ pub mod wasi {
                                                                             let l325 = i32::from(*base.add(46).cast::<u8>());
                                                                             let l326 = *base.add(48).cast::<i32>();
                                                                             let l327 = *base.add(52).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l320,
                                                                                         month: l321 as u8,
                                                                                         day: l322 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l323 as u8,
                                                                                         minute: l324 as u8,
                                                                                         second: l325 as u8,
@@ -7484,14 +7484,14 @@ pub mod wasi {
                                                                             let l333 = i32::from(*base.add(46).cast::<u8>());
                                                                             let l334 = *base.add(48).cast::<i32>();
                                                                             let l335 = *base.add(52).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l328,
                                                                                         month: l329 as u8,
                                                                                         day: l330 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l331 as u8,
                                                                                         minute: l332 as u8,
                                                                                         second: l333 as u8,
@@ -7524,7 +7524,7 @@ pub mod wasi {
                                                                             let l338 = *base.add(12).cast::<i32>();
                                                                             let l339 = i32::from(*base.add(16).cast::<u8>());
                                                                             let l340 = i32::from(*base.add(17).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l338,
                                                                                 month: l339 as u8,
                                                                                 day: l340 as u8,
@@ -7537,7 +7537,7 @@ pub mod wasi {
                                                                             let l341 = *base.add(12).cast::<i32>();
                                                                             let l342 = i32::from(*base.add(16).cast::<u8>());
                                                                             let l343 = i32::from(*base.add(17).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l341,
                                                                                 month: l342 as u8,
                                                                                 day: l343 as u8,
@@ -7557,7 +7557,7 @@ pub mod wasi {
                                                                             let l346 = *base.add(24).cast::<i32>();
                                                                             let l347 = i32::from(*base.add(28).cast::<u8>());
                                                                             let l348 = i32::from(*base.add(29).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l346,
                                                                                 month: l347 as u8,
                                                                                 day: l348 as u8,
@@ -7570,7 +7570,7 @@ pub mod wasi {
                                                                             let l349 = *base.add(24).cast::<i32>();
                                                                             let l350 = i32::from(*base.add(28).cast::<u8>());
                                                                             let l351 = i32::from(*base.add(29).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l349,
                                                                                 month: l350 as u8,
                                                                                 day: l351 as u8,
@@ -7968,11 +7968,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (11i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date5,
                                             time: time5,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year6,
                                             month: month6,
                                             day: day6,
@@ -7980,7 +7980,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year6);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour7,
                                             minute: minute7,
                                             second: second7,
@@ -7993,15 +7993,15 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamptz(e) => {
                                         *base.add(0).cast::<u8>() = (12i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp8,
                                             offset: offset8,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date9,
                                             time: time9,
                                         } = timestamp8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year10,
                                             month: month10,
                                             day: day10,
@@ -8009,7 +8009,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year10);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour11,
                                             minute: minute11,
                                             second: second11,
@@ -8023,7 +8023,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year12,
                                             month: month12,
                                             day: day12,
@@ -8034,7 +8034,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour13,
                                             minute: minute13,
                                             second: second13,
@@ -8047,11 +8047,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timetz(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timetz {
+                                        let super::super::super::golem::rdbms::types::Timetz {
                                             time: time14,
                                             offset: offset14,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour15,
                                             minute: minute15,
                                             second: second15,
@@ -8116,7 +8116,7 @@ pub mod wasi {
                                     }
                                     DbValue::Uuid(e) => {
                                         *base.add(0).cast::<u8>() = (22i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Uuid {
+                                        let super::super::super::golem::rdbms::types::Uuid {
                                             high_bits: high_bits22,
                                             low_bits: low_bits22,
                                         } = e;
@@ -8125,7 +8125,7 @@ pub mod wasi {
                                     }
                                     DbValue::Inet(e) => {
                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V25;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V25;
                                         match e {
                                             V25::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -8160,7 +8160,7 @@ pub mod wasi {
                                     }
                                     DbValue::Cidr(e) => {
                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V28;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V28;
                                         match e {
                                             V28::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -8195,7 +8195,7 @@ pub mod wasi {
                                     }
                                     DbValue::Macaddr(e) => {
                                         *base.add(0).cast::<u8>() = (25i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::MacAddress {
+                                        let super::super::super::golem::rdbms::types::MacAddress {
                                             octets: octets29,
                                         } = e;
                                         let (t30_0, t30_1, t30_2, t30_3, t30_4, t30_5) = octets29;
@@ -8378,11 +8378,11 @@ pub mod wasi {
                                         match start40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date41,
                                                     time: time41,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year42,
                                                     month: month42,
                                                     day: day42,
@@ -8390,7 +8390,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year42);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour43,
                                                     minute: minute43,
                                                     second: second43,
@@ -8403,11 +8403,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date44,
                                                     time: time44,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year45,
                                                     month: month45,
                                                     day: day45,
@@ -8415,7 +8415,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year45);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month45)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day45)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour46,
                                                     minute: minute46,
                                                     second: second46,
@@ -8433,11 +8433,11 @@ pub mod wasi {
                                         match end40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date47,
                                                     time: time47,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year48,
                                                     month: month48,
                                                     day: day48,
@@ -8445,7 +8445,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year48);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month48)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day48)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour49,
                                                     minute: minute49,
                                                     second: second49,
@@ -8458,11 +8458,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date50,
                                                     time: time50,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year51,
                                                     month: month51,
                                                     day: day51,
@@ -8470,7 +8470,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year51);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month51)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day51)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour52,
                                                     minute: minute52,
                                                     second: second52,
@@ -8492,15 +8492,15 @@ pub mod wasi {
                                         match start53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp54,
                                                     offset: offset54,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date55,
                                                     time: time55,
                                                 } = timestamp54;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year56,
                                                     month: month56,
                                                     day: day56,
@@ -8508,7 +8508,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year56);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month56)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day56)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour57,
                                                     minute: minute57,
                                                     second: second57,
@@ -8522,15 +8522,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp58,
                                                     offset: offset58,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date59,
                                                     time: time59,
                                                 } = timestamp58;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year60,
                                                     month: month60,
                                                     day: day60,
@@ -8538,7 +8538,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year60);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month60)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day60)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour61,
                                                     minute: minute61,
                                                     second: second61,
@@ -8557,15 +8557,15 @@ pub mod wasi {
                                         match end53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp62,
                                                     offset: offset62,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date63,
                                                     time: time63,
                                                 } = timestamp62;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year64,
                                                     month: month64,
                                                     day: day64,
@@ -8573,7 +8573,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year64);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month64)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day64)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour65,
                                                     minute: minute65,
                                                     second: second65,
@@ -8587,15 +8587,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp66,
                                                     offset: offset66,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date67,
                                                     time: time67,
                                                 } = timestamp66;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year68,
                                                     month: month68,
                                                     day: day68,
@@ -8603,7 +8603,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year68);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month68)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day68)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour69,
                                                     minute: minute69,
                                                     second: second69,
@@ -8626,7 +8626,7 @@ pub mod wasi {
                                         match start70 {
                                             Datebound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year71,
                                                     month: month71,
                                                     day: day71,
@@ -8637,7 +8637,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year72,
                                                     month: month72,
                                                     day: day72,
@@ -8653,7 +8653,7 @@ pub mod wasi {
                                         match end70 {
                                             Datebound::Included(e) => {
                                                 *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year73,
                                                     month: month73,
                                                     day: day73,
@@ -8664,7 +8664,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year74,
                                                     month: month74,
                                                     day: day74,
@@ -8815,7 +8815,7 @@ pub mod wasi {
                         }
                         let ptr88 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.query-stream"]
                             fn wit_import(
@@ -9049,11 +9049,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (11i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date5,
                                             time: time5,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year6,
                                             month: month6,
                                             day: day6,
@@ -9061,7 +9061,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year6);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour7,
                                             minute: minute7,
                                             second: second7,
@@ -9074,15 +9074,15 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamptz(e) => {
                                         *base.add(0).cast::<u8>() = (12i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp8,
                                             offset: offset8,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date9,
                                             time: time9,
                                         } = timestamp8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year10,
                                             month: month10,
                                             day: day10,
@@ -9090,7 +9090,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year10);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour11,
                                             minute: minute11,
                                             second: second11,
@@ -9104,7 +9104,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year12,
                                             month: month12,
                                             day: day12,
@@ -9115,7 +9115,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour13,
                                             minute: minute13,
                                             second: second13,
@@ -9128,11 +9128,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timetz(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timetz {
+                                        let super::super::super::golem::rdbms::types::Timetz {
                                             time: time14,
                                             offset: offset14,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour15,
                                             minute: minute15,
                                             second: second15,
@@ -9197,7 +9197,7 @@ pub mod wasi {
                                     }
                                     DbValue::Uuid(e) => {
                                         *base.add(0).cast::<u8>() = (22i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Uuid {
+                                        let super::super::super::golem::rdbms::types::Uuid {
                                             high_bits: high_bits22,
                                             low_bits: low_bits22,
                                         } = e;
@@ -9206,7 +9206,7 @@ pub mod wasi {
                                     }
                                     DbValue::Inet(e) => {
                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V25;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V25;
                                         match e {
                                             V25::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -9241,7 +9241,7 @@ pub mod wasi {
                                     }
                                     DbValue::Cidr(e) => {
                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V28;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V28;
                                         match e {
                                             V28::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -9276,7 +9276,7 @@ pub mod wasi {
                                     }
                                     DbValue::Macaddr(e) => {
                                         *base.add(0).cast::<u8>() = (25i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::MacAddress {
+                                        let super::super::super::golem::rdbms::types::MacAddress {
                                             octets: octets29,
                                         } = e;
                                         let (t30_0, t30_1, t30_2, t30_3, t30_4, t30_5) = octets29;
@@ -9459,11 +9459,11 @@ pub mod wasi {
                                         match start40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date41,
                                                     time: time41,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year42,
                                                     month: month42,
                                                     day: day42,
@@ -9471,7 +9471,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year42);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour43,
                                                     minute: minute43,
                                                     second: second43,
@@ -9484,11 +9484,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date44,
                                                     time: time44,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year45,
                                                     month: month45,
                                                     day: day45,
@@ -9496,7 +9496,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year45);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month45)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day45)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour46,
                                                     minute: minute46,
                                                     second: second46,
@@ -9514,11 +9514,11 @@ pub mod wasi {
                                         match end40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date47,
                                                     time: time47,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year48,
                                                     month: month48,
                                                     day: day48,
@@ -9526,7 +9526,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year48);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month48)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day48)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour49,
                                                     minute: minute49,
                                                     second: second49,
@@ -9539,11 +9539,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date50,
                                                     time: time50,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year51,
                                                     month: month51,
                                                     day: day51,
@@ -9551,7 +9551,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year51);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month51)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day51)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour52,
                                                     minute: minute52,
                                                     second: second52,
@@ -9573,15 +9573,15 @@ pub mod wasi {
                                         match start53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp54,
                                                     offset: offset54,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date55,
                                                     time: time55,
                                                 } = timestamp54;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year56,
                                                     month: month56,
                                                     day: day56,
@@ -9589,7 +9589,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year56);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month56)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day56)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour57,
                                                     minute: minute57,
                                                     second: second57,
@@ -9603,15 +9603,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp58,
                                                     offset: offset58,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date59,
                                                     time: time59,
                                                 } = timestamp58;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year60,
                                                     month: month60,
                                                     day: day60,
@@ -9619,7 +9619,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year60);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month60)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day60)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour61,
                                                     minute: minute61,
                                                     second: second61,
@@ -9638,15 +9638,15 @@ pub mod wasi {
                                         match end53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp62,
                                                     offset: offset62,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date63,
                                                     time: time63,
                                                 } = timestamp62;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year64,
                                                     month: month64,
                                                     day: day64,
@@ -9654,7 +9654,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year64);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month64)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day64)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour65,
                                                     minute: minute65,
                                                     second: second65,
@@ -9668,15 +9668,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp66,
                                                     offset: offset66,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date67,
                                                     time: time67,
                                                 } = timestamp66;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year68,
                                                     month: month68,
                                                     day: day68,
@@ -9684,7 +9684,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year68);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month68)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day68)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour69,
                                                     minute: minute69,
                                                     second: second69,
@@ -9707,7 +9707,7 @@ pub mod wasi {
                                         match start70 {
                                             Datebound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year71,
                                                     month: month71,
                                                     day: day71,
@@ -9718,7 +9718,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year72,
                                                     month: month72,
                                                     day: day72,
@@ -9734,7 +9734,7 @@ pub mod wasi {
                                         match end70 {
                                             Datebound::Included(e) => {
                                                 *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year73,
                                                     month: month73,
                                                     day: day73,
@@ -9745,7 +9745,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year74,
                                                     month: month74,
                                                     day: day74,
@@ -9896,7 +9896,7 @@ pub mod wasi {
                         }
                         let ptr88 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.execute"]
                             fn wit_import(
@@ -10040,7 +10040,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.begin-transaction"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -10245,11 +10245,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (11i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date5,
                                             time: time5,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year6,
                                             month: month6,
                                             day: day6,
@@ -10257,7 +10257,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year6);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour7,
                                             minute: minute7,
                                             second: second7,
@@ -10270,15 +10270,15 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamptz(e) => {
                                         *base.add(0).cast::<u8>() = (12i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp8,
                                             offset: offset8,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date9,
                                             time: time9,
                                         } = timestamp8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year10,
                                             month: month10,
                                             day: day10,
@@ -10286,7 +10286,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year10);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour11,
                                             minute: minute11,
                                             second: second11,
@@ -10300,7 +10300,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year12,
                                             month: month12,
                                             day: day12,
@@ -10311,7 +10311,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour13,
                                             minute: minute13,
                                             second: second13,
@@ -10324,11 +10324,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timetz(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timetz {
+                                        let super::super::super::golem::rdbms::types::Timetz {
                                             time: time14,
                                             offset: offset14,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour15,
                                             minute: minute15,
                                             second: second15,
@@ -10393,7 +10393,7 @@ pub mod wasi {
                                     }
                                     DbValue::Uuid(e) => {
                                         *base.add(0).cast::<u8>() = (22i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Uuid {
+                                        let super::super::super::golem::rdbms::types::Uuid {
                                             high_bits: high_bits22,
                                             low_bits: low_bits22,
                                         } = e;
@@ -10402,7 +10402,7 @@ pub mod wasi {
                                     }
                                     DbValue::Inet(e) => {
                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V25;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V25;
                                         match e {
                                             V25::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -10437,7 +10437,7 @@ pub mod wasi {
                                     }
                                     DbValue::Cidr(e) => {
                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V28;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V28;
                                         match e {
                                             V28::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -10472,7 +10472,7 @@ pub mod wasi {
                                     }
                                     DbValue::Macaddr(e) => {
                                         *base.add(0).cast::<u8>() = (25i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::MacAddress {
+                                        let super::super::super::golem::rdbms::types::MacAddress {
                                             octets: octets29,
                                         } = e;
                                         let (t30_0, t30_1, t30_2, t30_3, t30_4, t30_5) = octets29;
@@ -10655,11 +10655,11 @@ pub mod wasi {
                                         match start40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date41,
                                                     time: time41,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year42,
                                                     month: month42,
                                                     day: day42,
@@ -10667,7 +10667,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year42);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour43,
                                                     minute: minute43,
                                                     second: second43,
@@ -10680,11 +10680,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date44,
                                                     time: time44,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year45,
                                                     month: month45,
                                                     day: day45,
@@ -10692,7 +10692,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year45);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month45)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day45)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour46,
                                                     minute: minute46,
                                                     second: second46,
@@ -10710,11 +10710,11 @@ pub mod wasi {
                                         match end40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date47,
                                                     time: time47,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year48,
                                                     month: month48,
                                                     day: day48,
@@ -10722,7 +10722,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year48);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month48)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day48)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour49,
                                                     minute: minute49,
                                                     second: second49,
@@ -10735,11 +10735,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date50,
                                                     time: time50,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year51,
                                                     month: month51,
                                                     day: day51,
@@ -10747,7 +10747,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year51);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month51)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day51)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour52,
                                                     minute: minute52,
                                                     second: second52,
@@ -10769,15 +10769,15 @@ pub mod wasi {
                                         match start53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp54,
                                                     offset: offset54,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date55,
                                                     time: time55,
                                                 } = timestamp54;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year56,
                                                     month: month56,
                                                     day: day56,
@@ -10785,7 +10785,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year56);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month56)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day56)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour57,
                                                     minute: minute57,
                                                     second: second57,
@@ -10799,15 +10799,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp58,
                                                     offset: offset58,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date59,
                                                     time: time59,
                                                 } = timestamp58;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year60,
                                                     month: month60,
                                                     day: day60,
@@ -10815,7 +10815,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year60);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month60)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day60)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour61,
                                                     minute: minute61,
                                                     second: second61,
@@ -10834,15 +10834,15 @@ pub mod wasi {
                                         match end53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp62,
                                                     offset: offset62,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date63,
                                                     time: time63,
                                                 } = timestamp62;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year64,
                                                     month: month64,
                                                     day: day64,
@@ -10850,7 +10850,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year64);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month64)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day64)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour65,
                                                     minute: minute65,
                                                     second: second65,
@@ -10864,15 +10864,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp66,
                                                     offset: offset66,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date67,
                                                     time: time67,
                                                 } = timestamp66;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year68,
                                                     month: month68,
                                                     day: day68,
@@ -10880,7 +10880,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year68);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month68)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day68)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour69,
                                                     minute: minute69,
                                                     second: second69,
@@ -10903,7 +10903,7 @@ pub mod wasi {
                                         match start70 {
                                             Datebound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year71,
                                                     month: month71,
                                                     day: day71,
@@ -10914,7 +10914,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year72,
                                                     month: month72,
                                                     day: day72,
@@ -10930,7 +10930,7 @@ pub mod wasi {
                                         match end70 {
                                             Datebound::Included(e) => {
                                                 *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year73,
                                                     month: month73,
                                                     day: day73,
@@ -10941,7 +10941,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year74,
                                                     month: month74,
                                                     day: day74,
@@ -11092,7 +11092,7 @@ pub mod wasi {
                         }
                         let ptr88 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.query"]
                             fn wit_import(
@@ -11443,13 +11443,13 @@ pub mod wasi {
                                                                 let l152 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l153 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l154 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l148,
                                                                         month: l149 as u8,
                                                                         day: l150 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l151 as u8,
                                                                         minute: l152 as u8,
                                                                         second: l153 as u8,
@@ -11469,14 +11469,14 @@ pub mod wasi {
                                                                 let l160 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l161 = *base.add(20).cast::<i32>();
                                                                 let l162 = *base.add(24).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                    timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                        date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamptz {
+                                                                    timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                        date: super::super::super::golem::rdbms::types::Date {
                                                                             year: l155,
                                                                             month: l156 as u8,
                                                                             day: l157 as u8,
                                                                         },
-                                                                        time: super::super::super::wasi::rdbms::types::Time {
+                                                                        time: super::super::super::golem::rdbms::types::Time {
                                                                             hour: l158 as u8,
                                                                             minute: l159 as u8,
                                                                             second: l160 as u8,
@@ -11493,7 +11493,7 @@ pub mod wasi {
                                                                 let l163 = *base.add(8).cast::<i32>();
                                                                 let l164 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l165 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Date {
                                                                     year: l163,
                                                                     month: l164 as u8,
                                                                     day: l165 as u8,
@@ -11507,7 +11507,7 @@ pub mod wasi {
                                                                 let l167 = i32::from(*base.add(9).cast::<u8>());
                                                                 let l168 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l169 = *base.add(12).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Time {
                                                                     hour: l166 as u8,
                                                                     minute: l167 as u8,
                                                                     second: l168 as u8,
@@ -11523,8 +11523,8 @@ pub mod wasi {
                                                                 let l172 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l173 = *base.add(12).cast::<i32>();
                                                                 let l174 = *base.add(16).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timetz {
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Timetz {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l170 as u8,
                                                                         minute: l171 as u8,
                                                                         second: l172 as u8,
@@ -11617,7 +11617,7 @@ pub mod wasi {
                                                             let e387 = {
                                                                 let l193 = *base.add(8).cast::<i64>();
                                                                 let l194 = *base.add(16).cast::<i64>();
-                                                                super::super::super::wasi::rdbms::types::Uuid {
+                                                                super::super::super::golem::rdbms::types::Uuid {
                                                                     high_bits: l193 as u64,
                                                                     low_bits: l194 as u64,
                                                                 }
@@ -11627,7 +11627,7 @@ pub mod wasi {
                                                         23 => {
                                                             let e387 = {
                                                                 let l195 = i32::from(*base.add(8).cast::<u8>());
-                                                                use super::super::super::wasi::rdbms::types::IpAddress as V208;
+                                                                use super::super::super::golem::rdbms::types::IpAddress as V208;
                                                                 let v208 = match l195 {
                                                                     0 => {
                                                                         let e208 = {
@@ -11671,7 +11671,7 @@ pub mod wasi {
                                                         24 => {
                                                             let e387 = {
                                                                 let l209 = i32::from(*base.add(8).cast::<u8>());
-                                                                use super::super::super::wasi::rdbms::types::IpAddress as V222;
+                                                                use super::super::super::golem::rdbms::types::IpAddress as V222;
                                                                 let v222 = match l209 {
                                                                     0 => {
                                                                         let e222 = {
@@ -11720,7 +11720,7 @@ pub mod wasi {
                                                                 let l226 = i32::from(*base.add(11).cast::<u8>());
                                                                 let l227 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l228 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::MacAddress {
+                                                                super::super::super::golem::rdbms::types::MacAddress {
                                                                     octets: (
                                                                         l223 as u8,
                                                                         l224 as u8,
@@ -11964,13 +11964,13 @@ pub mod wasi {
                                                                             let l274 = i32::from(*base.add(21).cast::<u8>());
                                                                             let l275 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l276 = *base.add(24).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l270,
                                                                                     month: l271 as u8,
                                                                                     day: l272 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l273 as u8,
                                                                                     minute: l274 as u8,
                                                                                     second: l275 as u8,
@@ -11989,13 +11989,13 @@ pub mod wasi {
                                                                             let l281 = i32::from(*base.add(21).cast::<u8>());
                                                                             let l282 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l283 = *base.add(24).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l277,
                                                                                     month: l278 as u8,
                                                                                     day: l279 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l280 as u8,
                                                                                     minute: l281 as u8,
                                                                                     second: l282 as u8,
@@ -12021,13 +12021,13 @@ pub mod wasi {
                                                                             let l290 = i32::from(*base.add(41).cast::<u8>());
                                                                             let l291 = i32::from(*base.add(42).cast::<u8>());
                                                                             let l292 = *base.add(44).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l286,
                                                                                     month: l287 as u8,
                                                                                     day: l288 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l289 as u8,
                                                                                     minute: l290 as u8,
                                                                                     second: l291 as u8,
@@ -12046,13 +12046,13 @@ pub mod wasi {
                                                                             let l297 = i32::from(*base.add(41).cast::<u8>());
                                                                             let l298 = i32::from(*base.add(42).cast::<u8>());
                                                                             let l299 = *base.add(44).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamp {
+                                                                                date: super::super::super::golem::rdbms::types::Date {
                                                                                     year: l293,
                                                                                     month: l294 as u8,
                                                                                     day: l295 as u8,
                                                                                 },
-                                                                                time: super::super::super::wasi::rdbms::types::Time {
+                                                                                time: super::super::super::golem::rdbms::types::Time {
                                                                                     hour: l296 as u8,
                                                                                     minute: l297 as u8,
                                                                                     second: l298 as u8,
@@ -12085,14 +12085,14 @@ pub mod wasi {
                                                                             let l307 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l308 = *base.add(24).cast::<i32>();
                                                                             let l309 = *base.add(28).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l302,
                                                                                         month: l303 as u8,
                                                                                         day: l304 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l305 as u8,
                                                                                         minute: l306 as u8,
                                                                                         second: l307 as u8,
@@ -12114,14 +12114,14 @@ pub mod wasi {
                                                                             let l315 = i32::from(*base.add(22).cast::<u8>());
                                                                             let l316 = *base.add(24).cast::<i32>();
                                                                             let l317 = *base.add(28).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l310,
                                                                                         month: l311 as u8,
                                                                                         day: l312 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l313 as u8,
                                                                                         minute: l314 as u8,
                                                                                         second: l315 as u8,
@@ -12150,14 +12150,14 @@ pub mod wasi {
                                                                             let l325 = i32::from(*base.add(46).cast::<u8>());
                                                                             let l326 = *base.add(48).cast::<i32>();
                                                                             let l327 = *base.add(52).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l320,
                                                                                         month: l321 as u8,
                                                                                         day: l322 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l323 as u8,
                                                                                         minute: l324 as u8,
                                                                                         second: l325 as u8,
@@ -12179,14 +12179,14 @@ pub mod wasi {
                                                                             let l333 = i32::from(*base.add(46).cast::<u8>());
                                                                             let l334 = *base.add(48).cast::<i32>();
                                                                             let l335 = *base.add(52).cast::<i32>();
-                                                                            super::super::super::wasi::rdbms::types::Timestamptz {
-                                                                                timestamp: super::super::super::wasi::rdbms::types::Timestamp {
-                                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Timestamptz {
+                                                                                timestamp: super::super::super::golem::rdbms::types::Timestamp {
+                                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                                         year: l328,
                                                                                         month: l329 as u8,
                                                                                         day: l330 as u8,
                                                                                     },
-                                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                                         hour: l331 as u8,
                                                                                         minute: l332 as u8,
                                                                                         second: l333 as u8,
@@ -12219,7 +12219,7 @@ pub mod wasi {
                                                                             let l338 = *base.add(12).cast::<i32>();
                                                                             let l339 = i32::from(*base.add(16).cast::<u8>());
                                                                             let l340 = i32::from(*base.add(17).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l338,
                                                                                 month: l339 as u8,
                                                                                 day: l340 as u8,
@@ -12232,7 +12232,7 @@ pub mod wasi {
                                                                             let l341 = *base.add(12).cast::<i32>();
                                                                             let l342 = i32::from(*base.add(16).cast::<u8>());
                                                                             let l343 = i32::from(*base.add(17).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l341,
                                                                                 month: l342 as u8,
                                                                                 day: l343 as u8,
@@ -12252,7 +12252,7 @@ pub mod wasi {
                                                                             let l346 = *base.add(24).cast::<i32>();
                                                                             let l347 = i32::from(*base.add(28).cast::<u8>());
                                                                             let l348 = i32::from(*base.add(29).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l346,
                                                                                 month: l347 as u8,
                                                                                 day: l348 as u8,
@@ -12265,7 +12265,7 @@ pub mod wasi {
                                                                             let l349 = *base.add(24).cast::<i32>();
                                                                             let l350 = i32::from(*base.add(28).cast::<u8>());
                                                                             let l351 = i32::from(*base.add(29).cast::<u8>());
-                                                                            super::super::super::wasi::rdbms::types::Date {
+                                                                            super::super::super::golem::rdbms::types::Date {
                                                                                 year: l349,
                                                                                 month: l350 as u8,
                                                                                 day: l351 as u8,
@@ -12663,11 +12663,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (11i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date5,
                                             time: time5,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year6,
                                             month: month6,
                                             day: day6,
@@ -12675,7 +12675,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year6);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour7,
                                             minute: minute7,
                                             second: second7,
@@ -12688,15 +12688,15 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamptz(e) => {
                                         *base.add(0).cast::<u8>() = (12i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp8,
                                             offset: offset8,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date9,
                                             time: time9,
                                         } = timestamp8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year10,
                                             month: month10,
                                             day: day10,
@@ -12704,7 +12704,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year10);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour11,
                                             minute: minute11,
                                             second: second11,
@@ -12718,7 +12718,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year12,
                                             month: month12,
                                             day: day12,
@@ -12729,7 +12729,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour13,
                                             minute: minute13,
                                             second: second13,
@@ -12742,11 +12742,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timetz(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timetz {
+                                        let super::super::super::golem::rdbms::types::Timetz {
                                             time: time14,
                                             offset: offset14,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour15,
                                             minute: minute15,
                                             second: second15,
@@ -12811,7 +12811,7 @@ pub mod wasi {
                                     }
                                     DbValue::Uuid(e) => {
                                         *base.add(0).cast::<u8>() = (22i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Uuid {
+                                        let super::super::super::golem::rdbms::types::Uuid {
                                             high_bits: high_bits22,
                                             low_bits: low_bits22,
                                         } = e;
@@ -12820,7 +12820,7 @@ pub mod wasi {
                                     }
                                     DbValue::Inet(e) => {
                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V25;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V25;
                                         match e {
                                             V25::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -12855,7 +12855,7 @@ pub mod wasi {
                                     }
                                     DbValue::Cidr(e) => {
                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V28;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V28;
                                         match e {
                                             V28::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -12890,7 +12890,7 @@ pub mod wasi {
                                     }
                                     DbValue::Macaddr(e) => {
                                         *base.add(0).cast::<u8>() = (25i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::MacAddress {
+                                        let super::super::super::golem::rdbms::types::MacAddress {
                                             octets: octets29,
                                         } = e;
                                         let (t30_0, t30_1, t30_2, t30_3, t30_4, t30_5) = octets29;
@@ -13073,11 +13073,11 @@ pub mod wasi {
                                         match start40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date41,
                                                     time: time41,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year42,
                                                     month: month42,
                                                     day: day42,
@@ -13085,7 +13085,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year42);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour43,
                                                     minute: minute43,
                                                     second: second43,
@@ -13098,11 +13098,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date44,
                                                     time: time44,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year45,
                                                     month: month45,
                                                     day: day45,
@@ -13110,7 +13110,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year45);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month45)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day45)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour46,
                                                     minute: minute46,
                                                     second: second46,
@@ -13128,11 +13128,11 @@ pub mod wasi {
                                         match end40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date47,
                                                     time: time47,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year48,
                                                     month: month48,
                                                     day: day48,
@@ -13140,7 +13140,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year48);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month48)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day48)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour49,
                                                     minute: minute49,
                                                     second: second49,
@@ -13153,11 +13153,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date50,
                                                     time: time50,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year51,
                                                     month: month51,
                                                     day: day51,
@@ -13165,7 +13165,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year51);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month51)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day51)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour52,
                                                     minute: minute52,
                                                     second: second52,
@@ -13187,15 +13187,15 @@ pub mod wasi {
                                         match start53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp54,
                                                     offset: offset54,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date55,
                                                     time: time55,
                                                 } = timestamp54;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year56,
                                                     month: month56,
                                                     day: day56,
@@ -13203,7 +13203,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year56);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month56)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day56)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour57,
                                                     minute: minute57,
                                                     second: second57,
@@ -13217,15 +13217,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp58,
                                                     offset: offset58,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date59,
                                                     time: time59,
                                                 } = timestamp58;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year60,
                                                     month: month60,
                                                     day: day60,
@@ -13233,7 +13233,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year60);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month60)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day60)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour61,
                                                     minute: minute61,
                                                     second: second61,
@@ -13252,15 +13252,15 @@ pub mod wasi {
                                         match end53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp62,
                                                     offset: offset62,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date63,
                                                     time: time63,
                                                 } = timestamp62;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year64,
                                                     month: month64,
                                                     day: day64,
@@ -13268,7 +13268,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year64);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month64)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day64)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour65,
                                                     minute: minute65,
                                                     second: second65,
@@ -13282,15 +13282,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp66,
                                                     offset: offset66,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date67,
                                                     time: time67,
                                                 } = timestamp66;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year68,
                                                     month: month68,
                                                     day: day68,
@@ -13298,7 +13298,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year68);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month68)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day68)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour69,
                                                     minute: minute69,
                                                     second: second69,
@@ -13321,7 +13321,7 @@ pub mod wasi {
                                         match start70 {
                                             Datebound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year71,
                                                     month: month71,
                                                     day: day71,
@@ -13332,7 +13332,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year72,
                                                     month: month72,
                                                     day: day72,
@@ -13348,7 +13348,7 @@ pub mod wasi {
                                         match end70 {
                                             Datebound::Included(e) => {
                                                 *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year73,
                                                     month: month73,
                                                     day: day73,
@@ -13359,7 +13359,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year74,
                                                     month: month74,
                                                     day: day74,
@@ -13510,7 +13510,7 @@ pub mod wasi {
                         }
                         let ptr88 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.query-stream"]
                             fn wit_import(
@@ -13744,11 +13744,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (11i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date5,
                                             time: time5,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year6,
                                             month: month6,
                                             day: day6,
@@ -13756,7 +13756,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year6);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour7,
                                             minute: minute7,
                                             second: second7,
@@ -13769,15 +13769,15 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamptz(e) => {
                                         *base.add(0).cast::<u8>() = (12i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamptz {
+                                        let super::super::super::golem::rdbms::types::Timestamptz {
                                             timestamp: timestamp8,
                                             offset: offset8,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date9,
                                             time: time9,
                                         } = timestamp8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year10,
                                             month: month10,
                                             day: day10,
@@ -13785,7 +13785,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year10);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour11,
                                             minute: minute11,
                                             second: second11,
@@ -13799,7 +13799,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year12,
                                             month: month12,
                                             day: day12,
@@ -13810,7 +13810,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour13,
                                             minute: minute13,
                                             second: second13,
@@ -13823,11 +13823,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timetz(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timetz {
+                                        let super::super::super::golem::rdbms::types::Timetz {
                                             time: time14,
                                             offset: offset14,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour15,
                                             minute: minute15,
                                             second: second15,
@@ -13892,7 +13892,7 @@ pub mod wasi {
                                     }
                                     DbValue::Uuid(e) => {
                                         *base.add(0).cast::<u8>() = (22i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Uuid {
+                                        let super::super::super::golem::rdbms::types::Uuid {
                                             high_bits: high_bits22,
                                             low_bits: low_bits22,
                                         } = e;
@@ -13901,7 +13901,7 @@ pub mod wasi {
                                     }
                                     DbValue::Inet(e) => {
                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V25;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V25;
                                         match e {
                                             V25::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -13936,7 +13936,7 @@ pub mod wasi {
                                     }
                                     DbValue::Cidr(e) => {
                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                        use super::super::super::wasi::rdbms::types::IpAddress as V28;
+                                        use super::super::super::golem::rdbms::types::IpAddress as V28;
                                         match e {
                                             V28::Ipv4(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -13971,7 +13971,7 @@ pub mod wasi {
                                     }
                                     DbValue::Macaddr(e) => {
                                         *base.add(0).cast::<u8>() = (25i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::MacAddress {
+                                        let super::super::super::golem::rdbms::types::MacAddress {
                                             octets: octets29,
                                         } = e;
                                         let (t30_0, t30_1, t30_2, t30_3, t30_4, t30_5) = octets29;
@@ -14154,11 +14154,11 @@ pub mod wasi {
                                         match start40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date41,
                                                     time: time41,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year42,
                                                     month: month42,
                                                     day: day42,
@@ -14166,7 +14166,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year42);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour43,
                                                     minute: minute43,
                                                     second: second43,
@@ -14179,11 +14179,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date44,
                                                     time: time44,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year45,
                                                     month: month45,
                                                     day: day45,
@@ -14191,7 +14191,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year45);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month45)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day45)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour46,
                                                     minute: minute46,
                                                     second: second46,
@@ -14209,11 +14209,11 @@ pub mod wasi {
                                         match end40 {
                                             Tsbound::Included(e) => {
                                                 *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date47,
                                                     time: time47,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year48,
                                                     month: month48,
                                                     day: day48,
@@ -14221,7 +14221,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year48);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month48)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day48)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour49,
                                                     minute: minute49,
                                                     second: second49,
@@ -14234,11 +14234,11 @@ pub mod wasi {
                                             }
                                             Tsbound::Excluded(e) => {
                                                 *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date50,
                                                     time: time50,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year51,
                                                     month: month51,
                                                     day: day51,
@@ -14246,7 +14246,7 @@ pub mod wasi {
                                                 *base.add(32).cast::<i32>() = _rt::as_i32(year51);
                                                 *base.add(36).cast::<u8>() = (_rt::as_i32(month51)) as u8;
                                                 *base.add(37).cast::<u8>() = (_rt::as_i32(day51)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour52,
                                                     minute: minute52,
                                                     second: second52,
@@ -14268,15 +14268,15 @@ pub mod wasi {
                                         match start53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp54,
                                                     offset: offset54,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date55,
                                                     time: time55,
                                                 } = timestamp54;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year56,
                                                     month: month56,
                                                     day: day56,
@@ -14284,7 +14284,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year56);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month56)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day56)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour57,
                                                     minute: minute57,
                                                     second: second57,
@@ -14298,15 +14298,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp58,
                                                     offset: offset58,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date59,
                                                     time: time59,
                                                 } = timestamp58;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year60,
                                                     month: month60,
                                                     day: day60,
@@ -14314,7 +14314,7 @@ pub mod wasi {
                                                 *base.add(12).cast::<i32>() = _rt::as_i32(year60);
                                                 *base.add(16).cast::<u8>() = (_rt::as_i32(month60)) as u8;
                                                 *base.add(17).cast::<u8>() = (_rt::as_i32(day60)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour61,
                                                     minute: minute61,
                                                     second: second61,
@@ -14333,15 +14333,15 @@ pub mod wasi {
                                         match end53 {
                                             Tstzbound::Included(e) => {
                                                 *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp62,
                                                     offset: offset62,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date63,
                                                     time: time63,
                                                 } = timestamp62;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year64,
                                                     month: month64,
                                                     day: day64,
@@ -14349,7 +14349,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year64);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month64)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day64)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour65,
                                                     minute: minute65,
                                                     second: second65,
@@ -14363,15 +14363,15 @@ pub mod wasi {
                                             }
                                             Tstzbound::Excluded(e) => {
                                                 *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Timestamptz {
+                                                let super::super::super::golem::rdbms::types::Timestamptz {
                                                     timestamp: timestamp66,
                                                     offset: offset66,
                                                 } = e;
-                                                let super::super::super::wasi::rdbms::types::Timestamp {
+                                                let super::super::super::golem::rdbms::types::Timestamp {
                                                     date: date67,
                                                     time: time67,
                                                 } = timestamp66;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year68,
                                                     month: month68,
                                                     day: day68,
@@ -14379,7 +14379,7 @@ pub mod wasi {
                                                 *base.add(36).cast::<i32>() = _rt::as_i32(year68);
                                                 *base.add(40).cast::<u8>() = (_rt::as_i32(month68)) as u8;
                                                 *base.add(41).cast::<u8>() = (_rt::as_i32(day68)) as u8;
-                                                let super::super::super::wasi::rdbms::types::Time {
+                                                let super::super::super::golem::rdbms::types::Time {
                                                     hour: hour69,
                                                     minute: minute69,
                                                     second: second69,
@@ -14402,7 +14402,7 @@ pub mod wasi {
                                         match start70 {
                                             Datebound::Included(e) => {
                                                 *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year71,
                                                     month: month71,
                                                     day: day71,
@@ -14413,7 +14413,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year72,
                                                     month: month72,
                                                     day: day72,
@@ -14429,7 +14429,7 @@ pub mod wasi {
                                         match end70 {
                                             Datebound::Included(e) => {
                                                 *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year73,
                                                     month: month73,
                                                     day: day73,
@@ -14440,7 +14440,7 @@ pub mod wasi {
                                             }
                                             Datebound::Excluded(e) => {
                                                 *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                let super::super::super::wasi::rdbms::types::Date {
+                                                let super::super::super::golem::rdbms::types::Date {
                                                     year: year74,
                                                     month: month74,
                                                     day: day74,
@@ -14591,7 +14591,7 @@ pub mod wasi {
                         }
                         let ptr88 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.execute"]
                             fn wit_import(
@@ -14735,7 +14735,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.commit"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -14847,7 +14847,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/postgres@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.rollback"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -14955,9 +14955,9 @@ pub mod wasi {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
-            pub type Date = super::super::super::wasi::rdbms::types::Date;
-            pub type Time = super::super::super::wasi::rdbms::types::Time;
-            pub type Timestamp = super::super::super::wasi::rdbms::types::Timestamp;
+            pub type Date = super::super::super::golem::rdbms::types::Date;
+            pub type Time = super::super::super::golem::rdbms::types::Time;
+            pub type Timestamp = super::super::super::golem::rdbms::types::Timestamp;
             #[derive(Clone)]
             pub enum Error {
                 ConnectionFailure(_rt::String),
@@ -15386,7 +15386,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]db-result-stream"]
                             fn drop(_: u32);
@@ -15423,7 +15423,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]db-connection"]
                             fn drop(_: u32);
@@ -15460,7 +15460,7 @@ pub mod wasi {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]db-transaction"]
                             fn drop(_: u32);
@@ -15480,7 +15480,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-result-stream.get-columns"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -15581,7 +15581,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-result-stream.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -15724,7 +15724,7 @@ pub mod wasi {
                                                                 let l23 = *base.add(8).cast::<i32>();
                                                                 let l24 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l25 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Date {
                                                                     year: l23,
                                                                     month: l24 as u8,
                                                                     day: l25 as u8,
@@ -15741,13 +15741,13 @@ pub mod wasi {
                                                                 let l30 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l31 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l32 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l26,
                                                                         month: l27 as u8,
                                                                         day: l28 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l29 as u8,
                                                                         minute: l30 as u8,
                                                                         second: l31 as u8,
@@ -15766,13 +15766,13 @@ pub mod wasi {
                                                                 let l37 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l38 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l39 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l33,
                                                                         month: l34 as u8,
                                                                         day: l35 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l36 as u8,
                                                                         minute: l37 as u8,
                                                                         second: l38 as u8,
@@ -15788,7 +15788,7 @@ pub mod wasi {
                                                                 let l41 = i32::from(*base.add(9).cast::<u8>());
                                                                 let l42 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l43 = *base.add(12).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Time {
                                                                     hour: l40 as u8,
                                                                     minute: l41 as u8,
                                                                     second: l42 as u8,
@@ -16042,7 +16042,7 @@ pub mod wasi {
                         let len0 = vec0.len();
                         let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[static]db-connection.open"]
                             fn wit_import(_: *mut u8, _: usize, _: *mut u8);
@@ -16247,7 +16247,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year2,
                                             month: month2,
                                             day: day2,
@@ -16258,11 +16258,11 @@ pub mod wasi {
                                     }
                                     DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date3,
                                             time: time3,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year4,
                                             month: month4,
                                             day: day4,
@@ -16270,7 +16270,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year4);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month4)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day4)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour5,
                                             minute: minute5,
                                             second: second5,
@@ -16283,11 +16283,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date6,
                                             time: time6,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year7,
                                             month: month7,
                                             day: day7,
@@ -16295,7 +16295,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year7);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month7)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day7)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour8,
                                             minute: minute8,
                                             second: second8,
@@ -16308,7 +16308,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour9,
                                             minute: minute9,
                                             second: second9,
@@ -16481,7 +16481,7 @@ pub mod wasi {
                         }
                         let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.query"]
                             fn wit_import(
@@ -16728,7 +16728,7 @@ pub mod wasi {
                                                                 let l62 = *base.add(8).cast::<i32>();
                                                                 let l63 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l64 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Date {
                                                                     year: l62,
                                                                     month: l63 as u8,
                                                                     day: l64 as u8,
@@ -16745,13 +16745,13 @@ pub mod wasi {
                                                                 let l69 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l70 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l71 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l65,
                                                                         month: l66 as u8,
                                                                         day: l67 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l68 as u8,
                                                                         minute: l69 as u8,
                                                                         second: l70 as u8,
@@ -16770,13 +16770,13 @@ pub mod wasi {
                                                                 let l76 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l77 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l78 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l72,
                                                                         month: l73 as u8,
                                                                         day: l74 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l75 as u8,
                                                                         minute: l76 as u8,
                                                                         second: l77 as u8,
@@ -16792,7 +16792,7 @@ pub mod wasi {
                                                                 let l80 = i32::from(*base.add(9).cast::<u8>());
                                                                 let l81 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l82 = *base.add(12).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Time {
                                                                     hour: l79 as u8,
                                                                     minute: l80 as u8,
                                                                     second: l81 as u8,
@@ -17216,7 +17216,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year2,
                                             month: month2,
                                             day: day2,
@@ -17227,11 +17227,11 @@ pub mod wasi {
                                     }
                                     DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date3,
                                             time: time3,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year4,
                                             month: month4,
                                             day: day4,
@@ -17239,7 +17239,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year4);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month4)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day4)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour5,
                                             minute: minute5,
                                             second: second5,
@@ -17252,11 +17252,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date6,
                                             time: time6,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year7,
                                             month: month7,
                                             day: day7,
@@ -17264,7 +17264,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year7);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month7)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day7)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour8,
                                             minute: minute8,
                                             second: second8,
@@ -17277,7 +17277,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour9,
                                             minute: minute9,
                                             second: second9,
@@ -17450,7 +17450,7 @@ pub mod wasi {
                         }
                         let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.query-stream"]
                             fn wit_import(
@@ -17684,7 +17684,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year2,
                                             month: month2,
                                             day: day2,
@@ -17695,11 +17695,11 @@ pub mod wasi {
                                     }
                                     DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date3,
                                             time: time3,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year4,
                                             month: month4,
                                             day: day4,
@@ -17707,7 +17707,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year4);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month4)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day4)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour5,
                                             minute: minute5,
                                             second: second5,
@@ -17720,11 +17720,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date6,
                                             time: time6,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year7,
                                             month: month7,
                                             day: day7,
@@ -17732,7 +17732,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year7);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month7)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day7)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour8,
                                             minute: minute8,
                                             second: second8,
@@ -17745,7 +17745,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour9,
                                             minute: minute9,
                                             second: second9,
@@ -17918,7 +17918,7 @@ pub mod wasi {
                         }
                         let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.execute"]
                             fn wit_import(
@@ -18062,7 +18062,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-connection.begin-transaction"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -18267,7 +18267,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year2,
                                             month: month2,
                                             day: day2,
@@ -18278,11 +18278,11 @@ pub mod wasi {
                                     }
                                     DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date3,
                                             time: time3,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year4,
                                             month: month4,
                                             day: day4,
@@ -18290,7 +18290,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year4);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month4)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day4)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour5,
                                             minute: minute5,
                                             second: second5,
@@ -18303,11 +18303,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date6,
                                             time: time6,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year7,
                                             month: month7,
                                             day: day7,
@@ -18315,7 +18315,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year7);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month7)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day7)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour8,
                                             minute: minute8,
                                             second: second8,
@@ -18328,7 +18328,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour9,
                                             minute: minute9,
                                             second: second9,
@@ -18501,7 +18501,7 @@ pub mod wasi {
                         }
                         let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.query"]
                             fn wit_import(
@@ -18748,7 +18748,7 @@ pub mod wasi {
                                                                 let l62 = *base.add(8).cast::<i32>();
                                                                 let l63 = i32::from(*base.add(12).cast::<u8>());
                                                                 let l64 = i32::from(*base.add(13).cast::<u8>());
-                                                                super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Date {
                                                                     year: l62,
                                                                     month: l63 as u8,
                                                                     day: l64 as u8,
@@ -18765,13 +18765,13 @@ pub mod wasi {
                                                                 let l69 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l70 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l71 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l65,
                                                                         month: l66 as u8,
                                                                         day: l67 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l68 as u8,
                                                                         minute: l69 as u8,
                                                                         second: l70 as u8,
@@ -18790,13 +18790,13 @@ pub mod wasi {
                                                                 let l76 = i32::from(*base.add(17).cast::<u8>());
                                                                 let l77 = i32::from(*base.add(18).cast::<u8>());
                                                                 let l78 = *base.add(20).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Timestamp {
-                                                                    date: super::super::super::wasi::rdbms::types::Date {
+                                                                super::super::super::golem::rdbms::types::Timestamp {
+                                                                    date: super::super::super::golem::rdbms::types::Date {
                                                                         year: l72,
                                                                         month: l73 as u8,
                                                                         day: l74 as u8,
                                                                     },
-                                                                    time: super::super::super::wasi::rdbms::types::Time {
+                                                                    time: super::super::super::golem::rdbms::types::Time {
                                                                         hour: l75 as u8,
                                                                         minute: l76 as u8,
                                                                         second: l77 as u8,
@@ -18812,7 +18812,7 @@ pub mod wasi {
                                                                 let l80 = i32::from(*base.add(9).cast::<u8>());
                                                                 let l81 = i32::from(*base.add(10).cast::<u8>());
                                                                 let l82 = *base.add(12).cast::<i32>();
-                                                                super::super::super::wasi::rdbms::types::Time {
+                                                                super::super::super::golem::rdbms::types::Time {
                                                                     hour: l79 as u8,
                                                                     minute: l80 as u8,
                                                                     second: l81 as u8,
@@ -19236,7 +19236,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year2,
                                             month: month2,
                                             day: day2,
@@ -19247,11 +19247,11 @@ pub mod wasi {
                                     }
                                     DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date3,
                                             time: time3,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year4,
                                             month: month4,
                                             day: day4,
@@ -19259,7 +19259,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year4);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month4)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day4)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour5,
                                             minute: minute5,
                                             second: second5,
@@ -19272,11 +19272,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date6,
                                             time: time6,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year7,
                                             month: month7,
                                             day: day7,
@@ -19284,7 +19284,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year7);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month7)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day7)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour8,
                                             minute: minute8,
                                             second: second8,
@@ -19297,7 +19297,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour9,
                                             minute: minute9,
                                             second: second9,
@@ -19470,7 +19470,7 @@ pub mod wasi {
                         }
                         let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.query-stream"]
                             fn wit_import(
@@ -19704,7 +19704,7 @@ pub mod wasi {
                                     }
                                     DbValue::Date(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year2,
                                             month: month2,
                                             day: day2,
@@ -19715,11 +19715,11 @@ pub mod wasi {
                                     }
                                     DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date3,
                                             time: time3,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year4,
                                             month: month4,
                                             day: day4,
@@ -19727,7 +19727,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year4);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month4)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day4)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour5,
                                             minute: minute5,
                                             second: second5,
@@ -19740,11 +19740,11 @@ pub mod wasi {
                                     }
                                     DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Timestamp {
+                                        let super::super::super::golem::rdbms::types::Timestamp {
                                             date: date6,
                                             time: time6,
                                         } = e;
-                                        let super::super::super::wasi::rdbms::types::Date {
+                                        let super::super::super::golem::rdbms::types::Date {
                                             year: year7,
                                             month: month7,
                                             day: day7,
@@ -19752,7 +19752,7 @@ pub mod wasi {
                                         *base.add(8).cast::<i32>() = _rt::as_i32(year7);
                                         *base.add(12).cast::<u8>() = (_rt::as_i32(month7)) as u8;
                                         *base.add(13).cast::<u8>() = (_rt::as_i32(day7)) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour8,
                                             minute: minute8,
                                             second: second8,
@@ -19765,7 +19765,7 @@ pub mod wasi {
                                     }
                                     DbValue::Time(e) => {
                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                        let super::super::super::wasi::rdbms::types::Time {
+                                        let super::super::super::golem::rdbms::types::Time {
                                             hour: hour9,
                                             minute: minute9,
                                             second: second9,
@@ -19938,7 +19938,7 @@ pub mod wasi {
                         }
                         let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.execute"]
                             fn wit_import(
@@ -20082,7 +20082,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.commit"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -20194,7 +20194,7 @@ pub mod wasi {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        #[link(wasm_import_module = "golem:rdbms/mysql@0.0.1")]
                         extern "C" {
                             #[link_name = "[method]db-transaction.rollback"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -20309,8 +20309,8 @@ pub mod exports {
                 #[doc(hidden)]
                 static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
                 use super::super::super::super::_rt;
-                pub type PostgresDbResult = super::super::super::super::wasi::rdbms::postgres::DbResult;
-                pub type MysqlDbResult = super::super::super::super::wasi::rdbms::mysql::DbResult;
+                pub type PostgresDbResult = super::super::super::super::golem::rdbms::postgres::DbResult;
+                pub type MysqlDbResult = super::super::super::super::golem::rdbms::mysql::DbResult;
                 #[repr(u8)]
                 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
                 pub enum TransactionEnd {
@@ -20566,7 +20566,7 @@ pub mod exports {
                                                 }
                                                 MysqlResult::Query(e) => {
                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                    let super::super::super::super::wasi::rdbms::mysql::DbResult {
+                                                    let super::super::super::super::golem::rdbms::mysql::DbResult {
                                                         columns: columns15,
                                                         rows: rows15,
                                                     } = e;
@@ -20588,7 +20588,7 @@ pub mod exports {
                                                     for (i, e) in vec20.into_iter().enumerate() {
                                                         let base = result20.add(i * 32);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::mysql::DbColumn {
+                                                            let super::super::super::super::golem::rdbms::mysql::DbColumn {
                                                                 ordinal: ordinal16,
                                                                 name: name16,
                                                                 db_type: db_type16,
@@ -20601,7 +20601,7 @@ pub mod exports {
                                                             ::core::mem::forget(vec17);
                                                             *base.add(12).cast::<usize>() = len17;
                                                             *base.add(8).cast::<*mut u8>() = ptr17.cast_mut();
-                                                            use super::super::super::super::wasi::rdbms::mysql::DbColumnType as V18;
+                                                            use super::super::super::super::golem::rdbms::mysql::DbColumnType as V18;
                                                             match db_type16 {
                                                                 V18::Boolean => {
                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -20738,7 +20738,7 @@ pub mod exports {
                                                     for (i, e) in vec49.into_iter().enumerate() {
                                                         let base = result49.add(i * 8);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::mysql::DbRow {
+                                                            let super::super::super::super::golem::rdbms::mysql::DbRow {
                                                                 values: values21,
                                                             } = e;
                                                             let vec48 = values21;
@@ -20759,7 +20759,7 @@ pub mod exports {
                                                             for (i, e) in vec48.into_iter().enumerate() {
                                                                 let base = result48.add(i * 24);
                                                                 {
-                                                                    use super::super::super::super::wasi::rdbms::mysql::DbValue as V47;
+                                                                    use super::super::super::super::golem::rdbms::mysql::DbValue as V47;
                                                                     match e {
                                                                         V47::Boolean(e) => {
                                                                             *base.add(0).cast::<u8>() = (0i32) as u8;
@@ -20827,7 +20827,7 @@ pub mod exports {
                                                                         }
                                                                         V47::Date(e) => {
                                                                             *base.add(0).cast::<u8>() = (14i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year23,
                                                                                 month: month23,
                                                                                 day: day23,
@@ -20838,11 +20838,11 @@ pub mod exports {
                                                                         }
                                                                         V47::Datetime(e) => {
                                                                             *base.add(0).cast::<u8>() = (15i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date24,
                                                                                 time: time24,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year25,
                                                                                 month: month25,
                                                                                 day: day25,
@@ -20850,7 +20850,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year25);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month25)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day25)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour26,
                                                                                 minute: minute26,
                                                                                 second: second26,
@@ -20863,11 +20863,11 @@ pub mod exports {
                                                                         }
                                                                         V47::Timestamp(e) => {
                                                                             *base.add(0).cast::<u8>() = (16i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date27,
                                                                                 time: time27,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year28,
                                                                                 month: month28,
                                                                                 day: day28,
@@ -20875,7 +20875,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year28);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month28)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day28)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour29,
                                                                                 minute: minute29,
                                                                                 second: second29,
@@ -20888,7 +20888,7 @@ pub mod exports {
                                                                         }
                                                                         V47::Time(e) => {
                                                                             *base.add(0).cast::<u8>() = (17i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour30,
                                                                                 minute: minute30,
                                                                                 second: second30,
@@ -21399,7 +21399,7 @@ pub mod exports {
                                                 }
                                                 MysqlResult::Query(e) => {
                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                    let super::super::super::super::wasi::rdbms::mysql::DbResult {
+                                                    let super::super::super::super::golem::rdbms::mysql::DbResult {
                                                         columns: columns15,
                                                         rows: rows15,
                                                     } = e;
@@ -21421,7 +21421,7 @@ pub mod exports {
                                                     for (i, e) in vec20.into_iter().enumerate() {
                                                         let base = result20.add(i * 32);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::mysql::DbColumn {
+                                                            let super::super::super::super::golem::rdbms::mysql::DbColumn {
                                                                 ordinal: ordinal16,
                                                                 name: name16,
                                                                 db_type: db_type16,
@@ -21434,7 +21434,7 @@ pub mod exports {
                                                             ::core::mem::forget(vec17);
                                                             *base.add(12).cast::<usize>() = len17;
                                                             *base.add(8).cast::<*mut u8>() = ptr17.cast_mut();
-                                                            use super::super::super::super::wasi::rdbms::mysql::DbColumnType as V18;
+                                                            use super::super::super::super::golem::rdbms::mysql::DbColumnType as V18;
                                                             match db_type16 {
                                                                 V18::Boolean => {
                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -21571,7 +21571,7 @@ pub mod exports {
                                                     for (i, e) in vec49.into_iter().enumerate() {
                                                         let base = result49.add(i * 8);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::mysql::DbRow {
+                                                            let super::super::super::super::golem::rdbms::mysql::DbRow {
                                                                 values: values21,
                                                             } = e;
                                                             let vec48 = values21;
@@ -21592,7 +21592,7 @@ pub mod exports {
                                                             for (i, e) in vec48.into_iter().enumerate() {
                                                                 let base = result48.add(i * 24);
                                                                 {
-                                                                    use super::super::super::super::wasi::rdbms::mysql::DbValue as V47;
+                                                                    use super::super::super::super::golem::rdbms::mysql::DbValue as V47;
                                                                     match e {
                                                                         V47::Boolean(e) => {
                                                                             *base.add(0).cast::<u8>() = (0i32) as u8;
@@ -21660,7 +21660,7 @@ pub mod exports {
                                                                         }
                                                                         V47::Date(e) => {
                                                                             *base.add(0).cast::<u8>() = (14i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year23,
                                                                                 month: month23,
                                                                                 day: day23,
@@ -21671,11 +21671,11 @@ pub mod exports {
                                                                         }
                                                                         V47::Datetime(e) => {
                                                                             *base.add(0).cast::<u8>() = (15i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date24,
                                                                                 time: time24,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year25,
                                                                                 month: month25,
                                                                                 day: day25,
@@ -21683,7 +21683,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year25);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month25)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day25)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour26,
                                                                                 minute: minute26,
                                                                                 second: second26,
@@ -21696,11 +21696,11 @@ pub mod exports {
                                                                         }
                                                                         V47::Timestamp(e) => {
                                                                             *base.add(0).cast::<u8>() = (16i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date27,
                                                                                 time: time27,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year28,
                                                                                 month: month28,
                                                                                 day: day28,
@@ -21708,7 +21708,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year28);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month28)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day28)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour29,
                                                                                 minute: minute29,
                                                                                 second: second29,
@@ -21721,7 +21721,7 @@ pub mod exports {
                                                                         }
                                                                         V47::Time(e) => {
                                                                             *base.add(0).cast::<u8>() = (17i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour30,
                                                                                 minute: minute30,
                                                                                 second: second30,
@@ -22236,7 +22236,7 @@ pub mod exports {
                                                 }
                                                 PostgresResult::Query(e) => {
                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                    let super::super::super::super::wasi::rdbms::postgres::DbResult {
+                                                    let super::super::super::super::golem::rdbms::postgres::DbResult {
                                                         columns: columns15,
                                                         rows: rows15,
                                                     } = e;
@@ -22258,7 +22258,7 @@ pub mod exports {
                                                     for (i, e) in vec31.into_iter().enumerate() {
                                                         let base = result31.add(i * 48);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::postgres::DbColumn {
+                                                            let super::super::super::super::golem::rdbms::postgres::DbColumn {
                                                                 ordinal: ordinal16,
                                                                 name: name16,
                                                                 db_type: db_type16,
@@ -22271,7 +22271,7 @@ pub mod exports {
                                                             ::core::mem::forget(vec17);
                                                             *base.add(12).cast::<usize>() = len17;
                                                             *base.add(8).cast::<*mut u8>() = ptr17.cast_mut();
-                                                            use super::super::super::super::wasi::rdbms::postgres::DbColumnType as V29;
+                                                            use super::super::super::super::golem::rdbms::postgres::DbColumnType as V29;
                                                             match db_type16 {
                                                                 V29::Character => {
                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -22383,7 +22383,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Enumeration(e) => {
                                                                     *base.add(16).cast::<u8>() = (36i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::EnumerationType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::EnumerationType {
                                                                         name: name18,
                                                                     } = e;
                                                                     let vec19 = (name18.into_bytes()).into_boxed_slice();
@@ -22395,7 +22395,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Composite(e) => {
                                                                     *base.add(16).cast::<u8>() = (37i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::CompositeType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::CompositeType {
                                                                         name: name20,
                                                                         attributes: attributes20,
                                                                     } = e;
@@ -22438,7 +22438,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Domain(e) => {
                                                                     *base.add(16).cast::<u8>() = (38i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::DomainType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::DomainType {
                                                                         name: name25,
                                                                         base_type: base_type25,
                                                                     } = e;
@@ -22457,7 +22457,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Range(e) => {
                                                                     *base.add(16).cast::<u8>() = (40i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::RangeType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::RangeType {
                                                                         name: name27,
                                                                         base_type: base_type27,
                                                                     } = e;
@@ -22500,7 +22500,7 @@ pub mod exports {
                                                     for (i, e) in vec135.into_iter().enumerate() {
                                                         let base = result135.add(i * 8);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::postgres::DbRow {
+                                                            let super::super::super::super::golem::rdbms::postgres::DbRow {
                                                                 values: values32,
                                                             } = e;
                                                             let vec134 = values32;
@@ -22521,7 +22521,7 @@ pub mod exports {
                                                             for (i, e) in vec134.into_iter().enumerate() {
                                                                 let base = result134.add(i * 56);
                                                                 {
-                                                                    use super::super::super::super::wasi::rdbms::postgres::DbValue as V133;
+                                                                    use super::super::super::super::golem::rdbms::postgres::DbValue as V133;
                                                                     match e {
                                                                         V133::Character(e) => {
                                                                             *base.add(0).cast::<u8>() = (0i32) as u8;
@@ -22592,11 +22592,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Timestamp(e) => {
                                                                             *base.add(0).cast::<u8>() = (11i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date37,
                                                                                 time: time37,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year38,
                                                                                 month: month38,
                                                                                 day: day38,
@@ -22604,7 +22604,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year38);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month38)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day38)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour39,
                                                                                 minute: minute39,
                                                                                 second: second39,
@@ -22617,15 +22617,15 @@ pub mod exports {
                                                                         }
                                                                         V133::Timestamptz(e) => {
                                                                             *base.add(0).cast::<u8>() = (12i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                 timestamp: timestamp40,
                                                                                 offset: offset40,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date41,
                                                                                 time: time41,
                                                                             } = timestamp40;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year42,
                                                                                 month: month42,
                                                                                 day: day42,
@@ -22633,7 +22633,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year42);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour43,
                                                                                 minute: minute43,
                                                                                 second: second43,
@@ -22647,7 +22647,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Date(e) => {
                                                                             *base.add(0).cast::<u8>() = (13i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year44,
                                                                                 month: month44,
                                                                                 day: day44,
@@ -22658,7 +22658,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Time(e) => {
                                                                             *base.add(0).cast::<u8>() = (14i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour45,
                                                                                 minute: minute45,
                                                                                 second: second45,
@@ -22671,11 +22671,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Timetz(e) => {
                                                                             *base.add(0).cast::<u8>() = (15i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timetz {
+                                                                            let super::super::super::super::golem::rdbms::types::Timetz {
                                                                                 time: time46,
                                                                                 offset: offset46,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour47,
                                                                                 minute: minute47,
                                                                                 second: second47,
@@ -22689,7 +22689,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Interval(e) => {
                                                                             *base.add(0).cast::<u8>() = (16i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Interval {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Interval {
                                                                                 months: months48,
                                                                                 days: days48,
                                                                                 microseconds: microseconds48,
@@ -22745,7 +22745,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Uuid(e) => {
                                                                             *base.add(0).cast::<u8>() = (22i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Uuid {
+                                                                            let super::super::super::super::golem::rdbms::types::Uuid {
                                                                                 high_bits: high_bits54,
                                                                                 low_bits: low_bits54,
                                                                             } = e;
@@ -22754,7 +22754,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Inet(e) => {
                                                                             *base.add(0).cast::<u8>() = (23i32) as u8;
-                                                                            use super::super::super::super::wasi::rdbms::types::IpAddress as V57;
+                                                                            use super::super::super::super::golem::rdbms::types::IpAddress as V57;
                                                                             match e {
                                                                                 V57::Ipv4(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -22789,7 +22789,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Cidr(e) => {
                                                                             *base.add(0).cast::<u8>() = (24i32) as u8;
-                                                                            use super::super::super::super::wasi::rdbms::types::IpAddress as V60;
+                                                                            use super::super::super::super::golem::rdbms::types::IpAddress as V60;
                                                                             match e {
                                                                                 V60::Ipv4(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -22824,7 +22824,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Macaddr(e) => {
                                                                             *base.add(0).cast::<u8>() = (25i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::MacAddress {
+                                                                            let super::super::super::super::golem::rdbms::types::MacAddress {
                                                                                 octets: octets61,
                                                                             } = e;
                                                                             let (t62_0, t62_1, t62_2, t62_3, t62_4, t62_5) = octets61;
@@ -22895,11 +22895,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Int4range(e) => {
                                                                             *base.add(0).cast::<u8>() = (28i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Int4range {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Int4range {
                                                                                 start: start65,
                                                                                 end: end65,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int4bound as V66;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int4bound as V66;
                                                                             match start65 {
                                                                                 V66::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -22913,7 +22913,7 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int4bound as V67;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int4bound as V67;
                                                                             match end65 {
                                                                                 V67::Included(e) => {
                                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -22930,11 +22930,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Int8range(e) => {
                                                                             *base.add(0).cast::<u8>() = (29i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Int8range {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Int8range {
                                                                                 start: start68,
                                                                                 end: end68,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int8bound as V69;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int8bound as V69;
                                                                             match start68 {
                                                                                 V69::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -22948,7 +22948,7 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int8bound as V70;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int8bound as V70;
                                                                             match end68 {
                                                                                 V70::Included(e) => {
                                                                                     *base.add(24).cast::<u8>() = (0i32) as u8;
@@ -22965,11 +22965,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Numrange(e) => {
                                                                             *base.add(0).cast::<u8>() = (30i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Numrange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Numrange {
                                                                                 start: start71,
                                                                                 end: end71,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Numbound as V74;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Numbound as V74;
                                                                             match start71 {
                                                                                 V74::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -22993,7 +22993,7 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Numbound as V77;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Numbound as V77;
                                                                             match end71 {
                                                                                 V77::Included(e) => {
                                                                                     *base.add(20).cast::<u8>() = (0i32) as u8;
@@ -23020,19 +23020,19 @@ pub mod exports {
                                                                         }
                                                                         V133::Tsrange(e) => {
                                                                             *base.add(0).cast::<u8>() = (31i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Tsrange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Tsrange {
                                                                                 start: start78,
                                                                                 end: end78,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tsbound as V85;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tsbound as V85;
                                                                             match start78 {
                                                                                 V85::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date79,
                                                                                         time: time79,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year80,
                                                                                         month: month80,
                                                                                         day: day80,
@@ -23040,7 +23040,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year80);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month80)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day80)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour81,
                                                                                         minute: minute81,
                                                                                         second: second81,
@@ -23053,11 +23053,11 @@ pub mod exports {
                                                                                 }
                                                                                 V85::Excluded(e) => {
                                                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date82,
                                                                                         time: time82,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year83,
                                                                                         month: month83,
                                                                                         day: day83,
@@ -23065,7 +23065,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year83);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month83)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day83)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour84,
                                                                                         minute: minute84,
                                                                                         second: second84,
@@ -23080,15 +23080,15 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tsbound as V92;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tsbound as V92;
                                                                             match end78 {
                                                                                 V92::Included(e) => {
                                                                                     *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date86,
                                                                                         time: time86,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year87,
                                                                                         month: month87,
                                                                                         day: day87,
@@ -23096,7 +23096,7 @@ pub mod exports {
                                                                                     *base.add(32).cast::<i32>() = _rt::as_i32(year87);
                                                                                     *base.add(36).cast::<u8>() = (_rt::as_i32(month87)) as u8;
                                                                                     *base.add(37).cast::<u8>() = (_rt::as_i32(day87)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour88,
                                                                                         minute: minute88,
                                                                                         second: second88,
@@ -23109,11 +23109,11 @@ pub mod exports {
                                                                                 }
                                                                                 V92::Excluded(e) => {
                                                                                     *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date89,
                                                                                         time: time89,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year90,
                                                                                         month: month90,
                                                                                         day: day90,
@@ -23121,7 +23121,7 @@ pub mod exports {
                                                                                     *base.add(32).cast::<i32>() = _rt::as_i32(year90);
                                                                                     *base.add(36).cast::<u8>() = (_rt::as_i32(month90)) as u8;
                                                                                     *base.add(37).cast::<u8>() = (_rt::as_i32(day90)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour91,
                                                                                         minute: minute91,
                                                                                         second: second91,
@@ -23139,23 +23139,23 @@ pub mod exports {
                                                                         }
                                                                         V133::Tstzrange(e) => {
                                                                             *base.add(0).cast::<u8>() = (32i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Tstzrange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Tstzrange {
                                                                                 start: start93,
                                                                                 end: end93,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tstzbound as V102;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tstzbound as V102;
                                                                             match start93 {
                                                                                 V102::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp94,
                                                                                         offset: offset94,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date95,
                                                                                         time: time95,
                                                                                     } = timestamp94;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year96,
                                                                                         month: month96,
                                                                                         day: day96,
@@ -23163,7 +23163,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year96);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month96)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day96)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour97,
                                                                                         minute: minute97,
                                                                                         second: second97,
@@ -23177,15 +23177,15 @@ pub mod exports {
                                                                                 }
                                                                                 V102::Excluded(e) => {
                                                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp98,
                                                                                         offset: offset98,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date99,
                                                                                         time: time99,
                                                                                     } = timestamp98;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year100,
                                                                                         month: month100,
                                                                                         day: day100,
@@ -23193,7 +23193,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year100);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month100)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day100)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour101,
                                                                                         minute: minute101,
                                                                                         second: second101,
@@ -23209,19 +23209,19 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tstzbound as V111;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tstzbound as V111;
                                                                             match end93 {
                                                                                 V111::Included(e) => {
                                                                                     *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp103,
                                                                                         offset: offset103,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date104,
                                                                                         time: time104,
                                                                                     } = timestamp103;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year105,
                                                                                         month: month105,
                                                                                         day: day105,
@@ -23229,7 +23229,7 @@ pub mod exports {
                                                                                     *base.add(36).cast::<i32>() = _rt::as_i32(year105);
                                                                                     *base.add(40).cast::<u8>() = (_rt::as_i32(month105)) as u8;
                                                                                     *base.add(41).cast::<u8>() = (_rt::as_i32(day105)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour106,
                                                                                         minute: minute106,
                                                                                         second: second106,
@@ -23243,15 +23243,15 @@ pub mod exports {
                                                                                 }
                                                                                 V111::Excluded(e) => {
                                                                                     *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp107,
                                                                                         offset: offset107,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date108,
                                                                                         time: time108,
                                                                                     } = timestamp107;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year109,
                                                                                         month: month109,
                                                                                         day: day109,
@@ -23259,7 +23259,7 @@ pub mod exports {
                                                                                     *base.add(36).cast::<i32>() = _rt::as_i32(year109);
                                                                                     *base.add(40).cast::<u8>() = (_rt::as_i32(month109)) as u8;
                                                                                     *base.add(41).cast::<u8>() = (_rt::as_i32(day109)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour110,
                                                                                         minute: minute110,
                                                                                         second: second110,
@@ -23278,15 +23278,15 @@ pub mod exports {
                                                                         }
                                                                         V133::Daterange(e) => {
                                                                             *base.add(0).cast::<u8>() = (33i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Daterange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Daterange {
                                                                                 start: start112,
                                                                                 end: end112,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Datebound as V115;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Datebound as V115;
                                                                             match start112 {
                                                                                 V115::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year113,
                                                                                         month: month113,
                                                                                         day: day113,
@@ -23297,7 +23297,7 @@ pub mod exports {
                                                                                 }
                                                                                 V115::Excluded(e) => {
                                                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year114,
                                                                                         month: month114,
                                                                                         day: day114,
@@ -23310,11 +23310,11 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Datebound as V118;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Datebound as V118;
                                                                             match end112 {
                                                                                 V118::Included(e) => {
                                                                                     *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year116,
                                                                                         month: month116,
                                                                                         day: day116,
@@ -23325,7 +23325,7 @@ pub mod exports {
                                                                                 }
                                                                                 V118::Excluded(e) => {
                                                                                     *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year117,
                                                                                         month: month117,
                                                                                         day: day117,
@@ -23349,7 +23349,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Enumeration(e) => {
                                                                             *base.add(0).cast::<u8>() = (36i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Enumeration {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Enumeration {
                                                                                 name: name119,
                                                                                 value: value119,
                                                                             } = e;
@@ -23368,7 +23368,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Composite(e) => {
                                                                             *base.add(0).cast::<u8>() = (37i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Composite {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Composite {
                                                                                 name: name122,
                                                                                 values: values122,
                                                                             } = e;
@@ -23404,7 +23404,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Domain(e) => {
                                                                             *base.add(0).cast::<u8>() = (38i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Domain {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Domain {
                                                                                 name: name125,
                                                                                 value: value125,
                                                                             } = e;
@@ -23445,7 +23445,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Range(e) => {
                                                                             *base.add(0).cast::<u8>() = (40i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Range {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Range {
                                                                                 name: name128,
                                                                                 value: value128,
                                                                             } = e;
@@ -23455,11 +23455,11 @@ pub mod exports {
                                                                             ::core::mem::forget(vec129);
                                                                             *base.add(12).cast::<usize>() = len129;
                                                                             *base.add(8).cast::<*mut u8>() = ptr129.cast_mut();
-                                                                            let super::super::super::super::wasi::rdbms::postgres::ValuesRange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::ValuesRange {
                                                                                 start: start130,
                                                                                 end: end130,
                                                                             } = value128;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::ValueBound as V131;
+                                                                            use super::super::super::super::golem::rdbms::postgres::ValueBound as V131;
                                                                             match start130 {
                                                                                 V131::Included(e) => {
                                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -23473,7 +23473,7 @@ pub mod exports {
                                                                                     *base.add(16).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::ValueBound as V132;
+                                                                            use super::super::super::super::golem::rdbms::postgres::ValueBound as V132;
                                                                             match end130 {
                                                                                 V132::Included(e) => {
                                                                                     *base.add(24).cast::<u8>() = (0i32) as u8;
@@ -23928,7 +23928,7 @@ pub mod exports {
                                                 }
                                                 PostgresResult::Query(e) => {
                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                    let super::super::super::super::wasi::rdbms::postgres::DbResult {
+                                                    let super::super::super::super::golem::rdbms::postgres::DbResult {
                                                         columns: columns15,
                                                         rows: rows15,
                                                     } = e;
@@ -23950,7 +23950,7 @@ pub mod exports {
                                                     for (i, e) in vec31.into_iter().enumerate() {
                                                         let base = result31.add(i * 48);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::postgres::DbColumn {
+                                                            let super::super::super::super::golem::rdbms::postgres::DbColumn {
                                                                 ordinal: ordinal16,
                                                                 name: name16,
                                                                 db_type: db_type16,
@@ -23963,7 +23963,7 @@ pub mod exports {
                                                             ::core::mem::forget(vec17);
                                                             *base.add(12).cast::<usize>() = len17;
                                                             *base.add(8).cast::<*mut u8>() = ptr17.cast_mut();
-                                                            use super::super::super::super::wasi::rdbms::postgres::DbColumnType as V29;
+                                                            use super::super::super::super::golem::rdbms::postgres::DbColumnType as V29;
                                                             match db_type16 {
                                                                 V29::Character => {
                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -24075,7 +24075,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Enumeration(e) => {
                                                                     *base.add(16).cast::<u8>() = (36i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::EnumerationType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::EnumerationType {
                                                                         name: name18,
                                                                     } = e;
                                                                     let vec19 = (name18.into_bytes()).into_boxed_slice();
@@ -24087,7 +24087,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Composite(e) => {
                                                                     *base.add(16).cast::<u8>() = (37i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::CompositeType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::CompositeType {
                                                                         name: name20,
                                                                         attributes: attributes20,
                                                                     } = e;
@@ -24130,7 +24130,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Domain(e) => {
                                                                     *base.add(16).cast::<u8>() = (38i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::DomainType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::DomainType {
                                                                         name: name25,
                                                                         base_type: base_type25,
                                                                     } = e;
@@ -24149,7 +24149,7 @@ pub mod exports {
                                                                 }
                                                                 V29::Range(e) => {
                                                                     *base.add(16).cast::<u8>() = (40i32) as u8;
-                                                                    let super::super::super::super::wasi::rdbms::postgres::RangeType {
+                                                                    let super::super::super::super::golem::rdbms::postgres::RangeType {
                                                                         name: name27,
                                                                         base_type: base_type27,
                                                                     } = e;
@@ -24192,7 +24192,7 @@ pub mod exports {
                                                     for (i, e) in vec135.into_iter().enumerate() {
                                                         let base = result135.add(i * 8);
                                                         {
-                                                            let super::super::super::super::wasi::rdbms::postgres::DbRow {
+                                                            let super::super::super::super::golem::rdbms::postgres::DbRow {
                                                                 values: values32,
                                                             } = e;
                                                             let vec134 = values32;
@@ -24213,7 +24213,7 @@ pub mod exports {
                                                             for (i, e) in vec134.into_iter().enumerate() {
                                                                 let base = result134.add(i * 56);
                                                                 {
-                                                                    use super::super::super::super::wasi::rdbms::postgres::DbValue as V133;
+                                                                    use super::super::super::super::golem::rdbms::postgres::DbValue as V133;
                                                                     match e {
                                                                         V133::Character(e) => {
                                                                             *base.add(0).cast::<u8>() = (0i32) as u8;
@@ -24284,11 +24284,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Timestamp(e) => {
                                                                             *base.add(0).cast::<u8>() = (11i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date37,
                                                                                 time: time37,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year38,
                                                                                 month: month38,
                                                                                 day: day38,
@@ -24296,7 +24296,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year38);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month38)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day38)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour39,
                                                                                 minute: minute39,
                                                                                 second: second39,
@@ -24309,15 +24309,15 @@ pub mod exports {
                                                                         }
                                                                         V133::Timestamptz(e) => {
                                                                             *base.add(0).cast::<u8>() = (12i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                 timestamp: timestamp40,
                                                                                 offset: offset40,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                            let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                 date: date41,
                                                                                 time: time41,
                                                                             } = timestamp40;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year42,
                                                                                 month: month42,
                                                                                 day: day42,
@@ -24325,7 +24325,7 @@ pub mod exports {
                                                                             *base.add(8).cast::<i32>() = _rt::as_i32(year42);
                                                                             *base.add(12).cast::<u8>() = (_rt::as_i32(month42)) as u8;
                                                                             *base.add(13).cast::<u8>() = (_rt::as_i32(day42)) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour43,
                                                                                 minute: minute43,
                                                                                 second: second43,
@@ -24339,7 +24339,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Date(e) => {
                                                                             *base.add(0).cast::<u8>() = (13i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Date {
+                                                                            let super::super::super::super::golem::rdbms::types::Date {
                                                                                 year: year44,
                                                                                 month: month44,
                                                                                 day: day44,
@@ -24350,7 +24350,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Time(e) => {
                                                                             *base.add(0).cast::<u8>() = (14i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour45,
                                                                                 minute: minute45,
                                                                                 second: second45,
@@ -24363,11 +24363,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Timetz(e) => {
                                                                             *base.add(0).cast::<u8>() = (15i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Timetz {
+                                                                            let super::super::super::super::golem::rdbms::types::Timetz {
                                                                                 time: time46,
                                                                                 offset: offset46,
                                                                             } = e;
-                                                                            let super::super::super::super::wasi::rdbms::types::Time {
+                                                                            let super::super::super::super::golem::rdbms::types::Time {
                                                                                 hour: hour47,
                                                                                 minute: minute47,
                                                                                 second: second47,
@@ -24381,7 +24381,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Interval(e) => {
                                                                             *base.add(0).cast::<u8>() = (16i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Interval {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Interval {
                                                                                 months: months48,
                                                                                 days: days48,
                                                                                 microseconds: microseconds48,
@@ -24437,7 +24437,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Uuid(e) => {
                                                                             *base.add(0).cast::<u8>() = (22i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::Uuid {
+                                                                            let super::super::super::super::golem::rdbms::types::Uuid {
                                                                                 high_bits: high_bits54,
                                                                                 low_bits: low_bits54,
                                                                             } = e;
@@ -24446,7 +24446,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Inet(e) => {
                                                                             *base.add(0).cast::<u8>() = (23i32) as u8;
-                                                                            use super::super::super::super::wasi::rdbms::types::IpAddress as V57;
+                                                                            use super::super::super::super::golem::rdbms::types::IpAddress as V57;
                                                                             match e {
                                                                                 V57::Ipv4(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -24481,7 +24481,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Cidr(e) => {
                                                                             *base.add(0).cast::<u8>() = (24i32) as u8;
-                                                                            use super::super::super::super::wasi::rdbms::types::IpAddress as V60;
+                                                                            use super::super::super::super::golem::rdbms::types::IpAddress as V60;
                                                                             match e {
                                                                                 V60::Ipv4(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -24516,7 +24516,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Macaddr(e) => {
                                                                             *base.add(0).cast::<u8>() = (25i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::types::MacAddress {
+                                                                            let super::super::super::super::golem::rdbms::types::MacAddress {
                                                                                 octets: octets61,
                                                                             } = e;
                                                                             let (t62_0, t62_1, t62_2, t62_3, t62_4, t62_5) = octets61;
@@ -24587,11 +24587,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Int4range(e) => {
                                                                             *base.add(0).cast::<u8>() = (28i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Int4range {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Int4range {
                                                                                 start: start65,
                                                                                 end: end65,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int4bound as V66;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int4bound as V66;
                                                                             match start65 {
                                                                                 V66::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -24605,7 +24605,7 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int4bound as V67;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int4bound as V67;
                                                                             match end65 {
                                                                                 V67::Included(e) => {
                                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -24622,11 +24622,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Int8range(e) => {
                                                                             *base.add(0).cast::<u8>() = (29i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Int8range {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Int8range {
                                                                                 start: start68,
                                                                                 end: end68,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int8bound as V69;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int8bound as V69;
                                                                             match start68 {
                                                                                 V69::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -24640,7 +24640,7 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Int8bound as V70;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Int8bound as V70;
                                                                             match end68 {
                                                                                 V70::Included(e) => {
                                                                                     *base.add(24).cast::<u8>() = (0i32) as u8;
@@ -24657,11 +24657,11 @@ pub mod exports {
                                                                         }
                                                                         V133::Numrange(e) => {
                                                                             *base.add(0).cast::<u8>() = (30i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Numrange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Numrange {
                                                                                 start: start71,
                                                                                 end: end71,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Numbound as V74;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Numbound as V74;
                                                                             match start71 {
                                                                                 V74::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
@@ -24685,7 +24685,7 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Numbound as V77;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Numbound as V77;
                                                                             match end71 {
                                                                                 V77::Included(e) => {
                                                                                     *base.add(20).cast::<u8>() = (0i32) as u8;
@@ -24712,19 +24712,19 @@ pub mod exports {
                                                                         }
                                                                         V133::Tsrange(e) => {
                                                                             *base.add(0).cast::<u8>() = (31i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Tsrange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Tsrange {
                                                                                 start: start78,
                                                                                 end: end78,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tsbound as V85;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tsbound as V85;
                                                                             match start78 {
                                                                                 V85::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date79,
                                                                                         time: time79,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year80,
                                                                                         month: month80,
                                                                                         day: day80,
@@ -24732,7 +24732,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year80);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month80)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day80)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour81,
                                                                                         minute: minute81,
                                                                                         second: second81,
@@ -24745,11 +24745,11 @@ pub mod exports {
                                                                                 }
                                                                                 V85::Excluded(e) => {
                                                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date82,
                                                                                         time: time82,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year83,
                                                                                         month: month83,
                                                                                         day: day83,
@@ -24757,7 +24757,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year83);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month83)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day83)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour84,
                                                                                         minute: minute84,
                                                                                         second: second84,
@@ -24772,15 +24772,15 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tsbound as V92;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tsbound as V92;
                                                                             match end78 {
                                                                                 V92::Included(e) => {
                                                                                     *base.add(28).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date86,
                                                                                         time: time86,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year87,
                                                                                         month: month87,
                                                                                         day: day87,
@@ -24788,7 +24788,7 @@ pub mod exports {
                                                                                     *base.add(32).cast::<i32>() = _rt::as_i32(year87);
                                                                                     *base.add(36).cast::<u8>() = (_rt::as_i32(month87)) as u8;
                                                                                     *base.add(37).cast::<u8>() = (_rt::as_i32(day87)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour88,
                                                                                         minute: minute88,
                                                                                         second: second88,
@@ -24801,11 +24801,11 @@ pub mod exports {
                                                                                 }
                                                                                 V92::Excluded(e) => {
                                                                                     *base.add(28).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date89,
                                                                                         time: time89,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year90,
                                                                                         month: month90,
                                                                                         day: day90,
@@ -24813,7 +24813,7 @@ pub mod exports {
                                                                                     *base.add(32).cast::<i32>() = _rt::as_i32(year90);
                                                                                     *base.add(36).cast::<u8>() = (_rt::as_i32(month90)) as u8;
                                                                                     *base.add(37).cast::<u8>() = (_rt::as_i32(day90)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour91,
                                                                                         minute: minute91,
                                                                                         second: second91,
@@ -24831,23 +24831,23 @@ pub mod exports {
                                                                         }
                                                                         V133::Tstzrange(e) => {
                                                                             *base.add(0).cast::<u8>() = (32i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Tstzrange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Tstzrange {
                                                                                 start: start93,
                                                                                 end: end93,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tstzbound as V102;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tstzbound as V102;
                                                                             match start93 {
                                                                                 V102::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp94,
                                                                                         offset: offset94,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date95,
                                                                                         time: time95,
                                                                                     } = timestamp94;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year96,
                                                                                         month: month96,
                                                                                         day: day96,
@@ -24855,7 +24855,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year96);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month96)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day96)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour97,
                                                                                         minute: minute97,
                                                                                         second: second97,
@@ -24869,15 +24869,15 @@ pub mod exports {
                                                                                 }
                                                                                 V102::Excluded(e) => {
                                                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp98,
                                                                                         offset: offset98,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date99,
                                                                                         time: time99,
                                                                                     } = timestamp98;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year100,
                                                                                         month: month100,
                                                                                         day: day100,
@@ -24885,7 +24885,7 @@ pub mod exports {
                                                                                     *base.add(12).cast::<i32>() = _rt::as_i32(year100);
                                                                                     *base.add(16).cast::<u8>() = (_rt::as_i32(month100)) as u8;
                                                                                     *base.add(17).cast::<u8>() = (_rt::as_i32(day100)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour101,
                                                                                         minute: minute101,
                                                                                         second: second101,
@@ -24901,19 +24901,19 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Tstzbound as V111;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Tstzbound as V111;
                                                                             match end93 {
                                                                                 V111::Included(e) => {
                                                                                     *base.add(32).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp103,
                                                                                         offset: offset103,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date104,
                                                                                         time: time104,
                                                                                     } = timestamp103;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year105,
                                                                                         month: month105,
                                                                                         day: day105,
@@ -24921,7 +24921,7 @@ pub mod exports {
                                                                                     *base.add(36).cast::<i32>() = _rt::as_i32(year105);
                                                                                     *base.add(40).cast::<u8>() = (_rt::as_i32(month105)) as u8;
                                                                                     *base.add(41).cast::<u8>() = (_rt::as_i32(day105)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour106,
                                                                                         minute: minute106,
                                                                                         second: second106,
@@ -24935,15 +24935,15 @@ pub mod exports {
                                                                                 }
                                                                                 V111::Excluded(e) => {
                                                                                     *base.add(32).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamptz {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamptz {
                                                                                         timestamp: timestamp107,
                                                                                         offset: offset107,
                                                                                     } = e;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Timestamp {
+                                                                                    let super::super::super::super::golem::rdbms::types::Timestamp {
                                                                                         date: date108,
                                                                                         time: time108,
                                                                                     } = timestamp107;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year109,
                                                                                         month: month109,
                                                                                         day: day109,
@@ -24951,7 +24951,7 @@ pub mod exports {
                                                                                     *base.add(36).cast::<i32>() = _rt::as_i32(year109);
                                                                                     *base.add(40).cast::<u8>() = (_rt::as_i32(month109)) as u8;
                                                                                     *base.add(41).cast::<u8>() = (_rt::as_i32(day109)) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Time {
+                                                                                    let super::super::super::super::golem::rdbms::types::Time {
                                                                                         hour: hour110,
                                                                                         minute: minute110,
                                                                                         second: second110,
@@ -24970,15 +24970,15 @@ pub mod exports {
                                                                         }
                                                                         V133::Daterange(e) => {
                                                                             *base.add(0).cast::<u8>() = (33i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Daterange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Daterange {
                                                                                 start: start112,
                                                                                 end: end112,
                                                                             } = e;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Datebound as V115;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Datebound as V115;
                                                                             match start112 {
                                                                                 V115::Included(e) => {
                                                                                     *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year113,
                                                                                         month: month113,
                                                                                         day: day113,
@@ -24989,7 +24989,7 @@ pub mod exports {
                                                                                 }
                                                                                 V115::Excluded(e) => {
                                                                                     *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year114,
                                                                                         month: month114,
                                                                                         day: day114,
@@ -25002,11 +25002,11 @@ pub mod exports {
                                                                                     *base.add(8).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::Datebound as V118;
+                                                                            use super::super::super::super::golem::rdbms::postgres::Datebound as V118;
                                                                             match end112 {
                                                                                 V118::Included(e) => {
                                                                                     *base.add(20).cast::<u8>() = (0i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year116,
                                                                                         month: month116,
                                                                                         day: day116,
@@ -25017,7 +25017,7 @@ pub mod exports {
                                                                                 }
                                                                                 V118::Excluded(e) => {
                                                                                     *base.add(20).cast::<u8>() = (1i32) as u8;
-                                                                                    let super::super::super::super::wasi::rdbms::types::Date {
+                                                                                    let super::super::super::super::golem::rdbms::types::Date {
                                                                                         year: year117,
                                                                                         month: month117,
                                                                                         day: day117,
@@ -25041,7 +25041,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Enumeration(e) => {
                                                                             *base.add(0).cast::<u8>() = (36i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Enumeration {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Enumeration {
                                                                                 name: name119,
                                                                                 value: value119,
                                                                             } = e;
@@ -25060,7 +25060,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Composite(e) => {
                                                                             *base.add(0).cast::<u8>() = (37i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Composite {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Composite {
                                                                                 name: name122,
                                                                                 values: values122,
                                                                             } = e;
@@ -25096,7 +25096,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Domain(e) => {
                                                                             *base.add(0).cast::<u8>() = (38i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Domain {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Domain {
                                                                                 name: name125,
                                                                                 value: value125,
                                                                             } = e;
@@ -25137,7 +25137,7 @@ pub mod exports {
                                                                         }
                                                                         V133::Range(e) => {
                                                                             *base.add(0).cast::<u8>() = (40i32) as u8;
-                                                                            let super::super::super::super::wasi::rdbms::postgres::Range {
+                                                                            let super::super::super::super::golem::rdbms::postgres::Range {
                                                                                 name: name128,
                                                                                 value: value128,
                                                                             } = e;
@@ -25147,11 +25147,11 @@ pub mod exports {
                                                                             ::core::mem::forget(vec129);
                                                                             *base.add(12).cast::<usize>() = len129;
                                                                             *base.add(8).cast::<*mut u8>() = ptr129.cast_mut();
-                                                                            let super::super::super::super::wasi::rdbms::postgres::ValuesRange {
+                                                                            let super::super::super::super::golem::rdbms::postgres::ValuesRange {
                                                                                 start: start130,
                                                                                 end: end130,
                                                                             } = value128;
-                                                                            use super::super::super::super::wasi::rdbms::postgres::ValueBound as V131;
+                                                                            use super::super::super::super::golem::rdbms::postgres::ValueBound as V131;
                                                                             match start130 {
                                                                                 V131::Included(e) => {
                                                                                     *base.add(16).cast::<u8>() = (0i32) as u8;
@@ -25165,7 +25165,7 @@ pub mod exports {
                                                                                     *base.add(16).cast::<u8>() = (2i32) as u8;
                                                                                 }
                                                                             }
-                                                                            use super::super::super::super::wasi::rdbms::postgres::ValueBound as V132;
+                                                                            use super::super::super::super::golem::rdbms::postgres::ValueBound as V132;
                                                                             match end130 {
                                                                                 V132::Included(e) => {
                                                                                     *base.add(24).cast::<u8>() = (0i32) as u8;
@@ -25868,8 +25868,8 @@ pub(crate) use __export_rdbms_service_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:it:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 6384] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xec0\x01A\x02\x01A\x12\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 6387] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xef0\x01A\x02\x01A\x12\
 \x01B\x13\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\0\x01o\x04}}}}\
 \x01o\x08{{{{{{{{\x01q\x02\x04ipv4\x01\x02\0\x04ipv6\x01\x03\0\x04\0\x0aip-addre\
 ss\x03\0\x04\x01o\x06}}}}}}\x01r\x01\x06octets\x06\x04\0\x0bmac-address\x03\0\x07\
@@ -25877,7 +25877,7 @@ ss\x03\0\x04\x01o\x06}}}}}}\x01r\x01\x06octets\x06\x04\0\x0bmac-address\x03\0\x0
 minute}\x06second}\x0ananosecondy\x04\0\x04time\x03\0\x0b\x01r\x02\x04date\x0a\x04\
 time\x0c\x04\0\x09timestamp\x03\0\x0d\x01r\x02\x09timestamp\x0e\x06offsetz\x04\0\
 \x0btimestamptz\x03\0\x0f\x01r\x02\x04time\x0c\x06offsetz\x04\0\x06timetz\x03\0\x11\
-\x03\0\x16wasi:rdbms/types@0.0.1\x05\0\x02\x03\0\0\x04date\x02\x03\0\0\x04time\x02\
+\x03\0\x17golem:rdbms/types@0.0.1\x05\0\x02\x03\0\0\x04date\x02\x03\0\0\x04time\x02\
 \x03\0\0\x06timetz\x02\x03\0\0\x09timestamp\x02\x03\0\0\x0btimestamptz\x02\x03\0\
 \0\x04uuid\x02\x03\0\0\x0aip-address\x02\x03\0\0\x0bmac-address\x01B\x87\x01\x02\
 \x03\x02\x01\x01\x04\0\x04date\x03\0\0\x02\x03\x02\x01\x02\x04\0\x04time\x03\0\x02\
@@ -25949,7 +25949,7 @@ statements\x06params\xcf\0\0\xe7\0\x04\0\x1c[method]db-transaction.query\x01r\x0
 action.query-stream\x01s\x01@\x03\x04self\xf1\0\x09statements\x06params\xcf\0\0\xec\
 \0\x04\0\x1e[method]db-transaction.execute\x01t\x01j\0\x01\x11\x01@\x01\x04self\xf1\
 \0\0\xf5\0\x04\0\x1d[method]db-transaction.commit\x01v\x04\0\x1f[method]db-trans\
-action.rollback\x01v\x03\0\x19wasi:rdbms/postgres@0.0.1\x05\x09\x01B>\x02\x03\x02\
+action.rollback\x01v\x03\0\x1agolem:rdbms/postgres@0.0.1\x05\x09\x01B>\x02\x03\x02\
 \x01\x01\x04\0\x04date\x03\0\0\x02\x03\x02\x01\x02\x04\0\x04time\x03\0\x02\x02\x03\
 \x02\x01\x04\x04\0\x09timestamp\x03\0\x04\x01q\x05\x12connection-failure\x01s\0\x17\
 query-parameter-failure\x01s\0\x17query-execution-failure\x01s\0\x16query-respon\
@@ -25988,9 +25988,9 @@ ements\x06params\x10\0\"\x04\0\x1c[method]db-transaction.query\x01-\x01@\x03\x04
 self,\x09statements\x06params\x10\0%\x04\0#[method]db-transaction.query-stream\x01\
 .\x01@\x03\x04self,\x09statements\x06params\x10\0'\x04\0\x1e[method]db-transacti\
 on.execute\x01/\x01j\0\x01\x07\x01@\x01\x04self,\00\x04\0\x1d[method]db-transact\
-ion.commit\x011\x04\0\x1f[method]db-transaction.rollback\x011\x03\0\x16wasi:rdbm\
-s/mysql@0.0.1\x05\x0a\x02\x03\0\x01\x09db-result\x02\x03\0\x02\x09db-result\x01B\
-!\x02\x03\x02\x01\x0b\x04\0\x12postgres-db-result\x03\0\0\x02\x03\x02\x01\x0c\x04\
+ion.commit\x011\x04\0\x1f[method]db-transaction.rollback\x011\x03\0\x17golem:rdb\
+ms/mysql@0.0.1\x05\x0a\x02\x03\0\x01\x09db-result\x02\x03\0\x02\x09db-result\x01\
+B!\x02\x03\x02\x01\x0b\x04\0\x12postgres-db-result\x03\0\0\x02\x03\x02\x01\x0c\x04\
 \0\x0fmysql-db-result\x03\0\x02\x01m\x03\x06commit\x08rollback\x04none\x04\0\x0f\
 transaction-end\x03\0\x04\x01m\x03\x07execute\x05query\x0cquery-stream\x04\0\x10\
 statement-action\x03\0\x06\x01ps\x01kw\x01r\x04\x09statements\x06params\x08\x06a\
