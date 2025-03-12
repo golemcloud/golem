@@ -234,8 +234,6 @@ mod type_inference_tests {
         let result =
             valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
 
-        dbg!(&result);
-
         assert!(result.is_ok());
     }
 

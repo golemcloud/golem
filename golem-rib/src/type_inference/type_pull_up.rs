@@ -1106,9 +1106,6 @@ mod internal {
         let right_expr_type = right_expr.inferred_type();
         let left_expr_type = left_expr.inferred_type();
 
-        dbg!(result_type.clone());
-        dbg!(right_expr.clone());
-        dbg!(left_expr.clone());
         if result_type.un_resolved()
             && !right_expr_type.un_resolved()
             && !left_expr_type.un_resolved()
