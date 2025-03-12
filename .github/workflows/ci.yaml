@@ -298,7 +298,6 @@ jobs:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
 
-
   docker-publish:
     runs-on: blacksmith
     needs:
