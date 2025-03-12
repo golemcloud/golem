@@ -101,6 +101,22 @@ run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
 
 # BUILD
 
+[tasks.build-core]
+dependencies = ["wit"]
+description = "Build only core crates in debug mode"
+command = "cargo"
+args = [
+    "build",
+    "-p",
+    "golem-component-service-base",
+    "-p",
+    "golem-worker-service-base",
+    "-p",
+    "golem-worker-executor-base",
+    "-p",
+    "golem-test-framework"
+]
+
 [tasks.build]
 dependencies = ["wit"]
 description = "Builds everything in debug mode"
