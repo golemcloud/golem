@@ -29,7 +29,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 cli-table = { workspace = true }
-colored = "2.1.0"
+colored = "2.2.0"
 console-subscriber = { workspace = true }
 futures-util = { workspace = true }
 itertools = { workspace = true }

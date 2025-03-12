@@ -40,8 +40,8 @@ proptest-arbitrary-interop = "0.1.0"
 test-r = { workspace = true }
 
 [build-dependencies]
-prost-build = "0.13.4"
-cargo_metadata = "0.19.1"
+prost-build = "0.13.5"
+cargo_metadata = "0.19.2"
 
 [features]
 default = ["host"]

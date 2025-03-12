@@ -36,7 +36,7 @@ async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
-bitflags = "2.6.0"
+bitflags = "2.9.0"
 bigdecimal = { workspace = true }
 bit-vec = { version = "0.6", features = ["serde"] }
 bytes = { workspace = true }
@@ -50,7 +50,7 @@ evicting_cache_map = "0.4.0"
 figment = { workspace = true }
 flume = "0.11.1"
 fred = { workspace = true }
-fs-set-times = "0.20.2"
+fs-set-times = "0.20.3"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.5.0"
@@ -65,8 +65,8 @@ io-extras = "0.18.4"
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-log = "0.4.22"
-mac_address = { version = "1.1.7", features = ["serde"] }
+log = "0.4.26"
+mac_address = { version = "1.1.8", features = ["serde"] }
 md5 = "0.7.0"
 metrohash = "1.0.7"
 nonempty-collections = { workspace = true}
@@ -79,7 +79,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
-sysinfo = "0.33.0"
+sysinfo = "0.33.1"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -105,7 +105,7 @@ golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
 assert2 = { workspace = true }
 axum = { workspace = true }
 console-subscriber = { workspace = true }
-goldenfile = "1.7.3"
+goldenfile = "1.8.0"
 once_cell = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }

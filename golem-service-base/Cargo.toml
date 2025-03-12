@@ -28,7 +28,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }
-bitflags = "2.8.0"
+bitflags = "2.9.0"
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
@@ -43,7 +43,7 @@ humantime-serde = { workspace = true }
 hyper = { workspace = true }
 lazy_static = { workspace = true}
 num-traits = { workspace = true }
-pin-project = "1.1.7"
+pin-project = "1.1.10"
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
