@@ -83,6 +83,7 @@ mod type_inference_tests {
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
+    use std::str::FromStr;
     use test_r::test;
 
     #[test]

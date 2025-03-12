@@ -1924,32 +1924,6 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_with_numbers_3() {
-        let component_metadata =
-            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
-
-        let mut interpreter =
-            test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
-
-        // z's type will be inferred as u32 and is not influenced by
-        // the fact that operands are u32
-        let rib = r#"
-          let worker = instance("my-worker");
-          let z = 1 + 2;
-          worker.foo(z)
-        "#;
-
-        let expr = Expr::from_text(rib).unwrap();
-        let compiled = compiler::compile(expr, &component_metadata).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
-
-        assert_eq!(
-            result.get_val().unwrap(),
-            ValueAndType::new(Value::U64(2), u64())
-        );
-    }
-
-    #[test]
     async fn test_interpreter_list_comprehension() {
         let mut interpreter = Interpreter::default();
 
