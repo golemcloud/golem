@@ -13,6 +13,10 @@ root = "../data/blob_storage"
 [compile_worker]
 max_component_size = 1000000
 
+[compile_worker.connect_timeout]
+nanos = 0
+secs = 10
+
 [compile_worker.retries]
 max_attempts = 3
 max_delay = "1s"
@@ -91,6 +95,10 @@ without_time = false
 # 
 # [compile_worker]
 # max_component_size = 1000000
+# 
+# [compile_worker.connect_timeout]
+# nanos = 0
+# secs = 10
 # 
 # [compile_worker.retries]
 # max_attempts = 3
