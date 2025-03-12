@@ -52,23 +52,6 @@ impl DockerComponentService {
         verbosity: Level,
         client_protocol: GolemClientProtocol,
     ) -> Self {
-        Self::new_base(
-            component_directory,
-            component_compilation_service,
-            rdb,
-            verbosity,
-            client_protocol,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        component_directory: PathBuf,
-        component_compilation_service: Option<(&str, u16)>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-        client_protocol: GolemClientProtocol,
-    ) -> Self {
         info!("Starting golem-component-service container");
 
         let env_vars = super::env_vars(

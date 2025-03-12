@@ -180,7 +180,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
 }
 
 #[async_trait]
-pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug {
+pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + Sync {
     async fn get_all(
         &self,
         owner: &Owner::Row,

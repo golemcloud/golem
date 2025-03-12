@@ -7182,6 +7182,7 @@ components:
         version:
           type: string
         priority:
+          description: Plugins will be applied in order of increasing priority
           type: integer
           format: int32
         parameters:

@@ -21,7 +21,9 @@ use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
-use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
+use golem_component_service_base::service::component::{
+    ComponentService, ComponentServiceDefault, LazyComponentService,
+};
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
@@ -42,10 +44,9 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Services {
-    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
+    pub compilation_service: Arc<dyn ComponentCompilationService>,
+    pub plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
 }
 
 impl Services {
@@ -127,22 +128,26 @@ impl Services {
                 }
             };
 
+        let component_service = Arc::new(LazyComponentService::new());
+
         let plugin_service: Arc<
             dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
         > = Arc::new(PluginServiceDefault::new(
             plugin_repo,
             plugin_wasm_files_service.clone(),
+            component_service.clone(),
         ));
 
-        let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
-            Arc::new(ComponentServiceDefault::new(
+        component_service
+            .set_implementation(ComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),
                 compilation_service.clone(),
                 initial_component_files_service.clone(),
                 plugin_service.clone(),
                 plugin_wasm_files_service.clone(),
-            ));
+            ))
+            .await;
 
         Ok(Services {
             component_service,

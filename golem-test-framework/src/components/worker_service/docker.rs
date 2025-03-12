@@ -56,23 +56,6 @@ impl DockerWorkerService {
         verbosity: Level,
         client_protocol: GolemClientProtocol,
     ) -> Self {
-        Self::new_base(
-            component_service,
-            shard_manager,
-            rdb,
-            verbosity,
-            client_protocol,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-        client_protocol: GolemClientProtocol,
-    ) -> Self {
         info!("Starting golem-worker-service container");
 
         let env_vars = super::env_vars(
