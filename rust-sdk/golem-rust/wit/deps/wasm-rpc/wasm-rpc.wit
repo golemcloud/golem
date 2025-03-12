@@ -1,6 +1,7 @@
-package golem:rpc@0.1.0;
+package golem:rpc@0.1.3;
 
 interface types {
+  use wasi:clocks/wall-clock@0.2.0.{datetime};
   use wasi:io/poll@0.2.0.{pollable};
 
   type node-index = s32;
@@ -26,12 +27,53 @@ interface types {
     prim-s16(s16),
     prim-s32(s32),
     prim-s64(s64),
-    prim-float32(float32),
-    prim-float64(float64),
+    prim-float32(f32),
+    prim-float64(f64),
     prim-char(char),
     prim-bool(bool),
     prim-string(string),
     handle(tuple<uri, u64>)
+  }
+
+  record wit-type {
+    nodes: list<wit-type-node>,
+  }
+
+  type resource-id = u64;
+
+  enum resource-mode {
+    owned,
+    borrowed
+  }
+
+  variant wit-type-node {
+    record-type(list<tuple<string, node-index>>),
+    variant-type(list<tuple<string, option<node-index>>>),
+    enum-type(list<string>),
+    flags-type(list<string>),
+    tuple-type(list<node-index>),
+    list-type(node-index),
+    option-type(node-index),
+    result-type(tuple<option<node-index>, option<node-index>>),
+    prim-u8-type,
+    prim-u16-type,
+    prim-u32-type,
+    prim-u64-type,
+    prim-s8-type,
+    prim-s16-type,
+    prim-s32-type,
+    prim-s64-type,
+    prim-f32-type,
+    prim-f64-type,
+    prim-char-type,
+    prim-bool-type,
+    prim-string-type,
+    handle-type(tuple<resource-id, resource-mode>)
+  }
+
+  record value-and-type {
+    value: wit-value,
+    typ: wit-type
   }
 
   record uri {
@@ -52,12 +94,24 @@ interface types {
     invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
 
     async-invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> future-invoke-result;
+
+    /// Schedule invocation for later
+    schedule-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>) -> ();
+    /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
+    schedule-cancelable-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>) -> cancellation-token;
   }
 
   resource future-invoke-result {
     subscribe: func() -> pollable;
     get: func() -> option<result<wit-value, rpc-error>>;
   }
+
+  resource cancellation-token {
+    cancel: func() -> ();
+  }
+
+  extract-value: func(vnt: value-and-type) -> wit-value;
+  extract-type: func(vnt: value-and-type) -> wit-type;
 }
 
 world wit-value {

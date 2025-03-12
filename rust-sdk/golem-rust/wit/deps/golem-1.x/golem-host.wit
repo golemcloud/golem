@@ -1,9 +1,9 @@
-package golem:api@1.1.0;
+package golem:api@1.1.5;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use golem:rpc/types@0.1.0.{uri};
+    use golem:rpc/types@0.1.3.{uri, wit-value};
     use wasi:clocks/monotonic-clock@0.2.0.{duration};
 
     /// An index into the persistent log storing all performed operations of a worker
@@ -164,12 +164,24 @@ interface host {
         get-next: func() -> option<list<worker-metadata>>;
     }
 
+    /// Target parameter for the `revert-worker` operation
+    variant revert-worker-target {
+        /// Revert to a specific oplog index. The given index will be the last one to be kept.
+        revert-to-oplog-index(oplog-index),
+        /// Revert the last N invocations.
+        revert-last-invocations(u64)
+    }
+
     /// Create a new promise
     create-promise: func() -> promise-id;
 
     /// Suspends execution until the given promise gets completed, and returns the payload passed to
     /// the promise completion.
     await-promise: func(promise-id: promise-id) -> list<u8>;
+
+    /// Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
+    /// it returns the payload passed to the promise completion.
+    poll-promise: func(promise-id: promise-id) -> option<list<u8>>;
 
     /// Completes the given promise with the given payload. Returns true if the promise was completed, false
     /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
@@ -236,6 +248,34 @@ interface host {
 
     /// Get worker metadata
     get-worker-metadata: func(worker-id: worker-id) -> option<worker-metadata>;
+
+    /// Fork a worker to another worker at a given oplog index
+    fork-worker: func(source-worker-id: worker-id, target-worker-id: worker-id, oplog-idx-cut-off: oplog-index) -> ();
+
+    /// Revert a worker to a previous state
+    revert-worker: func(worker-id: worker-id, revert-target: revert-worker-target);
+
+    /// Get the component-id for a given component reference.
+    /// Returns none when no component with the specified reference exists.
+    /// The syntax of the component reference is implementation dependent.
+    ///
+    /// Golem OSS: "{component_name}"
+    /// Golem Cloud:
+    ///     1: "{component_name}" -> will resolve in current account and project
+    ///     2: "{project_name}/{component_name}" -> will resolve in current account
+    ///     3: "{account_id}/{project_name}/{component_name}"
+    resolve-component-id: func(component-reference: string) -> option<component-id>;
+
+    /// Get the worker-id for a given component and worker name.
+    /// Returns none when no component for the specified reference exists.
+    resolve-worker-id: func(component-reference: string, worker-name: string) -> option<worker-id>;
+
+    /// Get the worker-id for a given component and worker name.
+    /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
+    resolve-worker-id-strict: func(component-reference: string, worker-name: string) -> option<worker-id>;
+
+    /// Construct an uri for a given worker id.
+    worker-uri: func(worker-id: worker-id) -> uri;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers

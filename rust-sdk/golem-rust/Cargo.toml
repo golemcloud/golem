@@ -13,10 +13,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
-serde = { version = "1.0.204", optional = true }
-serde_json = { version = "1.0.120", optional = true }
-uuid = { version = "1.10.0", features = ["v4"], optional = true }
-wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
+serde = { version = "1.0.219", optional = true }
+serde_json = { version = "1.0.140", optional = true }
+uuid = { version = "1.15.1", features = ["v4"], optional = true }
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [features]
 default = ["json", "macro", "uuid"]
@@ -31,7 +31,9 @@ package = "golem:rust"
 path = "wit"
 
 [package.metadata.component.target.dependencies]
-"golem:api" = { path = "wit/deps/golem-1.1" }
+"golem:api" = { path = "wit/deps/golem-1.x" }
+"golem:durability" = { path = "wit/deps/golem-durability" }
+"golem:rdbms" = { path = "wit/deps/rdbms" }
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "wasi:clocks" = { path = "wit/deps/clocks" }
 "wasi:io" = { path = "wit/deps/io" }

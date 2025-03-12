@@ -1,0 +1,47 @@
+package golem:rdbms@0.0.1;
+
+interface types {
+
+  record uuid {
+    high-bits: u64,
+    low-bits: u64
+  }
+
+  variant ip-address {
+    ipv4(tuple<u8, u8, u8, u8>),
+    ipv6(tuple<u16, u16, u16, u16, u16, u16, u16, u16>),
+  }
+
+  record mac-address {
+    octets: tuple<u8, u8, u8, u8, u8, u8>
+  }
+
+  record date {
+    year: s32,
+    month: u8,
+    day: u8
+  }
+
+  record time {
+    hour: u8,
+    minute: u8,
+    second: u8,
+    nanosecond: u32
+  }
+
+  record timestamp {
+    date: date,
+    time: time
+  }
+
+  record timestamptz {
+    timestamp: timestamp,
+    offset: s32
+  }
+
+  record timetz {
+    time: time,
+    offset: s32
+  }
+
+}

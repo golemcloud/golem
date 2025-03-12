@@ -1,11 +1,12 @@
-package golem:api@1.1.0;
+package golem:api@1.1.5;
 
 /// Host interface for enumerating and searching for worker oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.0.{datetime};
-    use golem:rpc/types@0.1.0.{wit-value};
+    use golem:rpc/types@0.1.3.{wit-value};
 
     use host.{account-id, component-version, oplog-index, retry-policy, uuid, worker-id};
+    use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
         /// The side-effect reads from the worker's local state (for example local file system,
@@ -55,11 +56,35 @@ interface oplog {
         wrapped-function-type: wrapped-function-type,
     }
 
+    record local-span-data {
+        span-id: span-id,
+        start: datetime,
+        parent: option<span-id>,
+        /// Optionally an index of the exported-function-invoked-parameters's invocation-context field
+        linked-context: option<u64>,
+        attributes: list<attribute>,
+        inherited: bool
+    }
+
+    record external-span-data {
+        span-id: span-id
+    }
+
+    variant span-data {
+        local-span(local-span-data),
+        external-span(external-span-data)
+    }
+
     record exported-function-invoked-parameters {
         timestamp: datetime,
         function-name: string,
         request: list<wit-value>,
-        idempotency-key: string
+        idempotency-key: string,
+        trace-id: trace-id,
+        trace-states: list<string>,
+        /// The first one is the invocation context stack associated with the exported function invocation,
+        /// and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
+        invocation-context: list<list<span-data>>
     }
 
     record exported-function-completed-parameters {
@@ -188,6 +213,37 @@ interface oplog {
         plugin: plugin-installation-description
     }
 
+    record revert-parameters {
+        timestamp: datetime,
+        start: oplog-index,
+        end: oplog-index
+    }
+
+    record cancel-invocation-parameters {
+        timestamp: datetime,
+        idempotency-key: string
+    }
+
+    record start-span-parameters {
+        timestamp: datetime,
+        span-id: span-id,
+        parent: option<span-id>,
+        linked-context: option<span-id>,
+        attributes: list<attribute>,
+    }
+
+    record finish-span-parameters {
+        timestamp: datetime,
+        span-id: span-id
+    }
+
+    record set-span-attribute-parameters {
+        timestamp: datetime,
+        span-id: span-id,
+        key: string,
+        value: attribute-value
+    }
+
     variant oplog-entry {
         /// The initial worker oplog entry
         create(create-parameters),
@@ -252,7 +308,17 @@ interface oplog {
         /// Activates a plugin
         activate-plugin(activate-plugin-parameters),
         /// Deactivates a plugin
-        deactivate-plugin(deactivate-plugin-parameters)
+        deactivate-plugin(deactivate-plugin-parameters),
+        /// Revert a worker to a previous state
+        revert(revert-parameters),
+        /// Cancel a pending invocation
+        cancel-invocation(cancel-invocation-parameters),
+        /// Start a new span in the invocation context
+        start-span(start-span-parameters),
+        /// Finish an open span in the invocation context
+        finish-span(finish-span-parameters),
+        /// Set an attribute on an open span in the invocation context
+        set-span-attribute(set-span-attribute-parameters),
     }
 
     resource get-oplog {
