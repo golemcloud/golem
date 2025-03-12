@@ -76,13 +76,21 @@ fn internal_error(error: &str) -> ComponentError {
 }
 
 pub struct ComponentGrpcApi {
-    pub component_service:
-        Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+    component_service: Arc<dyn component::ComponentService<DefaultComponentOwner>>,
+    plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
 }
 
 impl ComponentGrpcApi {
+    pub fn new(
+        component_service: Arc<dyn component::ComponentService<DefaultComponentOwner>>,
+        plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    ) -> Self {
+        Self {
+            component_service,
+            plugin_service,
+        }
+    }
+
     fn require_component_id(
         source: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
     ) -> Result<ComponentId, ComponentError> {

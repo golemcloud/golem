@@ -18,6 +18,7 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_service_base::stream::LoggedByteStream;
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, debug_span, error};
@@ -26,7 +27,7 @@ use tracing_futures::Instrument;
 const COMPONENT_FILES_LABEL: &str = "component_files";
 
 #[async_trait]
-pub trait ComponentObjectStore {
+pub trait ComponentObjectStore: Debug + Send + Sync {
     async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error>;
 
     async fn get_stream(
@@ -39,6 +40,7 @@ pub trait ComponentObjectStore {
     async fn delete(&self, object_key: &str) -> Result<(), Error>;
 }
 
+#[derive(Debug)]
 pub struct LoggedComponentObjectStore<Store> {
     store: Store,
 }
@@ -102,6 +104,7 @@ impl<Store: ComponentObjectStore + Sync> ComponentObjectStore
     }
 }
 
+#[derive(Debug)]
 pub struct BlobStorageComponentObjectStore {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 }
