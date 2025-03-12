@@ -20,10 +20,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
-aws-config = { workspace = true }
-aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
-bincode_derive = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
@@ -51,7 +48,6 @@ uuid = { workspace = true }
 wac-graph = { workspace = true }
 
 [dev-dependencies]
-fastrand = "2.3.0"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

@@ -17,19 +17,11 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-component-service-base = { path = "../golem-component-service-base", version = "=0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
-golem-rib = {  path = "../golem-rib", version = "=0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-console-subscriber = { workspace = true }
-figment = { workspace = true }
 futures-util = { workspace = true }
-humantime-serde = { workspace = true }
 include_dir = { workspace = true }
-lazy_static = { workspace = true }
-mappable-rc = "0.1.1"
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
@@ -38,25 +30,12 @@ poem-openapi = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { workspace = true, features = [
-    "runtime-tokio",
-    "sqlite",
-    "postgres",
-    "uuid",
-    "migrate",
-    "chrono",
-] }
-tap = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }

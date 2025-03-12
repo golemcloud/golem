@@ -21,50 +21,30 @@ harness = false
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-common = { path = "../golem-common" }
 golem-service-base = { path = "../golem-service-base" }
-golem-rib = { path = "../golem-rib" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-bincode = { workspace = true }
-bincode_derive = { workspace = true }
-bytes = { workspace = true }
-console-subscriber = { workspace = true }
-derive_more = { workspace = true }
-figment = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 include_dir = { workspace = true }
-humantime-serde = { workspace = true }
-hyper = { workspace = true }
-lazy_static = { workspace = true }
-nom = { workspace = true }
-openapiv3 = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
-regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
-strum = { workspace = true }
-strum_macros = { workspace = true }
 tap = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

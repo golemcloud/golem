@@ -22,13 +22,10 @@ anyhow = { workspace = true }
 async-fs = { workspace = true }
 async-hash = { workspace = true }
 async-trait = { workspace = true }
-async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 axum = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
-bigdecimal = { workspace = true }
 bincode = { workspace = true }
-bincode_derive = { workspace = true }
 bitflags = "2.6.0"
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -41,15 +38,12 @@ http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
-hyper = { workspace = true }
 lazy_static = { workspace = true}
-num-traits = { workspace = true }
 pin-project = "1.1.10"
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
 prost-types = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -61,7 +55,6 @@ sqlx = { workspace = true, features = [
     "migrate",
     "chrono",
 ] }
-sha2 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -69,14 +62,10 @@ tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
-tracing-futures = { version = "0.2.5", features = ["futures-03"] }
-url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
-proptest = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }

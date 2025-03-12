@@ -21,7 +21,6 @@ golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = 
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }
-bincode_derive = { workspace = true }
 combine = { workspace = true }
 poem-openapi = { workspace = true, optional = true }
 semver = { workspace = true }
