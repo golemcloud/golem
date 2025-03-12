@@ -101,22 +101,6 @@ run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
 
 # BUILD
 
-[tasks.build-core]
-dependencies = ["wit"]
-description = "Build only core crates in debug mode"
-command = "cargo"
-args = [
-    "build",
-    "-p",
-    "golem-component-service-base",
-    "-p",
-    "golem-worker-service-base",
-    "-p",
-    "golem-worker-executor-base",
-    "-p",
-    "golem-test-framework"
-]
-
 [tasks.build]
 dependencies = ["wit"]
 description = "Builds everything in debug mode"
@@ -258,12 +242,19 @@ args = [
     "--nocapture",
 ]
 
+[tasks.worker-executor-tests-untagged]
+dependencies = ["wit"]
+description = "Runs only untagged worker-executor-tests"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo test --package golem-worker-executor-base --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
+'''
+
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
 cargo test --package golem-worker-executor-base --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
 '''
 

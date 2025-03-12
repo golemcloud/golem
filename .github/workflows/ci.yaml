@@ -19,38 +19,7 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
 jobs:
-  build-core:
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: true
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check that wit-deps are up-to-date
-        run: cargo make --profile ci check-wit
-      - name: Build core crates
-        run: cargo make --profile ci build-core
-
-  build-bins:
-    needs:
-      - build-core
+  build:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -77,12 +46,10 @@ jobs:
       - name: Building all executables
         env:
           QUIET: true
-        run: cargo make --profile ci build-bins
+        run: cargo make --profile ci build
         timeout-minutes: 30
 
   docker-targets-build:
-    needs:
-      - build-bins
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -146,8 +113,6 @@ jobs:
           path: target/${{ matrix.platform.target }}.tar
 
   unit-tests-and-checks:
-    needs:
-      - build-core
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -191,8 +156,6 @@ jobs:
           include_passed: true
 
   worker-tests:
-    needs:
-      - build-core
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -200,6 +163,7 @@ jobs:
       fail-fast: true
       matrix:
         group:
+          - name: untagged
           - name: group1
           - name: group2
           - name: group3
@@ -247,8 +211,6 @@ jobs:
 
   # Integration tess not requiring prebuilt executables
   api-and-integration-tests-1:
-    needs:
-      - build-core
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -302,8 +264,6 @@ jobs:
 
   # Integration tests requiring prebuilt executables
   api-and-integration-tests-2:
-    needs:
-      - build-bins
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -516,6 +476,7 @@ jobs:
 
   publish:
     needs:
+      - build
       - unit-tests-and-checks
       - wasm-rpc-stub
       - worker-tests
