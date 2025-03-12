@@ -664,7 +664,7 @@ mod internal {
         ActualType, ExpectedType, Expr, InferredNumber, InferredType, MatchArm, Range,
         TypeMismatchError, TypeName, VariableId,
     };
-    use combine::parser::choice::A::P;
+
     use std::collections::VecDeque;
     use std::ops::Deref;
 
