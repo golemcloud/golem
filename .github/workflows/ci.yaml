@@ -66,7 +66,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          shared-key: debug-bins
+          shared-key: debug
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
@@ -215,7 +215,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          shared-key: debug-workertests
+          shared-key: debug
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
@@ -319,7 +319,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          shared-key: debug-bins
+          shared-key: debug
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
