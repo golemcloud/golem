@@ -209,61 +209,7 @@ jobs:
           detailed_summary: true
           include_passed: true
 
-  # Integration tess not requiring prebuilt executables
-  api-and-integration-tests-1:
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    strategy:
-      fail-fast: true
-      matrix:
-        group:
-          - name: integration-tests-group2
-            description: "Component service integration tests"
-          - name: integration-tests-group3
-            description: "Worker service integration tests"
-          - name: integration-tests-group4
-            description: "Base service integration tests"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
-        with:
-          redis-version: latest
-          auto-start: false
-      - name: ${{ matrix.group.description }}
-        env:
-          QUIET: true
-        run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
-
-  # Integration tests requiring prebuilt executables
-  api-and-integration-tests-2:
+  api-and-integration-tests:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -273,6 +219,12 @@ jobs:
         group:
           - name: integration-tests-group1
             description: "Full integration tests"
+          - name: integration-tests-group2
+            description: "Component service integration tests"
+          - name: integration-tests-group3
+            description: "Worker service integration tests"
+          - name: integration-tests-group4
+            description: "Base service integration tests"
           - name: integration-tests-group5
             description: "Sharding tests"
           - name: api-tests
@@ -480,8 +432,7 @@ jobs:
       - unit-tests-and-checks
       - wasm-rpc-stub
       - worker-tests
-      - api-and-integration-tests-1
-      - api-and-integration-tests-2
+      - api-and-integration-tests
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 10
