@@ -55,8 +55,8 @@ impl Debug for DebugOplog {
 pub struct DebugOplogState {
     debug_session_id: DebugSessionId,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
-    _execution_status: Arc<std::sync::RwLock<ExecutionStatus>>, // TODO; might be required
-    _initial_worker_metadata: WorkerMetadata,                   // TODO; might be required
+    _execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+    _initial_worker_metadata: WorkerMetadata,
 }
 
 #[async_trait]
@@ -70,6 +70,8 @@ impl Oplog for DebugOplog {
     // There is no need to commit anything to the indexed storage
     async fn commit(&self, _level: CommitLevel) {}
 
+    // Current Oplog Index acts as the Replay Target
+    // In a new worker, ReplayState begins with last_replayed_index
     async fn current_oplog_index(&self) -> OplogIndex {
         let debug_session_data = self
             .oplog_state
@@ -80,7 +82,7 @@ impl Oplog for DebugOplog {
 
         // If a debug session not found but hasn't been set up with a target index,
         // it implies, we only connected to the worker and haven't started debugging yet.
-        if let Some(index) = debug_session_data.target_oplog_index_at_invocation_boundary {
+        if let Some(index) = debug_session_data.target_oplog_index {
             index
         } else {
             self.inner.current_oplog_index().await

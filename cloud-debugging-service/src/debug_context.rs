@@ -1,7 +1,9 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::invocation_context::{self, InvocationContextStack};
+use golem_common::model::invocation_context::{
+    self, AttributeValue, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -184,7 +186,11 @@ impl<T: GolemTypes> InvocationManagement for DebugContext<T> {
 #[async_trait]
 impl<T: GolemTypes> StatusManagement for DebugContext<T> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
-        self.durable_ctx.check_interrupt()
+        if self.is_live() {
+            Some(InterruptKind::Suspend)
+        } else {
+            self.durable_ctx.check_interrupt()
+        }
     }
 
     async fn set_suspended(&self) -> Result<(), GolemError> {
@@ -474,8 +480,8 @@ impl<T: GolemTypes> InvocationContextManagement for DebugContext<T> {
 
     fn start_child_span(
         &mut self,
-        parent: &invocation_context::SpanId,
-        initial_attributes: &[(String, invocation_context::AttributeValue)],
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
         self.durable_ctx
             .start_child_span(parent, initial_attributes)

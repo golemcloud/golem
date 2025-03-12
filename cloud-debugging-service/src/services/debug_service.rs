@@ -21,6 +21,7 @@ use golem_worker_executor_base::GolemTypes;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{error, info};
 
 #[async_trait]
@@ -37,12 +38,16 @@ pub trait DebugService {
         owned_worker_id: OwnedWorkerId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
+        ensure_invocation_boundary: bool,
+        wait_time: Duration,
     ) -> Result<PlaybackResult, DebugServiceError>;
 
     async fn rewind(
         &self,
         owned_worker_id: OwnedWorkerId,
         target_index: OplogIndex,
+        ensure_invocation_boundary: bool,
+        timeout: Duration,
     ) -> Result<RewindResult, DebugServiceError>;
 
     async fn fork(
@@ -51,6 +56,11 @@ pub trait DebugService {
         target_worker_id: WorkerId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<ForkResult, DebugServiceError>;
+
+    async fn current_oplog_index(
+        &self,
+        worker_id: OwnedWorkerId,
+    ) -> Result<OplogIndex, DebugServiceError>;
 
     async fn terminate_session(&self, worker_id: OwnedWorkerId) -> Result<(), DebugServiceError>;
 }
@@ -229,6 +239,8 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
         &self,
         owned_worker_id: &OwnedWorkerId,
         target_index: &OplogIndex,
+        ensure_invocation_boundary: bool,
+        wait_time: Duration,
     ) -> Result<RewindResult, DebugServiceError> {
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -241,9 +253,7 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
                     Some(owned_worker_id.worker_id.clone()),
                 ))?;
 
-        if let Some(current_oplog_index) =
-            debug_session_data.target_oplog_index_at_invocation_boundary
-        {
+        if let Some(current_oplog_index) = debug_session_data.target_oplog_index {
             let worker = Worker::get_or_create_suspended(
                 &self.all,
                 owned_worker_id,
@@ -269,7 +279,7 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
                 DebugServiceError::internal(e.to_string(), Some(owned_worker_id.worker_id.clone()))
             })?;
 
-            let target_index_at_invocation_boundary =
+            let new_target_index = if ensure_invocation_boundary {
                 Self::get_target_oplog_index_at_invocation_boundary(
                     worker.oplog(),
                     *target_index,
@@ -278,9 +288,12 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
                 .await
                 .map_err(|e| {
                     DebugServiceError::internal(e, Some(owned_worker_id.worker_id.clone()))
-                })?;
+                })?
+            } else {
+                *target_index
+            };
 
-            if target_index_at_invocation_boundary > current_oplog_index {
+            if new_target_index > current_oplog_index {
                 return Err(DebugServiceError::validation_failed(
                     vec![
                         format!(
@@ -293,29 +306,48 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
             };
 
             self.debug_session
-                .update(debug_session_id, target_index_at_invocation_boundary, None)
+                .update(debug_session_id.clone(), new_target_index, None)
+                .await;
+
+            self.debug_session
+                .update_oplog_index(debug_session_id.clone(), OplogIndex::NONE)
                 .await;
 
             // we restart regardless of the current status of the worker such that it restarts
             worker.set_interrupting(InterruptKind::Restart).await;
 
+            tokio::time::sleep(wait_time).await;
+
+            let last_index = self
+                .debug_session
+                .get(&debug_session_id)
+                .await
+                .map(|d| d.current_oplog_index)
+                .unwrap_or(OplogIndex::NONE);
+
             Ok(RewindResult {
                 worker_id: owned_worker_id.worker_id.clone(),
-                stopped_at_index: target_index_at_invocation_boundary,
+                current_index: last_index,
                 success: true,
                 message: format!("Rewinding the worker to index {}", target_index),
             })
         } else {
             // If this is the first step in a debugging session, then rewind is more or less
             // playback to that index
-            self.playback(owned_worker_id.clone(), *target_index, None)
-                .await
-                .map(|result| RewindResult {
-                    worker_id: owned_worker_id.worker_id.clone(),
-                    stopped_at_index: result.stopped_at_index,
-                    success: true,
-                    message: format!("Rewinding the worker to index {}", target_index),
-                })
+            self.playback(
+                owned_worker_id.clone(),
+                *target_index,
+                None,
+                ensure_invocation_boundary,
+                wait_time,
+            )
+            .await
+            .map(|result| RewindResult {
+                worker_id: owned_worker_id.worker_id.clone(),
+                current_index: result.current_index,
+                success: true,
+                message: format!("Rewinding the worker to index {}", target_index),
+            })
         }
     }
 
@@ -326,10 +358,12 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
         existing_target_oplog_index: Option<OplogIndex>,
         target_index: OplogIndex,
         playback_overrides: Option<Vec<PlaybackOverride>>,
+        ensure_invocation_boundary: bool,
+        timeout: Duration,
     ) -> Result<OplogIndex, DebugServiceError> {
         let owned_worker_id = OwnedWorkerId::new(account_id, worker_id);
 
-        let debug_session_id = DebugSessionId::new(owned_worker_id);
+        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
         let session_data =
             self.debug_session
@@ -359,17 +393,21 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
             let worker = Worker::get_or_create_suspended(
                 &self.all,
                 &OwnedWorkerId::new(account_id, worker_id),
-                Some(worker_metadata.args),
-                Some(worker_metadata.env),
+                Some(worker_metadata.args.clone()),
+                Some(worker_metadata.env.clone()),
                 Some(worker_metadata.last_known_status.component_version),
-                worker_metadata.parent,
+                worker_metadata.parent.clone(),
             )
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
             // We select a new target index based on the given target index
             // such that it is always in an invocation boundary
-            let new_target_index = Self::new_target_index(worker_id, &worker, target_index).await?;
+            let new_target_index = if ensure_invocation_boundary {
+                Self::target_index_at_invocation_boundary(worker_id, &worker, target_index).await?
+            } else {
+                target_index
+            };
 
             let mut playback_overrides_validated = None;
 
@@ -389,16 +427,23 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
                 .await;
 
             if existing_target_oplog_index.is_some() {
-                worker.resume_replay().await.map_err(|e| {
-                    DebugServiceError::internal(e.to_string(), Some(worker_id.clone()))
-                })?;
-            } else {
-                Worker::start_if_needed(worker).await.map_err(|e| {
-                    DebugServiceError::internal(e.to_string(), Some(worker_id.clone()))
-                })?;
+                worker.stop().await;
             }
 
-            Ok(new_target_index)
+            Worker::start_if_needed(worker.clone())
+                .await
+                .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+
+            tokio::time::sleep(timeout).await;
+
+            let last_index = self
+                .debug_session
+                .get(&debug_session_id)
+                .await
+                .map(|d| d.current_oplog_index)
+                .unwrap_or(OplogIndex::INITIAL);
+
+            Ok(last_index)
         } else {
             Err(DebugServiceError::internal(
                 "No initial metadata found".to_string(),
@@ -419,7 +464,7 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
         })
     }
 
-    pub async fn new_target_index(
+    pub async fn target_index_at_invocation_boundary(
         worker_id: &WorkerId,
         worker: &Arc<Worker<DebugContext<T>>>,
         target_oplog_index: OplogIndex,
@@ -514,8 +559,9 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
                 DebugSessionId::new(owned_worker_id),
                 DebugSessionData {
                     worker_metadata: Some(metadata),
-                    target_oplog_index_at_invocation_boundary: None,
+                    target_oplog_index: None,
                     playback_overrides: PlaybackOverridesInternal::empty(),
+                    current_oplog_index: OplogIndex::NONE,
                 },
             )
             .await;
@@ -532,6 +578,8 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
         owned_worker_id: OwnedWorkerId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
+        ensure_invocation_boundary: bool,
+        timeout: Duration,
     ) -> Result<PlaybackResult, DebugServiceError> {
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -544,7 +592,7 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
                     Some(owned_worker_id.worker_id.clone()),
                 ))?;
 
-        let existing_target_index = existing_session_data.target_oplog_index_at_invocation_boundary;
+        let existing_target_index = existing_session_data.target_oplog_index;
 
         let stopped_at_index = self
             .resume_replay_with_target_index(
@@ -553,12 +601,14 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
                 existing_target_index,
                 target_index,
                 overrides,
+                ensure_invocation_boundary,
+                timeout,
             )
             .await?;
 
         Ok(PlaybackResult {
             worker_id: owned_worker_id.worker_id.clone(),
-            stopped_at_index,
+            current_index: stopped_at_index,
             success: true,
             message: format!(
                 "Playback worker {} stopped at index {}",
@@ -571,13 +621,21 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
         &self,
         owned_worker_id: OwnedWorkerId,
         target_oplog_index: OplogIndex,
+        ensure_invocation_boundary: bool,
+        timeout: Duration,
     ) -> Result<RewindResult, DebugServiceError> {
         info!(
             "Rewinding worker {} to index {}",
             owned_worker_id.worker_id, target_oplog_index
         );
 
-        self.rewind(&owned_worker_id, &target_oplog_index).await
+        self.rewind(
+            &owned_worker_id,
+            &target_oplog_index,
+            ensure_invocation_boundary,
+            timeout,
+        )
+        .await
     }
 
     async fn fork(
@@ -611,6 +669,27 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
                 source_worker_id, target_worker_id
             ),
         })
+    }
+
+    async fn current_oplog_index(
+        &self,
+        worker_id: OwnedWorkerId,
+    ) -> Result<OplogIndex, DebugServiceError> {
+        let debug_session_id = DebugSessionId::new(worker_id.clone());
+
+        let result = self
+            .debug_session
+            .get(&debug_session_id)
+            .await
+            .map(|debug_session| debug_session.current_oplog_index);
+
+        match result {
+            Some(index) => Ok(index),
+            None => Err(DebugServiceError::internal(
+                "No debug session found".to_string(),
+                Some(worker_id.worker_id),
+            )),
+        }
     }
 
     async fn terminate_session(

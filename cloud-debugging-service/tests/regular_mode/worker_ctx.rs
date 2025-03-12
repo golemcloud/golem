@@ -592,6 +592,7 @@ impl UpdateManagement for TestWorkerCtx {
     }
 }
 
+#[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
     fn start_span(
         &mut self,

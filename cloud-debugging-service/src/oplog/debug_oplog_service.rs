@@ -91,7 +91,7 @@ impl OplogService for DebugOplogService {
             .debug_session
             .get(&debug_session_id)
             .await
-            .and_then(|debug_session| debug_session.target_oplog_index_at_invocation_boundary);
+            .and_then(|debug_session| debug_session.target_oplog_index);
 
         match result {
             Some(index) => index,
@@ -109,6 +109,12 @@ impl OplogService for DebugOplogService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
+        // In a debugging service, the read happens only through resume_replay which implies every call to
+        // oplog_service.read will be always part of a replay (and never live)
+        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+        self.debug_session
+            .update_oplog_index(debug_session_id, idx)
+            .await;
         self.inner.read(owned_worker_id, idx, n).await
     }
 

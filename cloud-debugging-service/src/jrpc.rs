@@ -8,6 +8,7 @@ use golem_common::model::OwnedWorkerId;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub async fn jrpc_handler(
     debug_service: Arc<dyn DebugService + Sync + Send>,
@@ -17,6 +18,19 @@ pub async fn jrpc_handler(
     let jrpc_id: Id = json_rpc_request.id;
 
     match json_rpc_request.method.as_str() {
+        "current_oplog_index" => {
+            if let Some(active_session_data) = active_session.get_active_session().await {
+                let owned_worker_id = OwnedWorkerId::new(
+                    &active_session_data.cloud_namespace.account_id,
+                    &active_session_data.worker_id,
+                );
+
+                let result = debug_service.current_oplog_index(owned_worker_id).await;
+                to_json_rpc_result(&jrpc_id, result)
+            } else {
+                Err(inactive_session_error(&jrpc_id))
+            }
+        }
         "connect" => {
             let params: ConnectParams = parse_params(&jrpc_id, json_rpc_request.params)?;
 
@@ -38,7 +52,16 @@ pub async fn jrpc_handler(
                 );
 
                 let result = debug_service
-                    .playback(owned_worker_id, params.target_index, params.overrides)
+                    .playback(
+                        owned_worker_id,
+                        params.target_index,
+                        params.overrides,
+                        params.ensure_invocation_boundary.unwrap_or(true),
+                        params
+                            .time_out_in_seconds
+                            .map(Duration::from_secs)
+                            .unwrap_or(Duration::from_secs(5)),
+                    )
                     .await;
 
                 to_json_rpc_result(&jrpc_id, result)
@@ -56,7 +79,15 @@ pub async fn jrpc_handler(
                 );
 
                 let result = debug_service
-                    .rewind(owned_worker_id, params.target_index)
+                    .rewind(
+                        owned_worker_id,
+                        params.target_index,
+                        params.ensure_invocation_boundary.unwrap_or(true),
+                        params
+                            .time_out_in_seconds
+                            .map(Duration::from_secs)
+                            .unwrap_or(Duration::from_secs(5)),
+                    )
                     .await;
                 to_json_rpc_result(&jrpc_id, result)
             } else {

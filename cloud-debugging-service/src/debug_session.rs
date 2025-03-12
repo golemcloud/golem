@@ -60,6 +60,12 @@ pub trait DebugSessions {
         target_oplog_index: OplogIndex,
         playback_overrides: Option<PlaybackOverridesInternal>,
     ) -> Option<DebugSessionData>;
+
+    async fn update_oplog_index(
+        &self,
+        debug_session_id: DebugSessionId,
+        oplog_index: OplogIndex,
+    ) -> Option<DebugSessionData>;
 }
 pub struct DebugSessionsDefault {
     pub session: Arc<Mutex<HashMap<DebugSessionId, DebugSessionData>>>,
@@ -104,10 +110,25 @@ impl DebugSessions for DebugSessionsDefault {
         let mut session = self.session.lock().unwrap();
         let session_data = session.get_mut(&debug_session_id);
         if let Some(session_data) = session_data {
-            session_data.target_oplog_index_at_invocation_boundary = Some(target_oplog_index);
+            session_data.target_oplog_index = Some(target_oplog_index);
             if let Some(playback_overrides) = playback_overrides {
                 session_data.playback_overrides = playback_overrides
             }
+            Some(session_data.clone())
+        } else {
+            None
+        }
+    }
+
+    async fn update_oplog_index(
+        &self,
+        debug_session_id: DebugSessionId,
+        oplog_index: OplogIndex,
+    ) -> Option<DebugSessionData> {
+        let mut session = self.session.lock().unwrap();
+        let session_data = session.get_mut(&debug_session_id);
+        if let Some(session_data) = session_data {
+            session_data.current_oplog_index = oplog_index;
             Some(session_data.clone())
         } else {
             None
@@ -118,8 +139,11 @@ impl DebugSessions for DebugSessionsDefault {
 #[derive(Debug, Clone)]
 pub struct DebugSessionData {
     pub worker_metadata: Option<WorkerMetadata>,
-    pub target_oplog_index_at_invocation_boundary: Option<OplogIndex>,
+    pub target_oplog_index: Option<OplogIndex>,
     pub playback_overrides: PlaybackOverridesInternal,
+    // The current status of the oplog index being replayed and possibly
+    // index of newly added oplog entries as part of going live in between host functions
+    pub current_oplog_index: OplogIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -148,7 +172,7 @@ impl PlaybackOverridesInternal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DebugSessionId(OwnedWorkerId);
+pub struct DebugSessionId(WorkerId);
 
 impl Serialize for DebugSessionId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -161,11 +185,11 @@ impl Serialize for DebugSessionId {
 
 impl DebugSessionId {
     pub fn new(worker_id: OwnedWorkerId) -> Self {
-        DebugSessionId(worker_id)
+        DebugSessionId(worker_id.worker_id)
     }
 
     pub fn worker_id(&self) -> WorkerId {
-        self.0.worker_id()
+        self.0.clone()
     }
 }
 impl Display for DebugSessionId {

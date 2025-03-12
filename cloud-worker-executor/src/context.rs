@@ -3,7 +3,7 @@ use crate::services::{AdditionalDeps, HasResourceLimits};
 use crate::CloudGolemTypes;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::invocation_context::{self, InvocationContextStack};
+use golem_common::model::invocation_context::{self, AttributeValue, InvocationContextStack};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -533,10 +533,11 @@ impl DynamicLinking<Context> for Context {
     }
 }
 
+#[async_trait]
 impl InvocationContextManagement for Context {
     fn start_span(
         &mut self,
-        initial_attributes: &[(String, invocation_context::AttributeValue)],
+        initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
         self.durable_ctx.start_span(initial_attributes)
     }

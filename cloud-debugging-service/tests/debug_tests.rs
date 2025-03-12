@@ -145,7 +145,7 @@ async fn test_connect_and_playback(
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let playback_result = debug_executor
-        .playback(first_invocation_boundary, None)
+        .playback(first_invocation_boundary, None, 3)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -153,7 +153,7 @@ async fn test_connect_and_playback(
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
-    assert_eq!(playback_result.stopped_at_index, first_invocation_boundary);
+    assert_eq!(playback_result.current_index, first_invocation_boundary);
 }
 
 #[test]
@@ -196,7 +196,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     let index_in_middle = previous_index(first_invocation_boundary);
 
     let playback_result = debug_executor
-        .playback(index_in_middle, None)
+        .playback(index_in_middle, None, 3)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -204,7 +204,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
-    assert_eq!(playback_result.stopped_at_index, first_invocation_boundary); // Playback should stop at the end of the invocation
+    assert_eq!(playback_result.current_index, first_invocation_boundary); // Playback should stop at the end of the invocation
 }
 
 // playback twice with progressing indexes
@@ -249,22 +249,37 @@ async fn test_playback_from_breakpoint(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result1 = debug_executor
-        .playback(initialize_boundary, None)
+        .playback(initialize_boundary, None, 3)
         .await
         .expect("Failed to playback the worker in debug mode");
+
+    let current_index = debug_executor
+        .current_index()
+        .await
+        .expect("Failed to get current index");
+
+    // In the test We expect the current index to be the index of the initialize-cart invocation within
+    // the configured wait_time_in_seconds.
+    // If this is false, we haven't waited enough. Asking for the current index again
+    // will be a good way to ensure that the playback has completed.
+    assert_eq!(current_index, initialize_boundary);
 
     let playback_result2 = debug_executor
-        .playback(add_item_boundary, None)
+        .playback(add_item_boundary, None, 3)
         .await
         .expect("Failed to playback the worker in debug mode");
 
-    drop(regular_worker_executor);
+    let current_index = debug_executor
+        .current_index()
+        .await
+        .expect("Failed to get current index");
+
+    assert_eq!(current_index, add_item_boundary);
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result1.worker_id, worker_id);
-    assert_eq!(playback_result1.stopped_at_index, initialize_boundary);
+    assert_eq!(playback_result1.current_index, initialize_boundary);
     assert_eq!(playback_result2.worker_id, worker_id);
-    assert_eq!(playback_result2.stopped_at_index, add_item_boundary);
 }
 
 #[test]
@@ -308,12 +323,12 @@ async fn test_playback_and_rewind(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result = debug_executor
-        .playback(second_boundary, None)
+        .playback(second_boundary, None, 3)
         .await
         .expect("Failed to playback the worker in debug mode");
 
     let rewind_result = debug_executor
-        .rewind(first_boundary)
+        .rewind(first_boundary, 3)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -321,9 +336,9 @@ async fn test_playback_and_rewind(
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
-    assert_eq!(playback_result.stopped_at_index, second_boundary);
+    assert_eq!(playback_result.current_index, second_boundary);
     assert_eq!(rewind_result.worker_id, worker_id);
-    assert_eq!(rewind_result.stopped_at_index, first_boundary);
+    assert_eq!(rewind_result.current_index, first_boundary);
 }
 
 #[test]
@@ -365,7 +380,7 @@ async fn test_playback_and_fork(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result = debug_executor
-        .playback(first_boundary, None)
+        .playback(first_boundary, None, 3)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -470,6 +485,7 @@ async fn test_playback_with_overrides(
         .playback(
             shopping_cart_execution_result.last_add_item_boundary,
             Some(vec![oplog_overrides]),
+            3,
         )
         .await
         .expect("Failed to playback the worker in debug mode");
