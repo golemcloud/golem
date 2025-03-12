@@ -40,13 +40,24 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ComponentApi {
-    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+    component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
+    plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
+    pub fn new(
+        component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
+        plugin_service: Arc<
+            dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+        >,
+    ) -> Self {
+        Self {
+            component_service,
+            plugin_service,
+        }
+    }
+
     /// Create a new component
     ///
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.

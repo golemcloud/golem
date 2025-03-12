@@ -63,6 +63,7 @@ use std::vec;
 use tap::TapFallible;
 use tempfile::NamedTempFile;
 use tokio::io::BufReader;
+use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
@@ -309,7 +310,7 @@ pub fn create_new_versioned_component_id(component_id: &ComponentId) -> Versione
 }
 
 #[async_trait]
-pub trait ComponentService<Owner: ComponentOwner>: Debug {
+pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -449,11 +450,11 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
 }
 
 pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
-    component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
-    object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
-    component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<Owner>>,
+    object_store: Arc<dyn ComponentObjectStore>,
+    component_compilation: Arc<dyn ComponentCompilationService>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope> + Sync + Send>,
+    plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
@@ -465,12 +466,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> Debug for ComponentServiceDefaul
 
 impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, Scope> {
     pub fn new(
-        component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
-        object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
-        component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
+        component_repo: Arc<dyn ComponentRepo<Owner>>,
+        object_store: Arc<dyn ComponentObjectStore>,
+        component_compilation: Arc<dyn ComponentCompilationService>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope> + Sync + Send>,
-        library_plugin_files_service: Arc<PluginWasmFilesService>,
+        plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
@@ -478,7 +479,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             component_compilation,
             initial_component_files_service,
             plugin_service,
-            plugin_wasm_files_service: library_plugin_files_service,
+            plugin_wasm_files_service,
         }
     }
 
@@ -1727,6 +1728,305 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
                 component_id: component_id.clone(),
             })
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct LazyComponentService<Owner>(RwLock<Option<Box<dyn ComponentService<Owner> + 'static>>>);
+
+impl<Owner: ComponentOwner> Default for LazyComponentService<Owner> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<Owner: ComponentOwner> LazyComponentService<Owner> {
+    pub fn new() -> Self {
+        Self(RwLock::new(None))
+    }
+
+    pub async fn set_implementation(&self, value: impl ComponentService<Owner> + 'static) {
+        let _ = self.0.write().await.insert(Box::new(value));
+    }
+}
+
+#[async_trait]
+impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Owner> {
+    async fn create(
+        &self,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        files: Option<InitialComponentFilesArchiveAndPermissions>,
+        installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .create(
+                component_id,
+                component_name,
+                component_type,
+                data,
+                files,
+                installed_plugins,
+                dynamic_linking,
+                owner,
+            )
+            .await
+    }
+
+    // Files must have been uploaded to the blob store before calling this method
+    async fn create_internal(
+        &self,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        files: Vec<InitialComponentFile>,
+        installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .create_internal(
+                component_id,
+                component_name,
+                component_type,
+                data,
+                files,
+                installed_plugins,
+                dynamic_linking,
+                owner,
+            )
+            .await
+    }
+
+    async fn update(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        files: Option<InitialComponentFilesArchiveAndPermissions>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .update(
+                component_id,
+                data,
+                component_type,
+                files,
+                dynamic_linking,
+                owner,
+            )
+            .await
+    }
+
+    // Files must have been uploaded to the blob store before calling this method
+    async fn update_internal(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        // None signals that files should be reused from the previous version
+        files: Option<Vec<InitialComponentFile>>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .update_internal(
+                component_id,
+                data,
+                component_type,
+                files,
+                dynamic_linking,
+                owner,
+            )
+            .await
+    }
+
+    async fn download(
+        &self,
+        component_id: &ComponentId,
+        version: Option<ComponentVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<u8>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .download(component_id, version, owner)
+            .await
+    }
+
+    async fn download_stream(
+        &self,
+        component_id: &ComponentId,
+        version: Option<ComponentVersion>,
+        owner: &Owner,
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .download_stream(component_id, version, owner)
+            .await
+    }
+
+    async fn find_by_name(
+        &self,
+        component_name: Option<ComponentName>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .find_by_name(component_name, owner)
+            .await
+    }
+
+    async fn find_id_by_name(
+        &self,
+        component_name: &ComponentName,
+        owner: &Owner,
+    ) -> Result<Option<ComponentId>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .find_id_by_name(component_name, owner)
+            .await
+    }
+
+    async fn get_by_version(
+        &self,
+        component_id: &VersionedComponentId,
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .get_by_version(component_id, owner)
+            .await
+    }
+
+    async fn get_latest_version(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .get_latest_version(component_id, owner)
+            .await
+    }
+
+    async fn get(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref().unwrap().get(component_id, owner).await
+    }
+
+    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref().unwrap().get_owner(component_id).await
+    }
+
+    async fn delete(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<(), ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref().unwrap().delete(component_id, owner).await
+    }
+
+    async fn create_or_update_constraint(
+        &self,
+        component_constraint: &ComponentConstraints<Owner>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .create_or_update_constraint(component_constraint)
+            .await
+    }
+
+    async fn get_component_constraint(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .get_component_constraint(component_id, owner)
+            .await
+    }
+
+    /// Gets the list of installed plugins for a given component version belonging to `owner`
+    async fn get_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Vec<PluginInstallation>, PluginError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .get_plugin_installations_for_component(owner, component_id, component_version)
+            .await
+    }
+
+    async fn create_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        installation: PluginInstallationCreation,
+    ) -> Result<PluginInstallation, PluginError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .create_plugin_installation_for_component(owner, component_id, installation)
+            .await
+    }
+
+    async fn update_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+        update: PluginInstallationUpdate,
+    ) -> Result<(), PluginError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .update_plugin_installation_for_component(owner, installation_id, component_id, update)
+            .await
+    }
+
+    async fn delete_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+    ) -> Result<(), PluginError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .delete_plugin_installation_for_component(owner, installation_id, component_id)
+            .await
     }
 }
 

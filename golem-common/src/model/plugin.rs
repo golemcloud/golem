@@ -111,6 +111,7 @@ pub struct PluginInstallation {
 pub struct PluginInstallationCreation {
     pub name: String,
     pub version: String,
+    /// Plugins will be applied in order of increasing priority
     pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
