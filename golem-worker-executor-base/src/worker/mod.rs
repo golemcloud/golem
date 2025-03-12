@@ -622,11 +622,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         canceled: false,
                     });
                 self.oplog.add_and_commit(entry).await;
-                self.update_metadata()
-                    .await
-                    .expect("update_metadata failed"); // TODO
             }
         }
+        self.update_metadata()
+            .await
+            .expect("update_metadata failed"); // TODO
     }
 
     pub async fn pending_invocations(&self) -> Vec<TimestampedWorkerInvocation> {
@@ -860,11 +860,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         canceled: false,
                     });
                 self.oplog.add_and_commit(entry).await;
-                self.update_metadata()
-                    .await
-                    .expect("update_metadata failed"); // TODO
             }
         }
+
+        self.update_metadata()
+            .await
+            .expect("update_metadata failed"); // TODO
     }
 
     pub async fn list_directory(
@@ -1049,6 +1050,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.component_type(),
                 )
                 .await;
+            let mut execution_status = self.execution_status.write().unwrap();
+            execution_status.set_last_known_status(recalculated_status.clone());
 
             Ok(())
         }

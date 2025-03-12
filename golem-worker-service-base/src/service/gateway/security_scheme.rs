@@ -67,7 +67,7 @@ impl SafeDisplay for SecuritySchemeServiceError {
                 format!("InternalError: {}", err)
             }
             SecuritySchemeServiceError::NotFound(identifier) => {
-                format!("SecurityScheme not found: {}", identifier)
+                format!("security scheme not found: {}", identifier)
             }
         }
     }

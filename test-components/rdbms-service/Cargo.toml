@@ -19,4 +19,4 @@ wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
 path = "wit"
 
 [package.metadata.component.target.dependencies]
-"wasi:rdbms" = { path = "wit/deps/rdbms" }
+"golem:rdbms" = { path = "wit/deps/rdbms" }

@@ -66,8 +66,8 @@ pub enum ApiDefinitionError {
     ApiDefinitionNotFound(ApiDefinitionId),
     #[error("API definition is not draft: {0}")]
     ApiDefinitionNotDraft(ApiDefinitionId),
-    #[error("API definition already exists: {0}")]
-    ApiDefinitionAlreadyExists(ApiDefinitionId),
+    #[error("API definition {0} already exists with the same version: {1}")]
+    ApiDefinitionAlreadyExists(ApiDefinitionId, ApiVersion),
     #[error("API definition deployed: {0}")]
     ApiDefinitionDeployed(String),
     #[error("Internal repository error: {0}")]
@@ -92,7 +92,7 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::RibCompilationErrors(_) => self.to_string(),
             ApiDefinitionError::ApiDefinitionNotFound(_) => self.to_string(),
             ApiDefinitionError::ApiDefinitionNotDraft(_) => self.to_string(),
-            ApiDefinitionError::ApiDefinitionAlreadyExists(_) => self.to_string(),
+            ApiDefinitionError::ApiDefinitionAlreadyExists(_, _) => self.to_string(),
             ApiDefinitionError::IdentityProviderError(inner) => inner.to_safe_string(),
             ApiDefinitionError::ApiDefinitionDeployed(_) => self.to_string(),
             ApiDefinitionError::InternalRepoError(inner) => inner.to_safe_string(),
@@ -273,6 +273,7 @@ where
         if exists.is_some() {
             return Err(ApiDefinitionError::ApiDefinitionAlreadyExists(
                 definition.id.clone(),
+                definition.version.clone(),
             ));
         }
 
