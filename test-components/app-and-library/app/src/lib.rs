@@ -1,7 +1,7 @@
 mod bindings;
 
-use self::bindings::exports::it::app_and_library_plugin_app::app_api::Guest;
-use self::bindings::it::app_and_library_plugin_library::library_api::library_function;
+use self::bindings::exports::it::app_and_library_app::app_api::Guest;
+use self::bindings::it::app_and_library_library::library_api::library_function;
 
 struct Component;
 

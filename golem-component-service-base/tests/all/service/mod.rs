@@ -12,26 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bytes::Bytes;
 use golem_component_service_base::model::plugin::{
-    PluginDefinitionCreation, PluginTypeSpecificCreation,
+    AppPluginCreation, LibraryPluginCreation, PluginDefinitionCreation, PluginTypeSpecificCreation,
+    PluginWasmFileReference,
 };
+use golem_component_service_base::service::transformer_plugin_caller::{
+    TransformationFailedReason, TransformerPluginCaller,
+};
+use golem_service_base::replayable_stream::ReplayableStream;
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
+use http::StatusCode;
 use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::all::repo::sqlite::SqliteDb;
 use crate::all::repo::{constraint_data, get_component_data};
 use crate::Tracing;
-use golem_common::model::component::DefaultComponentOwner;
+use async_trait::async_trait;
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginInstallation,
-    PluginInstallationCreation,
+    ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope,
+    OplogProcessorDefinition, PluginInstallation, PluginInstallationCreation,
 };
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId,
     ComponentType, Empty,
 };
-use golem_common::SafeDisplay;
-use golem_component_service_base::config::PluginTransformationsConfig;
-use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
+use golem_common::{widen_infallible, SafeDisplay};
+use golem_component_service_base::model::{Component, InitialComponentFilesArchiveAndPermissions};
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
@@ -116,6 +124,29 @@ fn plugin_wasm_files_service(
     Arc::new(PluginWasmFilesService::new(blob_storage.clone()))
 }
 
+#[derive(Debug)]
+struct FailingTransformerPluginCaller;
+
+#[async_trait]
+impl<Owner: ComponentOwner> TransformerPluginCaller<Owner> for FailingTransformerPluginCaller {
+    async fn call_remote_transformer_plugin(
+        &self,
+        _component: &Component<Owner>,
+        _data: &[u8],
+        _url: String,
+        _parameters: &HashMap<String, String>,
+    ) -> Result<Vec<u8>, TransformationFailedReason> {
+        Err(TransformationFailedReason::HttpStatus(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    }
+}
+
+#[test_dep]
+fn transformer_plugin_caller() -> Arc<dyn TransformerPluginCaller<DefaultComponentOwner>> {
+    Arc::new(FailingTransformerPluginCaller)
+}
+
 #[test_dep]
 fn lazy_component_service(_tracing: &Tracing) -> Arc<LazyComponentService<DefaultComponentOwner>> {
     Arc::new(LazyComponentService::new())
@@ -143,6 +174,7 @@ async fn component_service(
     initial_component_files_service: &Arc<InitialComponentFilesService>,
     plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
     plugin_wasm_files_service: &Arc<PluginWasmFilesService>,
+    transformer_plugin_caller: &Arc<dyn TransformerPluginCaller<DefaultComponentOwner>>,
     _tracing: &Tracing,
 ) -> Arc<dyn ComponentService<DefaultComponentOwner>> {
     lazy_component_service
@@ -153,7 +185,7 @@ async fn component_service(
             initial_component_files_service.clone(),
             plugin_service.clone(),
             plugin_wasm_files_service.clone(),
-            PluginTransformationsConfig::default(),
+            transformer_plugin_caller.clone(),
         ))
         .await;
     lazy_component_service.clone()
@@ -777,5 +809,244 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
     assert!(matches!(
         result,
         Err(PluginError::InvalidOplogProcessorPlugin)
+    ));
+}
+
+#[test]
+#[tracing::instrument]
+// happy path is tested in integration tests using a real web server.
+async fn test_failing_component_transformer_plugin(
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+) {
+    let plugin_component_name =
+        ComponentName("failing-component-transformer-component".to_string());
+
+    // Create a component that can be composed with library
+    let created_component = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &plugin_component_name,
+            ComponentType::Durable,
+            get_component_data("shopping-cart"),
+            None,
+            vec![],
+            HashMap::new(),
+            &DefaultComponentOwner,
+        )
+        .await
+        .unwrap();
+
+    // create a library plugin
+    let plugin_name = "failing-component-transformer-plugin";
+    let plugin_version = "1";
+
+    plugin_service
+        .create_plugin(PluginDefinitionCreation {
+            name: plugin_name.to_string(),
+            version: plugin_version.to_string(),
+            description: "a plugin".to_string(),
+            icon: vec![],
+            homepage: "".to_string(),
+            specs: PluginTypeSpecificCreation::ComponentTransformer(
+                ComponentTransformerDefinition {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "http://localhost:9000/validate".to_string(),
+                    transform_url: "http://localhost:9000/transform".to_string(),
+                },
+            ),
+            scope: DefaultPluginScope::Global(Empty {}),
+            owner: DefaultPluginOwner,
+        })
+        .await
+        .unwrap();
+
+    let result = component_service
+        .create_plugin_installation_for_component(
+            &DefaultComponentOwner,
+            &created_component.versioned_component_id.component_id,
+            PluginInstallationCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                parameters: HashMap::new(),
+                priority: 0,
+            },
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(PluginError::InternalComponentError(
+            ComponentError::TransformationFailed(_)
+        ))
+    ));
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_library_plugin_creation(
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+) {
+    let plugin_component_name = ComponentName("library-plugin-creation-app".to_string());
+
+    // Create a component that can be composed with library
+    let created_component = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &plugin_component_name,
+            ComponentType::Durable,
+            get_component_data("app_and_library_app"),
+            None,
+            vec![],
+            HashMap::new(),
+            &DefaultComponentOwner,
+        )
+        .await
+        .unwrap();
+
+    // create a library plugin
+    let plugin_name = "library-plugin-creation-library";
+    let plugin_version = "1";
+
+    let library_plugin_stream = Bytes::from(get_component_data("app_and_library_library"))
+        .map_item(|i| i.map_err(widen_infallible::<String>))
+        .map_error(widen_infallible::<String>)
+        .erased();
+
+    plugin_service
+        .create_plugin(PluginDefinitionCreation {
+            name: plugin_name.to_string(),
+            version: plugin_version.to_string(),
+            description: "a plugin".to_string(),
+            icon: vec![],
+            homepage: "".to_string(),
+            specs: PluginTypeSpecificCreation::Library(LibraryPluginCreation {
+                data: PluginWasmFileReference::Data(Box::new(library_plugin_stream)),
+            }),
+            scope: DefaultPluginScope::Global(Empty {}),
+            owner: DefaultPluginOwner,
+        })
+        .await
+        .unwrap();
+
+    component_service
+        .create_plugin_installation_for_component(
+            &DefaultComponentOwner,
+            &created_component.versioned_component_id.component_id,
+            PluginInstallationCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                parameters: HashMap::new(),
+                priority: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    // get component and check it now implements the old interface
+    let final_component = component_service
+        .get_latest_version(
+            &created_component.versioned_component_id.component_id,
+            &created_component.owner,
+        )
+        .await
+        .unwrap()
+        .expect("plugin not found");
+
+    let exports = final_component.metadata.exports;
+
+    assert_eq!(exports.len(), 1);
+    assert!(matches!(
+        &exports[0],
+        AnalysedExport::Instance(AnalysedInstance {
+            name,
+            ..
+        }) if name == "it:app-and-library-app/app-api"
+    ));
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_app_plugin_creation(
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+) {
+    let plugin_component_name = ComponentName("app-plugin-creation-library".to_string());
+
+    // Create a component that will be composed with the app plugin
+    let created_component = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &plugin_component_name,
+            ComponentType::Durable,
+            get_component_data("app_and_library_library"),
+            None,
+            vec![],
+            HashMap::new(),
+            &DefaultComponentOwner,
+        )
+        .await
+        .unwrap();
+
+    // create a library plugin
+    let plugin_name = "app-plugin-creation-app";
+    let plugin_version = "1";
+
+    let app_plugin_stream = Bytes::from(get_component_data("app_and_library_app"))
+        .map_item(|i| i.map_err(widen_infallible::<String>))
+        .map_error(widen_infallible::<String>)
+        .erased();
+
+    plugin_service
+        .create_plugin(PluginDefinitionCreation {
+            name: plugin_name.to_string(),
+            version: plugin_version.to_string(),
+            description: "a plugin".to_string(),
+            icon: vec![],
+            homepage: "".to_string(),
+            specs: PluginTypeSpecificCreation::App(AppPluginCreation {
+                data: PluginWasmFileReference::Data(Box::new(app_plugin_stream)),
+            }),
+            scope: DefaultPluginScope::Global(Empty {}),
+            owner: DefaultPluginOwner,
+        })
+        .await
+        .unwrap();
+
+    component_service
+        .create_plugin_installation_for_component(
+            &DefaultComponentOwner,
+            &created_component.versioned_component_id.component_id,
+            PluginInstallationCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                parameters: HashMap::new(),
+                priority: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    // get component and check it now implements the new interface
+    let final_component = component_service
+        .get_latest_version(
+            &created_component.versioned_component_id.component_id,
+            &created_component.owner,
+        )
+        .await
+        .unwrap()
+        .expect("plugin not found");
+
+    let exports = final_component.metadata.exports;
+
+    assert_eq!(exports.len(), 1);
+    assert!(matches!(
+        &exports[0],
+        AnalysedExport::Instance(AnalysedInstance {
+            name,
+            ..
+        }) if name == "it:app-and-library-app/app-api"
     ));
 }

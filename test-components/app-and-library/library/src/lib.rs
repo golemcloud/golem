@@ -1,6 +1,6 @@
 mod bindings;
 
-use self::bindings::exports::it::app_and_library_plugin_library::library_api::Guest;
+use self::bindings::exports::it::app_and_library_library::library_api::Guest;
 
 pub struct Component;
 

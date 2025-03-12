@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "app-and-library-plugin-app"
+name = "app-and-library-app"
 version = "0.0.1"
 dependencies = [
  "once_cell",
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "app-and-library-plugin-library"
+name = "app-and-library-library"
 version = "0.0.1"
 dependencies = [
  "wit-bindgen-rt",
