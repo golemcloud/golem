@@ -83,6 +83,8 @@ jobs:
   docker-targets-build:
     needs:
       - build-bins
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
@@ -146,6 +148,8 @@ jobs:
   unit-tests-and-checks:
     needs:
       - build-core
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
@@ -189,6 +193,8 @@ jobs:
   worker-tests:
     needs:
       - build-core
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
       fail-fast: true
@@ -243,6 +249,8 @@ jobs:
   api-and-integration-tests-1:
     needs:
       - build-core
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
       fail-fast: true
@@ -296,6 +304,8 @@ jobs:
   api-and-integration-tests-2:
     needs:
       - build-bins
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
       fail-fast: true
@@ -347,6 +357,8 @@ jobs:
 
   wasm-rpc-stub:
     runs-on: blacksmith
+    env:
+      CARGO_BUILD_JOBS: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -510,6 +522,8 @@ jobs:
       - api-and-integration-tests-1
       - api-and-integration-tests-2
     if: "startsWith(github.ref, 'refs/tags/v')"
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
