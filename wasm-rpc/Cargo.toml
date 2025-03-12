@@ -22,6 +22,7 @@ async-recursion = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 bigdecimal = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
+bincode_derive = { workspace = true, optional = true }
 chrono = { workspace = true }
 git-version = "0.3.9"
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", optional = true }
@@ -61,7 +62,7 @@ host = [
     "typeinfo"
 ]
 arbitrary = ["dep:arbitrary"]
-bincode = ["dep:bincode", "golem-wasm-ast/bincode"]
+bincode = ["dep:bincode", "dep:bincode_derive", "golem-wasm-ast/bincode"]
 json = [
     "dep:serde",
     "dep:serde_json",

@@ -21,7 +21,7 @@ golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = 
 
 anyhow = { workspace = true }
 async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound"] }
+async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-scoped = "0.9.0"
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
@@ -29,7 +29,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 cli-table = { workspace = true }
-colored = "2.2.0"
+colored = "3.0.0"
 console-subscriber = { workspace = true }
 futures-util = { workspace = true }
 itertools = { workspace = true }

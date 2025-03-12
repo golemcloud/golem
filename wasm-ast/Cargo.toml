@@ -9,6 +9,7 @@ description = "WASM AST"
 
 [dependencies]
 bincode = { workspace = true, optional = true }
+bincode_derive = { workspace = true, optional = true }
 itertools = { workspace = true }
 leb128 = { version = "0.2.5", optional = true }
 mappable-rc = "0.1.1"
@@ -56,7 +57,7 @@ analysis = ["component"]
 wave = ["dep:wasm-wave"]
 
 # Bincode serialization for analysis output
-bincode = ["dep:bincode"]
+bincode = ["dep:bincode", "dep:bincode_derive"]
 
 # Serde JSON serialization for analysis output
 json = ["dep:serde", "dep:serde_json"]

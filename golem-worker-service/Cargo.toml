@@ -29,6 +29,7 @@ golem-worker-service-base = { path = "../golem-worker-service-base", version = "
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+bincode_derive = { workspace = true }
 bytes = { workspace = true }
 console-subscriber = { workspace = true }
 derive_more = { workspace = true }

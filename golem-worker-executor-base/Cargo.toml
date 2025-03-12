@@ -28,7 +28,7 @@ anyhow = { workspace = true }
 async-fs = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound"] }
+async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-recursion = { workspace = true }
 async-scoped = { version = "0.9.0", features = [ "use-tokio" ] }
 async-stream = { version = "0.3", optional = true }
@@ -36,9 +36,10 @@ async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
-bitflags = "2.9.0"
+bincode_derive = { workspace = true }
+bitflags = "2.6.0"
 bigdecimal = { workspace = true }
-bit-vec = { version = "0.6", features = ["serde"] }
+bit-vec = { version = "0.6.3", features = ["serde"] }
 bytes = { workspace = true }
 cap-fs-ext = "3.4.2"                                # keep in sync with wasmtime
 cap-std = { workspace = true }
@@ -53,7 +54,7 @@ fred = { workspace = true }
 fs-set-times = "0.20.3"
 futures = { workspace = true }
 futures-util = { workspace = true }
-gethostname = "0.5.0"
+gethostname = "1.0.0"
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }

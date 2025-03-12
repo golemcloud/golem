@@ -85,7 +85,7 @@ mod tests {
     use test_r::test;
 
     use bincode::{Decode, Encode};
-    use rand::distributions::Alphanumeric;
+    use rand::distr::Alphanumeric;
     use rand::Rng;
     use serde::{Deserialize, Serialize};
 
@@ -99,7 +99,7 @@ mod tests {
 
     impl Example {
         pub fn random(rng: &mut impl Rng) -> Example {
-            match rng.gen_range(0..2) {
+            match rng.random_range(0..2) {
                 0 => Example::First(
                     rng.sample_iter(Alphanumeric)
                         .take(7)
@@ -107,8 +107,8 @@ mod tests {
                         .collect(),
                 ),
                 1 => Example::Second {
-                    x: rng.gen::<i64>(),
-                    y: rng.gen::<bool>(),
+                    x: rng.random::<i64>(),
+                    y: rng.random::<bool>(),
                     z: Box::new(Example::random(rng)),
                 },
                 _ => unreachable!(),
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     pub fn roundtrip() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..1000 {
             let example = Example::random(&mut rng);
             let serialized = super::serialize(&example).unwrap();
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     pub fn try_deserialize_without_version() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..1000 {
             let example = Example::random(&mut rng);
             let serialized = serde_json::to_vec(&example).unwrap();
