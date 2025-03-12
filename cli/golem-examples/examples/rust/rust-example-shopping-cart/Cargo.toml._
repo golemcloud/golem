@@ -14,7 +14,7 @@ opt-level = 's'
 [dependencies]
 once_cell = "1.17.1"
 rand = "0.8.5"
-wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [package.metadata.component.target]
 path = "wit"

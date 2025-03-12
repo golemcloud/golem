@@ -18,4 +18,4 @@ path = "wit"
 
 [dependencies]
 lib = { path = "../lib" }
-wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
