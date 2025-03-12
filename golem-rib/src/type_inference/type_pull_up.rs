@@ -301,7 +301,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     },
                 );
             }
-            Expr::Plus {
+            outer @ Expr::Plus {
                 lhs,
                 rhs,
                 inferred_type,
@@ -310,6 +310,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
@@ -321,10 +322,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
-            Expr::Minus {
+            outer @ Expr::Minus {
                 lhs,
                 rhs,
                 inferred_type,
@@ -333,6 +334,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
@@ -344,10 +346,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
-            Expr::Multiply {
+            outer @ Expr::Multiply {
                 lhs,
                 rhs,
                 inferred_type,
@@ -356,6 +358,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
@@ -367,10 +370,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
-            Expr::Divide {
+            outer @ Expr::Divide {
                 lhs,
                 rhs,
                 inferred_type,
@@ -379,6 +382,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
@@ -390,7 +394,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
             Expr::EqualTo {
@@ -657,9 +661,10 @@ mod internal {
     use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
-        VariableId,
+        ActualType, ExpectedType, Expr, InferredNumber, InferredType, MatchArm, Range,
+        TypeMismatchError, TypeName, VariableId,
     };
+    use combine::parser::choice::A::P;
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -1080,32 +1085,78 @@ mod internal {
     }
 
     pub(crate) fn handle_math_op<F>(
+        original_math_expr: &Expr,
         original_left_expr: &Expr,
         original_right_expr: &Expr,
         result_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
         f: F,
-    ) where
+    ) -> Result<(), TypeMismatchError>
+    where
         F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr,
     {
         let right_expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_right_expr.clone());
+
         let left_expr = inferred_type_stack
             .pop_front()
             .unwrap_or(original_left_expr.clone());
 
         let right_expr_type = right_expr.inferred_type();
         let left_expr_type = left_expr.inferred_type();
-        let new_result_type = result_type.merge(right_expr_type).merge(left_expr_type);
 
-        let new_math_op = f(
-            Box::new(left_expr),
-            Box::new(right_expr),
-            new_result_type.clone(),
-        );
+        dbg!(result_type.clone());
+        dbg!(right_expr.clone());
+        dbg!(left_expr.clone());
+        if result_type.un_resolved()
+            && !right_expr_type.un_resolved()
+            && !left_expr_type.un_resolved()
+        {
+            // We shouldn't be merging the types of individual expressions's type to the result type
+            // because the result type of a math of can stay independent.
+            let right_number_type = right_expr_type.as_number().map_err(|_| TypeMismatchError {
+                expr_with_wrong_type: right_expr.clone(),
+                parent_expr: Some(original_math_expr.clone()),
+                expected_type: ExpectedType::Kind(TypeKind::Number),
+                actual_type: ActualType::Inferred(right_expr_type),
+                field_path: Default::default(),
+                additional_error_detail: vec![
+                    "math expression consist of operands that are not valid numbers".to_string(),
+                ],
+            })?;
+            let left_number_type = left_expr_type.as_number().map_err(|_| TypeMismatchError {
+                expr_with_wrong_type: left_expr.clone(),
+                parent_expr: Some(original_math_expr.clone()),
+                expected_type: ExpectedType::Kind(TypeKind::Number),
+                actual_type: ActualType::Inferred(left_expr_type),
+                field_path: Default::default(),
+                additional_error_detail: vec![
+                    "math expression consist of operands that are not valid numbers".to_string(),
+                ],
+            })?;
 
-        inferred_type_stack.push_front(new_math_op);
+            let promoted_type = InferredNumber::promote_type(&left_number_type, &right_number_type);
+
+            let new_result_type = promoted_type;
+            let new_math_op = f(
+                Box::new(left_expr),
+                Box::new(right_expr),
+                InferredType::from(new_result_type),
+            );
+
+            inferred_type_stack.push_front(new_math_op);
+        } else {
+            let new_math_op = f(
+                Box::new(left_expr),
+                Box::new(right_expr),
+                result_type.clone(),
+            );
+
+            inferred_type_stack.push_front(new_math_op);
+        }
+
+        Ok(())
     }
 
     pub(crate) fn handle_comparison_op<F>(

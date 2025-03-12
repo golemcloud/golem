@@ -1669,7 +1669,7 @@ mod interpreter_tests {
 
         rib_input.insert("request".to_string(), value_and_type);
 
-        let mut interpreter = test_utils::static_test_interpreter(
+        let mut interpreter = test_utils::interpreter_static_response(
             &ValueAndType::new(Value::S8(1), s8()),
             Some(RibInput::new(rib_input)),
         );
@@ -1736,7 +1736,7 @@ mod interpreter_tests {
 
         rib_input.insert("request".to_string(), value_and_type);
 
-        let mut interpreter = test_utils::static_test_interpreter(
+        let mut interpreter = test_utils::interpreter_static_response(
             &ValueAndType::new(Value::S8(1), s8()),
             Some(RibInput::new(rib_input)),
         );
@@ -1872,6 +1872,81 @@ mod interpreter_tests {
             .unwrap();
 
         assert_eq!(result, 0u8.into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_with_numbers_1() {
+        let component_metadata =
+            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+
+        let mut interpreter =
+            test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
+
+        let rib = r#"
+          let worker = instance("my-worker");
+          worker.foo(1)
+        "#;
+
+        let expr = Expr::from_text(rib).unwrap();
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            ValueAndType::new(Value::U64(2), u64())
+        );
+    }
+
+    #[test]
+    async fn test_interpreter_with_numbers_2() {
+        let component_metadata =
+            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+
+        let mut interpreter =
+            test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
+
+        // z's type will be inferred as u32 and is not influenced by
+        // the fact that operands are u32
+        let rib = r#"
+          let worker = instance("my-worker");
+          let z = 1: u8 + 2:u8;
+          worker.foo(z)
+        "#;
+
+        let expr = Expr::from_text(rib).unwrap();
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            ValueAndType::new(Value::U64(2), u64())
+        );
+    }
+
+    #[test]
+    async fn test_interpreter_with_numbers_3() {
+        let component_metadata =
+            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+
+        let mut interpreter =
+            test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
+
+        // z's type will be inferred as u32 and is not influenced by
+        // the fact that operands are u32
+        let rib = r#"
+          let worker = instance("my-worker");
+          let z = 1 + 2;
+          worker.foo(z)
+        "#;
+
+        let expr = Expr::from_text(rib).unwrap();
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            ValueAndType::new(Value::U64(2), u64())
+        );
     }
 
     #[test]
@@ -2090,7 +2165,7 @@ mod interpreter_tests {
 
         let result_value = test_utils::get_value_and_type(&output_analysed_type, r#"ok(1)"#);
 
-        let mut interpreter = test_utils::static_test_interpreter(&result_value, None);
+        let mut interpreter = test_utils::interpreter_static_response(&result_value, None);
 
         let analysed_exports = test_utils::get_component_metadata(
             "my-worker-function",
@@ -2127,7 +2202,7 @@ mod interpreter_tests {
 
         let result_value = get_value_and_type(&output_analysed_type, r#"err("failed")"#);
 
-        let mut interpreter = test_utils::static_test_interpreter(&result_value, None);
+        let mut interpreter = test_utils::interpreter_static_response(&result_value, None);
 
         let analysed_exports = test_utils::get_component_metadata(
             "my-worker-function",
@@ -2197,7 +2272,7 @@ mod interpreter_tests {
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
-        let mut rib_executor = test_utils::static_test_interpreter(&result_value, None);
+        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), result_value);
@@ -2230,7 +2305,7 @@ mod interpreter_tests {
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
-        let mut rib_executor = test_utils::static_test_interpreter(&result_value, None);
+        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
@@ -2339,7 +2414,7 @@ mod interpreter_tests {
         let component_metadata = test_utils::get_metadata_with_resource_without_params();
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
-        let mut rib_executor = test_utils::static_test_interpreter(&result_value, None);
+        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
@@ -2393,7 +2468,7 @@ mod interpreter_tests {
         let component_metadata = test_utils::get_metadata_with_resource_without_params();
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
-        let mut rib_executor = test_utils::static_test_interpreter(&result_value, None);
+        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), result_value);
@@ -2898,7 +2973,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2975,7 +3050,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2995,7 +3070,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3035,7 +3110,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3055,7 +3130,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3075,7 +3150,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3095,7 +3170,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3135,7 +3210,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3155,7 +3230,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3199,7 +3274,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3220,7 +3295,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3281,7 +3356,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3330,7 +3405,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3355,7 +3430,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3384,7 +3459,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3414,7 +3489,7 @@ mod interpreter_tests {
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
         let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), None);
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3446,8 +3521,10 @@ mod interpreter_tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), Some(rib_input));
+        let mut rib_interpreter = test_utils::interpreter_static_response(
+            &"success".into_value_and_type(),
+            Some(rib_input),
+        );
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3482,8 +3559,10 @@ mod interpreter_tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter =
-            test_utils::static_test_interpreter(&"success".into_value_and_type(), Some(rib_input));
+        let mut rib_interpreter = test_utils::interpreter_static_response(
+            &"success".into_value_and_type(),
+            Some(rib_input),
+        );
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3542,7 +3621,7 @@ mod interpreter_tests {
 
         let compiled = compiler::compile(expr, &component_metadata).unwrap();
 
-        let mut rib_interpreter = test_utils::dynamic_test_interpreter(None);
+        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3603,7 +3682,7 @@ mod interpreter_tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter = test_utils::dynamic_test_interpreter(Some(rib_input));
+        let mut rib_interpreter = test_utils::interpreter_worker_details_response(Some(rib_input));
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3967,15 +4046,15 @@ mod interpreter_tests {
             golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
-        // A simple interpreter that always return result_value regardless
-        // of the function name, args, or worker name
-        pub(crate) fn static_test_interpreter(
+        // The interpreter that always returns a static value for every function calls in Rib
+        // regardless of the input arguments
+        pub(crate) fn interpreter_static_response(
             result_value: &ValueAndType,
             input: Option<RibInput>,
         ) -> Interpreter {
             let value = result_value.clone();
 
-            let invoke = Arc::new(StaticWorkerFnInvoke { value });
+            let invoke = Arc::new(TestInvoke1 { value });
 
             Interpreter {
                 input: input.unwrap_or_default(),
@@ -3983,12 +4062,28 @@ mod interpreter_tests {
             }
         }
 
-        struct StaticWorkerFnInvoke {
+        // The interpreter that always returns a record value consisting of function name, worker name etc
+        // for every function calls in Rib.
+        // Example : `my-instance.qux[amazon:shopping-cart]("bar")` will return a record
+        // that contains the actual worker-name of my-instance, the function name `qux` and arguments
+        // It helps ensures that interpreter invokes the function at the expected worker.
+        pub(crate) fn interpreter_worker_details_response(
+            rib_input: Option<RibInput>,
+        ) -> Interpreter {
+            let invoke: Arc<dyn RibFunctionInvoke + Send + Sync> = Arc::new(TestInvoke2);
+
+            Interpreter {
+                input: rib_input.unwrap_or_default(),
+                invoke,
+            }
+        }
+
+        struct TestInvoke1 {
             value: ValueAndType,
         }
 
         #[async_trait]
-        impl RibFunctionInvoke for StaticWorkerFnInvoke {
+        impl RibFunctionInvoke for TestInvoke1 {
             async fn invoke(
                 &self,
                 _worker_name: Option<EvaluatedWorkerName>,
@@ -4003,10 +4098,10 @@ mod interpreter_tests {
             }
         }
 
-        struct DynamicWorkerFnInvoke;
+        struct TestInvoke2;
 
         #[async_trait]
-        impl RibFunctionInvoke for DynamicWorkerFnInvoke {
+        impl RibFunctionInvoke for TestInvoke2 {
             async fn invoke(
                 &self,
                 worker_name: Option<EvaluatedWorkerName>,
@@ -4048,15 +4143,6 @@ mod interpreter_tests {
                     tuple(vec![record(analysed_type_pairs)]),
                 );
                 Ok(value)
-            }
-        }
-
-        pub(crate) fn dynamic_test_interpreter(rib_input: Option<RibInput>) -> Interpreter {
-            let invoke: Arc<dyn RibFunctionInvoke + Send + Sync> = Arc::new(DynamicWorkerFnInvoke);
-
-            Interpreter {
-                input: rib_input.unwrap_or_default(),
-                invoke,
             }
         }
     }

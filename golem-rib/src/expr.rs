@@ -492,7 +492,7 @@ impl Expr {
         Expr::Plus {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: InferredType::number(),
+            inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -1087,6 +1087,7 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibCompilationError> {
+        dbg!(self.clone());
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
@@ -1106,8 +1107,10 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibCompilationError> {
+        dbg!(self.clone());
         self.identify_instance_creation(function_type_registry)?;
         *self = self.bind_global_variable_types(type_spec)?;
+        dbg!(self.clone());
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();

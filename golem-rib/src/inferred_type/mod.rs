@@ -81,6 +81,37 @@ pub enum InferredNumber {
     F64,
 }
 
+impl InferredNumber {
+    pub fn promote_type(a: &InferredNumber, b: &InferredNumber) -> InferredNumber {
+        use InferredNumber::*;
+
+        match (a, b) {
+            //Floating-point always wins
+            (F64, _) | (_, F64) => F64,
+            (F32, _) | (_, F32) => F32,
+
+            // 64-bit integer dominance
+            (S64, _) | (_, S64) => S64,
+            (U64, S8) | (U64, S16) | (U64, S32) => S64, // Convert U64 + Signed to S64
+            (U64, _) | (_, U64) => U64,
+
+            // 32-bit integer dominance**
+            (S32, U8) | (S32, U16) | (S32, U32) | (U32, S8) | (U32, S16) => S32, // Prefer signed
+            (S32, _) | (_, S32) => S32,
+            (U32, _) | (_, U32) => U32,
+
+            // 16-bit integer dominance**
+            (S16, U8) | (U16, S8) => S16, // Prefer signed
+            (S16, _) | (_, S16) => S16,
+            (U16, _) | (_, U16) => U16,
+
+            // **8-bit integer dominance**
+            (S8, _) | (_, S8) => S8,
+            (U8, U8) => U8,
+        }
+    }
+}
+
 impl From<InferredNumber> for InferredType {
     fn from(inferred_number: InferredNumber) -> Self {
         match inferred_number {

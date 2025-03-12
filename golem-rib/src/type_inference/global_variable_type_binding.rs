@@ -1162,14 +1162,10 @@ mod internal {
             .map(|x| x.0)
             .unwrap_or(original_left_expr.clone());
 
-        let right_expr_type = right_expr.inferred_type();
-        let left_expr_type = left_expr.inferred_type();
-        let new_result_type = result_type.merge(right_expr_type).merge(left_expr_type);
-
         let new_math_op = f(
             Box::new(left_expr),
             Box::new(right_expr),
-            new_result_type.clone(),
+            result_type.clone(),
         );
 
         temp_stack.push_front((new_math_op, false));

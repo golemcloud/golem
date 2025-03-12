@@ -729,10 +729,11 @@ impl Display for FullyQualifiedFunctionName {
         }
 
         if let Some(interface_name) = &self.interface_name {
-            write!(f, "/{}.", interface_name)?
+            write!(f, "/{}.", interface_name)?;
+            write!(f, "{{{}}}", self.function_name)
+        } else {
+            write!(f, "{}", self.function_name)
         }
-
-        write!(f, "{{{}}}", self.function_name)
     }
 }
 
