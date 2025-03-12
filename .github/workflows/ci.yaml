@@ -45,7 +45,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check that wit-deps are up-to-date
         run: cargo make --profile ci check-wit
-      - name: Build all targets
+      - name: Build core crates
         run: cargo make --profile ci build-core
 
   build-bins:
@@ -74,41 +74,11 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Building executables for tests
+      - name: Building all executables
         env:
           QUIET: true
         run: cargo make --profile ci build-bins
         timeout-minutes: 30
-      - name: Upload compiled component-compilation-service
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-component-compilation-service
-          path: |
-            target/debug/golem-component-compilation-service
-      - name: Upload compiled component-service
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-component-service
-          path: |
-            target/debug/golem-component-service
-      - name: Upload compiled shard-manager
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-shard-manager
-          path: |
-            target/debug/golem-shard-manager
-      - name: Upload compiled worker-service
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-worker-service
-          path: |
-            target/debug/golem-worker-service
-      - name: Upload compiled worker-executor
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-worker-executor
-          path: |
-            target/debug/worker-executor
 
   docker-targets-build:
     needs:
@@ -352,17 +322,6 @@ jobs:
           shared-key: debug-bins
           cache-all-crates: true
           save-if: false
-
-      - name: Download specific files from target
-        uses: actions/download-artifact@v4
-        with:
-          pattern: target-debug-*
-          path: target/debug
-          merge-multiple: true
-      - name: Fix permissions
-        working-directory: target/debug
-        run: chmod +x golem-component-compilation-service golem-component-service golem-shard-manager golem-worker-service worker-executor
-
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -373,7 +332,6 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
