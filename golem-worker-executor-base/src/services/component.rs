@@ -146,6 +146,7 @@ pub fn configured(
                 cache_config.max_resolved_component_capacity,
                 cache_config.time_to_idle,
                 config.retries.clone(),
+                config.connect_timeout,
                 compiled_component_service,
                 config.max_component_size,
                 plugin_observations,
@@ -187,6 +188,7 @@ impl ComponentServiceGrpc {
         max_resolved_component_capacity: usize,
         time_to_idle: Duration,
         retry_config: RetryConfig,
+        connect_timeout: Duration,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
         max_component_size: usize,
         plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
@@ -215,7 +217,7 @@ impl ComponentServiceGrpc {
                 endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
-                    ..Default::default() // TODO
+                    connect_timeout,
                 },
             ),
             plugin_observations,

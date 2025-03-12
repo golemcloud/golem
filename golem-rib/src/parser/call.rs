@@ -796,8 +796,7 @@ mod function_call_tests {
         assert_eq!(result, expected);
     }
 
-    // TODO; The resource parameters can be identifiers, but currently
-    // function name parser parses all arguments to be just string
+    // TODO: The resource parameters can be identifiers, but currently function name parser parses all arguments to be just string
     #[test]
     fn test_call_with_function_name_indexed_constructor2() {
         let input = "ns:name/interface.{resource1(\"hello\", 1, true).new}({bar, baz})";
@@ -905,7 +904,7 @@ mod function_call_tests {
         assert_eq!(result, expected);
     }
 
-    // TODO; Should have been RawResourceStaticMethod
+    // TODO: Should have been RawResourceStaticMethod
     #[test]
     fn test_call_with_function_name_static_method_syntax_sugar() {
         let input = "ns:name/interface.{resource1.do-something-static}({bar, baz})";

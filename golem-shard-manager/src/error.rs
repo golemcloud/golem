@@ -20,6 +20,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::retriable_error::IsRetriableError;
+use golem_service_base::model::GolemError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ShardManagerError {
@@ -34,7 +35,7 @@ pub enum ShardManagerError {
     #[error("No result")]
     NoResult,
     #[error("Worker execution error: {0}")]
-    WorkerExecutionError(String),
+    WorkerExecutionError(GolemError),
     #[error("Persistence serialization error {0}")]
     SerializationError(String),
     #[error("Redis error {0}")]
@@ -91,7 +92,7 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 error(shard_manager_error::Error::Unknown, "NoResult".to_string())
             }
             ShardManagerError::WorkerExecutionError(details) => {
-                error(shard_manager_error::Error::Unknown, details)
+                error(shard_manager_error::Error::Unknown, details.to_string())
             }
             ShardManagerError::SerializationError(details) => {
                 error(shard_manager_error::Error::Unknown, details)

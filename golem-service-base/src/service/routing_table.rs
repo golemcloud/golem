@@ -32,8 +32,8 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
 use golem_common::cache::*;
-use golem_common::client::GrpcClient;
-use golem_common::model::RoutingTable;
+use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::{RetryConfig, RoutingTable};
 use golem_common::retriable_error::IsRetriableError;
 
 #[derive(Debug, Clone)]
@@ -98,6 +98,9 @@ pub struct RoutingTableConfig {
     pub port: u16,
     #[serde(with = "humantime_serde")]
     pub invalidation_min_delay: Duration,
+    pub retries: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
 impl RoutingTableConfig {
@@ -114,6 +117,8 @@ impl Default for RoutingTableConfig {
             host: "localhost".to_string(),
             port: 9002,
             invalidation_min_delay: Duration::from_millis(500),
+            retries: RetryConfig::default(),
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -146,7 +151,10 @@ impl RoutingTableServiceDefault {
                     .accept_compressed(CompressionEncoding::Gzip)
             },
             config.url(),
-            Default::default(), // TODO
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                connect_timeout: config.connect_timeout,
+            },
         );
         Self {
             config,

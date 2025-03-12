@@ -17,12 +17,13 @@ use goldenfile::Mint;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{OplogEntry, OplogPayload, SpanData};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
     IdempotencyKey, OplogIndex, Timestamp, TimestampedWorkerInvocation, WorkerInvocation,
 };
 use golem_wasm_rpc::Value;
+use std::collections::HashMap;
 use std::num::{NonZeroU128, NonZeroU64};
 use test_r::test;
 
@@ -43,11 +44,70 @@ pub fn oplog_entry() {
         },
     };
 
-    // TODO: ExportedFunctionInvocation, StartSpan, FinishSpan
+    let oe33 = OplogEntry::ExportedFunctionInvoked {
+        timestamp: Timestamp::from(1724701938466),
+        function_name: "test:pkg/iface.{fn}".to_string(),
+        request: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
+        idempotency_key: IdempotencyKey {
+            value: "id1".to_string(),
+        },
+        trace_id: TraceId::from_string("4bf92f3577b34da6a3ce929d0e0e4736").unwrap(),
+        trace_states: vec!["a=1".to_string(), "b=2".to_string()],
+        invocation_context: vec![
+            SpanData::LocalSpan {
+                span_id: SpanId::from_string("cddd89c618fb7bf3").unwrap(),
+                start: Timestamp::from(1724701938466),
+                parent_id: Some(SpanId::from_string("00f067aa0ba902b7").unwrap()),
+                linked_context: Some(vec![SpanData::LocalSpan {
+                    span_id: SpanId::from_string("d0fa4a9110f2dcab").unwrap(),
+                    start: Timestamp::from(1724701938466),
+                    parent_id: None,
+                    linked_context: None,
+                    attributes: HashMap::new(),
+                    inherited: true,
+                }]),
+                attributes: HashMap::from_iter(vec![(
+                    "key".to_string(),
+                    AttributeValue::String("value".to_string()),
+                )]),
+                inherited: false,
+            },
+            SpanData::ExternalSpan {
+                span_id: SpanId::from_string("00f067aa0ba902b7").unwrap(),
+            },
+        ],
+    };
+
+    let oe34 = OplogEntry::StartSpan {
+        timestamp: Timestamp::from(1724701938466),
+        span_id: SpanId::from_string("cddd89c618fb7bf3").unwrap(),
+        parent_id: Some(SpanId::from_string("00f067aa0ba902b7").unwrap()),
+        linked_context_id: Some(SpanId::from_string("d0fa4a9110f2dcab").unwrap()),
+        attributes: HashMap::from_iter(vec![(
+            "key".to_string(),
+            AttributeValue::String("value".to_string()),
+        )]),
+    };
+
+    let oe35 = OplogEntry::FinishSpan {
+        timestamp: Timestamp::from(1724701938466),
+        span_id: SpanId::from_string("cddd89c618fb7bf3").unwrap(),
+    };
+
+    let oe36 = OplogEntry::SetSpanAttribute {
+        timestamp: Timestamp::from(1724701938466),
+        span_id: SpanId::from_string("cddd89c618fb7bf3").unwrap(),
+        key: "key".to_string(),
+        value: AttributeValue::String("value".to_string()),
+    };
 
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("oplog_entry_revert", &mut mint, oe31);
     backward_compatible("oplog_entry_cancel_pending_invocation", &mut mint, oe32);
+    backward_compatible("oplog_entry_exported_function_invoked", &mut mint, oe33);
+    backward_compatible("oplog_entry_start_span", &mut mint, oe34);
+    backward_compatible("oplog_entry_finish_span", &mut mint, oe35);
+    backward_compatible("oplog_entry_set_span_attribute", &mut mint, oe36);
 }
 
 #[test]

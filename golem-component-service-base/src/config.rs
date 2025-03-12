@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::Empty;
+use golem_common::model::{Empty, RetryConfig};
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -28,6 +29,8 @@ impl Default for ComponentCompilationConfig {
         Self::Enabled(ComponentCompilationEnabledConfig {
             host: "localhost".to_string(),
             port: 9091,
+            retries: RetryConfig::default(),
+            connect_timeout: Duration::from_secs(10),
         })
     }
 }
@@ -36,6 +39,9 @@ impl Default for ComponentCompilationConfig {
 pub struct ComponentCompilationEnabledConfig {
     pub host: String,
     pub port: u16,
+    pub retries: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
 impl ComponentCompilationEnabledConfig {
@@ -47,4 +53,9 @@ impl ComponentCompilationEnabledConfig {
             .build()
             .expect("Failed to build ComponentCompilationService URI")
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PluginTransformationsConfig {
+    pub(crate) retries: RetryConfig,
 }

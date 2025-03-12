@@ -125,7 +125,11 @@ impl Services {
             let uri = config.uri();
             let retry_config = config.retries.clone();
 
-            Arc::new(RemoteComponentService::new(uri, retry_config))
+            Arc::new(RemoteComponentService::new(
+                uri,
+                retry_config,
+                config.connect_timeout,
+            ))
         };
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(

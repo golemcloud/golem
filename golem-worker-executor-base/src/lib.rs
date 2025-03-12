@@ -490,6 +490,8 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             .access_token
             .parse::<Uuid>()
             .expect("Access token must be an UUID"),
+        golem_config.public_worker_api.retries.clone(),
+        golem_config.public_worker_api.connect_timeout,
     ));
 
     let rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync> =

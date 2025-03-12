@@ -84,7 +84,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     owned_worker_id: OwnedWorkerId,
 
     oplog: Arc<dyn Oplog + Send + Sync>,
-    event_service: Arc<dyn WorkerEventService + Send + Sync>, // TODO: rename
+    worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
 
     deps: All<Ctx>,
 
@@ -271,7 +271,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(Worker {
             owned_worker_id,
             oplog,
-            event_service: Arc::new(WorkerEventServiceDefault::new(
+            worker_event_service: Arc::new(WorkerEventServiceDefault::new(
                 deps.config().limits.event_broadcast_capacity,
                 deps.config().limits.event_history_size,
             )),
@@ -396,7 +396,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
-        self.event_service.clone()
+        self.worker_event_service.clone()
     }
 
     pub fn is_loading(&self) -> bool {
@@ -594,7 +594,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.oplog.add_and_commit(entry).await;
         self.update_metadata()
             .await
-            .expect("update_metadata failed"); // TODO
+            .expect("update_metadata failed");
     }
 
     /// Enqueues a manual update.
@@ -626,7 +626,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         self.update_metadata()
             .await
-            .expect("update_metadata failed"); // TODO
+            .expect("update_metadata failed");
     }
 
     pub async fn pending_invocations(&self) -> Vec<TimestampedWorkerInvocation> {
@@ -710,7 +710,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .concat();
         let mut map = self.invocation_results.write().await;
         for key in keys_to_fail {
-            let stderr = self.event_service.get_last_invocation_errors();
+            let stderr = self.worker_event_service.get_last_invocation_errors();
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
@@ -865,7 +865,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.update_metadata()
             .await
-            .expect("update_metadata failed"); // TODO
+            .expect("update_metadata failed");
     }
 
     pub async fn list_directory(
@@ -1548,7 +1548,7 @@ impl RunningWorker {
             parent.key_value_service(),
             parent.blob_store_service(),
             parent.rdbms_service(),
-            parent.event_service.clone(),
+            parent.worker_event_service.clone(),
             parent.active_workers(),
             parent.oplog_service(),
             parent.oplog.clone(),

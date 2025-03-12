@@ -125,6 +125,7 @@ pub struct ComponentServiceConfig {
     pub port: u16,
     pub access_token: Uuid,
     pub retries: RetryConfig,
+    pub connect_timeout: Duration,
 }
 
 impl ComponentServiceConfig {
@@ -151,6 +152,7 @@ impl Default for ComponentServiceConfig {
             access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
                 .expect("invalid UUID"),
             retries: RetryConfig::max_attempts_3(),
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }

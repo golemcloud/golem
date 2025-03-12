@@ -26,15 +26,15 @@ use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use tracing::info;
 
+use crate::error::{HealthCheckError, ShardManagerError};
+use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
+use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
-
-use crate::error::{HealthCheckError, ShardManagerError};
-use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
-use crate::shard_manager_config::WorkerExecutorServiceConfig;
+use golem_service_base::model::{GolemError, GolemErrorUnknown};
 
 #[async_trait]
 pub trait WorkerExecutorService {
@@ -190,7 +190,7 @@ impl WorkerExecutorServiceDefault {
             },
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),
-                ..Default::default() // TODO: configure
+                connect_timeout: config.connect_timeout,
             },
         );
         Self { config, client }
@@ -227,10 +227,11 @@ impl WorkerExecutorServiceDefault {
             golem::workerexecutor::v1::AssignShardsResponse {
                 result:
                     Some(golem::workerexecutor::v1::assign_shards_response::Result::Failure(failure)),
-            } => Err(ShardManagerError::WorkerExecutionError(format!(
-                "{:?}",
+            } => Err(ShardManagerError::WorkerExecutionError(
                 failure
-            ))), // TODO: can we do better then debug format?
+                    .try_into()
+                    .unwrap_or_else(|err| GolemError::Unknown(GolemErrorUnknown { details: err })),
+            )),
             golem::workerexecutor::v1::AssignShardsResponse { result: None } => {
                 Err(ShardManagerError::NoResult)
             }
@@ -268,10 +269,11 @@ impl WorkerExecutorServiceDefault {
             golem::workerexecutor::v1::RevokeShardsResponse {
                 result:
                     Some(golem::workerexecutor::v1::revoke_shards_response::Result::Failure(failure)),
-            } => Err(ShardManagerError::WorkerExecutionError(format!(
-                "{:?}",
+            } => Err(ShardManagerError::WorkerExecutionError(
                 failure
-            ))), // TODO: can we do better then debug format?
+                    .try_into()
+                    .unwrap_or_else(|err| GolemError::Unknown(GolemErrorUnknown { details: err })),
+            )),
             golem::workerexecutor::v1::RevokeShardsResponse { result: None } => {
                 Err(ShardManagerError::NoResult)
             }

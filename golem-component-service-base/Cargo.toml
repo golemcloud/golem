@@ -25,6 +25,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 futures = { workspace = true }
+humantime-serde = { workspace = true }
 http = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }

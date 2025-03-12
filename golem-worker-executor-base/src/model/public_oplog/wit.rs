@@ -361,6 +361,7 @@ impl From<PublicWorkerInvocation> for oplog::WorkerInvocation {
                 idempotency_key,
                 full_function_name,
                 function_input,
+                ..
             }) => Self::ExportedFunction(oplog::ExportedFunctionInvocationParameters {
                 function_name: full_function_name,
                 input: function_input.map(|input| input.into_iter().map(|v| v.into()).collect()),

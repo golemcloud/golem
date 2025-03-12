@@ -1167,19 +1167,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
-            Some(cursor) => {
-                get_public_oplog_chunk(
-                    self.component_service(),
-                    self.oplog_service(),
-                    self.plugins(),
-                    &owned_worker_id,
-                    cursor.current_component_version,
-                    OplogIndex::from_u64(cursor.next_oplog_index),
-                    min(request.count as usize, 100), // TODO: configurable maximum
-                )
-                .await
-                .map_err(GolemError::unknown)?
-            }
+            Some(cursor) => get_public_oplog_chunk(
+                self.component_service(),
+                self.oplog_service(),
+                self.plugins(),
+                &owned_worker_id,
+                cursor.current_component_version,
+                OplogIndex::from_u64(cursor.next_oplog_index),
+                min(
+                    request.count as usize,
+                    self.services.config().limits.max_oplog_query_pages_size,
+                ),
+            )
+            .await
+            .map_err(GolemError::unknown)?,
             None => {
                 let start = OplogIndex::from_u64(request.from_oplog_index);
                 let initial_component_version =
@@ -1193,7 +1194,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_worker_id,
                     initial_component_version,
                     start,
-                    min(request.count as usize, 100), // TODO: configurable maximum
+                    min(
+                        request.count as usize,
+                        self.services.config().limits.max_oplog_query_pages_size,
+                    ),
                 )
                 .await
                 .map_err(GolemError::unknown)?
@@ -1237,20 +1241,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
-            Some(cursor) => {
-                search_public_oplog(
-                    self.component_service(),
-                    self.oplog_service(),
-                    self.plugins(),
-                    &owned_worker_id,
-                    cursor.current_component_version,
-                    OplogIndex::from_u64(cursor.next_oplog_index),
-                    min(request.count as usize, 100), // TODO: configurable maximum,
-                    &request.query,
-                )
-                .await
-                .map_err(GolemError::unknown)?
-            }
+            Some(cursor) => search_public_oplog(
+                self.component_service(),
+                self.oplog_service(),
+                self.plugins(),
+                &owned_worker_id,
+                cursor.current_component_version,
+                OplogIndex::from_u64(cursor.next_oplog_index),
+                min(
+                    request.count as usize,
+                    self.services.config().limits.max_oplog_query_pages_size,
+                ),
+                &request.query,
+            )
+            .await
+            .map_err(GolemError::unknown)?,
             None => {
                 let start = OplogIndex::INITIAL;
                 let initial_component_version =
@@ -1263,7 +1268,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_worker_id,
                     initial_component_version,
                     start,
-                    min(request.count as usize, 100), // TODO: configurable maximum,
+                    min(
+                        request.count as usize,
+                        self.services.config().limits.max_oplog_query_pages_size,
+                    ),
                     &request.query,
                 )
                 .await

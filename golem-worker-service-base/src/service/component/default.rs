@@ -30,6 +30,7 @@ use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 use http::Uri;
+use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
@@ -65,7 +66,7 @@ pub struct RemoteComponentService {
 }
 
 impl RemoteComponentService {
-    pub fn new(uri: Uri, retry_config: RetryConfig) -> Self {
+    pub fn new(uri: Uri, retry_config: RetryConfig, connect_timeout: Duration) -> Self {
         Self {
             client: GrpcClient::new(
                 "component_service",
@@ -77,7 +78,7 @@ impl RemoteComponentService {
                 uri,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
-                    ..Default::default() // TODO
+                    connect_timeout,
                 },
             ),
             retry_config,

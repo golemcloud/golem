@@ -7,9 +7,9 @@ mod tests {
     use async_trait::async_trait;
     use golem_wasm_rpc::IntoValueAndType;
     use rand::prelude::*;
+    use rand::rng;
     use std::env;
     use std::time::Duration;
-    use rand::rng;
     use tokio::sync::mpsc;
     use tokio::task::JoinSet;
     use tracing::{error, info};

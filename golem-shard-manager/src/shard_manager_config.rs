@@ -77,6 +77,8 @@ pub struct WorkerExecutorServiceConfig {
     #[serde(with = "humantime_serde")]
     pub revoke_shards_timeout: Duration,
     pub retries: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
 impl Default for WorkerExecutorServiceConfig {
@@ -85,7 +87,8 @@ impl Default for WorkerExecutorServiceConfig {
             assign_shards_timeout: Duration::from_secs(5),
             health_check_timeout: Duration::from_secs(2),
             revoke_shards_timeout: Duration::from_secs(5),
-            retries: Default::default(),
+            retries: RetryConfig::max_attempts_5(),
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }

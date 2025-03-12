@@ -215,14 +215,21 @@ impl InterpreterStack {
         Ok(())
     }
 
-    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) {
-        let idx = cases.iter().position(|x| x == &enum_name).unwrap() as u32; // TODO: return error
+    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> Result<(), String> {
+        let idx = cases.iter().position(|x| x == &enum_name).ok_or_else(|| {
+            format!(
+                "internal error: failed to find the enum {} in the cases",
+                enum_name
+            )
+        })? as u32;
         self.push_val(ValueAndType::new(
             Value::Enum(idx),
             AnalysedType::Enum(TypeEnum {
                 cases: cases.into_iter().collect(),
             }),
         ));
+
+        Ok(())
     }
 
     pub fn push_some(&mut self, inner_element: Value, inner_type: &AnalysedType) {
