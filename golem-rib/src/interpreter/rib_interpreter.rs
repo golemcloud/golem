@@ -1400,8 +1400,7 @@ mod interpreter_tests {
         Path, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
-        bool, case, f32, field, list, option, record, s32, s8, str, tuple, u32, u64, u8,
-        variant,
+        bool, case, f32, field, list, option, record, s32, s8, str, tuple, u32, u64, u8, variant,
     };
     use golem_wasm_rpc::{parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType};
 

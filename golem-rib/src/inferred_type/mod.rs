@@ -72,7 +72,6 @@ pub enum InferredType {
 
 impl Eq for InferredType {}
 
-
 impl Hash for InferredType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
@@ -130,7 +129,10 @@ impl Hash for InferredType {
                 sorted_fields.sort_by(|a, b| a.0.cmp(&b.0));
                 sorted_fields.hash(state);
             }
-            InferredType::Resource { resource_id, resource_mode } => {
+            InferredType::Resource {
+                resource_id,
+                resource_mode,
+            } => {
                 21.hash(state);
                 resource_id.hash(state);
                 resource_mode.hash(state);
@@ -144,7 +146,9 @@ impl Hash for InferredType {
                 23.hash(state);
                 instance_type.hash(state);
             }
-            InferredType::OneOf(types) | InferredType::AllOf(types) | InferredType::Sequence(types) => {
+            InferredType::OneOf(types)
+            | InferredType::AllOf(types)
+            | InferredType::Sequence(types) => {
                 24.hash(state);
                 let mut sorted_types = types.clone();
                 sorted_types.sort();
@@ -178,17 +182,35 @@ impl PartialEq for InferredType {
             (InferredType::Enum(vs1), InferredType::Enum(vs2)) => vs1 == vs2,
             (InferredType::Option(t1), InferredType::Option(t2)) => t1 == t2,
             (
-                InferredType::Result { ok: ok1, error: error1 },
-                InferredType::Result { ok: ok2, error: error2 },
+                InferredType::Result {
+                    ok: ok1,
+                    error: error1,
+                },
+                InferredType::Result {
+                    ok: ok2,
+                    error: error2,
+                },
             ) => ok1 == ok2 && error1 == error2,
             (InferredType::Variant(vs1), InferredType::Variant(vs2)) => vs1 == vs2,
             (
-                InferredType::Resource { resource_id: id1, resource_mode: mode1 },
-                InferredType::Resource { resource_id: id2, resource_mode: mode2 },
+                InferredType::Resource {
+                    resource_id: id1,
+                    resource_mode: mode1,
+                },
+                InferredType::Resource {
+                    resource_id: id2,
+                    resource_mode: mode2,
+                },
             ) => id1 == id2 && mode1 == mode2,
             (
-                InferredType::Range { from: from1, to: to1 },
-                InferredType::Range { from: from2, to: to2 },
+                InferredType::Range {
+                    from: from1,
+                    to: to1,
+                },
+                InferredType::Range {
+                    from: from2,
+                    to: to2,
+                },
             ) => from1 == from2 && to1 == to2,
             (
                 InferredType::Instance { instance_type: t1 },

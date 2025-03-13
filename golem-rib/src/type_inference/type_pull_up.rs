@@ -661,8 +661,8 @@ mod internal {
     use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range,
-        TypeMismatchError, TypeName, VariableId,
+        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
+        VariableId,
     };
 
     use std::collections::VecDeque;
@@ -1281,9 +1281,11 @@ mod internal {
                 function_name,
                 worker,
             } => {
-                let new_worker = worker.as_ref().map(|worker| inferred_expr_stack
-                            .pop_front()
-                            .unwrap_or(worker.deref().clone()));
+                let new_worker = worker.as_ref().map(|worker| {
+                    inferred_expr_stack
+                        .pop_front()
+                        .unwrap_or(worker.deref().clone())
+                });
 
                 let mut function_name = function_name.clone();
 
