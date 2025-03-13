@@ -21,7 +21,7 @@ use futures::stream::BoxStream;
 use golem_common::model::{AccountId, InitialComponentFileKey};
 use tracing::debug;
 
-const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
+const COMPONENT_FILES_LABEL: &str = "initial_component_files";
 
 /// Service for storing initial component files.
 #[derive(Debug)]
@@ -44,7 +44,7 @@ impl InitialComponentFilesService {
         let metadata = self
             .blob_storage
             .get_metadata(
-                INITIAL_COMPONENT_FILES_LABEL,
+                COMPONENT_FILES_LABEL,
                 "exists",
                 BlobStorageNamespace::InitialComponentFiles {
                     account_id: account_id.clone(),
@@ -64,7 +64,7 @@ impl InitialComponentFilesService {
     ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         self.blob_storage
             .get_stream(
-                INITIAL_COMPONENT_FILES_LABEL,
+                COMPONENT_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::InitialComponentFiles {
                     account_id: account_id.clone(),
@@ -86,7 +86,7 @@ impl InitialComponentFilesService {
         let metadata = self
             .blob_storage
             .get_metadata(
-                INITIAL_COMPONENT_FILES_LABEL,
+                COMPONENT_FILES_LABEL,
                 "get_metadata",
                 BlobStorageNamespace::InitialComponentFiles {
                     account_id: account_id.clone(),
@@ -101,7 +101,7 @@ impl InitialComponentFilesService {
 
             self.blob_storage
                 .put_stream(
-                    INITIAL_COMPONENT_FILES_LABEL,
+                    COMPONENT_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::InitialComponentFiles {
                         account_id: account_id.clone(),
