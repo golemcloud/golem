@@ -14,6 +14,7 @@ itertools = { workspace = true }
 leb128 = { version = "0.2.5", optional = true }
 mappable-rc = "0.1.1"
 poem-openapi = { workspace = true, optional = true }
+poem-openapi-derive = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
@@ -33,7 +34,19 @@ wasmprinter = "0.219.1"
 prost-build = "0.13.5"
 
 [features]
-default = ["parser", "wit-parser", "writer", "component", "metadata", "analysis", "wave", "json", "bincode", "poem_openapi", "protobuf"]
+default = [
+    "parser",
+    "wit-parser",
+    "writer",
+    "component",
+    "metadata",
+    "analysis",
+    "wave",
+    "json",
+    "bincode",
+    "poem_openapi",
+    "protobuf",
+]
 
 # Support building up the WASM AST by parsing a binary WASM module or component using the wasmparser library
 parser = ["dep:wasmparser", "dep:leb128"]
@@ -63,7 +76,7 @@ bincode = ["dep:bincode", "dep:bincode_derive"]
 json = ["dep:serde", "dep:serde_json"]
 
 # poem-openapi instances for analysis output
-poem_openapi = ["json", "dep:poem-openapi"]
+poem_openapi = ["json", "dep:poem-openapi", "dep:poem-openapi-derive"]
 
 # Protobuf representation of analysed types
 protobuf = ["dep:prost"]

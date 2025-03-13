@@ -24,7 +24,9 @@ golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = [
+    "host",
+] }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }
@@ -45,6 +47,7 @@ openapiv3 = { workspace = true }
 openidconnect = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }

@@ -16,7 +16,9 @@ harness = false
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = [
+    "host",
+] }
 
 anyhow = { workspace = true }
 async-fs = { workspace = true }
@@ -38,10 +40,11 @@ http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
-lazy_static = { workspace = true}
+lazy_static = { workspace = true }
 pin-project = "1.1.10"
 poem = { workspace = true }
 poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 prost-types = { workspace = true }
 reqwest = { workspace = true }

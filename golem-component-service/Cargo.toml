@@ -27,6 +27,7 @@ opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -8,14 +8,51 @@ repository = "https://github.com/golemcloud/golem"
 description = "Shared code between Golem services"
 
 [features]
-default = ["base-model", "config", "model", "observability", "poem", "protobuf", "redis", "serialization", "sql", "tokio"]
+default = [
+    "base-model",
+    "config",
+    "model",
+    "observability",
+    "poem",
+    "protobuf",
+    "redis",
+    "serialization",
+    "sql",
+    "tokio",
+]
 
 base-model = []
 config = ["dep:figment"]
-model = ["base-model", "dep:golem-wasm-rpc", "dep:golem-wasm-ast", "dep:golem-rib"]
-observability = ["dep:console-subscriber", "dep:prometheus", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-serde"]
-poem = ["dep:poem", "dep:poem-openapi", "golem-wasm-ast/poem_openapi", "golem-wasm-ast/poem_openapi", "golem-rib/poem"]
-protobuf = ["dep:prost", "dep:prost-types", "dep:tonic", "dep:golem-api-grpc", "golem-rib/protobuf", "golem-wasm-ast/protobuf", "golem-wasm-rpc/protobuf"]
+model = [
+    "base-model",
+    "dep:golem-wasm-rpc",
+    "dep:golem-wasm-ast",
+    "dep:golem-rib",
+]
+observability = [
+    "dep:console-subscriber",
+    "dep:prometheus",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:tracing-serde",
+]
+poem = [
+    "dep:poem",
+    "dep:poem-openapi",
+    "dep:poem-openapi-derive",
+    "golem-wasm-ast/poem_openapi",
+    "golem-wasm-ast/poem_openapi",
+    "golem-rib/poem",
+]
+protobuf = [
+    "dep:prost",
+    "dep:prost-types",
+    "dep:tonic",
+    "dep:golem-api-grpc",
+    "golem-rib/protobuf",
+    "golem-wasm-ast/protobuf",
+    "golem-wasm-rpc/protobuf",
+]
 redis = ["dep:fred"]
 serialization = []
 sql = ["dep:sqlx"]
@@ -26,9 +63,17 @@ harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0", optional = true }
-golem-rib = { path = "../golem-rib", version = "=0.0.0", default-features = false, features = ["protobuf", "poem", "json_in_errors"], optional = true } # TODO: make these optionals
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = ["metadata"], optional = true }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"], optional = true }
+golem-rib = { path = "../golem-rib", version = "=0.0.0", default-features = false, features = [
+    "protobuf",
+    "poem",
+    "json_in_errors",
+], optional = true } # TODO: make these optionals
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
+    "metadata",
+], optional = true }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = [
+    "host",
+], optional = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -50,6 +95,7 @@ lazy_static = { workspace = true }
 nonempty-collections = { workspace = true }
 poem = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
+poem-openapi-derive = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }

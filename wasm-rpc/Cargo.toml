@@ -27,6 +27,7 @@ chrono = { workspace = true }
 git-version = "0.3.9"
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", optional = true }
 poem-openapi = { workspace = true, optional = true }
+poem-openapi-derive = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
@@ -46,10 +47,7 @@ cargo_metadata = "0.19.2"
 
 [features]
 default = ["host"]
-host-bindings = [
-    "dep:async-trait",
-    "wasmtime"
-]
+host-bindings = ["dep:async-trait", "wasmtime"]
 host = [
     "arbitrary",
     "bincode",
@@ -59,7 +57,7 @@ host = [
     "protobuf",
     "serde",
     "text",
-    "typeinfo"
+    "typeinfo",
 ]
 arbitrary = ["dep:arbitrary"]
 bincode = ["dep:bincode", "dep:bincode_derive", "golem-wasm-ast/bincode"]
@@ -72,6 +70,7 @@ json = [
 ]
 poem_openapi = [
     "dep:poem-openapi",
+    "dep:poem-openapi-derive",
     "json",
     "typeinfo",
     "golem-wasm-ast/poem_openapi",
@@ -80,10 +79,7 @@ protobuf = ["dep:bincode", "dep:serde", "dep:prost", "golem-wasm-ast/protobuf"]
 serde = ["dep:serde"]
 stub = []
 text = ["typeinfo", "dep:wasm-wave", "golem-wasm-ast/wave"]
-typeinfo = [
-    "dep:golem-wasm-ast",
-    "golem-wasm-ast/analysis",
-]
+typeinfo = ["dep:golem-wasm-ast", "golem-wasm-ast/analysis"]
 wasmtime = [
     "dep:wasmtime",
     "dep:wasmtime-wasi",
