@@ -1337,16 +1337,10 @@ mod internal {
                 function_name,
                 worker,
             } => {
-                let new_worker = if let Some(worker) = worker {
-                    Some(
-                        temp_stack
+                let new_worker = worker.as_ref().map(|worker| temp_stack
                             .pop_front()
                             .map(|x| x.0)
-                            .unwrap_or(worker.deref().clone()),
-                    )
-                } else {
-                    None
-                };
+                            .unwrap_or(worker.deref().clone()));
 
                 let mut function_name = function_name.clone();
 

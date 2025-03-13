@@ -24,8 +24,9 @@ use golem_wasm_ast::analysis::analysed_type::*;
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Ord, PartialOrd)]
 pub enum InferredType {
     Bool,
     S8,
@@ -71,6 +72,89 @@ pub enum InferredType {
 
 impl Eq for InferredType {}
 
+
+impl Hash for InferredType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            InferredType::Bool => 0.hash(state),
+            InferredType::S8 => 1.hash(state),
+            InferredType::U8 => 2.hash(state),
+            InferredType::S16 => 3.hash(state),
+            InferredType::U16 => 4.hash(state),
+            InferredType::S32 => 5.hash(state),
+            InferredType::U32 => 6.hash(state),
+            InferredType::S64 => 7.hash(state),
+            InferredType::U64 => 8.hash(state),
+            InferredType::F32 => 9.hash(state),
+            InferredType::F64 => 10.hash(state),
+            InferredType::Chr => 11.hash(state),
+            InferredType::Str => 12.hash(state),
+            InferredType::List(inner) => {
+                13.hash(state);
+                inner.hash(state);
+            }
+            InferredType::Tuple(inner) => {
+                14.hash(state);
+                inner.hash(state);
+            }
+            InferredType::Record(fields) => {
+                15.hash(state);
+                let mut sorted_fields = fields.clone();
+                sorted_fields.sort_by(|a, b| a.0.cmp(&b.0));
+                sorted_fields.hash(state);
+            }
+            InferredType::Flags(flags) => {
+                16.hash(state);
+                let mut sorted_flags = flags.clone();
+                sorted_flags.sort();
+                sorted_flags.hash(state);
+            }
+            InferredType::Enum(variants) => {
+                17.hash(state);
+                let mut sorted_variants = variants.clone();
+                sorted_variants.sort();
+                sorted_variants.hash(state);
+            }
+            InferredType::Option(inner) => {
+                18.hash(state);
+                inner.hash(state);
+            }
+            InferredType::Result { ok, error } => {
+                19.hash(state);
+                ok.hash(state);
+                error.hash(state);
+            }
+            InferredType::Variant(fields) => {
+                20.hash(state);
+                let mut sorted_fields = fields.clone();
+                sorted_fields.sort_by(|a, b| a.0.cmp(&b.0));
+                sorted_fields.hash(state);
+            }
+            InferredType::Resource { resource_id, resource_mode } => {
+                21.hash(state);
+                resource_id.hash(state);
+                resource_mode.hash(state);
+            }
+            InferredType::Range { from, to } => {
+                22.hash(state);
+                from.hash(state);
+                to.hash(state);
+            }
+            InferredType::Instance { instance_type } => {
+                23.hash(state);
+                instance_type.hash(state);
+            }
+            InferredType::OneOf(types) | InferredType::AllOf(types) | InferredType::Sequence(types) => {
+                24.hash(state);
+                let mut sorted_types = types.clone();
+                sorted_types.sort();
+                sorted_types.hash(state);
+            }
+            InferredType::Unknown => 25.hash(state),
+        }
+    }
+}
+
 impl PartialEq for InferredType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -94,53 +178,47 @@ impl PartialEq for InferredType {
             (InferredType::Enum(vs1), InferredType::Enum(vs2)) => vs1 == vs2,
             (InferredType::Option(t1), InferredType::Option(t2)) => t1 == t2,
             (
-                InferredType::Result {
-                    ok: ok1,
-                    error: error1,
-                },
-                InferredType::Result {
-                    ok: ok2,
-                    error: error2,
-                },
+                InferredType::Result { ok: ok1, error: error1 },
+                InferredType::Result { ok: ok2, error: error2 },
             ) => ok1 == ok2 && error1 == error2,
             (InferredType::Variant(vs1), InferredType::Variant(vs2)) => vs1 == vs2,
             (
-                InferredType::Resource {
-                    resource_id: id1,
-                    resource_mode: mode1,
-                },
-                InferredType::Resource {
-                    resource_id: id2,
-                    resource_mode: mode2,
-                },
+                InferredType::Resource { resource_id: id1, resource_mode: mode1 },
+                InferredType::Resource { resource_id: id2, resource_mode: mode2 },
             ) => id1 == id2 && mode1 == mode2,
             (
-                InferredType::Range {
-                    from: from1,
-                    to: to1,
-                },
-                InferredType::Range {
-                    from: from2,
-                    to: to2,
-                },
+                InferredType::Range { from: from1, to: to1 },
+                InferredType::Range { from: from2, to: to2 },
             ) => from1 == from2 && to1 == to2,
             (
                 InferredType::Instance { instance_type: t1 },
                 InferredType::Instance { instance_type: t2 },
             ) => t1 == t2,
+            (InferredType::Unknown, InferredType::Unknown) => true,
+
+            // **Fix: Sort & Compare for OneOf, AllOf, Sequence**
             (InferredType::OneOf(ts1), InferredType::OneOf(ts2)) => {
-                ts1.iter().all(|t1| ts2.iter().any(|t2| t1 == t2));
-                ts2.iter().all(|t2| ts1.iter().any(|t1| t1 == t2))
+                let mut ts1_sorted = ts1.clone();
+                let mut ts2_sorted = ts2.clone();
+                ts1_sorted.sort();
+                ts2_sorted.sort();
+                ts1_sorted == ts2_sorted
             }
             (InferredType::AllOf(ts1), InferredType::AllOf(ts2)) => {
-                ts1.iter().all(|t1| ts2.iter().any(|t2| t1 == t2));
-                ts2.iter().all(|t2| ts1.iter().any(|t1| t1 == t2))
+                let mut ts1_sorted = ts1.clone();
+                let mut ts2_sorted = ts2.clone();
+                ts1_sorted.sort();
+                ts2_sorted.sort();
+                ts1_sorted == ts2_sorted
             }
-            (InferredType::Unknown, InferredType::Unknown) => true,
             (InferredType::Sequence(ts1), InferredType::Sequence(ts2)) => {
-                ts1.iter().all(|t1| ts2.iter().any(|t2| t1 == t2));
-                ts2.iter().all(|t2| ts1.iter().any(|t1| t1 == t2))
+                let mut ts1_sorted = ts1.clone();
+                let mut ts2_sorted = ts2.clone();
+                ts1_sorted.sort();
+                ts2_sorted.sort();
+                ts1_sorted == ts2_sorted
             }
+
             _ => false,
         }
     }

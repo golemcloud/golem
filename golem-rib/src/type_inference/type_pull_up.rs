@@ -661,7 +661,7 @@ mod internal {
     use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        ActualType, ExpectedType, Expr, InferredNumber, InferredType, MatchArm, Range,
+        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range,
         TypeMismatchError, TypeName, VariableId,
     };
 
@@ -1281,15 +1281,9 @@ mod internal {
                 function_name,
                 worker,
             } => {
-                let new_worker = if let Some(worker) = worker {
-                    Some(
-                        inferred_expr_stack
+                let new_worker = worker.as_ref().map(|worker| inferred_expr_stack
                             .pop_front()
-                            .unwrap_or(worker.deref().clone()),
-                    )
-                } else {
-                    None
-                };
+                            .unwrap_or(worker.deref().clone()));
 
                 let mut function_name = function_name.clone();
 
