@@ -118,12 +118,6 @@ description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
 
-[tasks.build-bins-non-ci]
-condition = { env_not_set = [
-    "CI",
-] } # on CI we always 'cargo make build' first so no need to recompile bins
-run_task = "build-bins"
-
 [tasks.build-bins]
 dependencies = ["wit"]
 description = "Builds all executables in debug mode"
@@ -253,12 +247,19 @@ args = [
     "--nocapture",
 ]
 
+[tasks.worker-executor-tests-untagged]
+dependencies = ["wit"]
+description = "Runs only untagged worker-executor-tests"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo test --package golem-worker-executor-base --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
+'''
+
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
 cargo test --package golem-worker-executor-base --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
@@ -330,7 +331,7 @@ dependencies = [
 
 [tasks.integration-tests-group1]
 description = "Runs integration tests only"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
@@ -363,7 +364,7 @@ cargo test --package golem-service-base --test integration -- --nocapture --repo
 
 [tasks.integration-tests-group5]
 description = "Runs sharding integration tests only"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
@@ -393,7 +394,7 @@ dependencies = ["api-tests-http", "api-tests-grpc"]
 
 [tasks.api-tests-http]
 description = "Runs API HTTP tests only"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
 script = '''
 cargo test --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
@@ -401,7 +402,7 @@ cargo test --package integration-tests --test api -- --nocapture --report-time $
 
 [tasks.api-tests-grpc]
 description = "Runs API GRPC tests only"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
 script = '''
 cargo test --package integration-tests --test api -- :tag: --nocapture --report-time $JUNIT_OPTS
@@ -740,7 +741,7 @@ kill $redis_pid || true
 
 [tasks.generate-configs]
 description = "Generates default and exmaple config files"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 
 script = '''
 export RUST_BACKTRACE=1
