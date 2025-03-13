@@ -83,7 +83,7 @@ async-trait = "0.1.87"
 async_zip = "0.0.17"
 aws-config = "=1.5.10" # Pinned because newer versions were failing with localstack
 aws-sdk-s3 = "=1.65.0" # Pinned because newer versions were failing with localstack
-axum = { version = "0.8.1", features = ["multipart"] }
+axum = { version = "0.7.9", features = ["multipart"] }
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "=2.0.0-rc.3", features = ["serde"] }
 bincode_derive = { version = "=2.0.0-rc.3" }
