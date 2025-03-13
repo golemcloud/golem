@@ -47,6 +47,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tracing::Instrument;
 
 #[async_trait]
 pub trait OplogProcessorPlugin {
@@ -610,6 +611,7 @@ impl<T: GolemTypes> ForwardingOplog<T> {
                     }
                 }
             }
+            .in_current_span()
         });
         Self {
             inner,

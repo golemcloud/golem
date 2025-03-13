@@ -712,7 +712,7 @@ where
         let mut tx_conn = self.tx_connection.0.lock().await;
 
         if tx_conn.open {
-            DB::TransactionManager::start_rollback(&mut tx_conn.connection);
+            let _ = DB::TransactionManager::rollback(&mut tx_conn.connection).await;
         }
 
         self.record_metrics("rollback-transaction-if-open", start, Ok(()))

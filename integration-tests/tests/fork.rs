@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{flaky, inherit_test_dep, test, timeout};
+use tracing::Instrument;
 
 use crate::Tracing;
 use golem_common::model::oplog::OplogIndex;
@@ -570,22 +571,25 @@ fn run_http_server(
 ) -> tokio::task::JoinHandle<()> {
     let response_clone = response.clone();
 
-    tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    })
+            let listener = tokio::net::TcpListener::bind(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    )
 }

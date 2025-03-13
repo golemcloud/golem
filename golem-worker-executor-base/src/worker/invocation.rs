@@ -24,7 +24,7 @@ use golem_common::virtual_exports;
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
-use tracing::{debug, error};
+use tracing::{debug, error, Instrument};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::bindings::Proxy;
@@ -472,11 +472,12 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         // The caller must ensure that the lifetime ’a is valid until the returned future is fully driven. Dropping the future is okay, but blocks the current thread until all spawned futures complete.
         unsafe {
             async_scoped::TokioScope::scope_and_collect(|s| {
-                s.spawn(proxy.wasi_http_incoming_handler().call_handle(
-                    store_context,
-                    incoming,
-                    outgoing,
-                ));
+                s.spawn(
+                    proxy
+                        .wasi_http_incoming_handler()
+                        .call_handle(store_context, incoming, outgoing)
+                        .in_current_span(),
+                );
             })
             .await
         }

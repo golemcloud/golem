@@ -19,9 +19,9 @@ use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::HeaderMap;
 use log::info;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
+use tracing::Instrument;
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
@@ -198,11 +198,6 @@ async fn search_oplog_1(
 
     drop(executor);
 
-    // println!("oplog\n{:#?}", oplog);
-    // println!("result1\n{:#?}", result1);
-    // println!("result2\n{:#?}", result2);
-    // println!("result3\n{:#?}", result3);
-
     assert_eq!(result1.len(), 4); // two invocations and two log messages
     assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
     assert_eq!(result3.len(), 2); // two invocations
@@ -254,8 +249,6 @@ async fn get_oplog_with_api_changing_updates(
         .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
-    // println!("oplog\n{:#?}", oplog);
-
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 17);
 }
@@ -301,7 +294,8 @@ async fn invocation_context_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
 
     let contexts = Arc::new(Mutex::new(Vec::new()));
     let contexts_clone = contexts.clone();
@@ -309,30 +303,26 @@ async fn invocation_context_test(
     let traceparents = Arc::new(Mutex::new(Vec::new()));
     let traceparents_clone = traceparents.clone();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/invocation-context",
-            post(
-                move |headers: HeaderMap, body: Json<serde_json::Value>| async move {
-                    contexts_clone.lock().unwrap().push(body.0);
-                    traceparents_clone
-                        .lock()
-                        .unwrap()
-                        .push(headers.get("traceparent").cloned());
-                    "ok"
-                },
-            ),
-        );
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/invocation-context",
+                post(
+                    move |headers: HeaderMap, body: Json<serde_json::Value>| async move {
+                        contexts_clone.lock().unwrap().push(body.0);
+                        traceparents_clone
+                            .lock()
+                            .unwrap()
+                            .push(headers.get("traceparent").cloned());
+                        "ok"
+                    },
+                ),
+            );
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
@@ -377,7 +367,7 @@ async fn invocation_context_test(
     }
 
     let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
-    println!("{:#?}", dump);
+    info!("{:#?}", dump);
 
     http_server.abort();
     drop(executor);

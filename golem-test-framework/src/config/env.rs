@@ -46,7 +46,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::Level;
+use tracing::{Instrument, Level};
 
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
@@ -417,23 +417,26 @@ impl EnvBasedTestDependencies {
         let rdb_and_component_service_join = {
             let config = config.clone();
 
-            tokio::spawn(async move {
-                let rdb = Self::make_rdb(config.clone()).await;
-                let component_service =
-                    Self::make_component_service(config.clone(), rdb.clone()).await;
-                let component_compilation_service = Self::make_component_compilation_service(
-                    config.clone(),
-                    component_service.clone(),
-                )
-                .await;
-                (rdb, component_service, component_compilation_service)
-            })
+            tokio::spawn(
+                async move {
+                    let rdb = Self::make_rdb(config.clone()).await;
+                    let component_service =
+                        Self::make_component_service(config.clone(), rdb.clone()).await;
+                    let component_compilation_service = Self::make_component_compilation_service(
+                        config.clone(),
+                        component_service.clone(),
+                    )
+                    .await;
+                    (rdb, component_service, component_compilation_service)
+                }
+                .in_current_span(),
+            )
         };
 
         let redis_monitor_join =
-            tokio::spawn(Self::make_redis_monitor(config.clone(), redis.clone()));
+            tokio::spawn(Self::make_redis_monitor(config.clone(), redis.clone()).in_current_span());
         let shard_manager_join =
-            tokio::spawn(Self::make_shard_manager(config.clone(), redis.clone()));
+            tokio::spawn(Self::make_shard_manager(config.clone(), redis.clone()).in_current_span());
 
         let (rdb, component_service, component_compilation_service) =
             rdb_and_component_service_join

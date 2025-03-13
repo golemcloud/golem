@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::Level;
+use tracing::{Instrument, Level};
 
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
@@ -322,15 +322,18 @@ impl TestMode {
 
 impl CliTestDependencies {
     pub fn init_logging(params: &CliParams) {
-        init_tracing(&TracingConfig::test("cli-tests"), |_output| {
-            golem_common::tracing::filter::boxed::env_with_directives(
-                params
-                    .default_log_level()
-                    .parse()
-                    .expect("Failed to parse log cli test log level"),
-                golem_common::tracing::directive::default_deps(),
-            )
-        });
+        init_tracing(
+            &TracingConfig::test("cli-tests").with_env_overrides(),
+            |_output| {
+                golem_common::tracing::filter::boxed::env_with_directives(
+                    params
+                        .default_log_level()
+                        .parse()
+                        .expect("Failed to parse log cli test log level"),
+                    golem_common::tracing::directive::default_deps(),
+                )
+            },
+        );
     }
 
     async fn make_docker(
@@ -343,42 +346,46 @@ impl CliTestDependencies {
 
         let rdb_and_component_service_join = {
             let component_directory = PathBuf::from(&params.component_directory);
-            tokio::spawn(async move {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new().await);
+            tokio::spawn(
+                async move {
+                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                        Arc::new(DockerPostgresRdb::new().await);
 
-                let component_compilation_service = if !compilation_service_disabled {
-                    Some((
-                        DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
-                    ))
-                } else {
-                    None
-                };
+                    let component_compilation_service = if !compilation_service_disabled {
+                        Some((
+                            DockerComponentCompilationService::NAME,
+                            DockerComponentCompilationService::GRPC_PORT.as_u16(),
+                        ))
+                    } else {
+                        None
+                    };
 
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    DockerComponentService::new(
-                        component_directory,
-                        component_compilation_service,
-                        rdb.clone(),
-                        params_clone.service_verbosity(),
-                        params.golem_client_protocol,
-                    )
-                    .await,
-                );
+                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                        Arc::new(
+                            DockerComponentService::new(
+                                component_directory,
+                                component_compilation_service,
+                                rdb.clone(),
+                                params_clone.service_verbosity(),
+                                params.golem_client_protocol,
+                            )
+                            .await,
+                        );
 
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    DockerComponentCompilationService::new(
-                        component_service.clone(),
-                        params_clone.service_verbosity(),
-                    )
-                    .await,
-                );
+                    let component_compilation_service: Arc<
+                        dyn ComponentCompilationService + Send + Sync + 'static,
+                    > = Arc::new(
+                        DockerComponentCompilationService::new(
+                            component_service.clone(),
+                            params_clone.service_verbosity(),
+                        )
+                        .await,
+                    );
 
-                (rdb, component_service, component_compilation_service)
-            })
+                    (rdb, component_service, component_compilation_service)
+                }
+                .in_current_span(),
+            )
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
@@ -481,49 +488,53 @@ impl CliTestDependencies {
             let build_root = build_root.clone();
             let component_directory = PathBuf::from(&params.component_directory);
 
-            tokio::spawn(async move {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new().await);
+            tokio::spawn(
+                async move {
+                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                        Arc::new(DockerPostgresRdb::new().await);
 
-                let component_compilation_service_port = if !compilation_service_disabled {
-                    Some(component_compilation_service_grpc_port)
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    SpawnedComponentService::new(
-                        component_directory,
-                        &build_root.join("golem-component-service"),
-                        &workspace_root.join("golem-component-service"),
-                        component_service_http_port,
-                        component_service_grpc_port,
-                        component_compilation_service_port,
-                        rdb.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                        params.golem_client_protocol,
-                    )
-                    .await,
-                );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    SpawnedComponentCompilationService::new(
-                        &build_root.join("golem-component-compilation-service"),
-                        &workspace_root.join("golem-component-compilation-service"),
-                        component_compilation_service_http_port,
-                        component_compilation_service_grpc_port,
-                        component_service.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                    )
-                    .await,
-                );
+                    let component_compilation_service_port = if !compilation_service_disabled {
+                        Some(component_compilation_service_grpc_port)
+                    } else {
+                        None
+                    };
+                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                        Arc::new(
+                            SpawnedComponentService::new(
+                                component_directory,
+                                &build_root.join("golem-component-service"),
+                                &workspace_root.join("golem-component-service"),
+                                component_service_http_port,
+                                component_service_grpc_port,
+                                component_compilation_service_port,
+                                rdb.clone(),
+                                params.service_verbosity(),
+                                out_level,
+                                Level::ERROR,
+                                params.golem_client_protocol,
+                            )
+                            .await,
+                        );
+                    let component_compilation_service: Arc<
+                        dyn ComponentCompilationService + Send + Sync + 'static,
+                    > = Arc::new(
+                        SpawnedComponentCompilationService::new(
+                            &build_root.join("golem-component-compilation-service"),
+                            &workspace_root.join("golem-component-compilation-service"),
+                            component_compilation_service_http_port,
+                            component_compilation_service_grpc_port,
+                            component_service.clone(),
+                            params.service_verbosity(),
+                            out_level,
+                            Level::ERROR,
+                        )
+                        .await,
+                    );
 
-                (rdb, component_service, component_compilation_service)
-            })
+                    (rdb, component_service, component_compilation_service)
+                }
+                .in_current_span(),
+            )
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
@@ -782,55 +793,59 @@ impl CliTestDependencies {
             let service_annotations = service_annotations.clone();
             let component_directory = PathBuf::from(&params.component_directory);
 
-            tokio::spawn(async move {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
-                    K8sPostgresRdb::new(
-                        &namespace,
-                        &routing_type,
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
+            tokio::spawn(
+                async move {
+                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
+                        K8sPostgresRdb::new(
+                            &namespace,
+                            &routing_type,
+                            timeout,
+                            service_annotations.clone(),
+                        )
+                        .await,
+                    );
 
-                let component_compilation_service = if !compilation_service_disabled {
-                    Some((
-                        K8sComponentCompilationService::NAME,
-                        K8sComponentCompilationService::GRPC_PORT,
-                    ))
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    K8sComponentService::new(
-                        component_directory,
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_compilation_service,
-                        rdb.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                        params.golem_client_protocol,
-                    )
-                    .await,
-                );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    K8sComponentCompilationService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_service.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
+                    let component_compilation_service = if !compilation_service_disabled {
+                        Some((
+                            K8sComponentCompilationService::NAME,
+                            K8sComponentCompilationService::GRPC_PORT,
+                        ))
+                    } else {
+                        None
+                    };
+                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                        Arc::new(
+                            K8sComponentService::new(
+                                component_directory,
+                                &namespace,
+                                &routing_type,
+                                Level::INFO,
+                                component_compilation_service,
+                                rdb.clone(),
+                                timeout,
+                                service_annotations.clone(),
+                                params.golem_client_protocol,
+                            )
+                            .await,
+                        );
+                    let component_compilation_service: Arc<
+                        dyn ComponentCompilationService + Send + Sync + 'static,
+                    > = Arc::new(
+                        K8sComponentCompilationService::new(
+                            &namespace,
+                            &routing_type,
+                            Level::INFO,
+                            component_service.clone(),
+                            timeout,
+                            service_annotations.clone(),
+                        )
+                        .await,
+                    );
 
-                (rdb, component_service, component_compilation_service)
-            })
+                    (rdb, component_service, component_compilation_service)
+                }
+                .in_current_span(),
+            )
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(

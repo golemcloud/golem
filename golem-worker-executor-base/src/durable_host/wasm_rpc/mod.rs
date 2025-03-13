@@ -53,7 +53,7 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{error, warn};
+use tracing::{error, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::bindings::cli::environment::Host;
@@ -413,20 +413,23 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .state
                 .invocation_context
                 .clone_as_inherited_stack(span.span_id());
-            let handle = wasmtime_wasi::runtime::spawn(async move {
-                Ok(rpc
-                    .invoke_and_await(
-                        &remote_worker_id,
-                        Some(idempotency_key),
-                        function_name,
-                        function_params,
-                        &worker_id,
-                        &args,
-                        &env,
-                        stack,
-                    )
-                    .await)
-            });
+            let handle = wasmtime_wasi::runtime::spawn(
+                async move {
+                    Ok(rpc
+                        .invoke_and_await(
+                            &remote_worker_id,
+                            Some(idempotency_key),
+                            function_name,
+                            function_params,
+                            &worker_id,
+                            &args,
+                            &env,
+                            stack,
+                        )
+                        .await)
+                }
+                .in_current_span(),
+            );
 
             let fut = self.table().push(FutureInvokeResultEntry {
                 payload: Box::new(FutureInvokeResultState::Pending {
@@ -776,34 +779,39 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 }
                 FutureInvokeResultState::Deferred { .. } => {
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let handle = wasmtime_wasi::runtime::spawn(async move {
-                        let request = rx.await.map_err(|err| anyhow!(err))?;
-                        let FutureInvokeResultState::Deferred {
-                            remote_worker_id,
-                            self_worker_id,
-                            args,
-                            env,
-                            function_name,
-                            function_params,
-                            idempotency_key,
-                            ..
-                        } = request
-                        else {
-                            return Err(anyhow!("unexpected incoming response state".to_string()));
-                        };
-                        Ok(rpc
-                            .invoke_and_await(
-                                &remote_worker_id,
-                                Some(idempotency_key),
+                    let handle = wasmtime_wasi::runtime::spawn(
+                        async move {
+                            let request = rx.await.map_err(|err| anyhow!(err))?;
+                            let FutureInvokeResultState::Deferred {
+                                remote_worker_id,
+                                self_worker_id,
+                                args,
+                                env,
                                 function_name,
                                 function_params,
-                                &self_worker_id,
-                                &args,
-                                &env,
-                                stack,
-                            )
-                            .await)
-                    });
+                                idempotency_key,
+                                ..
+                            } = request
+                            else {
+                                return Err(anyhow!(
+                                    "unexpected incoming response state".to_string()
+                                ));
+                            };
+                            Ok(rpc
+                                .invoke_and_await(
+                                    &remote_worker_id,
+                                    Some(idempotency_key),
+                                    function_name,
+                                    function_params,
+                                    &self_worker_id,
+                                    &args,
+                                    &env,
+                                    stack,
+                                )
+                                .await)
+                        }
+                        .in_current_span(),
+                    );
                     let FutureInvokeResultState::Deferred {
                         remote_worker_id,
                         function_name,

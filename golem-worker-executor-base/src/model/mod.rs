@@ -650,10 +650,10 @@ impl Debug for InvocationContext {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
     use super::*;
     use golem_common::model::ComponentId;
+    use test_r::test;
+    use tracing::info;
     use uuid::Uuid;
 
     fn example_trace_id_1() -> TraceId {
@@ -761,7 +761,7 @@ mod tests {
             worker_name: "instanceName".to_string(),
         };
         let hash = ShardId::hash_worker_id(&worker_id);
-        println!("hash: {:?}", hash);
+        info!("hash: {:?}", hash);
         assert_eq!(hash, -6692039695739768661);
     }
 

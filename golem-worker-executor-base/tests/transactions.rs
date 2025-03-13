@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test, timeout};
-
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
@@ -28,11 +26,12 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinHandle;
-use tracing::{debug, instrument};
+use tracing::info;
+use tracing::{debug, instrument, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -41,15 +40,15 @@ inherit_test_dep!(Tracing);
 struct TestHttpServer {
     handle: JoinHandle<()>,
     events: Arc<Mutex<Vec<String>>>,
+    port: u16,
 }
 
 impl TestHttpServer {
-    pub fn start(host_http_port: u16, fail_per_step: u64) -> Self {
-        Self::start_custom(host_http_port, Arc::new(move |_| fail_per_step), false)
+    pub async fn start(fail_per_step: u64) -> Self {
+        Self::start_custom(Arc::new(move |_| fail_per_step), false).await
     }
 
-    pub fn start_custom(
-        host_http_port: u16,
+    pub async fn start_custom(
         fail_per_step: Arc<impl Fn(u64) -> u64 + Send + Sync + 'static>,
         log_steps: bool,
     ) -> Self {
@@ -57,57 +56,66 @@ impl TestHttpServer {
         let events_clone = events.clone();
         let events_clone2 = events.clone();
         let events_clone3 = events.clone();
-        let handle = tokio::spawn(async move {
-            let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
-            let route = Router::new()
-                .route(
-                    "/step/:step",
-                    get(move |step: Path<u64>| async move {
-                        let step = step.0;
-                        let mut steps = call_count_per_step.lock().unwrap();
-                        let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
 
-                        debug!("step: {} occurrence {step_count}", step);
-                        if log_steps {
-                            events_clone.lock().unwrap().push(format!("=> {step}"));
-                        }
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
 
-                        match step_count {
-                            n if *n < fail_per_step(step) => "true",
-                            _ => "false",
-                        }
-                    }),
-                )
-                .route(
-                    "/step/:step",
-                    delete(move |step: Path<u64>| async move {
-                        let step = step.0;
-                        debug!("step: undo {step}");
-                        if log_steps {
-                            events_clone2.lock().unwrap().push(format!("<= {step}"));
-                        }
-                        "false"
-                    }),
-                )
-                .route(
-                    "/side-effect",
-                    post(move |body: Bytes| async move {
-                        let body = String::from_utf8(body.to_vec()).unwrap();
-                        debug!("received POST message: {body}");
-                        events_clone3.lock().unwrap().push(body.clone());
-                        "OK"
-                    }),
-                );
-            let listener = tokio::net::TcpListener::bind(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-            axum::serve(listener, route).await.unwrap();
-        });
-        Self { handle, events }
+        let handle = tokio::spawn(
+            async move {
+                let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
+                let route = Router::new()
+                    .route(
+                        "/step/:step",
+                        get(move |step: Path<u64>| async move {
+                            let step = step.0;
+                            let mut steps = call_count_per_step.lock().unwrap();
+                            let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
+
+                            debug!("step: {} occurrence {step_count}", step);
+                            if log_steps {
+                                events_clone.lock().unwrap().push(format!("=> {step}"));
+                            }
+
+                            match step_count {
+                                n if *n < fail_per_step(step) => "true",
+                                _ => "false",
+                            }
+                        }),
+                    )
+                    .route(
+                        "/step/:step",
+                        delete(move |step: Path<u64>| async move {
+                            let step = step.0;
+                            debug!("step: undo {step}");
+                            if log_steps {
+                                events_clone2.lock().unwrap().push(format!("<= {step}"));
+                            }
+                            "false"
+                        }),
+                    )
+                    .route(
+                        "/side-effect",
+                        post(move |body: Bytes| async move {
+                            let body = String::from_utf8(body.to_vec()).unwrap();
+                            debug!("received POST message: {body}");
+                            events_clone3.lock().unwrap().push(body.clone());
+                            "OK"
+                        }),
+                    );
+
+                axum::serve(listener, route).await.unwrap();
+            }
+            .in_current_span(),
+        );
+        Self {
+            handle,
+            events,
+            port,
+        }
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     pub fn abort(&self) {
@@ -130,14 +138,12 @@ async fn jump(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-
-    let http_server = TestHttpServer::start(host_http_port, 1);
+    let http_server = TestHttpServer::start(1).await;
 
     let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "runtime-service-jump", vec![], env)
@@ -166,7 +172,7 @@ async fn jump(
         None => false,
     });
 
-    println!("events: {:?}", events);
+    info!("events: {:?}", events);
 
     check!(result == vec![Value::U64(5)]);
     check!(
@@ -270,13 +276,11 @@ async fn atomic_region(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-
-    let http_server = TestHttpServer::start(host_http_port, 2);
+    let http_server = TestHttpServer::start(2).await;
     let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "atomic-region", vec![], env)
@@ -291,7 +295,7 @@ async fn atomic_region(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
+    info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
 }
@@ -307,13 +311,12 @@ async fn idempotence_on(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port, 1);
+    let http_server = TestHttpServer::start(1).await;
 
     let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "idempotence-flag", vec![], env)
@@ -332,7 +335,7 @@ async fn idempotence_on(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
+    info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "1"]);
 }
@@ -348,13 +351,12 @@ async fn idempotence_off(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port, 1);
+    let http_server = TestHttpServer::start(1).await;
 
     let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "idempotence-flag", vec![], env)
@@ -372,8 +374,8 @@ async fn idempotence_off(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
-    println!("result: {:?}", result);
+    info!("events:\n - {}", events.join("\n - "));
+    info!("result: {:?}", result);
 
     check!(events == vec!["1"]);
     check!(result.is_err());
@@ -390,13 +392,12 @@ async fn persist_nothing(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port, 2);
+    let http_server = TestHttpServer::start(2).await;
 
     let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "persist-nothing", vec![], env)
@@ -410,8 +411,8 @@ async fn persist_nothing(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
-    println!("result: {:?}", result);
+    info!("events:\n - {}", events.join("\n - "));
+    info!("result: {:?}", result);
 
     check!(events == vec!["1", "2", "3", "2", "2", "4"]);
     check!(result.is_ok());
@@ -506,13 +507,11 @@ async fn golem_rust_atomic_region(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-
-    let http_server = TestHttpServer::start(host_http_port, 2);
+    let http_server = TestHttpServer::start(2).await;
     let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "golem-rust-tests-atomic-region", vec![], env)
@@ -527,7 +526,7 @@ async fn golem_rust_atomic_region(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
+    info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
 }
@@ -543,13 +542,12 @@ async fn golem_rust_idempotence_on(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port, 1);
+    let http_server = TestHttpServer::start(1).await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(
@@ -573,7 +571,7 @@ async fn golem_rust_idempotence_on(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
+    info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "1"]);
 }
@@ -589,13 +587,12 @@ async fn golem_rust_idempotence_off(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port, 1);
+    let http_server = TestHttpServer::start(1).await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(
@@ -618,8 +615,8 @@ async fn golem_rust_idempotence_off(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
-    println!("result: {:?}", result);
+    info!("events:\n - {}", events.join("\n - "));
+    info!("result: {:?}", result);
 
     check!(events == vec!["1"]);
     check!(result.is_err());
@@ -636,13 +633,12 @@ async fn golem_rust_persist_nothing(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port, 2);
+    let http_server = TestHttpServer::start(2).await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(
@@ -661,8 +657,8 @@ async fn golem_rust_persist_nothing(
     http_server.abort();
 
     let events = http_server.get_events();
-    println!("events:\n - {}", events.join("\n - "));
-    println!("result: {:?}", result);
+    info!("events:\n - {}", events.join("\n - "));
+    info!("result: {:?}", result);
 
     check!(events == vec!["1", "2", "3", "2", "2", "4"]);
     check!(result.is_ok());
@@ -679,20 +675,19 @@ async fn golem_rust_fallible_transaction(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start_custom(
-        host_http_port,
         Arc::new(|step| match step {
             3 => 1, // step 3 returns true once
             _ => 0, // other steps always return false
         }),
         true,
-    );
+    )
+    .await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -742,20 +737,19 @@ async fn golem_rust_infallible_transaction(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start_custom(
-        host_http_port,
         Arc::new(|step| match step {
             3 => 1, // step 3 returns true once
             _ => 0, // other steps always return false
         }),
         true,
-    );
+    )
+    .await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
     let worker_id = executor
         .start_worker_with(
             &component_id,

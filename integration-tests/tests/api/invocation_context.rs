@@ -38,6 +38,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
+use tracing::{info, Instrument};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -59,32 +60,35 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
     let tracestates = Arc::new(Mutex::new(Vec::new()));
     let tracestates_clone = tracestates.clone();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/invocation-context",
-            post(move |headers: HeaderMap, body: Json<Value>| async move {
-                contexts_clone.lock().unwrap().push(body.0);
-                traceparents_clone
-                    .lock()
-                    .unwrap()
-                    .push(headers.get("traceparent").cloned());
-                tracestates_clone
-                    .lock()
-                    .unwrap()
-                    .push(headers.get("tracestate").cloned());
-                "ok"
-            }),
-        );
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/invocation-context",
+                post(move |headers: HeaderMap, body: Json<Value>| async move {
+                    contexts_clone.lock().unwrap().push(body.0);
+                    traceparents_clone
+                        .lock()
+                        .unwrap()
+                        .push(headers.get("traceparent").cloned());
+                    tracestates_clone
+                        .lock()
+                        .unwrap()
+                        .push(headers.get("tracestate").cloned());
+                    "ok"
+                }),
+            );
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+            let listener = tokio::net::TcpListener::bind(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
@@ -214,7 +218,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
     }
 
     let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
-    println!("{:#?}", dump);
+    info!("{:#?}", dump);
 
     http_server.abort();
 

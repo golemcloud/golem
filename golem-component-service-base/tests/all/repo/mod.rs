@@ -43,6 +43,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
+use tracing::info;
 use uuid::Uuid;
 
 pub mod constraint_data;
@@ -244,9 +245,9 @@ async fn test_repo_component_name_unique_in_namespace(
         .create(&ComponentRecord::try_from_model(component2.clone(), true).unwrap())
         .await;
 
-    println!("{:?}", result1);
-    println!("{:?}", result2);
-    println!("{:?}", result3);
+    info!("{:?}", result1);
+    info!("{:?}", result2);
+    info!("{:?}", result3);
 
     assert!(result1.is_ok());
     assert!(result2.is_err());
@@ -296,10 +297,10 @@ async fn test_repo_component_delete(
         )
         .await;
 
-    println!("{:?}", result1);
-    println!("{:?}", result2);
-    println!("{:?}", result3);
-    println!("{:?}", result4);
+    info!("{:?}", result1);
+    info!("{:?}", result2);
+    info!("{:?}", result3);
+    info!("{:?}", result4);
 
     assert!(result1.is_ok());
     assert!(result2.is_ok());
@@ -638,7 +639,7 @@ async fn test_default_component_plugin_installation(
         .get_installed_plugins(&plugin_owner_row, &component_id.0, 2)
         .await?;
 
-    println!("{:?}", installations2);
+    info!("{:?}", installations2);
 
     let latest_installation2_id = installations2
         .iter()

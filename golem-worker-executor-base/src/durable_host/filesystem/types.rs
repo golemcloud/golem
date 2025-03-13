@@ -228,7 +228,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let modified = times.data_modification_timestamp.as_ref().map(|t| {
             SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
         });
-        spawn_blocking(|| set_symlink_times(path, accessed, modified)).await?;
+        let span = tracing::Span::current();
+        spawn_blocking(move || {
+            let _enter = span.enter();
+            set_symlink_times(path, accessed, modified)
+        })
+        .await?;
         stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
         stat.data_modification_timestamp = times.data_modification_timestamp.map(|t| t.into());
         Ok(stat)
@@ -284,7 +289,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let modified = times.data_modification_timestamp.as_ref().map(|t| {
             SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
         });
-        spawn_blocking(|| set_symlink_times(full_path, accessed, modified)).await?;
+        let span = tracing::Span::current();
+        spawn_blocking(move || {
+            let _enter = span.enter();
+            set_symlink_times(full_path, accessed, modified)
+        })
+        .await?;
         stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
         stat.data_modification_timestamp = times.data_modification_timestamp.map(|t| t.into());
         Ok(stat)

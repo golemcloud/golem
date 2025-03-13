@@ -1432,18 +1432,21 @@ impl RunningWorker {
             "invocation-loop",
             worker_id = parent.owned_worker_id.worker_id.to_string(),
         );
-        let handle = tokio::task::spawn(async move {
-            RunningWorker::invocation_loop(
-                receiver,
-                active_clone,
-                owned_worker_id_clone,
-                parent,
-                waiting_for_command_clone,
-                oom_retry_count,
-            )
-            .instrument(span)
-            .await;
-        });
+        let handle = tokio::task::spawn(
+            async move {
+                RunningWorker::invocation_loop(
+                    receiver,
+                    active_clone,
+                    owned_worker_id_clone,
+                    parent,
+                    waiting_for_command_clone,
+                    oom_retry_count,
+                )
+                .instrument(span)
+                .await;
+            }
+            .in_current_span(),
+        );
 
         RunningWorker {
             handle: Some(handle),
