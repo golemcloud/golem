@@ -20,7 +20,7 @@ pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibCompilationError>
                 pull_types_up_for_standalone_expr(expr)?
             }
 
-            expr.pull_types_up()?;
+            *expr = expr.pull_types_up()?;
         }
 
 

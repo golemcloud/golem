@@ -25,7 +25,7 @@ use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Hash, Ord, PartialOrd)]
 pub enum InferredType {
     Bool,
     S8,
@@ -67,6 +67,68 @@ pub enum InferredType {
     Unknown,
     // Because function result can be a vector of types
     Sequence(Vec<InferredType>),
+}
+
+impl Eq for InferredType {}
+
+impl PartialEq for InferredType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (InferredType::Bool, InferredType::Bool) => true,
+            (InferredType::S8, InferredType::S8) => true,
+            (InferredType::U8, InferredType::U8) => true,
+            (InferredType::S16, InferredType::S16) => true,
+            (InferredType::U16, InferredType::U16) => true,
+            (InferredType::S32, InferredType::S32) => true,
+            (InferredType::U32, InferredType::U32) => true,
+            (InferredType::S64, InferredType::S64) => true,
+            (InferredType::U64, InferredType::U64) => true,
+            (InferredType::F32, InferredType::F32) => true,
+            (InferredType::F64, InferredType::F64) => true,
+            (InferredType::Chr, InferredType::Chr) => true,
+            (InferredType::Str, InferredType::Str) => true,
+            (InferredType::List(t1), InferredType::List(t2)) => t1 == t2,
+            (InferredType::Tuple(ts1), InferredType::Tuple(ts2)) => ts1 == ts2,
+            (InferredType::Record(fs1), InferredType::Record(fs2)) => fs1 == fs2,
+            (InferredType::Flags(vs1), InferredType::Flags(vs2)) => vs1 == vs2,
+            (InferredType::Enum(vs1), InferredType::Enum(vs2)) => vs1 == vs2,
+            (InferredType::Option(t1), InferredType::Option(t2)) => t1 == t2,
+            (
+                InferredType::Result { ok: ok1, error: error1 },
+                InferredType::Result { ok: ok2, error: error2 },
+            ) => ok1 == ok2 && error1 == error2,
+            (InferredType::Variant(vs1), InferredType::Variant(vs2)) => vs1 == vs2,
+            (
+                InferredType::Resource {
+                    resource_id: id1,
+                    resource_mode: mode1,
+                },
+                InferredType::Resource {
+                    resource_id: id2,
+                    resource_mode: mode2,
+                },
+            ) => id1 == id2 && mode1 == mode2,
+            (
+                InferredType::Range { from: from1, to: to1 },
+                InferredType::Range { from: from2, to: to2 },
+            ) => from1 == from2 && to1 == to2,
+            (InferredType::Instance { instance_type: t1 }, InferredType::Instance { instance_type: t2 }) => t1 == t2,
+            (InferredType::OneOf(ts1), InferredType::OneOf(ts2)) => {
+                ts1.iter().all(|t1| ts2.iter().any(|t2| t1 == t2));
+                ts2.iter().all(|t2| ts1.iter().any(|t1| t1 == t2))
+            }
+            (InferredType::AllOf(ts1), InferredType::AllOf(ts2)) => {
+                ts1.iter().all(|t1| ts2.iter().any(|t2| t1 == t2));
+                ts2.iter().all(|t2| ts1.iter().any(|t1| t1 == t2))
+            }
+            (InferredType::Unknown, InferredType::Unknown) => true,
+            (InferredType::Sequence(ts1), InferredType::Sequence(ts2)) => {
+                ts1.iter().all(|t1| ts2.iter().any(|t2| t1 == t2));
+                ts2.iter().all(|t2| ts1.iter().any(|t1| t1 == t2))
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -333,7 +395,7 @@ impl InferredType {
         } else if types.len() == 1 {
             types.into_iter().next()
         } else {
-            let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect(); // Step 1: Col
+            let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect();
             unique_one_of_types.sort();
             Some(InferredType::OneOf(unique_one_of_types))
         }

@@ -2191,8 +2191,8 @@ mod interpreter_tests {
            let input = { request : { path : { user : "jak" } }, y : "baz" };
            let result = my-worker-function(input);
            match result {
-             ok(result) => { body: "afsal", status: 200 },
-             err(result) => { status: 400, body: "afsal" }
+             ok(result) => { body: result, status: 200 },
+             err(result) => { status: 400, body: 400 }
            }
         "#;
 
@@ -2201,7 +2201,7 @@ mod interpreter_tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = test_utils::get_value_and_type(
-            &record(vec![field("body", u64()), field("status", u16())]),
+            &record(vec![field("body", u64()), field("status", u64())]),
             r#"{body: 1, status: 200}"#,
         );
 
@@ -3662,7 +3662,7 @@ mod interpreter_tests {
     }
 
     #[test]
-    async fn test_interpreter_first_class_worker_28() {
+async fn test_interpreter_first_class_worker_28() {
         let expr = r#"
                 let x = request.path.user-id;
                 let worker = instance(x);
