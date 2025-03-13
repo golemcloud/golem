@@ -46,11 +46,12 @@ pub struct S3BlobStorage {
 }
 
 impl S3BlobStorage {
+    #[allow(deprecated)]
     pub async fn new(config: S3BlobStorageConfig) -> Self {
         let region = config.region.clone();
 
         let mut config_builder =
-            aws_config::defaults(BehaviorVersion::v2025_01_17()).region(Region::new(region));
+            aws_config::defaults(BehaviorVersion::v2024_03_28()).region(Region::new(region));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
             info!("The AWS endpoint url for blob storage is {}", &endpoint_url);
