@@ -113,6 +113,10 @@ pub enum ComponentError {
     TransformationFailed(TransformationFailedReason),
     #[error("Plugin composition failed: {0}")]
     PluginApplicationFailed(String),
+    #[error("Failed to download file from component")]
+    FailedToDownloadFile,
+    #[error("Invalid file path: {0}")]
+    InvalidFilePath(String),
 }
 
 impl ComponentError {
@@ -187,6 +191,8 @@ impl SafeDisplay for ComponentError {
             ComponentError::InternalPluginError(_) => self.to_string(),
             ComponentError::TransformationFailed(_) => self.to_string(),
             ComponentError::PluginApplicationFailed(_) => self.to_string(),
+            ComponentError::FailedToDownloadFile => self.to_string(),
+            ComponentError::InvalidFilePath(_) => self.to_string(),
         }
     }
 }
@@ -270,6 +276,16 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
                 })
             }
             ComponentError::PluginApplicationFailed(_) => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::FailedToDownloadFile => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::InvalidFilePath(_) => {
                 component_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
@@ -371,6 +387,14 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         version: Option<ComponentVersion>,
         owner: &Owner,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError>;
+
+    async fn get_file_contents(
+        &self,
+        component_id: &ComponentId,
+        version: ComponentVersion,
+        path: &str,
+        owner: &Owner,
+    ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, ComponentError>;
 
     async fn find_by_name(
         &self,
@@ -1346,6 +1370,55 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         }
     }
 
+    async fn get_file_contents(
+        &self,
+        component_id: &ComponentId,
+        version: ComponentVersion,
+        path: &str,
+        owner: &Owner,
+    ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, ComponentError> {
+        let component = self
+            .get_by_version(
+                &VersionedComponentId {
+                    component_id: component_id.clone(),
+                    version,
+                },
+                owner,
+            )
+            .await?;
+        if let Some(component) = component {
+            info!(owner = %owner, component_id = %component.versioned_component_id, "Stream component file: {}", path);
+
+            let file = component
+                .files
+                .iter()
+                .find(|&file| file.path.to_rel_string() == path)
+                .ok_or(ComponentError::InvalidFilePath(path.to_string()))?;
+
+            let stream = self
+                .initial_component_files_service
+                .get(&owner.account_id(), &file.key)
+                .await
+                .map_err(|e| {
+                    ComponentError::initial_component_file_upload_error(
+                        "Failed to get component file",
+                        e,
+                    )
+                })?
+                .ok_or(ComponentError::FailedToDownloadFile)?
+                .map_err(|e| {
+                    ComponentError::initial_component_file_upload_error(
+                        "Error streaming file data",
+                        e,
+                    )
+                });
+
+            Ok(Box::pin(stream))
+        } else {
+            Err(ComponentError::UnknownComponentId(component_id.clone()))
+        }
+    }
+
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
@@ -1881,6 +1954,20 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         lock.as_ref()
             .unwrap()
             .download_stream(component_id, version, owner)
+            .await
+    }
+
+    async fn get_file_contents(
+        &self,
+        component_id: &ComponentId,
+        version: ComponentVersion,
+        path: &str,
+        owner: &Owner,
+    ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .get_file_contents(component_id, version, path, owner)
             .await
     }
 
