@@ -34,7 +34,6 @@ exclude = [
     "test-components/environment-service",
     "test-components/failing-component",
     "test-components/file-service",
-    "test-components/file-server",
     "test-components/file-write-read-delete",
     "test-components/flags-service",
     "test-components/golem-rust-tests",
@@ -53,7 +52,6 @@ exclude = [
     "test-components/rust-echo",
     "test-components/rust-service",
     "test-components/scheduled-invocation",
-    "test-components/scheduled-invocation-linked",
     "test-components/shopping-cart",
     "test-components/shopping-cart-resource",
     "test-components/stdio-cc",
@@ -69,8 +67,7 @@ exclude = [
     "test-components/wasi-http-incoming-request-handler-state",
     "test-components/write-stderr",
     "test-components/write-stdout",
-    "test-components/rdbms-service",
-    "app/desktop/src-tauri"
+    "test-components/rdbms-service"
 ]
 
 [workspace.dependencies]
