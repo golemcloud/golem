@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::{Debug, Formatter};
+
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_service_client::ComponentCompilationServiceClient,
@@ -24,7 +26,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 #[async_trait]
-pub trait ComponentCompilationService {
+pub trait ComponentCompilationService: Debug + Send + Sync {
     async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64);
 }
 
@@ -45,6 +47,13 @@ impl ComponentCompilationServiceDefault {
             GrpcClientConfig::default(), // TODO
         );
         Self { client }
+    }
+}
+
+impl Debug for ComponentCompilationServiceDefault {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComponentCompilationServiceDefault")
+            .finish()
     }
 }
 
@@ -82,6 +91,13 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
 }
 
 pub struct ComponentCompilationServiceDisabled;
+
+impl Debug for ComponentCompilationServiceDisabled {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComponentCompilationServiceDisabled")
+            .finish()
+    }
+}
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDisabled {

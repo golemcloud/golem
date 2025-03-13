@@ -24,6 +24,7 @@ use tracing::debug;
 const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 
 /// Service for storing initial component files.
+#[derive(Debug)]
 pub struct InitialComponentFilesService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 }

@@ -49,25 +49,6 @@ impl DockerWorkerExecutor {
         verbosity: Level,
         shared_client: bool,
     ) -> Self {
-        Self::new_base(
-            redis,
-            component_service,
-            shard_manager,
-            worker_service,
-            verbosity,
-            shared_client,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-        verbosity: Level,
-        shared_client: bool,
-    ) -> Self {
         info!("Starting golem-worker-executor container");
 
         let env_vars = super::env_vars(
