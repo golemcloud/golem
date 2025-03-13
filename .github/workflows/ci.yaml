@@ -35,6 +35,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
+          prefix-key: v2-rust
           shared-key: debug
           cache-all-crates: true
           save-if: true
