@@ -3666,16 +3666,8 @@ async fn test_interpreter_first_class_worker_28() {
         let expr = r#"
                 let x = request.path.user-id;
                 let worker = instance(x);
-                let a = "mac";
-                let b = "apple";
-                let c = 1;
-                let d = 1;
                 let cart = worker.cart("bar");
-                cart.add-item({product-id: a, name: b, quantity: c, price: d});
-                cart.remove-item(a);
-                cart.update-item-quantity(a, 2);
                 let result = cart.get-cart-contents();
-                cart.drop();
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();

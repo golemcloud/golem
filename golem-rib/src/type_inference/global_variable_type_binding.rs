@@ -1337,6 +1337,15 @@ mod internal {
                 function_name,
                 worker,
             } => {
+                let new_worker = if let Some(worker) = worker {
+                    Some(temp_stack
+                        .pop_front()
+                        .map(|x| x.0)
+                        .unwrap_or(worker.deref().clone()))
+                } else {
+                    None
+                };
+
                 let mut function_name = function_name.clone();
 
                 let resource_params = function_name.function.raw_resource_params_mut();
@@ -1388,36 +1397,17 @@ mod internal {
                     None => inferred_type.clone(),
                 };
 
-                // worker in the call type
-                let new_call = if let Some(worker) = worker {
-                    let worker = temp_stack
-                        .pop_front()
-                        .map(|x| x.0)
-                        .unwrap_or(worker.deref().clone());
 
-                    Expr::Call {
-                        call_type: CallType::Function {
-                            function_name,
-                            worker: Some(Box::new(worker)),
-                        },
-                        generic_type_parameter: generic_type_parameter.clone(),
-                        args: new_arg_exprs,
-                        inferred_type: new_inferred_type,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    }
-                } else {
-                    Expr::Call {
-                        call_type: CallType::Function {
-                            function_name,
-                            worker: None,
-                        },
-                        generic_type_parameter: generic_type_parameter.clone(),
-                        args: new_arg_exprs,
-                        inferred_type: new_inferred_type,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    }
+                let new_call = Expr::Call {
+                    call_type: CallType::Function {
+                        function_name,
+                        worker: new_worker.map(Box::new)
+                    },
+                    generic_type_parameter: generic_type_parameter.clone(),
+                    args: new_arg_exprs,
+                    inferred_type: new_inferred_type,
+                    source_span: source_span.clone(),
+                    type_annotation: type_annotation.clone(),
                 };
 
                 temp_stack.push_front((new_call, false));

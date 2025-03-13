@@ -557,6 +557,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     &mut inferred_expr_stack,
                     source_span,
                 );
+
             }
 
             Expr::Unwrap {
@@ -1281,6 +1282,13 @@ mod internal {
                 function_name,
                 worker,
             } => {
+
+                let new_worker = if let Some(worker) = worker {
+                    Some(inferred_expr_stack.pop_front().unwrap_or(worker.deref().clone()))
+                } else {
+                    None
+                };
+
                 let mut function_name = function_name.clone();
 
                 let resource_params = function_name.function.raw_resource_params_mut();
@@ -1332,33 +1340,16 @@ mod internal {
                 };
 
                 // worker in the call type
-                let new_call = if let Some(worker) = worker {
-                    let worker = inferred_expr_stack
-                        .pop_front()
-                        .unwrap_or(worker.deref().clone());
-
-                    Expr::call(
-                        CallType::Function {
-                            function_name,
-                            worker: Some(Box::new(worker)),
-                        },
-                        None,
-                        new_arg_exprs,
-                    )
+                let new_call =  Expr::call(
+                    CallType::Function {
+                        function_name,
+                        worker: new_worker.map(Box::new),
+                    },
+                    None,
+                    new_arg_exprs,
+                )
                     .with_inferred_type(new_inferred_type)
-                    .with_source_span(source_span.clone())
-                } else {
-                    Expr::call(
-                        CallType::Function {
-                            function_name,
-                            worker: None,
-                        },
-                        None,
-                        new_arg_exprs,
-                    )
-                    .with_inferred_type(new_inferred_type)
-                    .with_source_span(source_span.clone())
-                };
+                    .with_source_span(source_span.clone());
 
                 inferred_expr_stack.push_front(new_call);
             }
