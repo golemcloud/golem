@@ -7,6 +7,7 @@ mod tests {
     use async_trait::async_trait;
     use golem_wasm_rpc::IntoValueAndType;
     use rand::prelude::*;
+    use rand::rng;
     use std::env;
     use std::time::Duration;
     use tokio::sync::mpsc;
@@ -346,7 +347,7 @@ mod tests {
     }
 
     fn randomize<T>(slice: &mut [T]) {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         slice.shuffle(&mut rng);
     }
 
@@ -451,7 +452,7 @@ mod tests {
             let mut stopped = self.worker_executor_cluster().stopped_indices().await;
             if !stopped.is_empty() {
                 {
-                    let mut rng = thread_rng();
+                    let mut rng = rng();
                     stopped.shuffle(&mut rng);
                 }
 
@@ -712,7 +713,7 @@ mod tests {
                 Command::RestartShardManager,
             ];
             {
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 commands.shuffle(&mut rng);
             }
             let command = &commands[0];
@@ -733,8 +734,8 @@ mod tests {
         }
 
         fn random_seconds() -> u64 {
-            let mut rng = thread_rng();
-            rng.gen_range(1..10)
+            let mut rng = rng();
+            rng.random_range(1..10)
         }
 
         while stop_rx.try_recv().is_err() {

@@ -121,7 +121,11 @@ impl Services {
         let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
             match config.compilation.clone() {
                 ComponentCompilationConfig::Enabled(config) => {
-                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
+                    Arc::new(ComponentCompilationServiceDefault::new(
+                        config.uri(),
+                        config.retries,
+                        config.connect_timeout,
+                    ))
                 }
                 ComponentCompilationConfig::Disabled(_) => {
                     Arc::new(ComponentCompilationServiceDisabled)
@@ -146,6 +150,7 @@ impl Services {
                 initial_component_files_service.clone(),
                 plugin_service.clone(),
                 plugin_wasm_files_service.clone(),
+                config.plugin_transformations.clone(),
             ))
             .await;
 

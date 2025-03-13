@@ -58,8 +58,19 @@ dependencies = [
 # WIT DEPENDENCIES
 [tasks.wit]
 description = "Fetches the WIT dependencies based on wit/deps.toml"
-condition = { files_modified = { input = ["wit/deps.toml"], output = ["wit/deps.done"] } }
-run_task = [{ name = ["remove-wit-deps", "wit-host", "wit-wasm-rpc", "wit-done"] }]
+condition = { files_modified = { input = [
+    "wit/deps.toml",
+], output = [
+    "wit/deps.done",
+] } }
+run_task = [
+    { name = [
+        "remove-wit-deps",
+        "wit-host",
+        "wit-wasm-rpc",
+        "wit-done",
+    ] },
+]
 
 [tasks.wit-wasm-rpc]
 private = true
@@ -378,7 +389,7 @@ cargo test \
 '''
 
 [tasks.api-tests]
-description =  "Runs all API tests"
+description = "Runs all API tests"
 dependencies = ["api-tests-http", "api-tests-grpc"]
 
 [tasks.api-tests-http]
@@ -401,7 +412,8 @@ cargo test --package integration-tests --test api -- :tag: --nocapture --report-
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
 dependencies = [
-    "build-bins",
+    "build-worker-service",
+    "build-component-service",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",

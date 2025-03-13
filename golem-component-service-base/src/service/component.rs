@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::PluginTransformationsConfig;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
@@ -38,7 +39,6 @@ use golem_common::model::plugin::{
     PluginTypeSpecificDefinition,
 };
 use golem_common::model::ComponentVersion;
-use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
@@ -480,6 +480,7 @@ pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    transformations_config: PluginTransformationsConfig,
 }
 
 impl<Owner: ComponentOwner, Scope: PluginScope> Debug for ComponentServiceDefault<Owner, Scope> {
@@ -496,6 +497,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         initial_component_files_service: Arc<InitialComponentFilesService>,
         plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        transformations_config: PluginTransformationsConfig,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
@@ -504,6 +506,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             initial_component_files_service,
             plugin_service,
             plugin_wasm_files_service,
+            transformations_config,
         }
     }
 
@@ -952,7 +955,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             "component_transformer_plugin",
             "transform",
             None,
-            &RetryConfig::default(), // TODO
+            &self.transformations_config.retries,
             &(client, serializable_component, url, data, parameters),
             |(client, serializable_component, url, data, parameters)| {
                 Box::pin(async move {

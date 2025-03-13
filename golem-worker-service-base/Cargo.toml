@@ -24,9 +24,10 @@ golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = [
+    "host",
+] }
 
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bigdecimal = { workspace = true }
@@ -35,34 +36,27 @@ chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 derive_more = { workspace = true }
 fred = { workspace = true }
-figment = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
-humantime-serde = { workspace = true }
 hyper = { workspace = true }
-lazy_static = { workspace = true }
 mime_guess = "2.0.5"
 nom = { workspace = true }
 openapiv3 = { workspace = true }
 openidconnect = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry-prometheus = { workspace = true }
-opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 regex = { workspace = true }
-rustc-hash = "2.1.0"
+rustc-hash = "2.1.1"
 rsa = "0.9.7"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-strum = { workspace = true }
-strum_macros = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",
@@ -71,21 +65,16 @@ sqlx = { workspace = true, features = [
     "migrate",
     "chrono",
 ] }
-tap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
-tonic-health = { workspace = true }
-tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
-wasm-wave = { workspace = true }
-log = "0.4.22"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

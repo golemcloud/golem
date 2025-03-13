@@ -23,7 +23,6 @@ async-rwlock = "1.3.0"
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
-figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
@@ -32,10 +31,8 @@ itertools = { workspace = true }
 k8s-openapi = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 prometheus = { workspace = true }
-prost = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -43,8 +40,6 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 tracing-test = "0.2.5"

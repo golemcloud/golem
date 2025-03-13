@@ -20,8 +20,6 @@ golem-service-base = { version = "=0.0.0", path = "../golem-service-base" }
 golem-worker-executor-base = { version = "=0.0.0", path = "../golem-worker-executor-base" }
 
 async-trait = { workspace = true }
-console-subscriber = { workspace = true }
-figment = { workspace = true }
 futures = { workspace = true }
 futures-util = "0.3.31"
 http = { workspace = true }
@@ -34,7 +32,7 @@ tokio-stream = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+#tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true }
 

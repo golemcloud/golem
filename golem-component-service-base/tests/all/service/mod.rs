@@ -30,6 +30,7 @@ use golem_common::model::{
     ComponentType, Empty,
 };
 use golem_common::SafeDisplay;
+use golem_component_service_base::config::PluginTransformationsConfig;
 use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
@@ -152,6 +153,7 @@ async fn component_service(
             initial_component_files_service.clone(),
             plugin_service.clone(),
             plugin_wasm_files_service.clone(),
+            PluginTransformationsConfig::default(),
         ))
         .await;
     lazy_component_service.clone()

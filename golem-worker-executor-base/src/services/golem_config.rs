@@ -66,6 +66,7 @@ pub struct Limits {
     #[serde(with = "humantime_serde")]
     pub epoch_interval: Duration,
     pub epoch_ticks: u64,
+    pub max_oplog_query_pages_size: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,6 +83,8 @@ pub struct PluginServiceGrpcConfig {
     pub access_token: String,
     pub retries: RetryConfig,
     pub plugin_cache_size: usize,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -124,6 +127,9 @@ pub struct WorkerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
     pub access_token: String,
+    pub retries: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
 impl GolemConfig {
@@ -377,6 +383,7 @@ impl Default for Limits {
             fuel_to_borrow: 10000,
             epoch_interval: Duration::from_millis(10),
             epoch_ticks: 1,
+            max_oplog_query_pages_size: 100,
         }
     }
 }
@@ -395,6 +402,7 @@ impl Default for PluginServiceGrpcConfig {
             access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
             retries: RetryConfig::max_attempts_3(),
             plugin_cache_size: 1024,
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -476,6 +484,8 @@ impl Default for WorkerServiceGrpcConfig {
             host: "localhost".to_string(),
             port: 9007,
             access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
+            retries: RetryConfig::max_attempts_5(),
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }

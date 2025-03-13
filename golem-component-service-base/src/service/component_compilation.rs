@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Formatter};
-
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_service_client::ComponentCompilationServiceClient,
     ComponentCompilationRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, RetryConfig};
 use http::Uri;
+use std::fmt::{Debug, Formatter};
+use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
@@ -35,7 +35,7 @@ pub struct ComponentCompilationServiceDefault {
 }
 
 impl ComponentCompilationServiceDefault {
-    pub fn new(uri: Uri) -> Self {
+    pub fn new(uri: Uri, retries: RetryConfig, connect_timeout: Duration) -> Self {
         let client = GrpcClient::new(
             "component-compilation-service",
             |channel| {
@@ -44,7 +44,10 @@ impl ComponentCompilationServiceDefault {
                     .accept_compressed(CompressionEncoding::Gzip)
             },
             uri,
-            GrpcClientConfig::default(), // TODO
+            GrpcClientConfig {
+                retries_on_unavailable: retries,
+                connect_timeout,
+            },
         );
         Self { client }
     }

@@ -15,6 +15,10 @@ access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 host = "localhost"
 port = 9090
 
+[component_service.connect_timeout]
+nanos = 0
+secs = 10
+
 [component_service.retries]
 max_attempts = 3
 max_delay = "1s"
@@ -48,9 +52,17 @@ min_delay = "100ms"
 multiplier = 2.0
 
 [routing_table]
+connect_timeout = "10s"
 host = "localhost"
 invalidation_min_delay = "500ms"
 port = 9002
+
+[routing_table.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [tracing]
 console = false
@@ -107,6 +119,10 @@ multiplier = 10.0
 # host = "localhost"
 # port = 9090
 # 
+# [component_service.connect_timeout]
+# nanos = 0
+# secs = 10
+# 
 # [component_service.retries]
 # max_attempts = 3
 # max_delay = "1s"
@@ -144,9 +160,17 @@ multiplier = 10.0
 # multiplier = 2.0
 # 
 # [routing_table]
+# connect_timeout = "10s"
 # host = "localhost"
 # invalidation_min_delay = "500ms"
 # port = 9002
+# 
+# [routing_table.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [tracing]
 # console = false
@@ -218,6 +242,10 @@ multiplier = 10.0
 # host = "localhost"
 # port = 9090
 # 
+# [component_service.connect_timeout]
+# nanos = 0
+# secs = 10
+# 
 # [component_service.retries]
 # max_attempts = 3
 # max_delay = "1s"
@@ -255,9 +283,17 @@ multiplier = 10.0
 # multiplier = 2.0
 # 
 # [routing_table]
+# connect_timeout = "10s"
 # host = "localhost"
 # invalidation_min_delay = "500ms"
 # port = 9002
+# 
+# [routing_table.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [tracing]
 # console = false

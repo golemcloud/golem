@@ -15,23 +15,23 @@ use prometheus::Registry;
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::path::Path;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock, Weak};
-
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    PluginInstallationId, RetryConfig, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, GolemConfig,
     IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, WorkerServiceGrpcConfig,
 };
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock, Weak};
+use std::time::Duration;
 
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
@@ -345,6 +345,8 @@ pub async fn start_limited(
             host: "localhost".to_string(),
             port: context.grpc_port(),
             access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
+            retries: RetryConfig::max_attempts_3(),
+            connect_timeout: Duration::from_secs(10),
         },
         memory: MemoryConfig {
             system_memory_override,

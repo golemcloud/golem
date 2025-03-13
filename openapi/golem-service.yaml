@@ -4362,9 +4362,24 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ValueAndType'
+        trace_id:
+          type: string
+        trace_states:
+          type: array
+          items:
+            type: string
+        invocation_context:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
       required:
       - idempotency_key
       - full_function_name
+      - trace_id
+      - trace_states
+      - invocation_context
     FailedUpdate:
       type: object
       properties:
@@ -5248,15 +5263,6 @@ components:
           format: uint64
       required:
       - target_version
-    MessagesErrorsBody:
-      type: object
-      properties:
-        errors:
-          type: array
-          items:
-            type: string
-      required:
-      - errors
     MethodPattern:
       type: string
       enum:
@@ -6435,15 +6441,6 @@ components:
       - targetVersion
     UpdateWorkerResponse:
       type: object
-    ValidationErrorsBody:
-      type: object
-      properties:
-        errors:
-          type: array
-          items:
-            type: string
-      required:
-      - errors
     ValueAndOptionalType:
       type: object
       properties:
@@ -6762,25 +6759,13 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          Messages: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
-          Validation: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+          Messages: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
+          Validation: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
-      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
-    WorkerServiceErrorsBody_MessagesErrorsBody:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Messages
-            type: string
-            enum:
-            - Messages
-        required:
-        - type
-      - $ref: '#/components/schemas/MessagesErrorsBody'
-    WorkerServiceErrorsBody_ValidationErrorsBody:
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
+    WorkerServiceErrorsBody_ErrorsBody:
       allOf:
       - type: object
         properties:
@@ -6791,7 +6776,7 @@ components:
             - Validation
         required:
         - type
-      - $ref: '#/components/schemas/ValidationErrorsBody'
+      - $ref: '#/components/schemas/ErrorsBody'
     WorkerStatus:
       description: |-
         Represents last known status of a worker
