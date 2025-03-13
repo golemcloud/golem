@@ -154,10 +154,9 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::Identifier { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
-                    return Err(UnResolvedTypesError::from(expr, parent)
-                        .with_additional_error_detail(
-                            format!("`{}` is unknown identifier", expr).as_str(),
-                        ));
+                    return Err(UnResolvedTypesError::from(expr, parent).with_help_message(
+                        format!("make sure `{}` is a valid identifier", expr).as_str(),
+                    ));
                 }
             }
             Expr::Boolean { inferred_type, .. } => {
@@ -774,9 +773,9 @@ mod unresolved_types_tests {
         error in the following rib found at line 1, column 1
         `hello`
         cause: cannot determine the type
-        `hello` is unknown identifier
         help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: make sure `hello` is a valid identifier
         "#;
 
         assert_eq!(error_msg, strip_spaces(error));
@@ -793,10 +792,10 @@ mod unresolved_types_tests {
         found within:
         `{foo: {a: "bar", b: ("foo", hello)}}`
         cause: cannot determine the type
-        `hello` is unknown identifier
         unresolved type at path: `foo.b[1]`
         help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: make sure `hello` is a valid identifier
         "#;
 
         assert_eq!(error_msg, strip_spaces(expected));
@@ -813,9 +812,9 @@ mod unresolved_types_tests {
         found within:
         `ok(hello)`
         cause: cannot determine the type
-        `hello` is unknown identifier
         help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: make sure `hello` is a valid identifier
         "#;
 
         assert_eq!(error_msg, strip_spaces(expected));
@@ -833,9 +832,9 @@ mod unresolved_types_tests {
         found within:
         `err(hello)`
         cause: cannot determine the type
-        `hello` is unknown identifier
         help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: make sure `hello` is a valid identifier
         "#;
 
         assert_eq!(error_msg, strip_spaces(expected));

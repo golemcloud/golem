@@ -969,20 +969,17 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
     )
     .unwrap();
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker-name = "shopping-cart-${id}";
+      let worker = instance(worker-name);
+      let response = worker.get-cart-contents("a", "b");
       response
     "#;
 
     let api_specification: HttpApiDefinition =
         get_api_def_with_cors_preflight_for_get_endpoint_resource(
             "/foo/{user-id}",
-            worker_name,
             response_mapping,
             &cors,
         )
@@ -1044,19 +1041,16 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
     let api_request =
         get_gateway_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
 
-    let worker_name = r#"
-        let x: u64 = request.path.user-id;
-        "shopping-cart-${x}"
-    "#;
-
     let response_mapping = r#"
-        let response = golem:it/api.{get-cart-contents}(request.path.token-id, request.path.token-id);
+        let x: u64 = request.path.user-id;
+        let my-instance = instance("shopping-cart-${x}");
+        let response = my-instance.get-cart-contents(request.path.token-id, request.path.token-id);
         response
     "#;
 
     let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
         "/foo/{user-id}?{token-id}",
-        Some(worker_name),
+        None,
         response_mapping,
     )
     .await;
@@ -1105,20 +1099,17 @@ async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input(
     );
 
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
-      response
-    "#;
-
-    let worker_name = r#"
       let n: u64 = 100;
       let age: u64 = request.body.age;
       let zero: u64 = 0; let one: u64 = 1;
       let res = if age > n then zero else one;
-      "shopping-cart-${res}"
+      let worker = instance("shopping-cart-${res}");
+      let response = worker.get-cart-contents("a", "b");
+      response
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping)
             .await;
 
     let session_store = internal::get_session_store();
@@ -1243,10 +1234,17 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
     "#;
 
     let response_mapping = r#"
-          let param1 = request.body.foo_key;
-          let param2 = request.body.bar_key[0];
-          let response = golem:it/api.{get-cart-contents}(param1, param2);
-          response
+         let userid: string = request.path.user-id;
+         let max: u64 = 100;
+         let zero: u64 = 0;
+         let one: u64 = 1;
+         let res = if userid == "bar" then one else zero;
+         let worker = instance("shopping-cart-${res}");
+         let param1 = request.body.foo_key;
+         let param2 = request.body.bar_key[0];
+         let response = golem:it/api.{get-cart-contents}(param1, param2);
+
+         response
         "#;
 
     let api_specification: HttpApiDefinition =
@@ -1696,7 +1694,6 @@ async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) ->
 
 async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
     path_pattern: &str,
-    worker_name: &str,
     rib_expression: &str,
     cors: &HttpCors,
 ) -> HttpApiDefinition {
@@ -1726,7 +1723,6 @@ async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
               componentId:
                 componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
                 version: 0
-              workerName: '{}'
               response: '${{{}}}'
 
         "#,
@@ -1738,7 +1734,6 @@ async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
         cors.get_allow_credentials().unwrap_or_default(),
         cors.get_max_age().unwrap_or_default(),
         path_pattern,
-        worker_name,
         rib_expression
     );
 

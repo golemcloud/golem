@@ -2839,7 +2839,7 @@ mod interpreter_tests {
     #[test]
     async fn test_interpreter_range_returns_5() {
         let expr = r#"
-              let y = 1 + 10;
+              let y = 1:u64 + 10: u64;
               1..y
               "#;
 
