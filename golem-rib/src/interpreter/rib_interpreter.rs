@@ -2176,7 +2176,7 @@ mod interpreter_tests {
         let input_analysed_type = test_utils::get_analysed_type_record();
         let output_analysed_type = test_utils::get_analysed_type_result();
 
-        let result_value = test_utils::get_value_and_type(&output_analysed_type, r#"ok(1)"#);
+        let result_value = get_value_and_type(&output_analysed_type, r#"ok(1)"#);
 
         let mut interpreter = test_utils::interpreter_static_response(&result_value, None);
 
@@ -2191,8 +2191,8 @@ mod interpreter_tests {
            let input = { request : { path : { user : "jak" } }, y : "baz" };
            let result = my-worker-function(input);
            match result {
-             ok(result) => { body: result, status: 200u16 },
-             err(result) => { status: 400u16, body: 400u64 }
+             ok(result) => { body: "afsal", status: 200 },
+             err(result) => { status: 400, body: "afsal" }
            }
         "#;
 

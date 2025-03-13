@@ -19,7 +19,10 @@ pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibCompilationError>
             for expr in exprs {
                 pull_types_up_for_standalone_expr(expr)?
             }
+
+            expr.pull_types_up()?;
         }
+
 
         expr => pull_types_up_for_standalone_expr(expr)?,
     }
@@ -56,7 +59,10 @@ fn pull_types_up_for_standalone_expr(expr: &mut Expr) -> Result<(), RibCompilati
         Expr::Cond { .. } => {
             *expr = expr.pull_types_up()?;
         }
-        Expr::PatternMatch { .. } => {
+        Expr::PatternMatch { match_arms, .. } => {
+            for arm in match_arms {
+                *arm.arm_resolution_expr = arm.arm_resolution_expr.pull_types_up()?;
+            }
             *expr = expr.pull_types_up()?;
         }
         Expr::Option { .. } => {
@@ -116,6 +122,12 @@ fn infer_number_literals(expr: &mut Expr) {
             Expr::SelectIndex { .. } => {}
             Expr::InvokeMethodLazy { .. } => {}
             Expr::Identifier { .. } => {}
+            Expr::PatternMatch { match_arms, .. } => {
+                for arm in match_arms {
+                    queue.push_back(&mut arm.arm_resolution_expr)
+                }
+
+            }
             Expr::Number {
                 number,
                 inferred_type,
