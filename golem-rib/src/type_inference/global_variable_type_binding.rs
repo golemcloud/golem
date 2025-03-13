@@ -1338,10 +1338,12 @@ mod internal {
                 worker,
             } => {
                 let new_worker = if let Some(worker) = worker {
-                    Some(temp_stack
-                        .pop_front()
-                        .map(|x| x.0)
-                        .unwrap_or(worker.deref().clone()))
+                    Some(
+                        temp_stack
+                            .pop_front()
+                            .map(|x| x.0)
+                            .unwrap_or(worker.deref().clone()),
+                    )
                 } else {
                     None
                 };
@@ -1397,11 +1399,10 @@ mod internal {
                     None => inferred_type.clone(),
                 };
 
-
                 let new_call = Expr::Call {
                     call_type: CallType::Function {
                         function_name,
-                        worker: new_worker.map(Box::new)
+                        worker: new_worker.map(Box::new),
                     },
                     generic_type_parameter: generic_type_parameter.clone(),
                     args: new_arg_exprs,

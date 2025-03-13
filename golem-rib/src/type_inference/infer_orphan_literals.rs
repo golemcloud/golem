@@ -23,7 +23,6 @@ pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibCompilationError>
             *expr = expr.pull_types_up()?;
         }
 
-
         expr => pull_types_up_for_standalone_expr(expr)?,
     }
 
@@ -126,7 +125,6 @@ fn infer_number_literals(expr: &mut Expr) {
                 for arm in match_arms {
                     queue.push_back(&mut arm.arm_resolution_expr)
                 }
-
             }
             Expr::Number {
                 number,

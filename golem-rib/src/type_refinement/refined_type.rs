@@ -162,7 +162,6 @@ impl<A> RefinedType<A> {
                     .map(|v| v.inner_type_by_name(field_name))
                     .collect::<Vec<_>>();
 
-
                 InferredType::all_of(collected_types).unwrap_or(InferredType::Unknown)
             }
             RefinedType::Value(value) => {

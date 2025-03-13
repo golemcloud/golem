@@ -3662,7 +3662,7 @@ mod interpreter_tests {
     }
 
     #[test]
-async fn test_interpreter_first_class_worker_28() {
+    async fn test_interpreter_first_class_worker_28() {
         let expr = r#"
                 let x = request.path.user-id;
                 let worker = instance(x);

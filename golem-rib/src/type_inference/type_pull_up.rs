@@ -557,7 +557,6 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     &mut inferred_expr_stack,
                     source_span,
                 );
-
             }
 
             Expr::Unwrap {
@@ -1282,9 +1281,12 @@ mod internal {
                 function_name,
                 worker,
             } => {
-
                 let new_worker = if let Some(worker) = worker {
-                    Some(inferred_expr_stack.pop_front().unwrap_or(worker.deref().clone()))
+                    Some(
+                        inferred_expr_stack
+                            .pop_front()
+                            .unwrap_or(worker.deref().clone()),
+                    )
                 } else {
                     None
                 };
@@ -1340,7 +1342,7 @@ mod internal {
                 };
 
                 // worker in the call type
-                let new_call =  Expr::call(
+                let new_call = Expr::call(
                     CallType::Function {
                         function_name,
                         worker: new_worker.map(Box::new),
@@ -1348,8 +1350,8 @@ mod internal {
                     None,
                     new_arg_exprs,
                 )
-                    .with_inferred_type(new_inferred_type)
-                    .with_source_span(source_span.clone());
+                .with_inferred_type(new_inferred_type)
+                .with_source_span(source_span.clone());
 
                 inferred_expr_stack.push_front(new_call);
             }

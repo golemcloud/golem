@@ -334,7 +334,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => {
                         *inferred_type = unified_type;
-                    },
+                    }
                     Err(e) => {
                         errors.push(
                             UnResolvedTypesError::from(&expr_copied, None)
