@@ -114,12 +114,12 @@ futures-core = "0.3.31"
 futures-util = "0.3.31"
 git-version = "0.3.9"
 hex = "0.4.3"
-http = "1.3.1" # keep in sync with wasmtime
-http-body = "1.0.1" # keep in sync with wasmtime
-http-body-util = "0.1.3" # keep in sync with wasmtime
+http = "1.3.1"
+http-body = "1.0.1"
+http-body-util = "0.1.3"
 humansize = "2.1.3"
 humantime-serde = "1.1.1"
-hyper = { version = "1.6.0", features = ["full"] } # keep in sync with wasmtime
+hyper = { version = "1.6.0", features = ["full"] }
 include_dir = "0.7.4"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"

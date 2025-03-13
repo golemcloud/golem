@@ -29,7 +29,7 @@ use crate::model::{
     ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType,
     WorkerConfig,
 };
-use crate::services::events::Event;
+use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
@@ -510,15 +510,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
+    ) -> Result<ResultOrSubscription, GolemError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
-            LookupResult::Complete(output) => Ok(Some(output)),
+            LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
             LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-            LookupResult::Pending => Ok(None),
+            LookupResult::Pending => {
+                let subscription = self.events().subscribe();
+                Ok(ResultOrSubscription::Pending(subscription))
+            }
             LookupResult::New => {
                 // Invoke the function in the background
+                let subscription = self.events().subscribe();
+
                 self.enqueue(
                     idempotency_key,
                     full_function_name,
@@ -526,7 +531,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     invocation_context,
                 )
                 .await;
-                Ok(None)
+                Ok(ResultOrSubscription::Pending(subscription))
             }
         }
     }
@@ -550,12 +555,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?
         {
-            Some(Ok(output)) => Ok(output),
-            Some(Err(err)) => Err(err),
-            None => {
+            ResultOrSubscription::Finished(Ok(output)) => Ok(output),
+            ResultOrSubscription::Finished(Err(err)) => Err(err),
+            ResultOrSubscription::Pending(subscription) => {
                 debug!("Waiting for idempotency key to complete",);
 
-                let result = self.wait_for_invocation_result(&idempotency_key).await;
+                let result = self
+                    .wait_for_invocation_result(&idempotency_key, subscription)
+                    .await;
 
                 debug!("Idempotency key lookup result: {:?}", result);
                 match result {
@@ -1060,8 +1067,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn wait_for_invocation_result(
         &self,
         key: &IdempotencyKey,
+        mut subscription: EventsSubscription,
     ) -> Result<LookupResult, RecvError> {
-        let mut subscription = self.events().subscribe();
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
@@ -1774,4 +1781,9 @@ impl QueuedWorkerInvocation {
             _ => false,
         }
     }
+}
+
+pub enum ResultOrSubscription {
+    Finished(Result<TypeAnnotatedValue, GolemError>),
+    Pending(EventsSubscription),
 }
