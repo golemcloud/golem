@@ -1106,6 +1106,9 @@ mod internal {
         let right_expr_type = right_expr.inferred_type();
         let left_expr_type = left_expr.inferred_type();
 
+        // This special check is optional in a pull up phase,
+        // and can be part of type check errors however, we have better control
+        // over error messages.
         if result_type.un_resolved()
             && !right_expr_type.un_resolved()
             && !left_expr_type.un_resolved()
@@ -1133,16 +1136,30 @@ mod internal {
                 ],
             })?;
 
-            let promoted_type = InferredNumber::promote_type(&left_number_type, &right_number_type);
+            // Being typesafe here (inspired from languages like Rust)
+            // where without a casting its impossible to perform math operations
+            // on different types.
+            if right_number_type == left_number_type {
+                let new_math_op = f(
+                    Box::new(left_expr),
+                    Box::new(right_expr),
+                    InferredType::from(right_number_type),
+                );
 
-            let new_result_type = promoted_type;
-            let new_math_op = f(
-                Box::new(left_expr),
-                Box::new(right_expr),
-                InferredType::from(new_result_type),
-            );
-
-            inferred_type_stack.push_front(new_math_op);
+                inferred_type_stack.push_front(new_math_op);
+            } else {
+                return Err(TypeMismatchError {
+                    expr_with_wrong_type: original_math_expr.clone(),
+                    parent_expr: None,
+                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
+                    field_path: Default::default(),
+                    additional_error_detail: vec![
+                        "math expression consist of operands that are not valid numbers"
+                            .to_string(),
+                    ],
+                });
+            }
         } else {
             let new_math_op = f(
                 Box::new(left_expr),

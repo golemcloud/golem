@@ -21,6 +21,7 @@ pub use global_variable_type_binding::*;
 pub use identifier_inference::*;
 pub use identify_instance_creation::*;
 pub use index_selection_type_binding::*;
+pub use infer_orphan_literals::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
 pub use instance_type_binding::*;
@@ -47,6 +48,7 @@ mod global_variable_type_binding;
 mod identifier_inference;
 mod identify_instance_creation;
 mod index_selection_type_binding;
+mod infer_orphan_literals;
 mod inference_fix_point;
 mod inferred_expr;
 mod instance_type_binding;
@@ -260,13 +262,6 @@ mod type_inference_tests {
 
     #[test]
     fn test_inference_inline_type_annotation_7() {
-        // ok(1) isn't automatically inferred since no further hints are given
-        let mut invalid_rib_expr = Expr::from_text(r#"ok(1)"#).unwrap();
-
-        let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
-
-        assert!(result.is_err());
-
         let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
         let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 
@@ -283,12 +278,6 @@ mod type_inference_tests {
 
     #[test]
     fn test_inference_inline_type_annotation_9() {
-        let mut invalid_rib_expr = Expr::from_text(r#"err(1)"#).unwrap();
-
-        let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
-
-        assert!(result.is_err());
-
         let mut valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
         let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 
@@ -306,15 +295,43 @@ mod type_inference_tests {
 
     #[test]
     fn test_inference_inline_type_annotation_11() {
-        let mut invalid_rib_expr = Expr::from_text(r#"[1, 2]"#).unwrap();
-
-        let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
-
-        assert!(result.is_err());
-
         let mut valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
         let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_inference_standalone_literals_1() {
+        let mut expr = Expr::from_text(r#"err(1)"#).unwrap();
+
+        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_inference_standalone_literals_2() {
+        let mut expr = Expr::from_text(r#"ok(1)"#).unwrap();
+
+        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_inference_standalone_literals_3() {
+        let mut expr = Expr::from_text(r#"[1, 2]"#).unwrap();
+
+        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_inference_standalone_literals_4() {
+        let mut expr = Expr::from_text("{foo: {status: 200, b: \"hello\"}}").unwrap();
+        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
         assert!(result.is_ok());
     }
 

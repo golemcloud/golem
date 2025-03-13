@@ -783,43 +783,6 @@ mod unresolved_types_tests {
     }
 
     #[test]
-    fn test_unresolved_type_record() {
-        let expr = Expr::from_text("{a: 1, b: \"hello\"}").unwrap();
-        let error = compile(expr, &vec![]).unwrap_err().to_string();
-
-        let expected = r#"
-        error in the following rib found at line 1, column 5
-        `1`
-        found within:
-        `{a: 1, b: "hello"}`
-        cause: cannot determine the type
-        unresolved type at path: `a`
-        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
-        "#;
-        assert_eq!(error, strip_spaces(expected));
-    }
-
-    #[test]
-    fn test_unresolved_type_nested_record_field() {
-        let expr = Expr::from_text("{foo: {a: 1, b: \"hello\"}}").unwrap();
-        let error_msg = compile(expr, &vec![]).unwrap_err().to_string();
-
-        let expected = r#"
-        error in the following rib found at line 1, column 11
-        `1`
-        found within:
-        `{foo: {a: 1, b: "hello"}}`
-        cause: cannot determine the type
-        unresolved type at path: `foo.a`
-        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
-        "#;
-
-        assert_eq!(error_msg, strip_spaces(expected));
-    }
-
-    #[test]
     fn test_unresolved_type_nested_record_index() {
         let expr = Expr::from_text("{foo: {a: \"bar\", b: (\"foo\", hello)}}").unwrap();
         let error_msg = compile(expr, &vec![]).unwrap_err().to_string();

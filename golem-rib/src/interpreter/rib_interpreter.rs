@@ -1882,6 +1882,7 @@ mod interpreter_tests {
         let mut interpreter =
             test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
 
+        // 1 is automatically inferred to be u32
         let rib = r#"
           let worker = instance("my-worker");
           worker.foo(1)
@@ -1905,11 +1906,12 @@ mod interpreter_tests {
         let mut interpreter =
             test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
 
-        // z's type will be inferred as u32 and is not influenced by
-        // the fact that operands are u32
+        // 1 and 2 are automatically inferred to be u32
+        // since the type of z is inferred to be u32 as that being passed to a function
+        // that expects u32
         let rib = r#"
           let worker = instance("my-worker");
-          let z = 1: u8 + 2:u8;
+          let z = 1 + 2;
           worker.foo(z)
         "#;
 
@@ -1921,6 +1923,43 @@ mod interpreter_tests {
             result.get_val().unwrap(),
             ValueAndType::new(Value::U64(2), u64())
         );
+    }
+
+    #[test]
+    async fn test_interpreter_with_numbers_3() {
+        let component_metadata =
+            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+
+        // This will cause a type inference error
+        // because the operands of the + operator are not of the same type
+        let rib = r#"
+          let worker = instance("my-worker");
+          let z = 1: u8 + 2;
+          worker.foo(z)
+        "#;
+
+        let expr = Expr::from_text(rib).unwrap();
+        let compile_result = compiler::compile(expr, &component_metadata);
+        assert!(compile_result.is_err());
+    }
+
+    #[test]
+    async fn test_interpreter_with_numbers_4() {
+        let component_metadata =
+            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+
+        // This will cause a type inference error
+        // because the operands of the + operator are supposed to be u32
+        // since z is u32
+        let rib = r#"
+          let worker = instance("my-worker");
+          let z = 1: u8 + 2: u8;
+          worker.foo(z)
+        "#;
+
+        let expr = Expr::from_text(rib).unwrap();
+        let compile_result = compiler::compile(expr, &component_metadata);
+        assert!(compile_result.is_err());
     }
 
     #[test]
