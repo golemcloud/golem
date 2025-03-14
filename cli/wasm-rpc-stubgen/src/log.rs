@@ -2,43 +2,50 @@ use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, PathExtra};
 use colored::{ColoredString, Colorize};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
+use tracing::debug;
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 
+// TODO: let's add another output for tracing debug and use that for silent mode in cli
 #[derive(Debug, Clone, Copy)]
 pub enum Output {
     Stdout,
     Stderr,
     None,
+    TracingDebug,
 }
 
 struct LogState {
-    indent_count: usize,
-    indent_prefix: String,
+    indents: Vec<Option<String>>,
+    calculated_indent: String,
     output: Output,
 }
 
 impl LogState {
     pub fn new() -> Self {
         Self {
-            indent_count: 0,
-            indent_prefix: "".to_string(),
+            indents: Vec::new(),
+            calculated_indent: String::new(),
             output: Output::Stdout,
         }
     }
 
-    pub fn inc_indent(&mut self) {
-        self.indent_count += 1;
-        self.regen_indent_prefix()
+    pub fn inc_indent(&mut self, custom_prefix: Option<&str>) {
+        self.indents.push(custom_prefix.map(|p| p.to_string()));
+        self.regen_indent_prefix();
     }
 
     pub fn dec_indent(&mut self) {
-        self.indent_count -= 1;
+        self.indents.pop();
         self.regen_indent_prefix()
     }
 
     fn regen_indent_prefix(&mut self) {
-        self.indent_prefix = "  ".repeat(self.indent_count);
+        self.calculated_indent = String::with_capacity(self.indents.len() * 2);
+        for indent in &self.indents {
+            self.calculated_indent
+                .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or("  "))
+        }
     }
 
     fn set_output(&mut self, output: Output) {
@@ -56,8 +63,13 @@ pub struct LogIndent;
 
 impl LogIndent {
     pub fn new() -> Self {
-        LOG_STATE.write().unwrap().inc_indent();
-        Self {}
+        LOG_STATE.write().unwrap().inc_indent(None);
+        Self
+    }
+
+    pub fn prefix<S: AsRef<str>>(prefix: S) -> Self {
+        LOG_STATE.write().unwrap().inc_indent(Some(prefix.as_ref()));
+        Self
     }
 }
 
@@ -69,7 +81,8 @@ impl Default for LogIndent {
 
 impl Drop for LogIndent {
     fn drop(&mut self) {
-        LOG_STATE.write().unwrap().dec_indent();
+        let mut state = LOG_STATE.write().unwrap();
+        state.dec_indent();
     }
 }
 
@@ -92,6 +105,7 @@ impl Drop for LogOutput {
 }
 
 pub fn set_log_output(output: Output) {
+    debug!(output=?output, "set log output");
     LOG_STATE.write().unwrap().set_output(output);
 }
 
@@ -99,34 +113,32 @@ pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
     let state = LOG_STATE.read().unwrap();
     let message = format!(
         "{}{} {}",
-        state.indent_prefix,
+        state.calculated_indent,
         action.log_color_action(),
         subject.as_ref()
     );
-
-    match state.output {
-        Output::Stdout => {
-            println!("{}", message);
-        }
-        Output::Stderr => {
-            eprintln!("{}", message);
-        }
-        Output::None => {
-            // NOP
-        }
-    }
+    logln_internal(state.output, &message);
 }
 
 pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
     let state = LOG_STATE.read().unwrap();
     let message = format!(
         "{}{} {}",
-        LOG_STATE.read().unwrap().indent_prefix,
+        state.calculated_indent,
         action.log_color_warn(),
         subject.as_ref(),
     );
+    logln_internal(state.output, &message);
+}
 
-    match state.output {
+pub fn logln<T: AsRef<str>>(message: T) {
+    let state = LOG_STATE.read().unwrap();
+    let message = format!("{}{}", state.calculated_indent, message.as_ref());
+    logln_internal(state.output, &message);
+}
+
+pub fn logln_internal(output: Output, message: &str) {
+    match output {
         Output::Stdout => {
             println!("{}", message)
         }
@@ -134,6 +146,9 @@ pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
             eprintln!("{}", message)
         }
         Output::None => {}
+        Output::TracingDebug => {
+            debug!("{}", message);
+        }
     }
 }
 
@@ -246,7 +261,7 @@ pub trait LogColorize {
     }
 
     fn log_color_error(&self) -> ColoredString {
-        self.as_str().red()
+        self.as_str().red().bold()
     }
 
     fn log_color_highlight(&self) -> ColoredString {

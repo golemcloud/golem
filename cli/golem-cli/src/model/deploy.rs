@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::uri::oss::urn::WorkerUrn;
+use crate::model::WorkerName;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct TryUpdateAllWorkersResult {
-    pub triggered: Vec<WorkerUrn>,
-    pub failed: Vec<WorkerUrn>,
+    pub triggered: Vec<WorkerName>,
+    pub failed: Vec<WorkerName>,
 }

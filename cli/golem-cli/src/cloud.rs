@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: this should be part of model / config
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
@@ -42,15 +44,35 @@ pub struct CloudAuthenticationConfigData {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(
-    Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr, Serialize, Deserialize,
-)]
-pub struct AccountId {
-    pub id: String,
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct AccountId(pub String);
+
+impl From<String> for AccountId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Into, Serialize, Deserialize)]
+impl From<&str> for AccountId {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectId(pub Uuid);
+
+impl From<Uuid> for ProjectId {
+    fn from(uuid: Uuid) -> Self {
+        ProjectId(uuid)
+    }
+}
+
+impl From<ProjectId> for Uuid {
+    fn from(project_id: ProjectId) -> Self {
+        project_id.0
+    }
+}
 
 impl Display for ProjectId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

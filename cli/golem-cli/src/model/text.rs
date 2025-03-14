@@ -13,50 +13,76 @@
 // limitations under the License.
 
 pub mod fmt {
-    use cli_table::{print_stdout, Row, Title, WithTitle};
+    use crate::fuzzy::Match;
+    use crate::model::Format;
+    use cli_table::{Row, Title, WithTitle};
     use colored::control::SHOULD_COLORIZE;
     use colored::Colorize;
     use golem_client::model::WorkerStatus;
+    use golem_wasm_rpc_stubgen::log::{log_warn_action, logln, LogColorize, LogIndent};
     use itertools::Itertools;
     use regex::Regex;
     use std::collections::BTreeMap;
 
-    pub trait TextFormat {
-        fn print(&self);
+    pub trait TextView {
+        fn log(&self);
     }
 
     pub trait TableWrapper: Sized {
-        type Table: TextFormat;
+        type Table: TextView;
         fn from_vec(vec: &[Self]) -> Self::Table;
     }
 
-    impl<T: TableWrapper> TextFormat for Vec<T> {
-        fn print(&self) {
+    impl<T: TableWrapper> TextView for Vec<T> {
+        fn log(&self) {
             let table = T::from_vec(self);
-            table.print();
+            table.log();
         }
     }
 
     pub trait MessageWithFields {
         fn message(&self) -> String;
         fn fields(&self) -> Vec<(String, String)>;
+
+        fn indent_fields() -> bool {
+            false
+        }
+
+        fn nest_ident_fields() -> bool {
+            false
+        }
+
+        fn format_field_name(name: String) -> String {
+            name
+        }
     }
 
-    impl<T: MessageWithFields> TextFormat for T {
-        fn print(&self) {
-            println!("{}\n", self.message());
+    impl<T: MessageWithFields> TextView for T {
+        fn log(&self) {
+            logln(self.message());
+            if !Self::nest_ident_fields() {
+                logln("");
+            }
 
             let fields = self.fields();
             let padding = fields.iter().map(|(name, _)| name.len()).max().unwrap_or(0) + 1;
 
+            let _indent = Self::indent_fields().then(LogIndent::new);
+            let _nest_indent =
+                Self::nest_ident_fields().then(|| NestedTextViewIndent::new(Format::Text));
+
             for (name, value) in self.fields() {
                 let lines: Vec<_> = value.lines().collect();
                 if lines.len() == 1 {
-                    println!("{:<padding$} {}", format!("{}:", name), lines[0]);
+                    logln(format!(
+                        "{:<padding$} {}",
+                        format!("{}:", Self::format_field_name(name)),
+                        lines[0]
+                    ));
                 } else {
-                    println!("{}:", name);
+                    logln(format!("{}:", Self::format_field_name(name)));
                     for line in lines {
-                        println!("  {}", line)
+                        logln(format!("  {}", line))
                     }
                 }
             }
@@ -277,15 +303,84 @@ pub mod fmt {
         )
     }
 
-    pub fn print_table<E, R>(table: &[E])
+    pub fn log_table<E, R>(table: &[E])
     where
         R: Title + 'static + for<'b> From<&'b E>,
         for<'a> &'a R: Row,
     {
-        let rows: Vec<R> = table.iter().map(R::from).collect();
-        let rows = &rows;
+        logln(format_table(table));
+    }
 
-        print_stdout(rows.with_title()).expect("Failed to print table");
+    pub fn log_text_view<View: TextView>(view: &View) {
+        view.log();
+    }
+
+    pub fn log_error<S: AsRef<str>>(message: S) {
+        logln(format!(
+            "{} {}",
+            "error:".log_color_error(),
+            message.as_ref()
+        ));
+    }
+
+    pub fn log_warn<S: AsRef<str>>(message: S) {
+        logln(format!("{} {}", "warn:".log_color_warn(), message.as_ref()));
+    }
+
+    pub fn log_fuzzy_matches(matches: &[Match]) {
+        for m in matches {
+            if !m.exact_match {
+                log_fuzzy_match(m);
+            }
+        }
+    }
+
+    pub fn log_fuzzy_match(m: &Match) {
+        log_warn_action(
+            "Fuzzy matched",
+            format!(
+                "pattern {} as {}",
+                m.pattern.log_color_highlight(),
+                m.option.log_color_ok_highlight()
+            ),
+        );
+    }
+
+    pub struct NestedTextViewIndent {
+        format: Format,
+        log_indent: Option<LogIndent>,
+    }
+
+    impl NestedTextViewIndent {
+        pub fn new(format: Format) -> Self {
+            match format {
+                Format::Json | Format::Yaml => Self {
+                    format,
+                    log_indent: Some(LogIndent::new()),
+                },
+                Format::Text => {
+                    logln("╔═");
+                    Self {
+                        format,
+                        log_indent: Some(LogIndent::prefix("║ ")),
+                    }
+                }
+            }
+        }
+    }
+
+    impl Drop for NestedTextViewIndent {
+        fn drop(&mut self) {
+            if let Some(ident) = self.log_indent.take() {
+                drop(ident);
+                match self.format {
+                    Format::Json | Format::Yaml => {
+                        // NOP
+                    }
+                    Format::Text => logln("╚═"),
+                }
+            }
+        }
     }
 }
 
@@ -296,8 +391,8 @@ pub mod api_security {
     use golem_client::model::SecuritySchemeData;
     use indoc::printdoc;
 
-    impl TextFormat for ApiSecurityScheme {
-        fn print(&self) {
+    impl TextView for ApiSecurityScheme {
+        fn log(&self) {
             printdoc!(
                     "
                     API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}
@@ -340,10 +435,10 @@ pub mod api_security {
 
 pub mod api_definition {
     use crate::model::text::fmt::*;
+    use crate::model::ComponentName;
     use cli_table::{format::Justify, Table};
     use golem_client::model::{HttpApiDefinitionResponseData, RouteResponseData};
-    use golem_common::model::ComponentId;
-    use golem_common::uri::oss::urn::ComponentUrn;
+
     use serde::{Deserialize, Serialize};
 
     #[derive(Table)]
@@ -352,8 +447,8 @@ pub mod api_definition {
         pub method: String,
         #[table(title = "Path")]
         pub path: String,
-        #[table(title = "Component URN", justify = "Justify::Right")]
-        pub component_urn: String,
+        #[table(title = "Component Name")]
+        pub component_name: ComponentName,
     }
 
     impl From<&RouteResponseData> for RouteTableView {
@@ -361,18 +456,16 @@ pub mod api_definition {
             Self {
                 method: value.method.to_string(),
                 path: value.path.to_string(),
-                component_urn: value
+                component_name: value
                     .binding
                     .clone()
                     .component_id
                     .map(|id| {
-                        ComponentUrn {
-                            id: ComponentId(id.component_id),
-                        }
-                        .to_string()
+                        // TODO: get component name
+                        id.component_id.to_string()
                     })
-                    .unwrap_or("NA".to_string())
-                    .to_string(),
+                    .unwrap_or("<NA>".to_string())
+                    .into(),
             }
         }
     }
@@ -483,9 +576,9 @@ pub mod api_definition {
         }
     }
 
-    impl TextFormat for Vec<HttpApiDefinitionResponseData> {
-        fn print(&self) {
-            print_table::<_, HttpApiDefinitionTableView>(self);
+    impl TextView for Vec<HttpApiDefinitionResponseData> {
+        fn log(&self) {
+            log_table::<_, HttpApiDefinitionTableView>(self);
         }
     }
 }
@@ -493,7 +586,9 @@ pub mod api_definition {
 pub mod api_deployment {
     use crate::model::text::fmt::*;
     use crate::model::ApiDeployment;
-    use cli_table::{print_stdout, Table, WithTitle};
+    use cli_table::Table;
+    use golem_client::model::ApiDefinitionInfo;
+
     use indoc::printdoc;
 
     pub fn format_site(api_deployment: &ApiDeployment) -> String {
@@ -503,8 +598,8 @@ pub mod api_deployment {
         }
     }
 
-    impl TextFormat for ApiDeployment {
-        fn print(&self) {
+    impl TextView for ApiDeployment {
+        fn log(&self) {
             for api_defs in &self.api_definitions {
                 printdoc!(
                     "
@@ -528,24 +623,30 @@ pub mod api_deployment {
         pub version: String,
     }
 
-    impl TextFormat for Vec<ApiDeployment> {
-        fn print(&self) {
-            print_stdout(
+    impl From<&(&ApiDeployment, &ApiDefinitionInfo)> for ApiDeploymentTableView {
+        fn from(value: &(&ApiDeployment, &ApiDefinitionInfo)) -> Self {
+            let (deployment, def) = value;
+            ApiDeploymentTableView {
+                site: format_site(deployment),
+                id: def.id.to_string(),
+                version: def.version.to_string(),
+            }
+        }
+    }
+
+    impl TextView for Vec<ApiDeployment> {
+        fn log(&self) {
+            log_table::<_, ApiDeploymentTableView>(
                 self.iter()
                     .flat_map(|deployment| {
                         deployment
                             .api_definitions
                             .iter()
-                            .map(move |def| ApiDeploymentTableView {
-                                site: format_site(deployment),
-                                id: def.id.to_string(),
-                                version: def.version.to_string(),
-                            })
+                            .map(move |def| (deployment, def))
                     })
                     .collect::<Vec<_>>()
-                    .with_title(),
-            )
-            .unwrap()
+                    .as_slice(),
+            );
         }
     }
 }
@@ -553,15 +654,16 @@ pub mod api_deployment {
 pub mod component {
     use crate::model::component::ComponentView;
     use crate::model::text::fmt::*;
-    use cli_table::{format::Justify, print_stdout, Table, WithTitle};
+    use crate::model::ComponentName;
+    use cli_table::{format::Justify, Table};
+
     use serde::{Deserialize, Serialize};
 
+    // TODO: review columns and formats
     #[derive(Table)]
     struct ComponentTableView {
-        #[table(title = "URN")]
-        pub component_urn: String,
         #[table(title = "Name")]
-        pub component_name: String,
+        pub component_name: ComponentName,
         #[table(title = "Version", justify = "Justify::Right")]
         pub component_version: u64,
         #[table(title = "Size", justify = "Justify::Right")]
@@ -573,8 +675,7 @@ pub mod component {
     impl From<&ComponentView> for ComponentTableView {
         fn from(value: &ComponentView) -> Self {
             Self {
-                component_urn: value.component_urn.to_string(),
-                component_name: value.component_name.to_string(),
+                component_name: value.component_name.clone(),
                 component_version: value.component_version,
                 component_size: value.component_size,
                 n_exports: value.exports.len(),
@@ -582,15 +683,9 @@ pub mod component {
         }
     }
 
-    impl TextFormat for Vec<ComponentView> {
-        fn print(&self) {
-            print_stdout(
-                self.iter()
-                    .map(ComponentTableView::from)
-                    .collect::<Vec<_>>()
-                    .with_title(),
-            )
-            .unwrap()
+    impl TextView for Vec<ComponentView> {
+        fn log(&self) {
+            log_table::<_, ComponentTableView>(self.as_slice())
         }
     }
 
@@ -598,7 +693,6 @@ pub mod component {
         let mut fields = FieldsBuilder::new();
 
         fields
-            .fmt_field("Component URN", &view.component_urn, format_main_id)
             .fmt_field("Component name", &view.component_name, format_id)
             .fmt_field("Component version", &view.component_version, format_id)
             .fmt_field_option("Project ID", &view.project_id, format_id)
@@ -615,13 +709,14 @@ pub mod component {
         fields.build()
     }
 
+    // TODO: rename all "add" to "create"
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ComponentAddView(pub ComponentView);
+    pub struct ComponentCreateView(pub ComponentView);
 
-    impl MessageWithFields for ComponentAddView {
+    impl MessageWithFields for ComponentCreateView {
         fn message(&self) -> String {
             format!(
-                "Added new component {}",
+                "Created new component {}",
                 format_message_highlight(&self.0.component_name)
             )
         }
@@ -646,6 +741,10 @@ pub mod component {
         fn fields(&self) -> Vec<(String, String)> {
             component_view_fields(&self.0)
         }
+
+        fn nest_ident_fields() -> bool {
+            true
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -661,6 +760,10 @@ pub mod component {
 
         fn fields(&self) -> Vec<(String, String)> {
             component_view_fields(&self.0)
+        }
+
+        fn nest_ident_fields() -> bool {
+            true
         }
     }
 }
@@ -694,22 +797,23 @@ pub mod example {
         }
     }
 
-    impl TextFormat for Vec<ExampleDescription> {
-        fn print(&self) {
-            print_table::<_, ExampleDescriptionTableView>(self);
+    impl TextView for Vec<ExampleDescription> {
+        fn log(&self) {
+            log_table::<_, ExampleDescriptionTableView>(self);
         }
     }
 }
 
 pub mod profile {
-    use crate::command::profile::{ProfileType, ProfileView};
     use crate::config::ProfileConfig;
     use crate::model::text::fmt::*;
+    use crate::model::{ProfileType, ProfileView};
     use colored::Colorize;
+    use golem_wasm_rpc_stubgen::log::logln;
     use itertools::Itertools;
 
-    impl TextFormat for Vec<ProfileView> {
-        fn print(&self) {
+    impl TextView for Vec<ProfileView> {
+        fn log(&self) {
             let res = self
                 .iter()
                 .map(|p| {
@@ -721,7 +825,7 @@ pub mod profile {
                 })
                 .join("\n");
 
-            println!("{}", res)
+            logln(res)
         }
     }
 
@@ -769,12 +873,12 @@ pub mod profile {
         }
     }
 
-    impl TextFormat for ProfileConfig {
-        fn print(&self) {
-            println!(
+    impl TextView for ProfileConfig {
+        fn log(&self) {
+            logln(format!(
                 "Default output format: {}",
-                format_message_highlight(&self.default_format)
-            )
+                format_message_highlight(&self.default_format),
+            ))
         }
     }
 }
@@ -784,7 +888,8 @@ pub mod worker {
     use crate::model::invoke_result_view::InvokeResultView;
     use crate::model::text::fmt::*;
     use crate::model::{
-        IdempotencyKey, WorkerMetadata, WorkerMetadataView, WorkersMetadataResponseView,
+        ComponentName, IdempotencyKey, WorkerMetadata, WorkerMetadataView, WorkerName,
+        WorkersMetadataResponseView,
     };
     use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
@@ -795,23 +900,31 @@ pub mod worker {
     use golem_common::model::public_oplog::{
         PluginInstallationDescription, PublicUpdateDescription, PublicWorkerInvocation,
     };
-    use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::{print_type_annotated_value, ValueAndType};
-    use indoc::{formatdoc, indoc, printdoc};
+    use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
+    use indoc::{formatdoc, indoc};
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct WorkerAddView(pub WorkerUrn);
+    pub struct WorkerCreateView {
+        pub component_name: ComponentName,
+        pub worker_name: Option<WorkerName>,
+    }
 
-    impl MessageWithFields for WorkerAddView {
+    impl MessageWithFields for WorkerCreateView {
         fn message(&self) -> String {
-            if let Some(worker_name) = &self.0.id.worker_name {
-                format!("Added worker {}", format_message_highlight(&worker_name))
-            } else {
+            if let Some(worker_name) = &self.worker_name {
                 format!(
-                    "Added worker with a {}",
+                    "Created new worker {}",
+                    format_message_highlight(&worker_name)
+                )
+            } else {
+                // TODO: review: do we really want to hide the worker name? it is provided now
+                //       in "worker new"
+                format!(
+                    "Created new worker with a {}",
                     format_message_highlight("random generated name")
                 )
             }
@@ -821,13 +934,14 @@ pub mod worker {
             let mut fields = FieldsBuilder::new();
 
             fields
-                .fmt_field("Worker URN", &self.0, format_main_id)
-                .fmt_field("Component URN", &self.0.id.component_id, |id| {
-                    format_id(&ComponentUrn { id: id.clone() })
-                })
-                .fmt_field_option("Worker name", &(self.0.id.worker_name.as_ref()), format_id);
+                .fmt_field("Component name", &self.component_name, format_id)
+                .fmt_field_option("Worker name", &self.worker_name, format_main_id);
 
             fields.build()
+        }
+
+        fn nest_ident_fields() -> bool {
+            true
         }
     }
 
@@ -848,26 +962,19 @@ pub mod worker {
 
     impl MessageWithFields for WorkerGetView {
         fn message(&self) -> String {
-            if let Some(worker_name) = &self.0.worker_urn.id.worker_name {
-                format!(
-                    "Got metadata for worker {}",
-                    format_message_highlight(worker_name)
-                )
-            } else {
-                "Got metadata for worker".to_string()
-            }
+            format!(
+                "Got metadata for worker {}",
+                format_message_highlight(&self.0.worker_name)
+            )
         }
 
         fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
             fields
-                .fmt_field("Worker URN", &self.0.worker_urn, format_main_id)
-                .fmt_field("Component URN", &self.0.worker_urn.id.component_id, |id| {
-                    format_id(&ComponentUrn { id: id.clone() })
-                })
-                .fmt_field_option("Worker name", &self.0.worker_urn.id.worker_name, format_id)
+                .fmt_field("Component name", &self.0.component_name, format_id)
                 .fmt_field("Component version", &self.0.component_version, format_id)
+                .fmt_field("Worker name", &self.0.worker_name, format_main_id)
                 .field("Created at", &self.0.created_at)
                 .fmt_field("Component size", &self.0.component_size, format_binary_size)
                 .fmt_field(
@@ -902,14 +1009,18 @@ pub mod worker {
 
             fields.build()
         }
+
+        fn nest_ident_fields() -> bool {
+            true
+        }
     }
 
     #[derive(Table)]
     struct WorkerMetadataTableView {
-        #[table(title = "Component URN")]
-        pub component_urn: ComponentUrn,
-        #[table(title = "Name")]
-        pub worker_name: String,
+        #[table(title = "Component name")]
+        pub component_name: ComponentName,
+        #[table(title = "Worker name")]
+        pub worker_name: WorkerName,
         #[table(title = "Component\nversion", justify = "Justify::Right")]
         pub component_version: u64,
         #[table(title = "Status", justify = "Justify::Right")]
@@ -921,10 +1032,8 @@ pub mod worker {
     impl From<&WorkerMetadataView> for WorkerMetadataTableView {
         fn from(value: &WorkerMetadataView) -> Self {
             Self {
-                component_urn: ComponentUrn {
-                    id: value.worker_urn.id.component_id.clone(),
-                },
-                worker_name: value.worker_urn.id.worker_name.clone().unwrap_or_default(),
+                component_name: value.component_name.clone(),
+                worker_name: value.worker_name.clone(),
                 status: format_status(&value.status),
                 component_version: value.component_version,
                 created_at: value.created_at,
@@ -932,33 +1041,26 @@ pub mod worker {
         }
     }
 
-    impl TextFormat for WorkersMetadataResponseView {
-        fn print(&self) {
-            print_table::<_, WorkerMetadataTableView>(&self.workers);
+    impl TextView for WorkersMetadataResponseView {
+        fn log(&self) {
+            log_table::<_, WorkerMetadataTableView>(&self.workers);
 
-            if let Some(cursor) = &self.cursor {
-                let layer = cursor.layer;
-                let cursor = cursor.cursor;
-
-                println!(
-                    "{}",
-                    formatdoc!(
-                        "
-
-                        There are more workers to display.
-                        To fetch next page use cursor {layer}/{cursor} this way:
-                        worker list --cursor {layer}/{cursor} ...
-                        "
-                    )
-                    .yellow()
-                );
+            if !self.cursors.is_empty() {
+                logln("");
+            }
+            for (component_name, cursor) in &self.cursors {
+                logln(format!(
+                    "Cursor for more results for component {}: {}",
+                    component_name.log_color_highlight(),
+                    cursor.log_color_highlight()
+                ));
             }
         }
     }
 
-    impl TextFormat for IdempotencyKey {
-        fn print(&self) {
-            printdoc!(
+    impl TextView for IdempotencyKey {
+        fn log(&self) {
+            logln(formatdoc!(
                 "
                 Idempotency key: {}
 
@@ -967,425 +1069,534 @@ pub mod worker {
 
                 ",
                 format_main_id(&self.0),
-                format!("invoke-and-await --idempotency-key {} ...", self.0).cyan()
-            )
+                format!("invoke-and-await --idempotency-key {} ...", self.0).cyan() // TODO: also review for other outdated hints like this
+            ))
         }
     }
 
-    #[derive(Table)]
-    struct WorkerUrnTableView {
-        #[table(title = "Worker URN")]
-        pub worker_urn: WorkerUrn,
-
-        #[table(title = "Name")]
-        pub worker_name: String,
-    }
-
-    impl From<&WorkerUrn> for WorkerUrnTableView {
-        fn from(value: &WorkerUrn) -> Self {
-            WorkerUrnTableView {
-                worker_urn: value.clone(),
-                worker_name: value.id.worker_name.clone().unwrap_or_default(),
-            }
-        }
-    }
-
-    impl TextFormat for TryUpdateAllWorkersResult {
-        fn print(&self) {
+    impl TextView for TryUpdateAllWorkersResult {
+        fn log(&self) {
             if !self.triggered.is_empty() {
-                println!("Triggered update for the following workers:");
-                print_table::<_, WorkerUrnTableView>(&self.triggered);
+                logln("Triggered update for the following workers:");
+                self.triggered.iter().for_each(|worker_name| {
+                    logln(format!("  - {}", worker_name));
+                });
             }
 
             if !self.failed.is_empty() {
-                println!(
-                    "{}",
-                    format_warn("Failed to trigger update for the following workers:")
-                );
-                print_table::<_, WorkerUrnTableView>(&self.failed);
+                logln(format_warn(
+                    "Failed to trigger update for the following workers:",
+                ));
+                self.failed.iter().for_each(|worker_name| {
+                    logln(format!("  - {}", worker_name));
+                });
             }
         }
     }
 
-    impl TextFormat for InvokeResultView {
-        fn print(&self) {
-            fn print_results_format(format: &str) {
-                println!(
+    impl TextView for InvokeResultView {
+        fn log(&self) {
+            fn log_results_format(format: &str) {
+                logln(format!(
                     "Invocation results in {} format:",
-                    format_message_highlight(format)
-                )
+                    format_message_highlight(format),
+                ))
             }
 
             match self {
-                InvokeResultView::Wave(wave) => {
-                    if wave.is_empty() {
-                        println!("Empty result.")
+                InvokeResultView::Wave(wave_values) => {
+                    if wave_values.is_empty() {
+                        logln("Empty result.")
                     } else {
-                        print_results_format("WAVE");
-                        println!("{}", serde_yaml::to_string(wave).unwrap());
+                        log_results_format("WAVE");
+                        for wave in wave_values {
+                            logln(format!("  - {}", wave));
+                        }
                     }
                 }
                 InvokeResultView::Json(json) => {
-                    eprintln!(
-                        "{}",
-                        format_warn(indoc!(
-                            "
+                    // TODO: do we have an issue or plan for this?
+                    logln(format_warn(indoc!(
+                        "
                             Failed to convert invocation result to WAVE format.
                             At the moment WAVE does not support Handle (aka Resource) data type.
 
                             Use -vvv flags to get detailed logs.
 
                             "
-                        ))
-                    );
+                    )));
 
-                    print_results_format("JSON");
-                    println!("{}", serde_json::to_string_pretty(json).unwrap());
+                    log_results_format("JSON");
+                    logln(serde_json::to_string_pretty(json).unwrap());
                 }
             }
         }
     }
 
-    impl TextFormat for Vec<(u64, PublicOplogEntry)> {
-        fn print(&self) {
+    impl TextView for Vec<(u64, PublicOplogEntry)> {
+        fn log(&self) {
             for (idx, entry) in self {
                 print!("{}: ", format_main_id(&format!("#{idx:0>5}")));
-                entry.print()
+                entry.log()
             }
         }
     }
 
-    impl TextFormat for PublicOplogEntry {
-        fn print(&self) {
+    impl TextView for PublicOplogEntry {
+        fn log(&self) {
             let pad = "          ";
             match self {
                 PublicOplogEntry::Create(params) => {
-                    println!("{}", format_message_highlight("CREATE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("CREATE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}component version: {}",
-                        format_id(&params.component_version)
-                    );
-                    println!(
+                        format_id(&params.component_version),
+                    ));
+                    logln(format!(
                         "{pad}args:              {}",
-                        format_id(&params.args.join(", "))
-                    );
-                    println!("{pad}env:");
+                        format_id(&params.args.join(", ")),
+                    ));
+                    logln("{pad}env:");
                     for (k, v) in &params.env {
-                        println!("{pad}  - {}: {}", k, format_id(&v));
+                        logln(format!("{pad}  - {}: {}", k, format_id(&v)));
                     }
                     if let Some(parent) = params.parent.as_ref() {
-                        println!("{pad}parent:            {}", format_id(parent));
+                        logln(format!("{pad}parent:            {}", format_id(parent)));
                     }
-                    println!("{pad}initial active plugins:");
+                    logln("{pad}initial active plugins:");
                     for plugin in &params.initial_active_plugins {
-                        println!(
+                        logln(format!(
                             "{pad}  - installation id: {}",
                             format_id(&plugin.installation_id)
-                        );
+                        ));
                         let inner_pad = format!("{pad}    ");
-                        print_plugin_description(&inner_pad, plugin);
+                        log_plugin_description(&inner_pad, plugin);
                     }
                 }
                 PublicOplogEntry::ImportedFunctionInvoked(params) => {
-                    println!(
+                    logln(format!(
                         "{} {}",
                         format_message_highlight("CALL"),
-                        format_id(&params.function_name)
-                    );
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}input:             {}", print_value(&params.request));
-                    println!("{pad}result:            {}", print_value(&params.response));
+                        format_id(&params.function_name),
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}input:             {}",
+                        value_to_string(&params.request)
+                    ));
+                    logln(format!(
+                        "{pad}result:            {}",
+                        value_to_string(&params.response)
+                    ));
                 }
                 PublicOplogEntry::ExportedFunctionInvoked(params) => {
-                    println!(
+                    logln(format!(
                         "{} {}",
                         format_message_highlight("INVOKE"),
-                        format_id(&params.function_name)
-                    );
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                        format_id(&params.function_name),
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}idempotency key:   {}",
-                        format_id(&params.idempotency_key)
-                    );
-                    println!("{pad}input:");
+                        format_id(&params.idempotency_key),
+                    ));
+                    logln("{pad}input:");
                     for param in &params.request {
-                        println!("{pad}  - {}", print_value(param));
+                        logln(format!("{pad}  - {}", value_to_string(param)));
                     }
                 }
                 PublicOplogEntry::ExportedFunctionCompleted(params) => {
-                    println!("{}", format_message_highlight("INVOKE COMPLETED"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("INVOKE COMPLETED"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}consumed fuel:     {}",
-                        format_id(&params.consumed_fuel)
-                    );
-                    println!("{pad}result:            {}", print_value(&params.response));
+                        format_id(&params.consumed_fuel),
+                    ));
+                    logln(format!(
+                        "{pad}result:            {}",
+                        value_to_string(&params.response)
+                    ));
                 }
                 PublicOplogEntry::Suspend(params) => {
-                    println!("{}", format_message_highlight("SUSPEND"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    logln(format_message_highlight("SUSPEND"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicOplogEntry::Error(params) => {
-                    println!("{}", format_message_highlight("ERROR"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}error:             {}", format_error(&params.error));
+                    logln(format_message_highlight("ERROR"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}error:             {}",
+                        format_error(&params.error)
+                    ));
                 }
                 PublicOplogEntry::NoOp(params) => {
-                    println!("{}", format_message_highlight("NOP"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    logln(format_message_highlight("NOP"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicOplogEntry::Jump(params) => {
-                    println!("{}", format_message_highlight("JUMP"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}from:              {}", format_id(&params.jump.start));
-                    println!("{pad}to:                {}", format_id(&params.jump.end));
+                    logln(format_message_highlight("JUMP"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}from:              {}",
+                        format_id(&params.jump.start)
+                    ));
+                    logln(format!(
+                        "{pad}to:                {}",
+                        format_id(&params.jump.end)
+                    ));
                 }
                 PublicOplogEntry::Interrupted(params) => {
-                    println!("{}", format_message_highlight("INTERRUPTED"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    logln(format_message_highlight("INTERRUPTED"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicOplogEntry::Exited(params) => {
-                    println!("{}", format_message_highlight("EXITED"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    logln(format_message_highlight("EXITED"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicOplogEntry::ChangeRetryPolicy(params) => {
-                    println!("{}", format_message_highlight("CHANGE RETRY POLICY"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("CHANGE RETRY POLICY"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}max attempts:      {}",
-                        format_id(&params.new_policy.max_attempts)
-                    );
-                    println!(
+                        format_id(&params.new_policy.max_attempts),
+                    ));
+                    logln(format!(
                         "{pad}min delay:         {} ms",
-                        format_id(&params.new_policy.min_delay.as_millis())
-                    );
-                    println!(
+                        format_id(&params.new_policy.min_delay.as_millis()),
+                    ));
+                    logln(format!(
                         "{pad}max delay:         {} ms",
-                        format_id(&params.new_policy.max_delay.as_millis())
-                    );
-                    println!(
+                        format_id(&params.new_policy.max_delay.as_millis()),
+                    ));
+                    logln(format!(
                         "{pad}multiplier:        {}",
-                        format_id(&params.new_policy.multiplier)
-                    );
-                    println!(
+                        format_id(&params.new_policy.multiplier),
+                    ));
+                    logln(format!(
                         "{pad}max jitter factor: {}",
                         format_id(
                             &params
                                 .new_policy
                                 .max_jitter_factor
                                 .map(|x| x.to_string())
-                                .unwrap_or("-".to_string())
-                        )
-                    );
+                                .unwrap_or("-".to_string()),
+                        ),
+                    ));
                 }
                 PublicOplogEntry::BeginAtomicRegion(params) => {
-                    println!("{}", format_message_highlight("BEGIN ATOMIC REGION"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    logln(format_message_highlight("BEGIN ATOMIC REGION"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicOplogEntry::EndAtomicRegion(params) => {
-                    println!("{}", format_message_highlight("END ATOMIC REGION"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}begin index:       {}", format_id(&params.begin_index));
+                    logln(format_message_highlight("END ATOMIC REGION"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}begin index:       {}",
+                        format_id(&params.begin_index)
+                    ));
                 }
                 PublicOplogEntry::BeginRemoteWrite(params) => {
-                    println!("{}", format_message_highlight("BEGIN REMOTE WRITE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    logln(format_message_highlight("BEGIN REMOTE WRITE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicOplogEntry::EndRemoteWrite(params) => {
-                    println!("{}", format_message_highlight("END REMOTE WRITE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}begin index:       {}", format_id(&params.begin_index));
+                    logln(format_message_highlight("END REMOTE WRITE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}begin index:       {}",
+                        format_id(&params.begin_index)
+                    ));
                 }
                 PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
                     PublicWorkerInvocation::ExportedFunction(inner_params) => {
-                        println!(
+                        logln(format!(
                             "{} {}",
                             format_message_highlight("ENQUEUED INVOCATION"),
-                            format_id(&inner_params.full_function_name)
-                        );
-                        println!("{pad}at:                {}", format_id(&params.timestamp));
-                        println!(
+                            format_id(&inner_params.full_function_name),
+                        ));
+                        logln(format!(
+                            "{pad}at:                {}",
+                            format_id(&params.timestamp)
+                        ));
+                        logln(format!(
                             "{pad}idempotency key:   {}",
-                            format_id(&inner_params.idempotency_key)
-                        );
+                            format_id(&inner_params.idempotency_key),
+                        ));
                         if let Some(input) = &inner_params.function_input {
-                            println!("{pad}input:");
+                            logln("{pad}input:");
                             for param in input {
-                                println!("{pad}  - {}", print_value(param));
+                                logln(format!("{pad}  - {}", value_to_string(param)));
                             }
                         }
                     }
                     PublicWorkerInvocation::ManualUpdate(inner_params) => {
-                        println!("{}", format_message_highlight("ENQUEUED MANUAL UPDATE"));
-                        println!("{pad}at:                {}", format_id(&params.timestamp));
-                        println!(
+                        logln(format_message_highlight("ENQUEUED MANUAL UPDATE"));
+                        logln(format!(
+                            "{pad}at:                {}",
+                            format_id(&params.timestamp)
+                        ));
+                        logln(format!(
                             "{pad}target version: {}",
-                            format_id(&inner_params.target_version)
-                        );
+                            format_id(&inner_params.target_version),
+                        ));
                     }
                 },
                 PublicOplogEntry::PendingUpdate(params) => {
-                    println!("{}", format_message_highlight("ENQUEUED UPDATE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("ENQUEUED UPDATE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}target version:    {}",
-                        format_id(&params.target_version)
-                    );
+                        format_id(&params.target_version),
+                    ));
                     match &params.description {
                         PublicUpdateDescription::Automatic(_) => {
-                            println!("{pad}type:              {}", format_id("automatic"));
+                            logln(format!(
+                                "{pad}type:              {}",
+                                format_id("automatic")
+                            ));
                         }
                         PublicUpdateDescription::SnapshotBased(inner_params) => {
-                            println!("{pad}type:              {}", format_id("snapshot based"));
-                            println!(
+                            logln(format!(
+                                "{pad}type:              {}",
+                                format_id("snapshot based")
+                            ));
+                            logln(format!(
                                 "{pad}snapshot:          {}",
-                                BASE64_STANDARD.encode(&inner_params.payload)
-                            );
+                                BASE64_STANDARD.encode(&inner_params.payload),
+                            ));
                         }
                     }
                 }
                 PublicOplogEntry::SuccessfulUpdate(params) => {
-                    println!("{}", format_message_highlight("SUCCESSFUL UPDATE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("SUCCESSFUL UPDATE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}target version:    {}",
-                        format_id(&params.target_version)
-                    );
-                    println!("{pad}new active plugins:");
+                        format_id(&params.target_version),
+                    ));
+                    logln(format!("{pad}new active plugins:"));
                     for plugin in &params.new_active_plugins {
-                        println!(
+                        logln(format!(
                             "{pad}  - installation id: {}",
-                            format_id(&plugin.installation_id)
-                        );
+                            format_id(&plugin.installation_id),
+                        ));
                         let inner_pad = format!("{pad}    ");
-                        print_plugin_description(&inner_pad, plugin);
+                        log_plugin_description(&inner_pad, plugin);
                     }
                 }
                 PublicOplogEntry::FailedUpdate(params) => {
-                    println!("{}", format_message_highlight("FAILED UPDATE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("FAILED UPDATE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}target version:    {}",
-                        format_id(&params.target_version)
-                    );
+                        format_id(&params.target_version),
+                    ));
                     if let Some(details) = &params.details {
-                        println!("{pad}error:             {}", format_error(details));
+                        logln(format!("{pad}error:             {}", format_error(details)));
                     }
                 }
                 PublicOplogEntry::GrowMemory(params) => {
-                    println!("{}", format_message_highlight("GROW MEMORY"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("GROW MEMORY"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}increase:          {}",
-                        format_id(&format_binary_size(&params.delta))
-                    );
+                        format_id(&format_binary_size(&params.delta)),
+                    ));
                 }
                 PublicOplogEntry::CreateResource(params) => {
-                    println!("{}", format_message_highlight("CREATE RESOURCE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}resource id:       {}", format_id(&params.id));
+                    logln(format_message_highlight("CREATE RESOURCE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!("{pad}resource id:       {}", format_id(&params.id)));
                 }
                 PublicOplogEntry::DropResource(params) => {
-                    println!("{}", format_message_highlight("DROP RESOURCE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}resource id:       {}", format_id(&params.id));
+                    logln(format_message_highlight("DROP RESOURCE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!("{pad}resource id:       {}", format_id(&params.id)));
                 }
                 PublicOplogEntry::DescribeResource(params) => {
-                    println!("{}", format_message_highlight("DESCRIBE RESOURCE"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!("{pad}resource id:       {}", format_id(&params.id));
-                    println!(
+                    logln(format_message_highlight("DESCRIBE RESOURCE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!("{pad}resource id:       {}", format_id(&params.id)));
+                    logln(format!(
                         "{pad}resource name:     {}",
-                        format_id(&params.resource_name)
-                    );
-                    println!("{pad}resource parameters:");
+                        format_id(&params.resource_name),
+                    ));
+                    logln(format!("{pad}resource parameters:"));
                     for value in &params.resource_params {
-                        println!("{pad}  - {}", print_value(value));
+                        logln(format!("{pad}  - {}", value_to_string(value)));
                     }
                 }
                 PublicOplogEntry::Log(params) => {
-                    println!("{}", format_message_highlight("LOG"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("LOG"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}level:             {}",
-                        format_id(&format!("{:?}", params.level))
-                    );
-                    println!("{pad}message:           {}", params.message);
+                        format_id(&format!("{:?}", params.level)),
+                    ));
+                    logln(format!("{pad}message:           {}", params.message));
                 }
                 PublicOplogEntry::Restart(params) => {
-                    println!("{}", format_message_highlight("RESTART"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    logln(format_message_highlight("RESTART"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicOplogEntry::ActivatePlugin(params) => {
-                    println!("{}", format_message_highlight("ACTIVATE PLUGIN"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("ACTIVATE PLUGIN"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}installation id:   {}",
-                        format_id(&params.plugin.installation_id)
-                    );
-                    print_plugin_description(pad, &params.plugin);
+                        format_id(&params.plugin.installation_id),
+                    ));
+                    log_plugin_description(pad, &params.plugin);
                 }
                 PublicOplogEntry::DeactivatePlugin(params) => {
-                    println!("{}", format_message_highlight("DEACTIVATE PLUGIN"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("DEACTIVATE PLUGIN"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}installation id:   {}",
-                        format_id(&params.plugin.installation_id)
-                    );
-                    print_plugin_description(pad, &params.plugin);
+                        format_id(&params.plugin.installation_id),
+                    ));
+                    log_plugin_description(pad, &params.plugin);
                 }
                 PublicOplogEntry::Revert(params) => {
-                    println!("{}", format_message_highlight("REVERT"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("REVERT"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}to oplog index:    {}",
-                        format_id(&params.dropped_region.start.previous())
-                    );
+                        format_id(&params.dropped_region.start.previous()),
+                    ));
                 }
                 PublicOplogEntry::CancelInvocation(params) => {
-                    println!("{}", format_message_highlight("CANCEL INVOCATION"));
-                    println!("{pad}at:                {}", format_id(&params.timestamp));
-                    println!(
+                    logln(format_message_highlight("CANCEL INVOCATION"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
                         "{pad}idempotency key:   {}",
-                        format_id(&params.idempotency_key)
-                    );
+                        format_id(&params.idempotency_key),
+                    ));
                 }
             }
         }
     }
 
-    fn print_plugin_description(pad: &str, value: &PluginInstallationDescription) {
-        println!("{pad}plugin name:       {}", format_id(&value.plugin_name));
-        println!(
+    fn log_plugin_description(pad: &str, value: &PluginInstallationDescription) {
+        logln(format!(
+            "{pad}plugin name:       {}",
+            format_id(&value.plugin_name)
+        ));
+        logln(format!(
             "{pad}plugin version:    {}",
-            format_id(&value.plugin_version)
-        );
-        println!(
+            format_id(&value.plugin_version),
+        ));
+        logln(format!(
             "{pad}plugin parameters:    {}",
-            format_id(&value.plugin_version)
-        );
+            format_id(&value.plugin_version),
+        ));
         for (k, v) in &value.parameters {
-            println!("{pad}  - {}: {}", k, format_id(&v));
+            logln(format!("{pad}  - {}: {}", k, format_id(&v)));
         }
     }
 
-    fn print_value(value: &ValueAndType) -> String {
+    fn value_to_string(value: &ValueAndType) -> String {
         let tav: TypeAnnotatedValue = value.try_into().expect("Failed to convert value to string");
         print_type_annotated_value(&tav).expect("Failed to convert value to string")
     }
 }
 
-pub mod plugin {
+pub mod plugin_oss {
     use crate::model::text::fmt::{
-        format_id, format_main_id, format_message_highlight, FieldsBuilder, MessageWithFields,
-        TableWrapper, TextFormat,
+        format_id, format_main_id, format_message_highlight, log_table, FieldsBuilder,
+        MessageWithFields, TableWrapper, TextView,
     };
-    use cli_table::{print_stdout, Table, WithTitle};
+    use cli_table::Table;
     use golem_client::model::{
         DefaultPluginScope, PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
         PluginInstallation, PluginTypeSpecificDefinition,
     };
+
     use itertools::Itertools;
 
     #[derive(Table)]
@@ -1439,16 +1650,9 @@ pub mod plugin {
         }
     }
 
-    impl TextFormat for PluginDefinitionTable {
-        fn print(&self) {
-            print_stdout(
-                self.0
-                    .iter()
-                    .map(PluginDefinitionTableView::from)
-                    .collect::<Vec<_>>()
-                    .with_title(),
-            )
-            .unwrap()
+    impl TextView for PluginDefinitionTable {
+        fn log(&self) {
+            log_table::<_, PluginDefinitionTableView>(self.0.as_slice())
         }
     }
 
@@ -1544,15 +1748,820 @@ pub mod plugin {
         }
     }
 
-    impl TextFormat for Vec<PluginInstallation> {
-        fn print(&self) {
+    impl TextView for Vec<PluginInstallation> {
+        fn log(&self) {
+            log_table::<_, PluginInstallationTableView>(self.as_slice())
+        }
+    }
+}
+
+// Shared help messages
+pub mod help {
+    use crate::model::component::render_type;
+    use crate::model::text::fmt::{
+        format_export, log_table, FieldsBuilder, MessageWithFields, TextView,
+    };
+    use cli_table::Table;
+    use colored::Colorize;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
+    use golem_wasm_rpc_stubgen::model::app::ComponentName as AppComponentName;
+    use indoc::indoc;
+
+    pub struct WorkerNameHelp;
+
+    impl MessageWithFields for WorkerNameHelp {
+        fn message(&self) -> String {
+            "Accepted worker name formats:"
+                .log_color_help_group()
+                .to_string()
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields.field(
+                "<WORKER>",
+                &indoc!(
+                    "
+                    Standalone worker name, usable when only one component is selected based on the
+                    current application directory.
+
+                    For ephemeral workers or for random worker name generation \"-\" can be used.
+
+                    "
+                ),
+            );
+            fields.field(
+                "<COMPONENT>/<WORKER>",
+                &indoc!(
+                    "
+                    Component specific worker name.
+
+                    When used in an application (sub)directory then the given component name is fuzzy
+                    matched against the application component names. If no matches are found, then
+                    a the component name is used as is.
+
+                    When used in a directory without application manifest(s), then the full component
+                    name is expected.
+
+                    "
+                ),
+            );
+            fields.field(
+                "<PROJECT>/<COMPONENT>/<WORKER>",
+                &indoc!(
+                    "
+                    TODO
+
+                    "
+                ),
+            );
+            fields.field(
+                "<ACCOUNT>/<PROJECT>/<COMPONENT>/<WORKER>",
+                &indoc!(
+                    "
+                    TODO
+
+                    "
+                ),
+            );
+
+            fields.build()
+        }
+
+        fn indent_fields() -> bool {
+            true
+        }
+
+        fn format_field_name(name: String) -> String {
+            name.log_color_highlight().to_string()
+        }
+    }
+
+    pub struct ComponentNameHelp;
+
+    impl MessageWithFields for ComponentNameHelp {
+        fn message(&self) -> String {
+            "Accepted component name formats:"
+                .log_color_help_group()
+                .to_string()
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields.field(
+                "<COMPONENT>",
+                &indoc!(
+                    "
+                    Standalone component name.
+
+                    When used in an application (sub)directory then the given component name is fuzzy
+                    matched against the application component names. If no matches are found, then
+                    a the component name is used as is.
+
+                    When used in a directory without application manifest(s), then the full component
+                    name is expected.
+
+                    "
+                ),
+            );
+            fields.field(
+                "<PROJECT>/<COMPONENT>",
+                &indoc!(
+                    "
+                    TODO
+
+                    "
+                ),
+            );
+            fields.field(
+                "<ACCOUNT>/<PROJECT>/<COMPONENT>",
+                &indoc!(
+                    "
+                    TODO
+
+                    "
+                ),
+            );
+
+            fields.build()
+        }
+
+        fn indent_fields() -> bool {
+            true
+        }
+
+        fn format_field_name(name: String) -> String {
+            name.log_color_highlight().to_string()
+        }
+    }
+
+    pub struct AvailableComponentNamesHelp(pub Vec<AppComponentName>);
+
+    impl TextView for AvailableComponentNamesHelp {
+        fn log(&self) {
+            if self.0.is_empty() {
+                logln(
+                    "The application contains no components."
+                        .log_color_warn()
+                        .to_string(),
+                );
+                return;
+            }
+
+            logln(
+                "Available application components:"
+                    .bold()
+                    .underline()
+                    .to_string(),
+            );
+            for component_name in &self.0 {
+                logln(format!("  - {}", component_name));
+            }
+            logln("");
+        }
+    }
+
+    pub struct AvailableFunctionNamesHelp {
+        pub component_name: String,
+        pub function_names: Vec<String>,
+    }
+
+    impl TextView for AvailableFunctionNamesHelp {
+        fn log(&self) {
+            if self.function_names.is_empty() {
+                logln(
+                    format!(
+                        "No functions are available for component {}.",
+                        self.component_name.log_color_highlight()
+                    )
+                    .log_color_warn()
+                    .to_string(),
+                );
+                return;
+            }
+
+            logln(
+                format!(
+                    "Available function names for component {}:",
+                    self.component_name
+                )
+                .bold()
+                .underline()
+                .to_string(),
+            );
+            for function_name in &self.function_names {
+                logln(format!("  - {}", format_export(function_name)));
+            }
+            logln("");
+        }
+    }
+
+    pub struct ArgumentError {
+        pub type_: Option<AnalysedType>,
+        pub value: Option<String>,
+        pub error: Option<String>,
+    }
+
+    // TODO: limit long values
+    #[derive(Table)]
+    pub struct ParameterErrorTable {
+        #[table(title = "Parameter type")]
+        pub parameter_type_: String,
+        #[table(title = "Argument value")]
+        pub argument_value: String,
+        #[table(title = "Error")]
+        pub error: String,
+    }
+
+    impl From<&ArgumentError> for ParameterErrorTable {
+        fn from(value: &ArgumentError) -> Self {
+            Self {
+                parameter_type_: value.type_.as_ref().map(render_type).unwrap_or_default(),
+                argument_value: value.value.clone().unwrap_or_default(),
+                error: value.error.clone().unwrap_or_default(),
+            }
+        }
+    }
+
+    pub struct ParameterErrorTableView(pub Vec<ArgumentError>);
+
+    impl TextView for ParameterErrorTableView {
+        fn log(&self) {
+            log_table::<_, ParameterErrorTable>(self.0.as_slice());
+        }
+    }
+}
+
+pub mod account {
+    use crate::model::text::fmt::*;
+    use golem_cloud_client::model::{Account, Role};
+    use serde::{Deserialize, Serialize};
+
+    fn account_fields(account: &Account) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Account ID", &account.id, format_main_id)
+            .fmt_field("E-mail", &account.email, format_id)
+            .field("Name", &account.name);
+
+        fields.build()
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct AccountGetView(pub Account);
+
+    impl MessageWithFields for AccountGetView {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for account {}",
+                format_message_highlight(&self.0.id)
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            account_fields(&self.0)
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AccountAddView(pub Account);
+
+    impl MessageWithFields for AccountAddView {
+        fn message(&self) -> String {
+            format!("Added account {}", format_message_highlight(&self.0.id))
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            account_fields(&self.0)
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AccountUpdateView(pub Account);
+
+    impl MessageWithFields for AccountUpdateView {
+        fn message(&self) -> String {
+            format!("Updated account {}", format_message_highlight(&self.0.id))
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            account_fields(&self.0)
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    pub struct GrantGetView(pub Vec<Role>);
+
+    impl TextView for GrantGetView {
+        fn log(&self) {
+            if self.0.is_empty() {
+                println!("No roles granted")
+            } else {
+                println!("Granted roles:");
+                for role in &self.0 {
+                    println!("  - {}", role);
+                }
+            }
+        }
+    }
+}
+
+pub mod api_domain {
+    use crate::model::text::fmt::*;
+    use cli_table::Table;
+    use golem_cloud_client::model::ApiDomain;
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ApiDomainAddView(pub ApiDomain);
+
+    impl MessageWithFields for ApiDomainAddView {
+        fn message(&self) -> String {
+            format!(
+                "Added API domain {}",
+                format_message_highlight(&self.0.domain_name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields
+                .fmt_field("Domain name", &self.0.domain_name, format_main_id)
+                .fmt_field("Project ID", &self.0.project_id, format_id)
+                .fmt_field_option("Created at", &self.0.created_at, |d| d.to_string())
+                .fmt_field_optional(
+                    "Name servers",
+                    &self.0.name_servers,
+                    !self.0.name_servers.is_empty(),
+                    |ns| ns.join("\n"),
+                );
+
+            fields.build()
+        }
+    }
+
+    #[derive(Table)]
+    struct ApiDomainTableView {
+        #[table(title = "Domain")]
+        pub domain_name: String,
+        #[table(title = "Project")]
+        pub project_id: Uuid,
+        #[table(title = "Servers")]
+        pub name_servers: String,
+    }
+
+    impl From<&ApiDomain> for ApiDomainTableView {
+        fn from(value: &ApiDomain) -> Self {
+            ApiDomainTableView {
+                domain_name: value.domain_name.to_string(),
+                project_id: value.project_id,
+                name_servers: value.name_servers.join("\n"),
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ApiDomainListView(pub Vec<ApiDomain>);
+
+    impl TextView for ApiDomainListView {
+        fn log(&self) {
+            log_table::<_, ApiDomainTableView>(&self.0);
+        }
+    }
+}
+
+pub mod certificate {
+    use crate::model::text::fmt::*;
+    use cli_table::Table;
+    use golem_cloud_client::model::Certificate;
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    fn certificate_fields(certificate: &Certificate) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Certificate ID", &certificate.id, format_main_id)
+            .fmt_field("Domain name", &certificate.domain_name, format_main_id)
+            .fmt_field("Project ID", &certificate.project_id, format_id)
+            .fmt_field_option("Created at", &certificate.created_at, |d| d.to_string());
+
+        fields.build()
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct CertificateAddView(pub Certificate);
+
+    impl MessageWithFields for CertificateAddView {
+        fn message(&self) -> String {
+            format!(
+                "Added certificate {}",
+                format_message_highlight(&self.0.domain_name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            certificate_fields(&self.0)
+        }
+    }
+
+    #[derive(Table)]
+    struct CertificateTableView {
+        #[table(title = "Domain")]
+        pub domain_name: String,
+        #[table(title = "Certificate ID")]
+        pub id: Uuid,
+        #[table(title = "Project")]
+        pub project_id: Uuid,
+    }
+
+    impl From<&Certificate> for CertificateTableView {
+        fn from(value: &Certificate) -> Self {
+            CertificateTableView {
+                domain_name: value.domain_name.to_string(),
+                id: value.id,
+                project_id: value.project_id,
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct CertificateListView(pub Vec<Certificate>);
+
+    impl TextView for CertificateListView {
+        fn log(&self) {
+            log_table::<_, CertificateTableView>(&self.0);
+        }
+    }
+}
+
+pub mod project {
+    use crate::model::project::ProjectView;
+    use crate::model::text::fmt::*;
+    use cli_table::Table;
+    use golem_cloud_client::model::{Project, ProjectGrant, ProjectPolicy, ProjectType};
+    use itertools::Itertools;
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    fn project_fields(project: &ProjectView) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Project Name", &project.name.0, format_main_id)
+            .fmt_field("Project ID", &project.project_id, format_main_id)
+            .fmt_field("Account ID", &project.owner_account_id.0, format_id)
+            .fmt_field("Environment ID", &project.default_environment_id, format_id)
+            .field(
+                "Default project",
+                &(project.project_type == ProjectType::Default),
+            )
+            .field("Description", &project.description);
+
+        fields.build()
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectGetView(pub ProjectView);
+
+    impl MessageWithFields for ProjectGetView {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for project {}",
+                format_message_highlight(&self.0.name.0)
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            project_fields(&self.0)
+        }
+    }
+
+    impl From<Project> for ProjectGetView {
+        fn from(value: Project) -> Self {
+            ProjectGetView(value.into())
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ProjectCreatedView(pub ProjectView);
+
+    impl From<Project> for ProjectCreatedView {
+        fn from(value: Project) -> Self {
+            ProjectCreatedView(value.into())
+        }
+    }
+
+    impl MessageWithFields for ProjectCreatedView {
+        fn message(&self) -> String {
+            format!(
+                "Created project {}",
+                format_message_highlight(&self.0.name.0)
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            project_fields(&self.0)
+        }
+    }
+
+    #[derive(Table)]
+    struct ProjectTableView {
+        #[table(title = "Project ID")]
+        pub project_id: Uuid,
+        #[table(title = "Name")]
+        pub name: String,
+        #[table(title = "Description")]
+        pub description: String,
+    }
+
+    impl From<&ProjectView> for ProjectTableView {
+        fn from(value: &ProjectView) -> Self {
+            ProjectTableView {
+                project_id: value.project_id.0,
+                name: value.name.0.clone(),
+                description: textwrap::wrap(&value.description, 30).join("\n"),
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectListView(pub Vec<ProjectView>);
+
+    impl From<Vec<Project>> for ProjectListView {
+        fn from(value: Vec<Project>) -> Self {
+            ProjectListView(value.into_iter().map(|v| v.into()).collect())
+        }
+    }
+
+    impl TextView for ProjectListView {
+        fn log(&self) {
+            log_table::<_, ProjectTableView>(&self.0);
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectShareView(pub ProjectGrant);
+
+    impl MessageWithFields for ProjectShareView {
+        fn message(&self) -> String {
+            "Shared project".to_string()
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut field = FieldsBuilder::new();
+
+            field
+                .fmt_field("Project grant ID", &self.0.id, format_main_id)
+                .fmt_field("Project ID", &self.0.data.grantor_project_id, format_id)
+                .fmt_field("Account ID", &self.0.data.grantee_account_id, format_id)
+                .fmt_field("Policy ID", &self.0.data.project_policy_id, format_id);
+
+            field.build()
+        }
+    }
+
+    fn project_policy_fields(policy: &ProjectPolicy) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Policy ID", &policy.id, format_main_id)
+            .field("Policy name", &policy.name)
+            .fmt_field_optional(
+                "Actions",
+                &policy.project_actions,
+                !policy.project_actions.actions.is_empty(),
+                |actions| {
+                    actions
+                        .actions
+                        .iter()
+                        .map(|a| format!("- {}", a))
+                        .join("\n")
+                },
+            );
+
+        fields.build()
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectPolicyAddView(pub ProjectPolicy);
+
+    impl MessageWithFields for ProjectPolicyAddView {
+        fn message(&self) -> String {
+            format!(
+                "Added project policy {}",
+                format_message_highlight(&self.0.name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            project_policy_fields(&self.0)
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectPolicyGetView(pub ProjectPolicy);
+
+    impl MessageWithFields for ProjectPolicyGetView {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for project policy {}",
+                format_message_highlight(&self.0.name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            project_policy_fields(&self.0)
+        }
+    }
+}
+
+pub mod token {
+    use crate::model::text::fmt::*;
+    use chrono::{DateTime, Utc};
+    use cli_table::Table;
+    use colored::Colorize;
+    use golem_cloud_client::model::{Token, UnsafeToken};
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct UnsafeTokenView(pub UnsafeToken);
+
+    impl MessageWithFields for UnsafeTokenView {
+        fn message(&self) -> String {
+            format!(
+                "Created new token\n{}",
+                format_warn("Save this token secret, you can't get this data later!")
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields
+                .fmt_field("Token ID", &self.0.data.id, format_main_id)
+                .fmt_field("Account ID", &self.0.data.id, format_id)
+                .field("Created at", &self.0.data.created_at)
+                .field("Expires at", &self.0.data.expires_at)
+                .fmt_field("Secret (SAVE THIS)", &self.0.secret.value, |s| {
+                    s.to_string().bold().red().to_string()
+                });
+
+            fields.build()
+        }
+    }
+
+    #[derive(Table)]
+    struct TokenTableView {
+        #[table(title = "ID")]
+        pub id: Uuid,
+        #[table(title = "Created at")]
+        pub created_at: DateTime<Utc>,
+        #[table(title = "Expires at")]
+        pub expires_at: DateTime<Utc>,
+        #[table(title = "Account")]
+        pub account_id: String,
+    }
+
+    impl From<&Token> for TokenTableView {
+        fn from(value: &Token) -> Self {
+            TokenTableView {
+                id: value.id,
+                created_at: value.created_at,
+                expires_at: value.expires_at,
+                account_id: value.account_id.to_string(),
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct TokenListView(pub Vec<Token>);
+
+    impl TextView for TokenListView {
+        fn log(&self) {
+            log_table::<_, TokenTableView>(&self.0);
+        }
+    }
+}
+
+pub mod plugin_cloud {
+    use crate::model::plugin_cloud::PluginDefinition;
+    use crate::model::text::fmt::{
+        format_id, format_main_id, format_message_highlight, FieldsBuilder, MessageWithFields,
+        TableWrapper, TextView,
+    };
+    use cli_table::{print_stdout, Table, WithTitle};
+    use golem_client::model::PluginTypeSpecificDefinition;
+    use golem_cloud_client::CloudPluginScope;
+
+    #[derive(Table)]
+    struct PluginDefinitionTableView {
+        #[table(title = "Plugin name")]
+        pub name: String,
+        #[table(title = "Plugin version")]
+        pub version: String,
+        #[table(title = "Description")]
+        pub description: String,
+        #[table(title = "Homepage")]
+        pub homepage: String,
+        #[table(title = "Type")]
+        pub typ: String,
+        #[table(title = "Scope")]
+        pub scope: String,
+    }
+
+    impl From<&PluginDefinition> for PluginDefinitionTableView {
+        fn from(value: &PluginDefinition) -> Self {
+            Self {
+                name: value.0.name.clone(),
+                version: value.0.version.clone(),
+                description: value.0.description.clone(),
+                homepage: value.0.homepage.clone(),
+                typ: match &value.0.specs {
+                    PluginTypeSpecificDefinition::ComponentTransformer(_) => {
+                        "Component Transformer".to_string()
+                    }
+                    PluginTypeSpecificDefinition::OplogProcessor(_) => {
+                        "Oplog Processor".to_string()
+                    }
+                },
+                scope: match &value.0.scope {
+                    CloudPluginScope::Global(_) => "Global".to_string(),
+                    CloudPluginScope::Component(component_scope) => {
+                        format!("Component {}", component_scope.component_id)
+                    }
+                    CloudPluginScope::Project(project_scope) => {
+                        format!("Project {}", project_scope.project_id)
+                    }
+                },
+            }
+        }
+    }
+
+    pub struct PluginDefinitionTable(Vec<PluginDefinition>);
+
+    impl TableWrapper for PluginDefinition {
+        type Table = PluginDefinitionTable;
+
+        fn from_vec(vec: &[Self]) -> Self::Table {
+            PluginDefinitionTable(vec.to_vec())
+        }
+    }
+
+    impl TextView for PluginDefinitionTable {
+        fn log(&self) {
             print_stdout(
-                self.iter()
-                    .map(PluginInstallationTableView::from)
+                self.0
+                    .iter()
+                    .map(PluginDefinitionTableView::from)
                     .collect::<Vec<_>>()
                     .with_title(),
             )
             .unwrap()
+        }
+    }
+
+    impl MessageWithFields for PluginDefinition {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for plugin {} version {}",
+                format_message_highlight(&self.0.name),
+                format_message_highlight(&self.0.version),
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields
+                .fmt_field("Name", &self.0.name, format_main_id)
+                .fmt_field("Version", &self.0.version, format_main_id)
+                .fmt_field("Description", &self.0.description, format_id)
+                .fmt_field("Homepage", &self.0.homepage, format_id)
+                .fmt_field("Scope", &self.0.scope, format_id);
+
+            match &self.0.specs {
+                PluginTypeSpecificDefinition::ComponentTransformer(specs) => {
+                    fields.fmt_field("Type", &"Component Transformer".to_string(), format_id);
+                    fields.fmt_field("Validate URL", &specs.validate_url, format_id);
+                    fields.fmt_field("Transform URL", &specs.transform_url, format_id);
+                }
+                PluginTypeSpecificDefinition::OplogProcessor(specs) => {
+                    fields.fmt_field("Type", &"Oplog Processor".to_string(), format_id);
+                    fields.fmt_field("Component ID", &specs.component_id, format_id);
+                    fields.fmt_field("Component Version", &specs.component_version, format_id);
+                }
+            }
+
+            fields.build()
         }
     }
 }

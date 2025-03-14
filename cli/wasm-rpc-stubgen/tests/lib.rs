@@ -1,5 +1,5 @@
 use assert2::assert;
-use golem_wasm_rpc_stubgen::WasmRpcOverride;
+use golem_wasm_rpc_stubgen::stub::WasmRpcOverride;
 use std::path::Path;
 use test_r::tag_suite;
 

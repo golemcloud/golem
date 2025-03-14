@@ -58,17 +58,13 @@ struct SelectedLanguage {
 impl SelectedLanguage {
     pub fn from_flag(guest_language: GuestLanguage) -> Option<SelectedLanguage> {
         let language = match guest_language {
-            GuestLanguage::Rust => Some(Language::Rust),
-            GuestLanguage::Go => Some(Language::Go),
             GuestLanguage::C => Some(Language::CCcp),
-            GuestLanguage::Zig => Some(Language::Zig),
+            GuestLanguage::Go => Some(Language::Go),
             GuestLanguage::JavaScript => Some(Language::JsTs),
-            GuestLanguage::TypeScript => Some(Language::JsTs),
-            GuestLanguage::CSharp => None,
-            GuestLanguage::Swift => None,
-            GuestLanguage::Grain => None,
             GuestLanguage::Python => Some(Language::Python),
-            GuestLanguage::Scala2 => None,
+            GuestLanguage::Rust => Some(Language::Rust),
+            GuestLanguage::TypeScript => Some(Language::JsTs),
+            GuestLanguage::Zig => Some(Language::Zig),
         };
 
         language.map(|language| SelectedLanguage {

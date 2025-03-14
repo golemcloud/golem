@@ -12,8 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem::command_handler::ServerCommandHandler;
+use golem_cli::command_handler::CommandHandler;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 fn main() -> ExitCode {
-    golem_cli::oss_main::<golem::command::SingleExecutableCommand>()
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime for golem main")
+        .block_on(CommandHandler::handle_args(
+            std::env::args_os(),
+            Arc::new(ServerCommandHandler {}),
+        ))
 }

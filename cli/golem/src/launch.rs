@@ -21,7 +21,6 @@ use golem_common::config::DbSqliteConfig;
 use golem_common::model::Empty;
 use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::ComponentService;
-use golem_component_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
@@ -31,9 +30,11 @@ use golem_shard_manager::shard_manager_config::{
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceGrpcConfig, DefaultAdditionalGolemConfig,
 };
-use golem_worker_executor_base::services::golem_config::CompiledComponentServiceConfig;
 use golem_worker_executor_base::services::golem_config::ShardManagerServiceConfig;
 use golem_worker_executor_base::services::golem_config::ShardManagerServiceGrpcConfig;
+use golem_worker_executor_base::services::golem_config::{
+    CompiledComponentServiceConfig, IndexedStorageKVStoreSqliteConfig,
+};
 use golem_worker_executor_base::services::golem_config::{
     GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
@@ -41,20 +42,20 @@ use golem_worker_service::WorkerService;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
-use prometheus::{default_registry, Registry};
+use prometheus::Registry;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
 pub struct LaunchArgs {
-    pub router_host: String,
+    pub router_addr: String,
     pub router_port: u16,
     pub custom_request_port: u16,
     pub data_dir: PathBuf,
 }
 
-pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Error> {
+pub async fn launch_golem_services(args: &LaunchArgs) -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
@@ -69,7 +70,7 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
             .build(),
     );
 
-    let mut join_set = JoinSet::new();
+    let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
 
     tokio::fs::create_dir_all(&args.data_dir)
         .await
@@ -83,7 +84,7 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
     let started_components = start_components(args, &mut join_set).await?;
 
     start_router(
-        &args.router_host,
+        &args.router_addr,
         args.router_port,
         started_components,
         &mut join_set,
@@ -98,7 +99,7 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
 
 async fn start_components(
     args: &LaunchArgs,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
     let shard_manager = run_shard_manager(shard_manager_config(args), join_set).await?;
     let component_service = run_component_service(component_service_config(args), join_set).await?;
@@ -118,7 +119,7 @@ async fn start_components(
         worker_executor,
         component_service,
         worker_service,
-        prometheus_registy: prometheus::default_registry().clone(),
+        prometheus_registry: prometheus::default_registry().clone(),
     })
 }
 
@@ -151,14 +152,6 @@ fn component_service_config(args: &LaunchArgs) -> ComponentServiceConfig {
                 .to_string(),
             max_connections: 32,
         }),
-        component_store: ComponentStoreConfig::Local(ComponentStoreLocalConfig {
-            root_path: args
-                .data_dir
-                .join("components")
-                .to_string_lossy()
-                .to_string(),
-            object_prefix: "".to_string(),
-        }),
         blob_storage: blob_storage_config(args),
         compilation: golem_component_service_base::config::ComponentCompilationConfig::Disabled(
             Empty {},
@@ -183,11 +176,11 @@ fn worker_executor_config(
                 .to_string(),
             max_connections: 32,
         }),
-        indexed_storage: IndexedStorageConfig::KVStoreSqlite,
+        indexed_storage: IndexedStorageConfig::KVStoreSqlite(IndexedStorageKVStoreSqliteConfig {}),
         blob_storage: blob_storage_config(args),
         compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {}),
         shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
-            host: args.router_host.clone(),
+            host: args.router_addr.clone(),
             port: shard_manager_run_details.grpc_port,
             ..ShardManagerServiceGrpcConfig::default()
         }),
@@ -200,7 +193,7 @@ fn worker_executor_config(
         component_service:
             golem_worker_executor_base::services::additional_config::ComponentServiceConfig::Grpc(
                 ComponentServiceGrpcConfig {
-                    host: args.router_host.clone(),
+                    host: args.router_addr.clone(),
                     port: component_service_run_details.grpc_port,
                     ..ComponentServiceGrpcConfig::default()
                 },
@@ -241,12 +234,12 @@ fn worker_service_config(
             ),
         blob_storage: blob_storage_config(args),
         component_service: golem_worker_service_base::app_config::ComponentServiceConfig {
-            host: args.router_host.clone(),
+            host: args.router_addr.clone(),
             port: component_service_run_details.grpc_port,
             ..golem_worker_service_base::app_config::ComponentServiceConfig::default()
         },
         routing_table: RoutingTableConfig {
-            host: args.router_host.clone(),
+            host: args.router_addr.clone(),
             port: shard_manager_run_details.grpc_port,
             ..RoutingTableConfig::default()
         },
@@ -256,9 +249,9 @@ fn worker_service_config(
 
 async fn run_shard_manager(
     config: ShardManagerConfig,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_shard_manager::RunDetails, anyhow::Error> {
-    let prometheus_registry = default_registry().clone();
+    let prometheus_registry = prometheus::default_registry().clone();
     let span = tracing::info_span!("shard-manager");
     golem_shard_manager::run(&config, prometheus_registry, join_set)
         .instrument(span)
@@ -267,7 +260,7 @@ async fn run_shard_manager(
 
 async fn run_component_service(
     config: ComponentServiceConfig,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_component_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_component_service::metrics::register_all();
     let migrations_dir = IncludedMigrationsDir::new(ComponentService::db_migrations());
@@ -283,7 +276,7 @@ async fn run_component_service(
 async fn run_worker_executor(
     config: GolemConfig,
     additional_config: DefaultAdditionalGolemConfig,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_worker_executor_base::RunDetails, anyhow::Error> {
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
 
@@ -301,7 +294,7 @@ async fn run_worker_executor(
 
 async fn run_worker_service(
     config: WorkerServiceBaseConfig,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_worker_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
     let migration_path = IncludedMigrationsDir::new(WorkerService::db_migrations());

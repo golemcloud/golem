@@ -18,8 +18,7 @@ use test_r::test;
 
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
-use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
-use golem_wasm_rpc_stubgen::WasmRpcOverride;
+use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition, WasmRpcOverride};
 use std::path::Path;
 use tempfile::{tempdir, TempDir};
 use wit_parser::{FunctionKind, Resolve, TypeDefKind, TypeOwner};

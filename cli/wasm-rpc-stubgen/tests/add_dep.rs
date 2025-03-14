@@ -19,12 +19,11 @@ use test_r::test;
 use assert2::assert;
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
-use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
+use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition, WasmRpcOverride};
 use golem_wasm_rpc_stubgen::wit_generate::{
     add_client_as_dependency_to_wit_dir, AddClientAsDepConfig, UpdateCargoToml,
 };
 use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
-use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use golem_wit::{WASI_POLL_WIT, WASI_WALL_CLOCKS_WIT, WASM_RPC_WIT};
 use semver::Version;
 use std::path::{Path, PathBuf};

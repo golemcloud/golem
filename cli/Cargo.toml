@@ -4,13 +4,12 @@ resolver = "2"
 members = [
     "golem",
     "golem-cli",
-    "golem-cloud-cli",
     "golem-examples",
     "wasm-rpc-stubgen",
 ]
 
 exclude = [
-    "desktop-app/src-tauri"
+    "desktop-app/src-tauri",
 ]
 
 [workspace.dependencies]
@@ -23,20 +22,20 @@ golem-common = "=1.1.21"
 golem-rib = "=1.1.21"
 golem-service-base = "=1.1.21"
 golem-test-framework = "=1.1.21"
-golem-wasm-ast = { version = "=1.1.21", default-features = false, features = ["analysis"] }
+golem-wasm-ast = { version = "=1.1.21", default-features = false, features = ["analysis", "wave"] }
 golem-wasm-rpc = { version = "=1.1.21", default-features = false, features = ["host"] }
 
 # Golem cloud deps
 golem-cloud-client = "=1.1.6"
 
 # External deps
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 assert2 = "0.3.15"
-async-trait = "0.1.86"
+async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 base64 = "0.22.1"
 blake3 = "1.5.5"
-bytes = "1.10.0"
+bytes = "1.10.1"
 cargo-component = "=0.20.0"
 cargo-component-core = "=0.20.0"
 cargo_metadata = "0.19.1"
@@ -47,16 +46,16 @@ clap-verbosity-flag = "3.0.2"
 clap_complete = "4.5.45"
 cli-table = "0.4.9"
 colored = "3.0.0"
-derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dirs = "6.0.0"
 dir-diff = "0.3.3"
 fancy-regex = "0.14.0"
 fs_extra = "1.3.0"
 futures = "0.3.31"
 futures-util = "0.3.31"
+fuzzy-matcher = "0.3.7"
 heck = "0.5.0"
-http = "1.2.0"
-http-body-util = "0.1.2"
+http = "1.3.1"
+http-body-util = "0.1.3"
 humansize = "2.1.3"
 hyper = "1.6.0"
 id-arena = "2.2.1"
@@ -83,20 +82,20 @@ proc-macro2 = "1.0.92"
 prometheus = "0.13.4"
 quote = "1.0.37"
 regex = "1.11.1"
-reqwest = { version = "0.12.12", features = ["blocking"] }
+reqwest = { version = "0.12.13", features = ["blocking"] }
 rustls = "0.23.23"
 semver = "1.0.23"
-serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.138"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 serde_json_path = "0.7.1"
 serde_yaml = "0.9.34"
 shlex = "1.3.0"
-sqlx = "0.8.3"
+sqlx = "0.8"
 strip-ansi-escapes = "0.2.0"
 strum = "0.27.1"
 strum_macros = "0.27.1"
 syn = "2.0.90"
-tempfile = "3.17.1"
+tempfile = "3.18.0"
 test-r = "2.1.0"
 textwrap = "0.16.1"
 tokio = "1.43.0"
@@ -112,6 +111,7 @@ uuid = "1.13.2"
 version-compare = "0.2.0"
 wac-graph = "=0.6.1"
 walkdir = "2.5.0"
+wasm-wave = "0.222.1"
 wax = "0.6.0"
 wit-bindgen-rust = "=0.26.0"
 wit-encoder = "=0.221.2"

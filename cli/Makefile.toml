@@ -8,6 +8,7 @@
 # - `cargo make test`: runs all tests
 # - `cargo make unit-tests`: runs all unit tests
 # - `cargo make integrations-tests`: runs all integrations tests
+# - `cargo make cli-integrations-tests`: runs cli integrations tests only
 # - `cargo make stubgen-integrations-tests`: runs stubgen integrations tests only
 # - `cargo make template-integration-tests`: runs template tests only
 # - `cargo make publish`: publishes packages to crates.io
@@ -117,12 +118,22 @@ command = "cargo"
 args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "--no-deps", "-Dwarnings"]
 
 ## ** INSTALL **
-[tasks.install-golem-cli-non-ci]
-condition = { env_not_set = ["CI"] } # on CI we install from target
+[tasks.install]
+dependencies = ["install-golem-cli", "setup-golem-cli-ci"]
+
+[tasks.install-golem-cli]
 description = "Install golem-cli"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --path golem-cli --bin golem-cli
+exec --fail-on-error cargo install --path golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.setup-golem-cli-ci]
+description = "Setup golem-cli"
+condition = { profiles = ["ci"] }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error golem-cli profile add --set-active --component-url http://localhost:9881/ default
 '''
 
 ## ** TEST **
@@ -138,7 +149,14 @@ exec --fail-on-error cargo test --workspace --lib --all-features -- --nocapture 
 
 [tasks.integration-tests]
 description = "Run integration tests"
-dependencies = ["stubgen-integration-tests", "template-integration-tests"]
+dependencies = ["cli-integration-tests", "stubgen-integration-tests", "template-integration-tests"]
+
+[tasks.cli-integration-tests]
+description = "Run CLI integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-cli --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
 
 [tasks.stubgen-integration-tests]
 description = "Run stubgen integration tests"
@@ -149,7 +167,7 @@ exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag:uses_cargo
 '''
 
 [tasks.template-integration-tests]
-dependencies = ["install-golem-cli-non-ci"]
+dependencies = ["install-golem-cli"]
 description = "Run template integration tests"
 script_runner = "@duckscript"
 script = '''

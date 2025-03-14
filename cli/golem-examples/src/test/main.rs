@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use clap::Parser;
 use colored::{ColoredString, Colorize};
 use golem_examples::model::{
@@ -17,6 +31,8 @@ use std::process::exit;
 use std::str::FromStr;
 use toml_edit::DocumentMut;
 
+// TODO: let's also drop this, and move this logic to the integration tests, or use the golem-cli directly in the golem-cli integ tests)
+// TODO: when moving there, let's add tests for rebuilds too
 #[derive(Parser, Debug)]
 #[command()]
 enum Command {
@@ -60,7 +76,7 @@ pub fn main() -> io::Result<()> {
             let results: Vec<(Example, Result<(), String>)> = all_standalone_examples()
                 .iter()
                 .filter(|example| match &filter {
-                    Some(filter) => filter.is_match(example.name.as_string()),
+                    Some(filter) => filter.is_match(example.name.as_str()),
                     None => true,
                 })
                 .map(|example| {
@@ -122,8 +138,10 @@ pub fn main() -> io::Result<()> {
                 used_languages.insert(*language);
 
                 let default_examples = examples.get(&ComposableAppGroupName::default()).unwrap();
+                // TODO:
                 assert_eq!(default_examples.components.len(), 1);
-                let default_component_example = &default_examples.components[0];
+                let (_, default_component_example) =
+                    &default_examples.components.iter().next().unwrap();
 
                 for _ in 1..=2 {
                     let component_name = format!("app:comp-{}", nanoid!(10, &alphabet));
@@ -181,7 +199,7 @@ fn test_example(
             .clone()
             .unwrap_or_else(|| "target/examples-test".to_string()),
     );
-    let component_name = ComponentName::new(example.name.as_string().to_string() + "-comp");
+    let component_name: ComponentName = format!("{}-comp", example.name).into();
     let package_name =
         PackageName::from_string("golemx:componentx").ok_or("failed to create package name")?;
     let component_path = target_path.join(component_name.as_str());

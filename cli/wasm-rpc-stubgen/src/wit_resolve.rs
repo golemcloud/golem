@@ -1,6 +1,8 @@
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::app::{Application, ComponentName, ComponentPropertiesExtensions, ProfileName};
+use crate::model::app::{
+    Application, BuildProfileName, ComponentName, ComponentPropertiesExtensions,
+};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use anyhow::{anyhow, bail, Context, Error};
@@ -184,7 +186,7 @@ pub struct ResolvedWitApplication {
 impl ResolvedWitApplication {
     pub fn new<CPE: ComponentPropertiesExtensions>(
         app: &Application<CPE>,
-        profile: Option<&ProfileName>,
+        profile: Option<&BuildProfileName>,
     ) -> ValidatedResult<Self> {
         // TODO: Can be removed once we fixed all docs and examples
         std::env::set_var("WIT_REQUIRE_F32_F64", "0");
@@ -266,7 +268,7 @@ impl ResolvedWitApplication {
         &mut self,
         validation: &mut ValidationBuilder,
         app: &Application<CPE>,
-        profile: Option<&ProfileName>,
+        profile: Option<&BuildProfileName>,
     ) {
         for component_name in app.component_names() {
             validation.push_context("component name", component_name.to_string());

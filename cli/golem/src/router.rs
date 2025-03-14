@@ -45,7 +45,7 @@ pub fn start_router(
 
     let listener = TcpListener::bind(listener_socket_addr);
 
-    let metrics = PrometheusExporter::new(started_components.prometheus_registy.clone());
+    let metrics = PrometheusExporter::new(started_components.prometheus_registry.clone());
 
     let worker_service_api = Arc::new(started_components.worker_service.api_endpoint);
     let component_service_api = Arc::new(started_components.component_service.endpoint);

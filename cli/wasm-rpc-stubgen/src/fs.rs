@@ -1,8 +1,8 @@
 use crate::log::LogColorize;
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use std::cmp::PartialEq;
 use std::fs::Metadata;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
@@ -171,6 +171,7 @@ pub fn metadata<P: AsRef<Path>>(path: P) -> anyhow::Result<Metadata> {
         .with_context(|| anyhow!("Failed to get metadata for {}", path.log_color_highlight()))
 }
 
+// TODO: change it to "extension methods" on path and path buf?
 pub struct PathExtra<P: AsRef<Path>>(P);
 
 impl<P: AsRef<Path>> PathExtra<P> {
@@ -434,5 +435,84 @@ impl OverwriteSafeActions {
         } else {
             Ok(None)
         }
+    }
+}
+
+pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
+    base_dir: P,
+    glob: S,
+) -> anyhow::Result<(PathBuf, String)> {
+    let glob = glob.as_ref();
+    let path = Path::new(glob);
+    let mut prefix_path = PathBuf::new();
+    let mut resolved_path = PathBuf::new();
+    let mut prefix_ended = false;
+
+    for component in path.components() {
+        match &component {
+            Component::Prefix(_) => {
+                bail!(
+                    "Unexpected path prefix in glob: {}",
+                    glob.log_color_error_highlight()
+                );
+            }
+            Component::RootDir => {
+                bail!(
+                    "Unexpected root prefix in glob: {}",
+                    glob.log_color_error_highlight()
+                );
+            }
+            Component::CurDir => {
+                // NOP
+            }
+            Component::ParentDir => {
+                if prefix_ended {
+                    if !resolved_path.pop() {
+                        bail!(
+                            "Too many parent directories in glob: {}",
+                            glob.log_color_error_highlight()
+                        );
+                    }
+                } else {
+                    prefix_path.push(component);
+                }
+            }
+            Component::Normal(component) => {
+                resolved_path.push(component);
+                prefix_ended = true;
+            }
+        }
+    }
+
+    Ok((
+        base_dir.as_ref().join(prefix_path),
+        PathExtra::new(resolved_path).to_string()?,
+    ))
+}
+
+#[cfg(test)]
+mod test {
+    use crate::fs::resolve_relative_glob;
+    use assert2::check;
+    use std::path::PathBuf;
+    use test_r::test;
+
+    #[test]
+    fn resolve_relative_globs() {
+        let base_dir = PathBuf::from("somedir/somewhere");
+
+        check!(resolve_relative_glob(&base_dir, "").unwrap() == (base_dir.clone(), "".to_string()));
+        check!(
+            resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap()
+                == (base_dir.clone(), "somepath/a/b/c".to_string())
+        );
+        check!(
+            resolve_relative_glob(&base_dir, "../../target").unwrap()
+                == (base_dir.join("../.."), "target".to_string())
+        );
+        check!(
+            resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap()
+                == (base_dir.join("../../../"), "target/a".to_string())
+        );
     }
 }

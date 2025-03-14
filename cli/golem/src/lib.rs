@@ -14,7 +14,7 @@
 
 use prometheus::Registry;
 
-pub mod command;
+pub mod command_handler;
 pub mod launch;
 mod migration;
 mod router;
@@ -27,5 +27,5 @@ pub struct StartedComponents {
     pub shard_manager: golem_shard_manager::RunDetails,
     pub worker_executor: golem_worker_executor_base::RunDetails,
     pub worker_service: golem_worker_service::TrafficReadyEndpoints,
-    pub prometheus_registy: Registry,
+    pub prometheus_registry: Registry,
 }

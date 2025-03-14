@@ -51,28 +51,29 @@ impl From<&str> for ComponentName {
     }
 }
 
+// TODO: rename to build profile?
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProfileName(String);
+pub struct BuildProfileName(String);
 
-impl ProfileName {
+impl BuildProfileName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-impl Display for ProfileName {
+impl Display for BuildProfileName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl From<String> for ProfileName {
+impl From<String> for BuildProfileName {
     fn from(value: String) -> Self {
-        ProfileName(value)
+        BuildProfileName(value)
     }
 }
 
-impl From<&str> for ProfileName {
+impl From<&str> for BuildProfileName {
     fn from(value: &str) -> Self {
         Self(value.to_string())
     }
@@ -128,15 +129,15 @@ pub enum ResolvedComponentProperties<CPE: ComponentPropertiesExtensions> {
     },
     Profiles {
         template_name: Option<TemplateName>,
-        any_template_overrides: HashMap<ProfileName, bool>,
-        default_profile: ProfileName,
-        profiles: HashMap<ProfileName, ComponentProperties<CPE>>,
+        any_template_overrides: HashMap<BuildProfileName, bool>,
+        default_profile: BuildProfileName,
+        profiles: HashMap<BuildProfileName, ComponentProperties<CPE>>,
     },
 }
 
 pub struct ComponentEffectivePropertySource<'a> {
     pub template_name: Option<&'a TemplateName>,
-    pub profile: Option<&'a ProfileName>,
+    pub profile: Option<&'a BuildProfileName>,
     pub is_requested_profile: bool,
     pub any_template_overrides: bool,
 }
@@ -258,13 +259,13 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         self.dependencies.values().flatten().cloned().collect()
     }
 
-    pub fn all_profiles(&self) -> BTreeSet<ProfileName> {
+    pub fn all_profiles(&self) -> BTreeSet<BuildProfileName> {
         self.component_names()
             .flat_map(|component_name| self.component_profiles(component_name))
             .collect()
     }
 
-    pub fn all_option_profiles(&self) -> BTreeSet<Option<ProfileName>> {
+    pub fn all_option_profiles(&self) -> BTreeSet<Option<BuildProfileName>> {
         let mut profiles = self
             .component_names()
             .flat_map(|component_name| self.component_profiles(component_name))
@@ -274,7 +275,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         profiles
     }
 
-    pub fn all_custom_commands(&self, profile: Option<&ProfileName>) -> BTreeSet<String> {
+    pub fn all_custom_commands(&self, profile: Option<&BuildProfileName>) -> BTreeSet<String> {
         let mut custom_commands = BTreeSet::new();
         custom_commands.extend(self.component_names().flat_map(|component_name| {
             self.component_properties(component_name, profile)
@@ -288,8 +289,8 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
 
     pub fn all_custom_commands_for_all_profiles(
         &self,
-    ) -> BTreeMap<Option<ProfileName>, BTreeSet<String>> {
-        let mut custom_commands = BTreeMap::<Option<ProfileName>, BTreeSet<String>>::new();
+    ) -> BTreeMap<Option<BuildProfileName>, BTreeSet<String>> {
+        let mut custom_commands = BTreeMap::<Option<BuildProfileName>, BTreeSet<String>>::new();
 
         custom_commands
             .entry(None)
@@ -350,7 +351,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
             .unwrap_or(&self.no_dependencies)
     }
 
-    pub fn component_profiles(&self, component_name: &ComponentName) -> BTreeSet<ProfileName> {
+    pub fn component_profiles(&self, component_name: &ComponentName) -> BTreeSet<BuildProfileName> {
         match &self.component(component_name).properties {
             ResolvedComponentProperties::Properties { .. } => BTreeSet::new(),
             ResolvedComponentProperties::Profiles { profiles, .. } => {
@@ -362,7 +363,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_effective_property_source<'a>(
         &'a self,
         component_name: &ComponentName,
-        profile: Option<&'a ProfileName>,
+        profile: Option<&'a BuildProfileName>,
     ) -> ComponentEffectivePropertySource<'a> {
         match &self.component(component_name).properties {
             ResolvedComponentProperties::Properties {
@@ -410,7 +411,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_properties(
         &self,
         component_name: &ComponentName,
-        profile: Option<&ProfileName>,
+        profile: Option<&BuildProfileName>,
     ) -> &ComponentProperties<CPE> {
         match &self.component(component_name).properties {
             ResolvedComponentProperties::Properties { properties, .. } => properties,
@@ -441,7 +442,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_source_wit(
         &self,
         component_name: &ComponentName,
-        profile: Option<&ProfileName>,
+        profile: Option<&BuildProfileName>,
     ) -> PathBuf {
         let component = self.component(component_name);
         component.source_dir().join(
@@ -471,7 +472,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_generated_wit(
         &self,
         component_name: &ComponentName,
-        profile: Option<&ProfileName>,
+        profile: Option<&BuildProfileName>,
     ) -> PathBuf {
         let component = self.component(component_name);
         component.source_dir().join(
@@ -484,7 +485,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_wasm(
         &self,
         component_name: &ComponentName,
-        profile: Option<&ProfileName>,
+        profile: Option<&BuildProfileName>,
     ) -> PathBuf {
         let component = self.component(component_name);
         component.source_dir().join(
@@ -497,7 +498,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_linked_wasm(
         &self,
         component_name: &ComponentName,
-        profile: Option<&ProfileName>,
+        profile: Option<&BuildProfileName>,
     ) -> PathBuf {
         self.component_source_dir(component_name).join(
             self.component_properties(component_name, profile)
@@ -764,9 +765,9 @@ mod app_builder {
     use crate::fs::PathExtra;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, Component, ComponentName, ComponentProperties, ComponentPropertiesExtensions,
-        DependencyType, DependentComponent, ProfileName, ResolvedComponentProperties, TemplateName,
-        WithSource,
+        Application, BuildProfileName, Component, ComponentName, ComponentProperties,
+        ComponentPropertiesExtensions, DependencyType, DependentComponent,
+        ResolvedComponentProperties, TemplateName, WithSource,
     };
     use crate::model::app_raw;
     use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -1347,9 +1348,9 @@ mod app_builder {
         ) -> Option<ResolvedComponentProperties<CPE>> {
             let ((profiles, any_template_overrides), valid) =
                 validation.with_context_returning(vec![], |validation| {
-                    let mut resolved_overrides = HashMap::<ProfileName, bool>::new();
+                    let mut resolved_overrides = HashMap::<BuildProfileName, bool>::new();
                     let mut resolved_profiles =
-                        HashMap::<ProfileName, ComponentProperties<CPE>>::new();
+                        HashMap::<BuildProfileName, ComponentProperties<CPE>>::new();
 
                     for (profile_name, template_component_properties) in &template.profiles {
                         validation.with_context(
@@ -1445,7 +1446,10 @@ mod app_builder {
             valid.then(|| ResolvedComponentProperties::Profiles {
                 template_name: None,
                 any_template_overrides: Default::default(),
-                default_profile: component.default_profile.map(ProfileName::from).unwrap(),
+                default_profile: component
+                    .default_profile
+                    .map(BuildProfileName::from)
+                    .unwrap(),
                 profiles: {
                     component
                         .profiles
@@ -1459,8 +1463,9 @@ mod app_builder {
                                     )
                                 },
                             );
-                            properties
-                                .map(|properties| (ProfileName::from(profile_name), properties))
+                            properties.map(|properties| {
+                                (BuildProfileName::from(profile_name), properties)
+                            })
                         })
                         .collect()
                 },

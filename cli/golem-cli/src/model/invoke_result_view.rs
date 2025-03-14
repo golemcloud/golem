@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::{function_result_types, Component};
+use crate::model::wave::type_wave_compatible;
+use anyhow::{anyhow, bail};
+use golem_client::model::InvokeResult;
 use golem_wasm_rpc::{print_type_annotated_value, protobuf};
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
-use tracing::{debug, info};
-
-use golem_client::model::InvokeResult;
-
-use crate::model::component::{function_result_types, Component};
-use crate::model::wave::type_wave_compatible;
-use crate::model::GolemError;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum InvokeResultView {
@@ -36,7 +33,7 @@ impl InvokeResultView {
         res: InvokeResult,
         component: &Component,
         function: &str,
-    ) -> Result<InvokeResultView, GolemError> {
+    ) -> anyhow::Result<InvokeResultView> {
         Ok(
             Self::try_parse(&res.result, component, function).unwrap_or_else(|_| {
                 let json = serde_json::to_value(&res.result).unwrap();
@@ -49,7 +46,7 @@ impl InvokeResultView {
         res: &protobuf::type_annotated_value::TypeAnnotatedValue,
         component: &Component,
         function: &str,
-    ) -> Result<InvokeResultView, GolemError> {
+    ) -> anyhow::Result<InvokeResultView> {
         let results = match res {
             protobuf::type_annotated_value::TypeAnnotatedValue::Tuple(tuple) => tuple
                 .value
@@ -58,11 +55,7 @@ impl InvokeResultView {
                 .collect::<Vec<_>>(),
             // TODO: need to support multi-result case when it's a Record
             _ => {
-                info!("Can't parse InvokeResult - tuple expected.");
-
-                return Err(GolemError(
-                    "Can't parse InvokeResult - tuple expected.".to_string(),
-                ));
+                bail!("Can't parse InvokeResult - tuple expected.");
             }
         };
 
@@ -70,17 +63,11 @@ impl InvokeResultView {
         let result_types = function_result_types(component, function)?;
 
         if results.len() != result_types.len() {
-            info!("Unexpected number of results.");
-
-            return Err(GolemError("Unexpected number of results.".to_string()));
+            bail!("Unexpected number of results.".to_string());
         }
 
         if !result_types.iter().all(|typ| type_wave_compatible(typ)) {
-            debug!("Result type is not supported by wave");
-
-            return Err(GolemError(
-                "Result type is not supported by wave".to_string(),
-            ));
+            bail!("Result type is not supported by wave".to_string(),);
         }
 
         let wave = results
@@ -93,16 +80,10 @@ impl InvokeResultView {
 
     fn try_wave_format(
         parsed: protobuf::type_annotated_value::TypeAnnotatedValue,
-    ) -> Result<String, GolemError> {
+    ) -> anyhow::Result<String> {
         match print_type_annotated_value(&parsed) {
             Ok(res) => Ok(res),
-            Err(err) => {
-                info!("Failed to format parsed value as wave: {err:?}");
-
-                Err(GolemError(
-                    "Failed to format parsed value as wave".to_string(),
-                ))
-            }
+            Err(err) => Err(anyhow!("Failed to format parsed value as wave: {err}")),
         }
     }
 }
@@ -158,7 +139,7 @@ mod tests {
                 component_id: Uuid::max(),
                 version: 0,
             },
-            component_name: String::new(),
+            component_name: "".into(),
             component_size: 0,
             component_type: ComponentType::Durable,
             metadata: ComponentMetadata {

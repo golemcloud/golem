@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::cloud::CloudAuthenticationConfig;
-use crate::init::CliKind;
-use crate::model::{Format, GolemError, HasFormatConfig};
+use crate::model::{Format, HasFormatConfig};
+use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,31 +23,37 @@ use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::warn;
 use url::Url;
 
-pub fn get_config_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap();
-    let default_conf_dir = home.join(".golem");
+const CLOUD_URL: &str = "https://release.api.golem.cloud";
+const DEFAULT_OSS_URL: &str = "http://localhost:9881";
 
-    std::env::var("GOLEM_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or(default_conf_dir)
-}
+// TODO: review and separate model, config and serialization parts
+// TODO: when doing the serialization we can do a legacy migration
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub profiles: HashMap<ProfileName, Profile>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_profile: Option<ProfileName>,
+    // TODO: these are deprecated now, remove them properly
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub active_profile: Option<ProfileName>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub active_cloud_profile: Option<ProfileName>,
 }
 
-#[derive(
-    Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, derive_more::FromStr,
-)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct ProfileName(pub String);
+
+impl ProfileName {
+    pub fn local() -> Self {
+        ProfileName("local".to_owned())
+    }
+    pub fn cloud() -> Self {
+        ProfileName("cloud".to_owned())
+    }
+}
 
 impl Display for ProfileName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -55,12 +61,36 @@ impl Display for ProfileName {
     }
 }
 
-impl ProfileName {
-    pub fn default(cli_kind: CliKind) -> ProfileName {
-        match cli_kind {
-            CliKind::Universal | CliKind::Oss => ProfileName("default".to_string()),
-            CliKind::Cloud => ProfileName("cloud_default".to_string()),
-        }
+impl From<&str> for ProfileName {
+    fn from(name: &str) -> Self {
+        Self(name.to_string())
+    }
+}
+
+impl From<String> for ProfileName {
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct BuildProfileName(pub String);
+
+impl Display for BuildProfileName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for BuildProfileName {
+    fn from(name: &str) -> Self {
+        Self(name.to_string())
+    }
+}
+
+impl From<String> for BuildProfileName {
+    fn from(name: String) -> Self {
+        Self(name)
     }
 }
 
@@ -70,6 +100,14 @@ pub struct NamedProfile {
     pub profile: Profile,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum ProfileKind {
+    Oss,
+    Cloud,
+}
+
+// TODO: cannot rename enum cases without migration, as that breaks the format,
+//       if we have to migrate once, we should use a more "user-friendly" format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Profile {
     Golem(OssProfile),
@@ -95,6 +133,13 @@ impl Profile {
         match self {
             Profile::Golem(p) => &mut p.config,
             Profile::GolemCloud(p) => &mut p.config,
+        }
+    }
+
+    pub fn kind(&self) -> ProfileKind {
+        match self {
+            Profile::Golem(_) => ProfileKind::Oss,
+            Profile::GolemCloud(_) => ProfileKind::Cloud,
         }
     }
 }
@@ -149,28 +194,87 @@ impl Config {
         config_dir.join("config.json")
     }
 
-    fn read_from_file_opt(config_dir: &Path) -> Option<Config> {
-        let file = File::open(Self::config_path(config_dir)).ok()?;
-        let reader = BufReader::new(file);
+    fn from_file(config_dir: &Path) -> anyhow::Result<Config> {
+        let config_path = Self::config_path(config_dir);
 
-        let parsed: serde_json::Result<Config> = serde_json::from_reader(reader);
-
-        match parsed {
-            Ok(conf) => Some(conf),
-            Err(err) => {
-                warn!("Config parsing failed: {err}");
-                None
-            }
+        if !config_path
+            .try_exists()
+            .with_context(|| anyhow!("Failed to check config file: {}", config_path.display()))?
+        {
+            return Ok(Config::default().with_local_and_cloud_profiles());
         }
+
+        let file = File::open(&config_path)
+            .with_context(|| anyhow!("Failed to open config file: {}", config_path.display()))?;
+
+        let reader = BufReader::new(file);
+        let mut config: Config = serde_json::from_reader(reader).with_context(|| {
+            anyhow!(
+                "Failed to deserialize config file {}",
+                config_path.display(),
+            )
+        })?;
+
+        // Detect if it was not yet migrated
+        if config.default_profile.is_none() {
+            // Drop old default profiles
+            config.profiles.remove(&ProfileName::from("default"));
+            config.profiles.remove(&ProfileName::from("cloud_default"));
+
+            // Rename profiles that are conflicting with the new ones
+            if let Some(profile) = config.profiles.remove(&ProfileName::from("local")) {
+                config
+                    .profiles
+                    .insert(ProfileName::from("local-migrated"), profile);
+            };
+            if let Some(profile) = config.profiles.remove(&ProfileName::from("cloud")) {
+                config
+                    .profiles
+                    .insert(ProfileName::from("cloud-migrated"), profile);
+            }
+
+            // Set default to local
+            config.default_profile = Some(ProfileName::from("local"));
+
+            // Save migrated config
+            config.store_file(config_dir).with_context(|| {
+                anyhow!(
+                    "Failed to save config after migration: {}",
+                    config_path.display()
+                )
+            })?;
+        }
+
+        Ok(config.with_local_and_cloud_profiles())
     }
 
-    pub fn read_from_file(config_dir: &Path) -> Config {
-        Self::read_from_file_opt(config_dir).unwrap_or_default()
+    fn with_local_and_cloud_profiles(mut self) -> Self {
+        self.profiles
+            .entry(ProfileName::local())
+            .or_insert_with(|| {
+                let url = Url::parse(DEFAULT_OSS_URL).unwrap();
+                Profile::Golem(OssProfile {
+                    url,
+                    worker_url: None,
+                    allow_insecure: false,
+                    config: ProfileConfig::default(),
+                })
+            });
+
+        self.profiles
+            .entry(ProfileName::cloud())
+            .or_insert_with(|| Profile::GolemCloud(CloudProfile::default()));
+
+        if self.default_profile.is_none() {
+            self.default_profile = Some(ProfileName::local())
+        }
+
+        self
     }
 
-    fn store_file(&self, config_dir: &Path) -> Result<(), GolemError> {
+    fn store_file(&self, config_dir: &Path) -> anyhow::Result<()> {
         create_dir_all(config_dir)
-            .map_err(|err| GolemError(format!("Can't create config directory: {err}")))?;
+            .map_err(|err| anyhow!("Can't create config directory: {err}"))?;
 
         let file = OpenOptions::new()
             .create(true)
@@ -178,113 +282,134 @@ impl Config {
             .write(true)
             .truncate(true)
             .open(Self::config_path(config_dir))
-            .map_err(|err| GolemError(format!("Can't open config file: {err}")))?;
+            .map_err(|err| anyhow!("Can't open config file: {err}"))?;
         let writer = BufWriter::new(file);
 
         serde_json::to_writer_pretty(writer, self)
-            .map_err(|err| GolemError(format!("Can't save config to file: {err}")))
+            .map_err(|err| anyhow!("Can't save config to file: {err}"))
     }
 
     pub fn set_active_profile_name(
         profile_name: ProfileName,
-        cli_kind: CliKind,
         config_dir: &Path,
-    ) -> Result<(), GolemError> {
-        let mut config = Self::read_from_file(config_dir);
+    ) -> anyhow::Result<()> {
+        let mut config = Self::from_file(config_dir)?;
 
-        if let Some(profile) = config.profiles.get(&profile_name) {
-            match profile {
-                Profile::Golem(_) => {
-                    if cli_kind == CliKind::Cloud {
-                        return Err(GolemError(format!("Profile {profile_name} is not a Cloud profile. Use `golem-cli` instead of `golem-cloud-cli` for this profile.")));
-                    }
-                }
-                Profile::GolemCloud(_) => {
-                    if cli_kind == CliKind::Oss {
-                        return Err(GolemError(format!("Profile {profile_name} is a Cloud profile. Use `golem-cloud-cli` instead of `golem-cli` for this profile. You can also install universal version of `golem-cli` using `cargo install golem-cloud-cli --features universal`")));
-                    }
-                }
-            }
-        } else {
-            return Err(GolemError(format!(
+        if !config.profiles.contains_key(&profile_name) {
+            bail!(
                 "No profile {profile_name} in configuration. Available profiles: [{}]",
                 config.profiles.keys().map(|n| &n.0).join(", ")
-            )));
-        }
+            );
+        };
 
-        match cli_kind {
-            CliKind::Universal | CliKind::Oss => config.active_profile = Some(profile_name),
-            CliKind::Cloud => config.active_cloud_profile = Some(profile_name),
-        }
+        config.default_profile = Some(profile_name);
 
         config.store_file(config_dir)?;
 
         Ok(())
     }
 
-    pub fn get_active_profile(cli_kind: CliKind, config_dir: &Path) -> Option<NamedProfile> {
-        let mut config = Self::read_from_file(config_dir);
+    pub fn get_active_profile(
+        config_dir: &Path,
+        selected_profile: Option<ProfileName>,
+    ) -> anyhow::Result<NamedProfile> {
+        let mut config = Self::from_file(config_dir)?;
 
-        let name = match cli_kind {
-            CliKind::Universal | CliKind::Oss => config
-                .active_profile
-                .unwrap_or_else(|| ProfileName::default(cli_kind)),
-            CliKind::Cloud => config
-                .active_cloud_profile
-                .unwrap_or_else(|| ProfileName::default(cli_kind)),
-        };
+        let name = selected_profile
+            .unwrap_or_else(|| config.default_profile.unwrap_or_else(ProfileName::local));
 
-        Some(NamedProfile {
+        Ok(NamedProfile {
             name: name.clone(),
-            profile: config.profiles.remove(&name)?,
+            profile: config.profiles.remove(&name).unwrap(),
         })
     }
 
-    pub fn get_profile(name: &ProfileName, config_dir: &Path) -> Option<Profile> {
-        let mut config = Self::read_from_file(config_dir);
-
-        config.profiles.remove(name)
+    pub fn get_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<Option<Profile>> {
+        let mut config = Self::from_file(config_dir)?;
+        Ok(config.profiles.remove(name))
     }
 
     pub fn set_profile(
         name: ProfileName,
         profile: Profile,
         config_dir: &Path,
-    ) -> Result<(), GolemError> {
-        let mut config = Self::read_from_file(config_dir);
-
-        let _ = config.profiles.insert(name, profile);
-
+    ) -> anyhow::Result<()> {
+        let mut config = Self::from_file(config_dir)?;
+        config.profiles.insert(name, profile);
         config.store_file(config_dir)
     }
 
-    pub fn delete_profile(name: &ProfileName, config_dir: &Path) -> Result<(), GolemError> {
-        let mut config = Self::read_from_file(config_dir);
-
-        if &config
-            .active_profile
-            .clone()
-            .unwrap_or_else(|| ProfileName::default(CliKind::Universal))
-            == name
-        {
-            return Err(GolemError("Can't remove active profile".to_string()));
-        }
-
-        if &config
-            .active_cloud_profile
-            .clone()
-            .unwrap_or_else(|| ProfileName::default(CliKind::Cloud))
-            == name
-        {
-            return Err(GolemError("Can't remove active cloud profile".to_string()));
-        }
-
-        let _ = config
-            .profiles
-            .remove(name)
-            .ok_or(GolemError(format!("Profile {name} not found")))?;
-
+    pub fn delete_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<()> {
+        let mut config = Self::from_file(config_dir)?;
+        config.profiles.remove(name);
         config.store_file(config_dir)
+    }
+}
+
+pub struct ClientConfig {
+    pub component_url: Url,
+    pub worker_url: Url,
+    pub cloud_url: Option<Url>,
+    pub service_http_client_config: HttpClientConfig,
+    pub health_check_http_client_config: HttpClientConfig,
+    pub file_download_http_client_config: HttpClientConfig,
+}
+
+impl From<&Profile> for ClientConfig {
+    fn from(profile: &Profile) -> Self {
+        match profile {
+            Profile::Golem(profile) => {
+                let allow_insecure = profile.allow_insecure;
+
+                ClientConfig {
+                    component_url: profile.url.clone(),
+                    worker_url: profile
+                        .worker_url
+                        .clone()
+                        .unwrap_or_else(|| profile.url.clone()),
+                    cloud_url: None,
+                    service_http_client_config: HttpClientConfig::new_for_service_calls(
+                        allow_insecure,
+                    ),
+                    health_check_http_client_config: HttpClientConfig::new_for_health_check(
+                        allow_insecure,
+                    ),
+                    file_download_http_client_config: HttpClientConfig::new_for_file_download(
+                        allow_insecure,
+                    ),
+                }
+            }
+            Profile::GolemCloud(profile) => {
+                let default_cloud_url = Url::parse(CLOUD_URL).unwrap();
+                let component_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
+                let cloud_url = Some(
+                    profile
+                        .custom_cloud_url
+                        .clone()
+                        .unwrap_or_else(|| component_url.clone()),
+                );
+                let worker_url = profile
+                    .custom_worker_url
+                    .clone()
+                    .unwrap_or_else(|| component_url.clone());
+                let allow_insecure = profile.allow_insecure;
+
+                ClientConfig {
+                    component_url,
+                    worker_url,
+                    cloud_url,
+                    service_http_client_config: HttpClientConfig::new_for_service_calls(
+                        allow_insecure,
+                    ),
+                    health_check_http_client_config: HttpClientConfig::new_for_health_check(
+                        allow_insecure,
+                    ),
+                    file_download_http_client_config: HttpClientConfig::new_for_file_download(
+                        allow_insecure,
+                    ),
+                }
+            }
+        }
     }
 }
 
@@ -304,7 +429,7 @@ impl HttpClientConfig {
             connect_timeout: None,
             read_timeout: None,
         }
-        .with_env_overrides("GOLEM")
+        .with_env_overrides("GOLEM_HTTP")
     }
 
     pub fn new_for_health_check(allow_insecure: bool) -> Self {
@@ -314,7 +439,7 @@ impl HttpClientConfig {
             connect_timeout: Some(Duration::from_secs(1)),
             read_timeout: Some(Duration::from_secs(1)),
         }
-        .with_env_overrides("GOLEM_HEALTHCHECK")
+        .with_env_overrides("GOLEM_HTTP_HEALTHCHECK")
     }
 
     pub fn new_for_file_download(allow_insecure: bool) -> Self {
@@ -324,7 +449,7 @@ impl HttpClientConfig {
             connect_timeout: Some(Duration::from_secs(10)),
             read_timeout: Some(Duration::from_secs(60)),
         }
-        .with_env_overrides("GOLEM_FILE_DOWNLOAD")
+        .with_env_overrides("GOLEM_HTTP_FILE_DOWNLOAD")
     }
 
     fn with_env_overrides(mut self, prefix: &str) -> Self {

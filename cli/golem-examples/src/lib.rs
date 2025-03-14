@@ -1,7 +1,20 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::model::{
-    ComponentName, ComposableAppGroupName, Example, ExampleKind, ExampleMetadata, ExampleName,
-    ExampleParameters, GuestLanguage, PackageName, TargetExistsResolveDecision,
-    TargetExistsResolveMode,
+    ComposableAppGroupName, Example, ExampleKind, ExampleMetadata, ExampleName, ExampleParameters,
+    GuestLanguage, PackageName, TargetExistsResolveDecision, TargetExistsResolveMode,
 };
 use include_dir::{include_dir, Dir, DirEntry};
 use itertools::Itertools;
@@ -10,8 +23,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-#[cfg(feature = "cli")]
-pub mod cli;
 pub mod model;
 
 #[cfg(test)]
@@ -65,7 +76,7 @@ pub fn all_standalone_examples() -> Vec<Example> {
 #[derive(Debug, Default)]
 pub struct ComposableAppExample {
     pub common: Option<Example>,
-    pub components: Vec<Example>,
+    pub components: BTreeMap<ExampleName, Example>,
 }
 
 pub fn all_composable_app_examples(
@@ -107,7 +118,7 @@ pub fn all_composable_app_examples(
             ExampleKind::ComposableAppComponent { group } => {
                 app_examples(&mut examples, example.language, group)
                     .components
-                    .push(example);
+                    .insert(example.name.clone(), example);
             }
         }
     }
@@ -172,7 +183,7 @@ pub fn add_component_by_example(
     package_name: &PackageName,
 ) -> io::Result<()> {
     let parameters = ExampleParameters {
-        component_name: ComponentName::new(package_name.to_string_with_colon()),
+        component_name: package_name.to_string_with_colon().into(),
         package_name: package_name.clone(),
         target_path: target_path.into(),
     };
@@ -466,11 +477,11 @@ fn parse_example(
     let kind = match (metadata.app_common_group, metadata.app_component_group) {
         (None, None) => ExampleKind::Standalone,
         (Some(group), None) => ExampleKind::ComposableAppCommon {
-            group: ComposableAppGroupName::from_string(group),
+            group: group.into(),
             skip_if_exists: metadata.app_common_skip_if_exists.map(PathBuf::from),
         },
         (None, Some(group)) => ExampleKind::ComposableAppComponent {
-            group: ComposableAppGroupName::from_string(group),
+            group: group.into(),
         },
         (Some(_), Some(_)) => panic!(
             "Only one of appCommonGroup and appComponentGroup can be specified, example root: {}",
@@ -496,7 +507,27 @@ fn parse_example(
         ExampleKind::ComposableAppComponent { .. } => "".to_string(),
     };
 
-    let name = ExampleName::from_string(example_root.file_name().unwrap().to_str().unwrap());
+    let name: ExampleName = {
+        let name = example_root
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // TODO: this is just a quickfix for hiding "<lang>-app-<component>" prefixes, let's decide later if we want
+        //       reorganize the template directories directly
+        let segments = name.split("-").collect::<Vec<_>>();
+        if segments.len() > 2 && segments[1] == "app" {
+            if segments.len() > 3 && segments[2] == "component" {
+                segments[3..].join("-").into()
+            } else {
+                segments[2..].join("-").into()
+            }
+        } else {
+            name.into()
+        }
+    };
 
     let mut wit_deps: Vec<PathBuf> = vec![];
     if metadata.requires_golem_host_wit.unwrap_or(false) {

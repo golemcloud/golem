@@ -13,11 +13,6 @@ autotests = false
 path = "src/lib.rs"
 harness = false
 
-[[bin]]
-name = "wasm-rpc-stubgen"
-path = "src/main.rs"
-test = false
-
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
@@ -33,6 +28,7 @@ blake3 = { workspace = true }
 cargo-component = { workspace = true }
 cargo-component-core = { workspace = true }
 cargo_toml = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
 fs_extra = { workspace = true }
@@ -53,6 +49,7 @@ shlex = { workspace = true }
 syn = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 wac-graph = { workspace = true }

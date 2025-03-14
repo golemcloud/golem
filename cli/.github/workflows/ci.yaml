@@ -68,10 +68,6 @@ jobs:
         save-if: true
     - name: Build all targets
       run: cargo make --profile ci build
-    - name: Install and setup golem-cli
-      run: |
-        mv target/debug/golem-cli /usr/local/bin
-        golem-cli profile add --set-active --component-url http://localhost:9881/ default
     - name: Unit tests
       run: cargo make --profile ci unit-tests
     - name: Integration tests

@@ -226,7 +226,16 @@ pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         } else {
             None
         },
-        path: def.config.wasm_rpc_override.wasm_rpc_path_override.clone(),
+        path: def
+            .config
+            .wasm_rpc_override
+            .wasm_rpc_path_override
+            .as_ref()
+            .map(|path| {
+                path.to_str()
+                    .expect("Failed to convert wasm rpc override path to string")
+                    .to_string()
+            }),
         default_features: false,
         features: vec!["stub".to_string()],
         ..Default::default()

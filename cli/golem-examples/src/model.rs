@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use fancy_regex::{Match, Regex};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
@@ -10,19 +24,13 @@ use std::{fmt, io};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::FromStr, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ComponentName(String);
 
 static COMPONENT_NAME_SPLIT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?=[A-Z\\-_:])").unwrap());
 
 impl ComponentName {
-    pub fn new(name: impl AsRef<str>) -> ComponentName {
-        ComponentName(name.as_ref().to_string())
-    }
-
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -69,6 +77,18 @@ impl ComponentName {
     }
 }
 
+impl From<&str> for ComponentName {
+    fn from(name: &str) -> Self {
+        ComponentName(name.to_string())
+    }
+}
+
+impl From<String> for ComponentName {
+    fn from(name: String) -> Self {
+        ComponentName(name)
+    }
+}
+
 impl fmt::Display for ComponentName {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -91,33 +111,25 @@ pub enum ExampleKind {
     Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, Serialize, Deserialize,
 )]
 pub enum GuestLanguage {
-    Rust,
-    Go,
     C,
-    Zig,
+    Go,
     JavaScript,
-    TypeScript,
-    CSharp,
-    Swift,
-    Grain,
     Python,
-    Scala2,
+    Rust,
+    TypeScript,
+    Zig,
 }
 
 impl GuestLanguage {
     pub fn from_string(s: impl AsRef<str>) -> Option<GuestLanguage> {
         match s.as_ref().to_lowercase().as_str() {
-            "rust" => Some(GuestLanguage::Rust),
-            "go" => Some(GuestLanguage::Go),
             "c" | "c++" | "cpp" => Some(GuestLanguage::C),
-            "zig" => Some(GuestLanguage::Zig),
+            "go" => Some(GuestLanguage::Go),
             "js" | "javascript" => Some(GuestLanguage::JavaScript),
-            "ts" | "typescript" => Some(GuestLanguage::TypeScript),
-            "c#" | "cs" | "csharp" => Some(GuestLanguage::CSharp),
-            "swift" => Some(GuestLanguage::Swift),
-            "grain" => Some(GuestLanguage::Grain),
             "py" | "python" => Some(GuestLanguage::Python),
-            "scala2" => Some(GuestLanguage::Scala2),
+            "rust" => Some(GuestLanguage::Rust),
+            "ts" | "typescript" => Some(GuestLanguage::TypeScript),
+            "zig" => Some(GuestLanguage::Zig),
             _ => None,
         }
     }
@@ -130,43 +142,31 @@ impl GuestLanguage {
             GuestLanguage::Zig => "zig".to_string(),
             GuestLanguage::JavaScript => "js".to_string(),
             GuestLanguage::TypeScript => "ts".to_string(),
-            GuestLanguage::CSharp => "cs".to_string(),
-            GuestLanguage::Swift => "swift".to_string(),
-            GuestLanguage::Grain => "grain".to_string(),
             GuestLanguage::Python => "python".to_string(),
-            GuestLanguage::Scala2 => "scala2".to_string(),
         }
     }
 
     pub fn tier(&self) -> GuestLanguageTier {
         match self {
-            GuestLanguage::Rust => GuestLanguageTier::Tier1,
-            GuestLanguage::Go => GuestLanguageTier::Tier1,
             GuestLanguage::C => GuestLanguageTier::Tier1,
-            GuestLanguage::Zig => GuestLanguageTier::Tier1,
+            GuestLanguage::Go => GuestLanguageTier::Tier1,
             GuestLanguage::JavaScript => GuestLanguageTier::Tier1,
-            GuestLanguage::TypeScript => GuestLanguageTier::Tier1,
-            GuestLanguage::CSharp => GuestLanguageTier::Tier3,
-            GuestLanguage::Swift => GuestLanguageTier::Tier2,
-            GuestLanguage::Grain => GuestLanguageTier::Tier2,
             GuestLanguage::Python => GuestLanguageTier::Tier1,
-            GuestLanguage::Scala2 => GuestLanguageTier::Tier1,
+            GuestLanguage::Rust => GuestLanguageTier::Tier1,
+            GuestLanguage::TypeScript => GuestLanguageTier::Tier1,
+            GuestLanguage::Zig => GuestLanguageTier::Tier1,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            GuestLanguage::Rust => "Rust",
-            GuestLanguage::Go => "Go",
             GuestLanguage::C => "C",
-            GuestLanguage::Zig => "Zig",
+            GuestLanguage::Go => "Go",
             GuestLanguage::JavaScript => "JavaScript",
-            GuestLanguage::TypeScript => "TypeScript",
-            GuestLanguage::CSharp => "C#",
-            GuestLanguage::Swift => "Swift",
-            GuestLanguage::Grain => "Grain",
             GuestLanguage::Python => "Python",
-            GuestLanguage::Scala2 => "Scala 2",
+            GuestLanguage::Rust => "Rust",
+            GuestLanguage::TypeScript => "TypeScript",
+            GuestLanguage::Zig => "Zig",
         }
     }
 }
@@ -316,18 +316,24 @@ impl FromStr for PackageName {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::FromStr, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ExampleName(String);
 
 impl ExampleName {
-    pub fn from_string(s: impl AsRef<str>) -> ExampleName {
-        ExampleName(s.as_ref().to_string())
-    }
-
-    pub fn as_string(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl From<&str> for ExampleName {
+    fn from(s: &str) -> Self {
+        ExampleName(s.to_string())
+    }
+}
+
+impl From<String> for ExampleName {
+    fn from(s: String) -> Self {
+        ExampleName(s)
     }
 }
 
@@ -337,17 +343,11 @@ impl fmt::Display for ExampleName {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::FromStr, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ComposableAppGroupName(String);
 
 impl ComposableAppGroupName {
-    pub fn from_string(s: impl AsRef<str>) -> ComposableAppGroupName {
-        ComposableAppGroupName(s.as_ref().to_string())
-    }
-
-    pub fn as_string(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -355,6 +355,18 @@ impl ComposableAppGroupName {
 impl Default for ComposableAppGroupName {
     fn default() -> Self {
         ComposableAppGroupName("default".to_string())
+    }
+}
+
+impl From<&str> for ComposableAppGroupName {
+    fn from(s: &str) -> Self {
+        ComposableAppGroupName(s.to_string())
+    }
+}
+
+impl From<String> for ComposableAppGroupName {
+    fn from(s: String) -> Self {
+        ComposableAppGroupName(s)
     }
 }
 
@@ -435,22 +447,22 @@ mod tests {
 
     #[allow(dead_code)]
     fn n1() -> ComponentName {
-        ComponentName::new("my-test-component")
+        "my-test-component".into()
     }
 
     #[allow(dead_code)]
     fn n2() -> ComponentName {
-        ComponentName::new("MyTestComponent")
+        "MyTestComponent".into()
     }
 
     #[allow(dead_code)]
     fn n3() -> ComponentName {
-        ComponentName::new("myTestComponent")
+        "myTestComponent".into()
     }
 
     #[allow(dead_code)]
     fn n4() -> ComponentName {
-        ComponentName::new("my_test_component")
+        "my_test_component".into()
     }
 
     #[test]

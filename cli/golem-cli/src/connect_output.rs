@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::worker::WorkerConnectOptions;
-use crate::model::Format;
+use crate::model::{Format, WorkerConnectOptions};
 use colored::Colorize;
 use golem_common::model::{LogLevel, Timestamp};
 use std::fmt::Write;

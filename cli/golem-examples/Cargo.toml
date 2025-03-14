@@ -6,15 +6,14 @@ license = "Apache-2.0"
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem-cli"
 description = "Golem example templates"
-default-run = "golem-examples-cli"
+default-run = "golem-examples-test-cli"
 autotests = false
 
 [dependencies]
 Inflector = { workspace = true }
 assert2 = { workspace = true }
-clap = { workspace = true, optional = true }
+clap = { workspace = true }
 colored = { workspace = true }
-derive_more = { workspace = true }
 fancy-regex = { workspace = true }
 fs_extra = { workspace = true }
 golem-wit = { workspace = true }
@@ -34,24 +33,13 @@ cargo_metadata = { workspace = true }
 dir-diff = { workspace = true }
 fs_extra = { workspace = true }
 
-[features]
-default = ["cli"]
-cli = ["dep:clap"]
-
 [lib]
 path = "src/lib.rs"
 harness = false
 
 [[bin]]
-name = "golem-examples-cli"
-path = "src/main.rs"
-required-features = ["cli"]
-test = false
-
-[[bin]]
 name = "golem-examples-test-cli"
 path = "src/test/main.rs"
-required-features = ["cli"]
 test = false
 
 [[test]]
