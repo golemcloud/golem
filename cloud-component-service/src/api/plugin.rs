@@ -90,7 +90,65 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(&auth, plugin.0)
+            .create_plugin(&auth, plugin.0.into())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    /// Registers a new library plugin
+    #[oai(
+        path = "/library-plugins/",
+        method = "post",
+        operation_id = "create_library_plugin"
+    )]
+    pub async fn create_library_plugin(
+        &self,
+        plugin: dto::LibraryPluginDefinitionCreation<CloudPluginScope>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "create_library_plugin",
+            plugin_name = plugin.name,
+            plugin_version = plugin.version
+        );
+        let auth = CloudAuthCtx::new(token.secret());
+
+        let response = self
+            .plugin_service
+            .create_plugin(&auth, plugin.into())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    /// Registers a new app plugin
+    #[oai(
+        path = "/app-plugins/",
+        method = "post",
+        operation_id = "create_app_plugin"
+    )]
+    pub async fn create_app_plugin(
+        &self,
+        plugin: dto::AppPluginDefinitionCreation<CloudPluginScope>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "create_app_plugin",
+            plugin_name = plugin.name,
+            plugin_version = plugin.version
+        );
+        let auth = CloudAuthCtx::new(token.secret());
+
+        let response = self
+            .plugin_service
+            .create_plugin(&auth, plugin.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

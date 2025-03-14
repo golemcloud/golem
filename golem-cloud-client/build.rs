@@ -1,38 +1,32 @@
+use golem_openapi_client_generator::parse_openapi_specs;
 use std::env::var_os;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use golem_openapi_client_generator::parse_openapi_specs;
-use relative_path::RelativePath;
-
 fn main() {
     println!("Starting code generation for Golem Cloud OpenAPI client.");
     let out_dir = var_os("OUT_DIR").unwrap();
-    let manifest_dir = var_os("CARGO_MANIFEST_DIR").unwrap();
 
-    let rel_path = RelativePath::new("../openapi/golem-cloud-service.yaml");
-    let yaml_path = rel_path.to_logical_path(manifest_dir.clone());
+    let root_yaml_path = PathBuf::from("../openapi/golem-cloud-service.yaml");
+    let local_yaml_path = PathBuf::from("openapi/golem-cloud-service.yaml");
+
+    println!("cargo::rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed={}", root_yaml_path.display());
+    println!("cargo::rerun-if-changed={}", local_yaml_path.display());
+
+    println!("Starting code generation for Golem OpenAPI client.");
 
     println!("Output directory: {:?}", out_dir);
-    println!("Workspace OpenAPI file: {:?}", yaml_path);
+    println!("Workspace OpenAPI file: {:?}", root_yaml_path);
 
-    if yaml_path.exists() {
-        generate(yaml_path.clone(), out_dir);
-
+    if root_yaml_path.exists() {
         // Copying the file to the crate so it gets packaged
-        std::fs::create_dir_all(Path::new(&manifest_dir).join("openapi")).unwrap();
-        std::fs::copy(
-            yaml_path.clone(),
-            Path::new(&manifest_dir).join("openapi/golem-cloud-service.yaml"),
-        )
-        .unwrap();
+        std::fs::create_dir_all(local_yaml_path.parent().unwrap()).unwrap();
+        copy_if_different(root_yaml_path.clone(), local_yaml_path.clone()).unwrap();
+    };
 
-        println!("cargo::rerun-if-changed=build.rs");
-        println!("cargo::rerun-if-changed={}", yaml_path.display());
-    } else {
-        let crate_yaml_path = Path::new(&manifest_dir).join("openapi/golem-cloud-service.yaml");
-        generate(crate_yaml_path, out_dir);
-    }
+    println!("Generating code to {}", out_dir.to_string_lossy());
+    generate(local_yaml_path.clone(), out_dir)
 }
 
 fn generate(yaml_path: PathBuf, out_dir: OsString) {
@@ -92,6 +86,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PluginTypeSpecificDefinition",
                 "golem_client::model::PluginTypeSpecificDefinition",
             ),
+            (
+                "PluginInstallationUpdate",
+                "golem_client::model::PluginInstallationUpdate",
+            ),
+            (
+                "PluginTypeSpecificCreation",
+                "golem_client::model::PluginTypeSpecificCreation",
+            ),
             //("ProjectAction", "cloud_common::model::ProjectAction"),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("RibInputTypeInfo", "golem_client::model::RibInputTypeInfo"),
@@ -123,4 +125,21 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         ],
     )
     .expect("Failed to generate client code from OpenAPI spec.");
+}
+
+fn copy_if_different(
+    src: impl AsRef<Path> + Sized,
+    dst: impl AsRef<Path> + Sized,
+) -> std::io::Result<()> {
+    if dst.as_ref().exists() {
+        let a = std::fs::read(&src)?;
+        let b = std::fs::read(&dst)?;
+        if a != b {
+            std::fs::copy(src, dst)?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(src, dst)?;
+        Ok(())
+    }
 }
