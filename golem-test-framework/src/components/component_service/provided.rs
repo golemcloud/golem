@@ -18,17 +18,21 @@ use crate::components::component_service::{
 };
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::info;
+
+use super::ComponentServiceInternal;
 
 pub struct ProvidedComponentService {
     component_directory: PathBuf,
     host: String,
     http_port: u16,
     grpc_port: u16,
-    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
 impl ProvidedComponentService {
@@ -38,6 +42,7 @@ impl ProvidedComponentService {
         http_port: u16,
         grpc_port: u16,
         client_protocol: GolemClientProtocol,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     ) -> Self {
         info!("Using already running golem-component-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -45,20 +50,16 @@ impl ProvidedComponentService {
             host: host.clone(),
             http_port,
             grpc_port,
-            client_protocol,
             component_client: new_component_client(client_protocol, &host, grpc_port, http_port)
                 .await,
             plugin_client: new_plugin_client(client_protocol, &host, grpc_port, http_port).await,
+            plugin_wasm_files_service,
         }
     }
 }
 
 #[async_trait]
-impl ComponentService for ProvidedComponentService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        self.client_protocol
-    }
-
+impl ComponentServiceInternal for ProvidedComponentService {
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
@@ -67,6 +68,13 @@ impl ComponentService for ProvidedComponentService {
         self.plugin_client.clone()
     }
 
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
+}
+
+#[async_trait]
+impl ComponentService for ProvidedComponentService {
     fn component_directory(&self) -> &Path {
         &self.component_directory
     }

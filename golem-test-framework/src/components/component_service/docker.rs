@@ -21,6 +21,7 @@ use crate::components::docker::{get_docker_container_name, ContainerHandle};
 use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -30,15 +31,17 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
+use super::ComponentServiceInternal;
+
 pub struct DockerComponentService {
     component_directory: PathBuf,
     container: ContainerHandle<GolemComponentServiceImage>,
     private_host: String,
     public_http_port: u16,
     public_grpc_port: u16,
-    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
 impl DockerComponentService {
@@ -51,6 +54,7 @@ impl DockerComponentService {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
         client_protocol: GolemClientProtocol,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -88,7 +92,6 @@ impl DockerComponentService {
             private_host,
             public_http_port,
             public_grpc_port,
-            client_protocol,
             component_client: new_component_client(
                 client_protocol,
                 "localhost",
@@ -103,16 +106,13 @@ impl DockerComponentService {
                 public_http_port,
             )
             .await,
+            plugin_wasm_files_service,
         }
     }
 }
 
 #[async_trait]
-impl ComponentService for DockerComponentService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        self.client_protocol
-    }
-
+impl ComponentServiceInternal for DockerComponentService {
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
@@ -121,6 +121,13 @@ impl ComponentService for DockerComponentService {
         self.plugin_client.clone()
     }
 
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
+}
+
+#[async_trait]
+impl ComponentService for DockerComponentService {
     fn component_directory(&self) -> &Path {
         &self.component_directory
     }

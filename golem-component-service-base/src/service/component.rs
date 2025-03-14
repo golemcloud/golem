@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::PluginTransformationsConfig;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
@@ -44,7 +43,6 @@ use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
-use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -53,8 +51,6 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
-use http::StatusCode;
-use reqwest::multipart::{Form, Part};
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -71,6 +67,8 @@ use tracing::{debug, error, info, info_span};
 use tracing_futures::Instrument;
 use wac_graph::types::Package;
 use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
+
+use super::transformer_plugin_caller::{TransformationFailedReason, TransformerPluginCaller};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -295,29 +293,6 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
     }
 }
 
-#[derive(Debug)]
-pub enum TransformationFailedReason {
-    Failure(String),
-    Request(reqwest::Error),
-    HttpStatus(StatusCode),
-}
-
-impl Display for TransformationFailedReason {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TransformationFailedReason::Failure(message) => write!(f, "{message}"),
-            TransformationFailedReason::Request(error) => write!(f, "Request error: {error}"),
-            TransformationFailedReason::HttpStatus(status) => write!(f, "HTTP status: {status}"),
-        }
-    }
-}
-
-impl SafeDisplay for TransformationFailedReason {
-    fn to_safe_string(&self) -> String {
-        self.to_string()
-    }
-}
-
 pub fn create_new_versioned_component_id(component_id: &ComponentId) -> VersionedComponentId {
     VersionedComponentId {
         component_id: component_id.clone(),
@@ -480,7 +455,7 @@ pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    transformations_config: PluginTransformationsConfig,
+    transformer_plugin_caller: Arc<dyn TransformerPluginCaller<Owner>>,
 }
 
 impl<Owner: ComponentOwner, Scope: PluginScope> Debug for ComponentServiceDefault<Owner, Scope> {
@@ -497,7 +472,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         initial_component_files_service: Arc<InitialComponentFilesService>,
         plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        transformations_config: PluginTransformationsConfig,
+        transformer_plugin_caller: Arc<dyn TransformerPluginCaller<Owner>>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
@@ -506,7 +481,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             initial_component_files_service,
             plugin_service,
             plugin_wasm_files_service,
-            transformations_config,
+            transformer_plugin_caller,
         }
     }
 
@@ -947,94 +922,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
     ) -> Result<Vec<u8>, ComponentError> {
         info!(%url, "Applying component transformation plugin");
 
-        // NOTE: the client could be cached per target url to keep connection pools open for component
-        //       transformer plugins, however this is not done yet as component update is not that frequent
-        let client = reqwest::Client::new();
-        let serializable_component: golem_service_base::model::Component = component.clone().into();
-        let response = with_retries(
-            "component_transformer_plugin",
-            "transform",
-            None,
-            &self.transformations_config.retries,
-            &(client, serializable_component, url, data, parameters),
-            |(client, serializable_component, url, data, parameters)| {
-                Box::pin(async move {
-                    let mut form = Form::new();
-                    form = form.part("component", Part::bytes(data.to_vec()));
-                    form = form.part(
-                        "metadata",
-                        Part::text(serde_json::to_string(&serializable_component).map_err(
-                            |err| {
-                                ComponentError::conversion_error(
-                                    "component metadata",
-                                    err.to_string(),
-                                )
-                            },
-                        )?)
-                        .mime_str("application/json")
-                        .unwrap(),
-                    );
-                    for (key, value) in *parameters {
-                        if key == "component" {
-                            return Err(ComponentError::TransformationFailed(
-                                TransformationFailedReason::Failure(
-                                    "Parameter key 'component' is reserved".to_string(),
-                                ),
-                            ));
-                        }
-                        if key == "metadata" {
-                            return Err(ComponentError::TransformationFailed(
-                                TransformationFailedReason::Failure(
-                                    "Parameter key 'metadata' is reserved".to_string(),
-                                ),
-                            ));
-                        }
-                        form = form.part(key.clone(), Part::text(value.clone()));
-                    }
-
-                    let request = client.post(url).multipart(form);
-
-                    let response = request.send().await.map_err(|err| {
-                        ComponentError::TransformationFailed(TransformationFailedReason::Request(
-                            err,
-                        ))
-                    })?;
-
-                    if response.status().is_server_error() {
-                        return Err(ComponentError::TransformationFailed(
-                            TransformationFailedReason::HttpStatus(response.status()),
-                        ));
-                    }
-
-                    Ok(response)
-                })
-            },
-            |err| {
-                matches!(
-                    err,
-                    ComponentError::TransformationFailed(TransformationFailedReason::HttpStatus(_))
-                        | ComponentError::TransformationFailed(
-                            TransformationFailedReason::Request(_)
-                        )
-                )
-            },
-        )
-        .await?;
-
-        if response.status().is_success() {
-            let body = response.bytes().await.map_err(|err| {
-                ComponentError::TransformationFailed(TransformationFailedReason::Failure(format!(
-                    "Failed to read response from transformation plugin: {}",
-                    err
-                )))
-            })?;
-
-            Ok(body.to_vec())
-        } else {
-            Err(ComponentError::TransformationFailed(
-                TransformationFailedReason::HttpStatus(response.status()),
-            ))
-        }
+        self.transformer_plugin_caller
+            .call_remote_transformer_plugin(component, data, url, parameters)
+            .await
+            .map_err(ComponentError::TransformationFailed)
     }
 
     async fn apply_library_plugin(

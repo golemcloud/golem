@@ -143,7 +143,7 @@ impl PluginApi {
         plugin: dto::AppPluginDefinitionCreation<DefaultPluginScope>,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
-            "create_library_plugin",
+            "create_app_plugin",
             plugin_name = plugin.name,
             plugin_version = plugin.version
         );

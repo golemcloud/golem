@@ -1,4 +1,4 @@
-package it:app-and-library-plugin-library;
+package it:app-and-library-library;
 
 interface library-api {
   library-function: func() -> u64;
