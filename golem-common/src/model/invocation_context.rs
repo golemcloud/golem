@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::oplog::SpanData;
+use crate::model::public_oplog::PublicAttributeValue;
 use crate::model::Timestamp;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -28,7 +29,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
-use crate::model::public_oplog::PublicAttributeValue;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct TraceId(pub NonZeroU128);
@@ -289,8 +289,7 @@ impl IntoValue for AttributeValue {
 impl From<PublicAttributeValue> for AttributeValue {
     fn from(value: PublicAttributeValue) -> Self {
         match value {
-            PublicAttributeValue::String(value) =>
-                Self::String(value.value),
+            PublicAttributeValue::String(value) => Self::String(value.value),
         }
     }
 }
