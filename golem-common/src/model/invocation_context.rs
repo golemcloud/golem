@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::oplog::SpanData;
+use crate::model::public_oplog::PublicAttributeValue;
 use crate::model::Timestamp;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -282,6 +283,14 @@ impl IntoValue for AttributeValue {
 
     fn get_type() -> AnalysedType {
         analysed_type::variant(vec![analysed_type::case("string", analysed_type::str())])
+    }
+}
+
+impl From<PublicAttributeValue> for AttributeValue {
+    fn from(value: PublicAttributeValue) -> Self {
+        match value {
+            PublicAttributeValue::String(value) => Self::String(value.value),
+        }
     }
 }
 
