@@ -178,26 +178,32 @@ impl WorkerCommandHandler {
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        // TODO: should always generate idempotency key if not provided?
-        let idempotency_key = idempotency_key.map(|key| {
-            if key.0 == "-" {
-                let key = IdempotencyKey::new();
+        fn new_idempotency_key() -> IdempotencyKey {
+            let key = IdempotencyKey::new();
+            log_action(
+                "Using",
+                format!(
+                    "auto generated idempotency key: {}",
+                    key.0.log_color_highlight()
+                ),
+            );
+            key
+        }
+
+        let idempotency_key = match idempotency_key {
+            Some(idempotency_key) if idempotency_key.0 == "-" => new_idempotency_key(),
+            Some(idempotency_key) => {
                 log_action(
                     "Using",
                     format!(
-                        "auto generated idempotency key: {}",
-                        key.0.log_color_highlight()
+                        "requested idempotency key: {}",
+                        idempotency_key.0.log_color_highlight()
                     ),
                 );
-                key.0
-            } else {
-                log_action(
-                    "Using",
-                    format!("requested idempotency key: {}", key.0.log_color_highlight()),
-                );
-                key.0
+                idempotency_key
             }
-        });
+            None => new_idempotency_key(),
+        };
 
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
 
@@ -308,7 +314,7 @@ impl WorkerCommandHandler {
                                 .invoke_function(
                                     &component.versioned_component_id.component_id,
                                     worker_name.0.as_str(),
-                                    idempotency_key.as_deref(),
+                                    Some(&idempotency_key.0),
                                     function_name.as_str(),
                                     &InvokeParametersOss { params: arguments },
                                 )
@@ -322,7 +328,7 @@ impl WorkerCommandHandler {
                                     .invoke_and_await_function(
                                         &component.versioned_component_id.component_id,
                                         worker_name.0.as_str(),
-                                        idempotency_key.as_deref(),
+                                        Some(&idempotency_key.0),
                                         function_name.as_str(),
                                         &InvokeParametersOss { params: arguments },
                                     )
@@ -337,7 +343,7 @@ impl WorkerCommandHandler {
                                 .worker
                                 .invoke_function_without_name(
                                     &component.versioned_component_id.component_id,
-                                    idempotency_key.as_deref(),
+                                    Some(&idempotency_key.0),
                                     function_name.as_str(),
                                     &InvokeParametersOss { params: arguments },
                                 )
@@ -350,7 +356,7 @@ impl WorkerCommandHandler {
                                     .worker
                                     .invoke_and_await_function_without_name(
                                         &component.versioned_component_id.component_id,
-                                        idempotency_key.as_deref(),
+                                        Some(&idempotency_key.0),
                                         function_name.as_str(),
                                         &InvokeParametersOss { params: arguments },
                                     )

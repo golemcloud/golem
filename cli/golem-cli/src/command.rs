@@ -780,6 +780,7 @@ pub mod profile {
             /// Switch to the profile after creation
             #[arg(short, long)]
             set_active: bool,
+            // TODO: add args
         },
 
         /// List profiles

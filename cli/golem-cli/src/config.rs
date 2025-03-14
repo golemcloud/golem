@@ -15,6 +15,7 @@
 use crate::cloud::CloudAuthenticationConfig;
 use crate::model::{Format, HasFormatConfig};
 use anyhow::{anyhow, bail, Context};
+use golem_wasm_rpc_stubgen::log::LogColorize;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -318,10 +319,16 @@ impl Config {
         let name = selected_profile
             .unwrap_or_else(|| config.default_profile.unwrap_or_else(ProfileName::local));
 
-        Ok(NamedProfile {
-            name: name.clone(),
-            profile: config.profiles.remove(&name).unwrap(),
-        })
+        match config.profiles.remove(&name) {
+            Some(profile) => Ok(NamedProfile {
+                name: name.clone(),
+                profile,
+            }),
+            None => {
+                // TODO: add a hint error for this, and list profiles?
+                bail!("Profile {} not found!", name.0.log_color_highlight());
+            }
+        }
     }
 
     pub fn get_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<Option<Profile>> {
