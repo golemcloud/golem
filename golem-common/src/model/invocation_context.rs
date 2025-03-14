@@ -28,6 +28,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
+use crate::model::public_oplog::PublicAttributeValue;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct TraceId(pub NonZeroU128);
@@ -282,6 +283,15 @@ impl IntoValue for AttributeValue {
 
     fn get_type() -> AnalysedType {
         analysed_type::variant(vec![analysed_type::case("string", analysed_type::str())])
+    }
+}
+
+impl From<PublicAttributeValue> for AttributeValue {
+    fn from(value: PublicAttributeValue) -> Self {
+        match value {
+            PublicAttributeValue::String(value) =>
+                Self::String(value.value),
+        }
     }
 }
 
