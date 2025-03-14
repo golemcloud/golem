@@ -96,7 +96,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.0.with_owner(DefaultPluginOwner))
+            .create_plugin(&DefaultPluginOwner, plugin.0.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -123,7 +123,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.with_owner(DefaultPluginOwner))
+            .create_plugin(&DefaultPluginOwner, plugin.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -150,7 +150,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.with_owner(DefaultPluginOwner))
+            .create_plugin(&DefaultPluginOwner, plugin.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

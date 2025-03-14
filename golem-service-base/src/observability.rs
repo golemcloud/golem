@@ -51,7 +51,7 @@ pub async fn start_health_and_metrics_server(
     Ok(local_addr.port())
 }
 
-fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
+pub fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let mut buffer = Vec::new();
 

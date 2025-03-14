@@ -666,19 +666,21 @@ async fn test_component_oplog_process_plugin_creation(
     let plugin_priority = 0;
 
     plugin_service
-        .create_plugin(PluginDefinitionCreation {
-            name: plugin_name.to_string(),
-            version: plugin_version.to_string(),
-            description: "a plugin".to_string(),
-            icon: vec![],
-            homepage: "".to_string(),
-            specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
-                component_id: created_plugin_component.versioned_component_id.component_id,
-                component_version: created_plugin_component.versioned_component_id.version,
-            }),
-            scope: DefaultPluginScope::Global(Empty {}),
-            owner: DefaultPluginOwner,
-        })
+        .create_plugin(
+            &DefaultPluginOwner,
+            PluginDefinitionCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: "a plugin".to_string(),
+                icon: vec![],
+                homepage: "".to_string(),
+                specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
+                    component_id: created_plugin_component.versioned_component_id.component_id,
+                    component_version: created_plugin_component.versioned_component_id.version,
+                }),
+                scope: DefaultPluginScope::Global(Empty {}),
+            },
+        )
         .await
         .unwrap();
 
@@ -759,19 +761,21 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
     let plugin_version = "1";
 
     let result = plugin_service
-        .create_plugin(PluginDefinitionCreation {
-            name: plugin_name.to_string(),
-            version: plugin_version.to_string(),
-            description: "a plugin".to_string(),
-            icon: vec![],
-            homepage: "".to_string(),
-            specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
-                component_id: created_plugin_component.versioned_component_id.component_id,
-                component_version: created_plugin_component.versioned_component_id.version,
-            }),
-            scope: DefaultPluginScope::Global(Empty {}),
-            owner: DefaultPluginOwner,
-        })
+        .create_plugin(
+            &DefaultPluginOwner,
+            PluginDefinitionCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: "a plugin".to_string(),
+                icon: vec![],
+                homepage: "".to_string(),
+                specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
+                    component_id: created_plugin_component.versioned_component_id.component_id,
+                    component_version: created_plugin_component.versioned_component_id.version,
+                }),
+                scope: DefaultPluginScope::Global(Empty {}),
+            },
+        )
         .await;
 
     assert!(matches!(
