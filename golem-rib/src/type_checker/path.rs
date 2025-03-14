@@ -14,7 +14,6 @@
 
 use std::fmt;
 use std::fmt::Display;
-use clap::Parser;
 
 #[derive(Clone, Debug, Default)]
 pub struct Path(Vec<PathElem>);

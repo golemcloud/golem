@@ -116,14 +116,7 @@ mod internal {
                 } => {
                     if variable_id == &type_spec.variable_id {
                         if path.is_empty() {
-                            let continue_traverse ={
-                                match expr_queue.back() {
-                                    Some(Expr::SelectField { expr: expr0, .. }) => {
-                                        expr0.as_ref() == expr
-                                    },
-                                    _ => false
-                                }
-                            };
+                            let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, .. }) if expr0.as_ref() == expr);
 
                             if continue_traverse {
                                 temp_stack.push_front((expr.clone(), true));
@@ -155,16 +148,7 @@ mod internal {
                     inferred_type,
                     source_span,
                 } => {
-                    let continue_search = {
-                        let parent_expr = expr_queue.back();
-                        match parent_expr {
-                            // Is the next expression in a select field, and it's expression is same as the current one
-                            Some(Expr::SelectField { expr: expr0, field, .. }) => {
-                                expr0.as_ref() == outer
-                            },
-                            _ => false
-                        }
-                    };
+                    let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, ..}) if expr0.as_ref() == outer);
 
                     handle_select_field(
                         expr,
@@ -884,7 +868,7 @@ mod internal {
                 Some(PathElem::Field(name)) if name == field => {
                     found = true;
                     path.progress()
-                },
+                }
                 Some(PathElem::Field(_)) => {}
                 Some(PathElem::Index(_)) => {}
                 None => {}
@@ -906,7 +890,6 @@ mod internal {
                         .with_source_span(source_span.clone()),
                     continue_search,
                 ));
-
             } else {
                 // We reset the path if the path is wrong
                 if !found {
@@ -916,7 +899,7 @@ mod internal {
                     Expr::select_field(expr.clone(), field, type_name.clone())
                         .with_inferred_type(current_field_type.clone())
                         .with_source_span(source_span.clone()),
-                    found
+                    found,
                 ));
             }
         } else {
