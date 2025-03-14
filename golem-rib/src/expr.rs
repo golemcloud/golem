@@ -492,7 +492,7 @@ impl Expr {
         Expr::Plus {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: InferredType::number(),
+            inferred_type: InferredType::Unknown,
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -1096,6 +1096,7 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
         self.infer_function_call_types(function_type_registry)?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
+        self.infer_orphan_literals()?;
         self.check_types(function_type_registry)?;
         self.unify_types()?;
         Ok(())
@@ -1136,6 +1137,10 @@ impl Expr {
         *self = expr;
         self.infer_global_inputs();
         Ok(())
+    }
+
+    pub fn infer_orphan_literals(&mut self) -> Result<(), RibCompilationError> {
+        type_inference::infer_orphan_literals(self)
     }
 
     pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibCompilationError> {

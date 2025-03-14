@@ -130,7 +130,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
                                 worker.test1();
                                 {
                                    body: "ok",
-                                   status: 200u64,
+                                   status: 200,
                                    headers: { Content-Type: "application/json" }
                                 }
                             "#,

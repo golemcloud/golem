@@ -43,6 +43,7 @@ poem-openapi-derive = { workspace = true, optional = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+clap = { version = "4.5.26", features = ["derive"] }
 
 [dev-dependencies]
 test-r = { workspace = true }

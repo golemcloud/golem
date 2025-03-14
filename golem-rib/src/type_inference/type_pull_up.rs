@@ -31,18 +31,18 @@ use std::collections::VecDeque;
 // Example Walkthrough:
 //
 // 1. Pop the back element in the queue to get `identifier(a)`.
-//    - Check the `inferred_type_stack` by popping from the front.
+//    - Check the `inferred_expr_stack` by popping from the front.
 //    - If it's `None`, push `identifier(a)`'s inferred type to the stack:
 //      - `Record(b -> Record(c -> u64))`.
 //
 // 2. Pop the back element in the queue again to get `select_field(a, b)`.
-//    - Check the `inferred_type_stack`, which now has
+//    - Check the `inferred_expr_stack`, which now has
 //      `Record(b -> Record(c -> u64))` at the front.
 //    - Retrieve the type for `b` from `Record(b -> Record(c -> u64))`
 //      and push it to the front of the stack.
 //
 // 3. Pop the final element from the queue: `select_field(select_field(a, b), c)`.
-//    - Check the `inferred_type_stack`, which has `Record(c -> u64)` at the front.
+//    - Check the `inferred_expr_stack`, which has `Record(c -> u64)` at the front.
 //    - Retrieve the type for `c` from `Record(c -> u64)`
 //      and push it to the stack as `u64`.
 //
@@ -53,7 +53,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
-    let mut inferred_type_stack = VecDeque::new();
+    let mut inferred_expr_stack = VecDeque::new();
 
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
@@ -63,15 +63,15 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 source_span,
                 ..
             } => {
-                internal::handle_tuple(exprs, inferred_type, &mut inferred_type_stack, source_span);
+                internal::handle_tuple(exprs, inferred_type, &mut inferred_expr_stack, source_span);
             }
 
             expr @ Expr::Identifier { .. } => {
-                inferred_type_stack.push_front(expr.clone());
+                inferred_expr_stack.push_front(expr.clone());
             }
 
             expr @ Expr::Flags { .. } => {
-                inferred_type_stack.push_front(expr.clone());
+                inferred_expr_stack.push_front(expr.clone());
             }
 
             Expr::InvokeMethodLazy { lhs, method, .. } => {
@@ -94,7 +94,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     expr,
                     field,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 )?;
             }
@@ -110,7 +110,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     expr,
                     index,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 )?;
             }
@@ -124,7 +124,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 internal::handle_result_ok(
                     expr,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -138,7 +138,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 internal::handle_result_error(
                     expr,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -152,7 +152,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 internal::handle_option_some(
                     expr,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -163,7 +163,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 source_span,
                 ..
             } => {
-                inferred_type_stack.push_front(Expr::Option {
+                inferred_expr_stack.push_front(Expr::Option {
                     expr: None,
                     type_annotation: type_annotation.clone(),
                     inferred_type: inferred_type.clone(),
@@ -184,7 +184,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -201,7 +201,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     predicate,
                     match_arms,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -209,7 +209,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
             Expr::Concat {
                 exprs, source_span, ..
             } => {
-                internal::handle_concat(exprs, &mut inferred_type_stack, source_span);
+                internal::handle_concat(exprs, &mut inferred_expr_stack, source_span);
             }
 
             Expr::ExprBlock {
@@ -221,7 +221,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 internal::handle_multiple(
                     exprs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -231,7 +231,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 source_span,
                 ..
             } => {
-                internal::handle_not(expr, inferred_type, &mut inferred_type_stack, source_span);
+                internal::handle_not(expr, inferred_type, &mut inferred_expr_stack, source_span);
             }
 
             Expr::GreaterThan {
@@ -245,7 +245,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::GreaterThan {
                         lhs: a,
                         rhs: b,
@@ -268,7 +268,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::GreaterThanOrEqualTo {
                         lhs: a,
                         rhs: b,
@@ -291,7 +291,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::LessThanOrEqualTo {
                         lhs: a,
                         rhs: b,
@@ -301,7 +301,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     },
                 );
             }
-            Expr::Plus {
+            outer @ Expr::Plus {
                 lhs,
                 rhs,
                 inferred_type,
@@ -310,10 +310,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::Plus {
                         lhs: a,
                         rhs: b,
@@ -321,10 +322,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
-            Expr::Minus {
+            outer @ Expr::Minus {
                 lhs,
                 rhs,
                 inferred_type,
@@ -333,10 +334,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::Minus {
                         lhs: a,
                         rhs: b,
@@ -344,10 +346,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
-            Expr::Multiply {
+            outer @ Expr::Multiply {
                 lhs,
                 rhs,
                 inferred_type,
@@ -356,10 +358,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::Multiply {
                         lhs: a,
                         rhs: b,
@@ -367,10 +370,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
-            Expr::Divide {
+            outer @ Expr::Divide {
                 lhs,
                 rhs,
                 inferred_type,
@@ -379,10 +382,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 ..
             } => {
                 internal::handle_math_op(
+                    outer,
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::Divide {
                         lhs: a,
                         rhs: b,
@@ -390,7 +394,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     },
-                );
+                )?;
             }
 
             Expr::EqualTo {
@@ -405,7 +409,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::EqualTo {
                         lhs: a,
                         rhs: b,
@@ -428,7 +432,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::LessThan {
                         lhs: a,
                         rhs: b,
@@ -451,7 +455,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     expr,
                     type_annotation,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -465,7 +469,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 internal::handle_sequence(
                     exprs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     type_annotation,
                     source_span,
                 );
@@ -480,18 +484,18 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 internal::handle_record(
                     exprs,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
             Expr::Literal { .. } => {
-                inferred_type_stack.push_front(expr.clone());
+                inferred_expr_stack.push_front(expr.clone());
             }
             Expr::Number { .. } => {
-                inferred_type_stack.push_front(expr.clone());
+                inferred_expr_stack.push_front(expr.clone());
             }
             Expr::Boolean { .. } => {
-                inferred_type_stack.push_front(expr.clone());
+                inferred_expr_stack.push_front(expr.clone());
             }
             Expr::And {
                 lhs,
@@ -504,7 +508,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     &InferredType::Bool,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::And {
                         lhs: a,
                         rhs: b,
@@ -526,7 +530,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     lhs,
                     rhs,
                     &InferredType::Bool,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     |a, b, c| Expr::Or {
                         lhs: a,
                         rhs: b,
@@ -550,7 +554,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     generic_type_parameter.clone(),
                     args,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -561,7 +565,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 source_span,
                 ..
             } => {
-                internal::handle_unwrap(expr, inferred_type, &mut inferred_type_stack, source_span);
+                internal::handle_unwrap(expr, inferred_type, &mut inferred_expr_stack, source_span);
             }
 
             Expr::Length {
@@ -570,11 +574,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 source_span,
                 ..
             } => {
-                internal::handle_length(expr, inferred_type, &mut inferred_type_stack, source_span);
+                internal::handle_length(expr, inferred_type, &mut inferred_expr_stack, source_span);
             }
 
             Expr::Throw { .. } => {
-                inferred_type_stack.push_front(expr.clone());
+                inferred_expr_stack.push_front(expr.clone());
             }
 
             Expr::GetTag {
@@ -586,7 +590,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 internal::handle_get_tag(
                     expr,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -604,7 +608,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                     iterable_expr,
                     yield_expr,
                     inferred_type,
-                    &mut inferred_type_stack,
+                    &mut inferred_expr_stack,
                     source_span,
                 );
             }
@@ -625,19 +629,19 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 init_value_expr,
                 yield_expr,
                 inferred_type,
-                &mut inferred_type_stack,
+                &mut inferred_expr_stack,
                 source_span,
             ),
 
             Expr::Range {
                 range, source_span, ..
             } => {
-                internal::handle_range(range, source_span, &mut inferred_type_stack);
+                internal::handle_range(range, source_span, &mut inferred_expr_stack);
             }
         }
     }
 
-    inferred_type_stack.pop_front().ok_or(
+    inferred_expr_stack.pop_front().ok_or(
         CustomError {
             expr: expr.clone(),
             message: "could not infer type".to_string(),
@@ -660,6 +664,7 @@ mod internal {
         ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
         VariableId,
     };
+
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -680,20 +685,20 @@ mod internal {
         current_iterable_expr: &Expr,
         current_yield_expr: &Expr,
         current_comprehension_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let yield_expr_inferred = inferred_type_stack
+        let yield_expr_inferred = inferred_expr_stack
             .pop_front()
             .unwrap_or(current_yield_expr.clone());
-        let iterable_expr_inferred = inferred_type_stack
+        let iterable_expr_inferred = inferred_expr_stack
             .pop_front()
             .unwrap_or(current_iterable_expr.clone());
 
         let list_expr = InferredType::List(Box::new(yield_expr_inferred.inferred_type()));
         let comprehension_type = current_comprehension_type.merge(list_expr);
 
-        inferred_type_stack.push_front(
+        inferred_expr_stack.push_front(
             Expr::list_comprehension_typed(
                 variable_id.clone(),
                 iterable_expr_inferred,
@@ -711,22 +716,22 @@ mod internal {
         initial_value_expr: &Expr,
         yield_expr: &Expr,
         reduce_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let new_yield_expr = inferred_type_stack
+        let new_yield_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(yield_expr.clone());
-        let new_init_value_expr = inferred_type_stack
+        let new_init_value_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(initial_value_expr.clone());
-        let new_iterable_expr = inferred_type_stack
+        let new_iterable_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(iterable_expr.clone());
 
         let new_reduce_type = reduce_type.merge(new_init_value_expr.inferred_type());
 
-        inferred_type_stack.push_front(
+        inferred_expr_stack.push_front(
             Expr::typed_list_reduce(
                 reduce_variable.clone(),
                 iterated_variable.clone(),
@@ -742,13 +747,13 @@ mod internal {
     pub(crate) fn handle_tuple(
         tuple_elems: &[Expr],
         current_tuple_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_position: &SourceSpan,
     ) {
         let mut new_tuple_elems = vec![];
 
         for current_tuple_elem in tuple_elems.iter().rev() {
-            let pulled_up_type = inferred_type_stack.pop_front();
+            let pulled_up_type = inferred_expr_stack.pop_front();
             let new_tuple_elem = pulled_up_type.unwrap_or(current_tuple_elem.clone());
             new_tuple_elems.push(new_tuple_elem);
         }
@@ -762,17 +767,17 @@ mod internal {
         let new_tuple = Expr::tuple(new_tuple_elems)
             .with_inferred_type(merged_tuple_type)
             .with_source_span(source_position.clone());
-        inferred_type_stack.push_front(new_tuple);
+        inferred_expr_stack.push_front(new_tuple);
     }
 
     pub(crate) fn handle_select_field(
         original_selection_expr: &Expr,
         field: &str,
         current_field_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) -> Result<(), RibCompilationError> {
-        let expr = inferred_type_stack
+        let expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
         let select_from_expr_type = expr.inferred_type();
@@ -786,7 +791,7 @@ mod internal {
             .with_inferred_type(current_field_type.merge(selection_field_type))
             .with_source_span(source_span.clone());
 
-        inferred_type_stack.push_front(new_select_field);
+        inferred_expr_stack.push_front(new_select_field);
 
         Ok(())
     }
@@ -795,16 +800,16 @@ mod internal {
         original_selection_expr: &Expr,
         original_index_expr: &Expr,
         curren_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) -> Result<(), RibCompilationError> {
-        let new_index_expr = inferred_type_stack
+        let new_index_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_index_expr.clone());
 
         let inferred_type_of_index_expr = new_index_expr.inferred_type();
 
-        let new_selection_expr = inferred_type_stack
+        let new_selection_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
 
@@ -837,7 +842,7 @@ mod internal {
                 .with_source_span(source_span.clone()),
             };
 
-            inferred_type_stack.push_front(new_select_index);
+            inferred_expr_stack.push_front(new_select_index);
 
             Ok(())
         } else {
@@ -845,7 +850,7 @@ mod internal {
                 Expr::select_index(new_selection_expr.clone(), original_index_expr.clone())
                     .with_source_span(source_span.clone());
 
-            inferred_type_stack.push_front(new_select_index);
+            inferred_expr_stack.push_front(new_select_index);
 
             Ok(())
         }
@@ -854,10 +859,10 @@ mod internal {
     pub(crate) fn handle_result_ok(
         original_ok_expr: &Expr,
         current_ok_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let ok_expr = inferred_type_stack
+        let ok_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_ok_expr.clone());
         let inferred_type_of_ok_expr = ok_expr.inferred_type();
@@ -871,16 +876,16 @@ mod internal {
             inferred_type: current_ok_type.merge(result_type),
             source_span: source_span.clone(),
         };
-        inferred_type_stack.push_front(new_result);
+        inferred_expr_stack.push_front(new_result);
     }
 
     pub(crate) fn handle_result_error(
         original_error_expr: &Expr,
         current_error_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let expr = inferred_type_stack
+        let expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_error_expr.clone());
         let inferred_type_of_error_expr = expr.inferred_type();
@@ -894,16 +899,16 @@ mod internal {
             inferred_type: current_error_type.merge(result_type),
             source_span: source_span.clone(),
         };
-        inferred_type_stack.push_front(new_result);
+        inferred_expr_stack.push_front(new_result);
     }
 
     pub(crate) fn handle_option_some(
         original_some_expr: &Expr,
         current_some_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let expr = inferred_type_stack
+        let expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_some_expr.clone());
         let inferred_type_of_some_expr = expr.inferred_type();
@@ -911,7 +916,7 @@ mod internal {
         let new_option = Expr::option(Some(expr.clone()))
             .with_inferred_type(current_some_type.merge(option_type))
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_option);
+        inferred_expr_stack.push_front(new_option);
     }
 
     pub(crate) fn handle_if_else(
@@ -919,16 +924,16 @@ mod internal {
         original_then_expr: &Expr,
         original_else_expr: &Expr,
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let else_expr = inferred_type_stack
+        let else_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_else_expr.clone());
-        let then_expr = inferred_type_stack
+        let then_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_then_expr.clone());
-        let cond_expr = inferred_type_stack
+        let cond_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_predicate.clone());
         let inferred_type_of_then_expr = then_expr.inferred_type();
@@ -941,20 +946,20 @@ mod internal {
             .with_inferred_type(new_type)
             .with_source_span(source_span.clone());
 
-        inferred_type_stack.push_front(new_expr);
+        inferred_expr_stack.push_front(new_expr);
     }
 
     pub fn handle_pattern_match(
         predicate: &Expr,
         current_match_arms: &[MatchArm],
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
         let mut new_resolutions = vec![];
         let mut new_arm_patterns = vec![];
         for un_inferred_match_arm in current_match_arms.iter().rev() {
-            let arm_resolution = inferred_type_stack
+            let arm_resolution = inferred_expr_stack
                 .pop_front()
                 .unwrap_or(un_inferred_match_arm.arm_resolution_expr.deref().clone());
 
@@ -964,7 +969,7 @@ mod internal {
             let mut new_arm_pattern_exprs = vec![];
 
             for _ in &current_arm_pattern_exprs {
-                let arm_expr = inferred_type_stack.pop_front();
+                let arm_expr = inferred_expr_stack.pop_front();
                 new_arm_pattern_exprs.push(arm_expr)
             }
             new_arm_pattern_exprs.reverse();
@@ -1006,23 +1011,23 @@ mod internal {
             current_inferred_type.clone()
         };
 
-        let pred = inferred_type_stack.pop_front().unwrap_or(predicate.clone());
+        let pred = inferred_expr_stack.pop_front().unwrap_or(predicate.clone());
 
         let new_expr = Expr::pattern_match(pred.clone(), new_match_arms)
             .with_inferred_type(new_type)
             .with_source_span(source_span.clone());
 
-        inferred_type_stack.push_front(new_expr);
+        inferred_expr_stack.push_front(new_expr);
     }
 
     pub(crate) fn handle_concat(
         exprs: &Vec<Expr>,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
         let mut new_exprs = vec![];
         for expr in exprs {
-            let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+            let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
             new_exprs.push(expr);
         }
 
@@ -1031,18 +1036,18 @@ mod internal {
         let new_concat = Expr::concat(new_exprs)
             .with_inferred_type(InferredType::Str)
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_concat);
+        inferred_expr_stack.push_front(new_concat);
     }
 
     pub(crate) fn handle_multiple(
         current_expr_list: &Vec<Expr>,
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
         let mut new_exprs = vec![];
         for _ in current_expr_list {
-            let expr = inferred_type_stack.pop_front();
+            let expr = inferred_expr_stack.pop_front();
             if let Some(expr) = expr {
                 new_exprs.push(expr);
             } else {
@@ -1061,66 +1066,127 @@ mod internal {
         let new_multiple = Expr::expr_block(new_exprs)
             .with_inferred_type(current_inferred_type.merge(new_inferred_type))
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_multiple);
+
+        inferred_expr_stack.push_front(new_multiple);
     }
 
     pub(crate) fn handle_not(
         original_not_expr: &Expr,
         current_not_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let expr = inferred_type_stack
+        let expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_not_expr.clone());
         let new_not = Expr::not(expr)
             .with_inferred_type(current_not_type.clone())
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_not);
+        inferred_expr_stack.push_front(new_not);
     }
 
     pub(crate) fn handle_math_op<F>(
+        original_math_expr: &Expr,
         original_left_expr: &Expr,
         original_right_expr: &Expr,
         result_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         f: F,
-    ) where
+    ) -> Result<(), TypeMismatchError>
+    where
         F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr,
     {
-        let right_expr = inferred_type_stack
+        let right_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_right_expr.clone());
-        let left_expr = inferred_type_stack
+
+        let left_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_left_expr.clone());
 
         let right_expr_type = right_expr.inferred_type();
         let left_expr_type = left_expr.inferred_type();
-        let new_result_type = result_type.merge(right_expr_type).merge(left_expr_type);
 
-        let new_math_op = f(
-            Box::new(left_expr),
-            Box::new(right_expr),
-            new_result_type.clone(),
-        );
+        // This special check is optional in a pull up phase,
+        // and can be part of type check errors however, we have better control
+        // over error messages.
+        if result_type.un_resolved()
+            && !right_expr_type.un_resolved()
+            && !left_expr_type.un_resolved()
+        {
+            // We shouldn't be merging the types of individual expressions's type to the result type
+            // because the result type of a math of can stay independent.
+            let right_number_type = right_expr_type.as_number().map_err(|_| TypeMismatchError {
+                expr_with_wrong_type: right_expr.clone(),
+                parent_expr: Some(original_math_expr.clone()),
+                expected_type: ExpectedType::Kind(TypeKind::Number),
+                actual_type: ActualType::Inferred(right_expr_type),
+                field_path: Default::default(),
+                additional_error_detail: vec![
+                    "math expression consist of operands that are not valid numbers".to_string(),
+                ],
+            })?;
+            let left_number_type = left_expr_type.as_number().map_err(|_| TypeMismatchError {
+                expr_with_wrong_type: left_expr.clone(),
+                parent_expr: Some(original_math_expr.clone()),
+                expected_type: ExpectedType::Kind(TypeKind::Number),
+                actual_type: ActualType::Inferred(left_expr_type),
+                field_path: Default::default(),
+                additional_error_detail: vec![
+                    "math expression consist of operands that are not valid numbers".to_string(),
+                ],
+            })?;
 
-        inferred_type_stack.push_front(new_math_op);
+            // Being typesafe here (inspired from languages like Rust)
+            // where without a casting its impossible to perform math operations
+            // on different types.
+            if right_number_type == left_number_type {
+                let new_math_op = f(
+                    Box::new(left_expr),
+                    Box::new(right_expr),
+                    InferredType::from(right_number_type),
+                );
+
+                inferred_expr_stack.push_front(new_math_op);
+            } else {
+                return Err(TypeMismatchError {
+                    expr_with_wrong_type: original_math_expr.clone(),
+                    parent_expr: None,
+                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
+                    field_path: Default::default(),
+                    additional_error_detail: vec![
+                        "math expression consist of operands that are not valid numbers"
+                            .to_string(),
+                    ],
+                });
+            }
+        } else {
+            let new_math_op = f(
+                Box::new(left_expr),
+                Box::new(right_expr),
+                result_type.clone(),
+            );
+
+            inferred_expr_stack.push_front(new_math_op);
+        }
+
+        Ok(())
     }
 
     pub(crate) fn handle_comparison_op<F>(
         original_left_expr: &Expr,
         original_right_expr: &Expr,
         result_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         f: F,
     ) where
         F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr,
     {
-        let right_expr = inferred_type_stack
+        let right_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_right_expr.clone());
-        let left_expr = inferred_type_stack
+        let left_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_left_expr.clone());
         let new_binary = f(
@@ -1128,20 +1194,20 @@ mod internal {
             Box::new(right_expr),
             result_type.clone(),
         );
-        inferred_type_stack.push_front(new_binary);
+        inferred_expr_stack.push_front(new_binary);
     }
 
     pub(crate) fn handle_range(
         range: &Range,
         source_span: &SourceSpan,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
     ) {
         match range {
             Range::Range { from, to } => {
-                let right = inferred_type_stack
+                let right = inferred_expr_stack
                     .pop_front()
                     .unwrap_or(to.deref().clone());
-                let left = inferred_type_stack
+                let left = inferred_expr_stack
                     .pop_front()
                     .unwrap_or(from.deref().clone());
 
@@ -1153,13 +1219,13 @@ mod internal {
                     .with_inferred_type(new_inferred_type)
                     .with_source_span(source_span.clone());
 
-                inferred_type_stack.push_front(new_range);
+                inferred_expr_stack.push_front(new_range);
             }
             Range::RangeInclusive { from, to } => {
-                let right = inferred_type_stack
+                let right = inferred_expr_stack
                     .pop_front()
                     .unwrap_or(to.deref().clone());
-                let left = inferred_type_stack
+                let left = inferred_expr_stack
                     .pop_front()
                     .unwrap_or(from.deref().clone());
 
@@ -1172,10 +1238,10 @@ mod internal {
                     .with_inferred_type(new_inferred_type)
                     .with_source_span(source_span.clone());
 
-                inferred_type_stack.push_front(new_range);
+                inferred_expr_stack.push_front(new_range);
             }
             Range::RangeFrom { from } => {
-                let left = inferred_type_stack
+                let left = inferred_expr_stack
                     .pop_front()
                     .unwrap_or(from.deref().clone());
 
@@ -1188,7 +1254,7 @@ mod internal {
                     .with_inferred_type(new_inferred_type)
                     .with_source_span(source_span.clone());
 
-                inferred_type_stack.push_front(new_range);
+                inferred_expr_stack.push_front(new_range);
             }
         }
     }
@@ -1198,13 +1264,13 @@ mod internal {
         generic_type_parameter: Option<GenericTypeParameter>,
         arguments: &[Expr],
         inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
         let mut new_arg_exprs = vec![];
 
         for expr in arguments.iter().rev() {
-            let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+            let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
             new_arg_exprs.push(expr);
         }
 
@@ -1215,6 +1281,12 @@ mod internal {
                 function_name,
                 worker,
             } => {
+                let new_worker = worker.as_ref().map(|worker| {
+                    inferred_expr_stack
+                        .pop_front()
+                        .unwrap_or(worker.deref().clone())
+                });
+
                 let mut function_name = function_name.clone();
 
                 let resource_params = function_name.function.raw_resource_params_mut();
@@ -1222,7 +1294,7 @@ mod internal {
                 if let Some(resource_params) = resource_params {
                     let mut new_resource_params = vec![];
                     for expr in resource_params.iter().rev() {
-                        let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+                        let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
                         new_resource_params.push(expr);
                     }
 
@@ -1242,7 +1314,7 @@ mod internal {
                     let worker = instance_type.worker_name();
                     if let Some(worker) = worker {
                         worker_in_inferred_type = Some(
-                            inferred_type_stack
+                            inferred_expr_stack
                                 .pop_front()
                                 .unwrap_or(worker.deref().clone()),
                         )
@@ -1266,42 +1338,25 @@ mod internal {
                 };
 
                 // worker in the call type
-                let new_call = if let Some(worker) = worker {
-                    let worker = inferred_type_stack
-                        .pop_front()
-                        .unwrap_or(worker.deref().clone());
+                let new_call = Expr::call(
+                    CallType::Function {
+                        function_name,
+                        worker: new_worker.map(Box::new),
+                    },
+                    None,
+                    new_arg_exprs,
+                )
+                .with_inferred_type(new_inferred_type)
+                .with_source_span(source_span.clone());
 
-                    Expr::call(
-                        CallType::Function {
-                            function_name,
-                            worker: Some(Box::new(worker)),
-                        },
-                        None,
-                        new_arg_exprs,
-                    )
-                    .with_inferred_type(new_inferred_type)
-                    .with_source_span(source_span.clone())
-                } else {
-                    Expr::call(
-                        CallType::Function {
-                            function_name,
-                            worker: None,
-                        },
-                        None,
-                        new_arg_exprs,
-                    )
-                    .with_inferred_type(new_inferred_type)
-                    .with_source_span(source_span.clone())
-                };
-
-                inferred_type_stack.push_front(new_call);
+                inferred_expr_stack.push_front(new_call);
             }
 
             CallType::InstanceCreation(instance_creation) => {
                 let worker_name = instance_creation.worker_name();
 
                 if let Some(worker_name) = worker_name {
-                    let worker_name = inferred_type_stack.pop_front().unwrap_or(worker_name);
+                    let worker_name = inferred_expr_stack.pop_front().unwrap_or(worker_name);
 
                     let new_instance_creation = match instance_creation {
                         InstanceCreationType::Worker { .. } => InstanceCreationType::Worker {
@@ -1322,7 +1377,7 @@ mod internal {
                     )
                     .with_inferred_type(inferred_type.clone())
                     .with_source_span(source_span.clone());
-                    inferred_type_stack.push_front(new_call);
+                    inferred_expr_stack.push_front(new_call);
                 } else {
                     let new_call = Expr::call(
                         CallType::InstanceCreation(instance_creation.clone()),
@@ -1332,7 +1387,7 @@ mod internal {
                     .with_inferred_type(inferred_type.clone())
                     .with_source_span(source_span.clone());
 
-                    inferred_type_stack.push_front(new_call);
+                    inferred_expr_stack.push_front(new_call);
                 }
             }
 
@@ -1344,7 +1399,7 @@ mod internal {
                 )
                 .with_inferred_type(inferred_type.clone())
                 .with_source_span(source_span.clone());
-                inferred_type_stack.push_front(new_call);
+                inferred_expr_stack.push_front(new_call);
             }
 
             CallType::EnumConstructor(str) => {
@@ -1352,7 +1407,7 @@ mod internal {
                     Expr::call(CallType::EnumConstructor(str.clone()), None, new_arg_exprs)
                         .with_inferred_type(inferred_type.clone())
                         .with_source_span(source_span.clone());
-                inferred_type_stack.push_front(new_call);
+                inferred_expr_stack.push_front(new_call);
             }
         }
     }
@@ -1360,43 +1415,43 @@ mod internal {
     pub(crate) fn handle_length(
         original_length_expr: &Expr,
         current_length_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let expr = inferred_type_stack
+        let expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_length_expr.clone());
         let new_length = Expr::length(expr)
             .with_inferred_type(current_length_type.clone())
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_length);
+        inferred_expr_stack.push_front(new_length);
     }
 
     pub(crate) fn handle_unwrap(
         expr: &Expr,
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+        let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
         let new_unwrap = expr
             .unwrap()
             .with_inferred_type(current_inferred_type.merge(expr.inferred_type()))
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_unwrap);
+        inferred_expr_stack.push_front(new_unwrap);
     }
 
     pub(crate) fn handle_get_tag(
         expr: &Expr,
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+        let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
         let new_get_tag = Expr::get_tag(expr.clone())
             .with_inferred_type(current_inferred_type.merge(expr.inferred_type()))
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_get_tag);
+        inferred_expr_stack.push_front(new_get_tag);
     }
 
     pub(crate) fn handle_let(
@@ -1404,10 +1459,10 @@ mod internal {
         original_expr: &Expr,
         optional_type: &Option<TypeName>,
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
-        let expr = inferred_type_stack
+        let expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_expr.clone());
         let new_let = Expr::let_binding_with_variable_id(
@@ -1417,20 +1472,20 @@ mod internal {
         )
         .with_inferred_type(current_inferred_type.clone())
         .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_let);
+        inferred_expr_stack.push_front(new_let);
     }
 
     pub(crate) fn handle_sequence(
         current_expr_list: &[Expr],
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         type_annotation: &Option<TypeName>,
         source_span: &SourceSpan,
     ) {
         let mut new_exprs = vec![];
 
         for expr in current_expr_list.iter().rev() {
-            let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+            let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
             new_exprs.push(expr);
         }
 
@@ -1452,20 +1507,20 @@ mod internal {
             }
         };
 
-        inferred_type_stack.push_front(new_sequence);
+        inferred_expr_stack.push_front(new_sequence);
     }
 
     pub(crate) fn handle_record(
         current_expr_list: &[(String, Box<Expr>)],
         current_inferred_type: &InferredType,
-        inferred_type_stack: &mut VecDeque<Expr>,
+        inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
     ) {
         let mut ordered_types = vec![];
         let mut new_exprs = vec![];
 
         for (field, expr) in current_expr_list.iter().rev() {
-            let expr: Expr = inferred_type_stack
+            let expr: Expr = inferred_expr_stack
                 .pop_front()
                 .unwrap_or(expr.deref().clone());
             ordered_types.push((field.clone(), expr.inferred_type()));
@@ -1482,7 +1537,7 @@ mod internal {
         let new_record = Expr::record(new_exprs.to_vec())
             .with_inferred_type(merged_record_type)
             .with_source_span(source_span.clone());
-        inferred_type_stack.push_front(new_record);
+        inferred_expr_stack.push_front(new_record);
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
