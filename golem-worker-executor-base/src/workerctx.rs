@@ -172,7 +172,6 @@ pub trait WorkerCtx:
     /// in the cluster
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync>;
 
-    // TODO: where do this belong
     async fn generate_unique_local_worker_id(
         &mut self,
         remote_worker_id: TargetWorkerId,

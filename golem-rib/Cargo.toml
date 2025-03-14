@@ -10,22 +10,40 @@ description = "Parser for Golem's Rib language"
 [features]
 default = ["json_in_errors", "protobuf", "poem"]
 json_in_errors = ["protobuf", "golem-wasm-rpc/json"]
-protobuf = ["dep:golem-api-grpc", "golem-wasm-ast/protobuf", "golem-wasm-rpc/protobuf"]
-poem = ["dep:poem-openapi", "golem-wasm-ast/poem_openapi", "golem-wasm-ast/poem_openapi"]
+protobuf = [
+    "dep:golem-api-grpc",
+    "golem-wasm-ast/protobuf",
+    "golem-wasm-rpc/protobuf",
+]
+poem = [
+    "dep:poem-openapi",
+    "dep:poem-openapi-derive",
+    "golem-wasm-ast/poem_openapi",
+    "golem-wasm-rpc/poem_openapi",
+]
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0", optional = true } # TODO: remove this dependency
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = ["analysis", "bincode"] }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["bincode", "typeinfo", "text"] }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
+    "analysis",
+    "bincode",
+] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = [
+    "bincode",
+    "typeinfo",
+    "text",
+] }
 
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }
 combine = { workspace = true }
 poem-openapi = { workspace = true, optional = true }
+poem-openapi-derive = { workspace = true, optional = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+clap = { version = "4.5.26", features = ["derive"] }
 
 [dev-dependencies]
 test-r = { workspace = true }

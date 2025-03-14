@@ -24,6 +24,7 @@ use tracing::debug;
 const PLUGIN_WASM_FILES_LABEL: &str = "plugin_wasms";
 
 /// Service for storing plugin wasm files.
+#[derive(Debug)]
 pub struct PluginWasmFilesService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 }

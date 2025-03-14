@@ -213,6 +213,56 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 queue.push_back(yield_expr);
             }
 
+            Expr::Plus {
+                lhs,
+                rhs,
+                inferred_type,
+                ..
+            } => {
+                lhs.add_infer_type_mut(inferred_type.clone());
+                rhs.add_infer_type_mut(inferred_type.clone());
+                queue.push_back(lhs);
+                queue.push_back(rhs);
+            }
+
+            Expr::Divide {
+                lhs,
+                rhs,
+                inferred_type,
+                ..
+            } => {
+                lhs.add_infer_type_mut(inferred_type.clone());
+                rhs.add_infer_type_mut(inferred_type.clone());
+                queue.push_back(lhs);
+                queue.push_back(rhs);
+            }
+
+            Expr::Minus {
+                lhs,
+                rhs,
+                inferred_type,
+                ..
+            } => {
+                lhs.add_infer_type_mut(inferred_type.clone());
+                rhs.add_infer_type_mut(inferred_type.clone());
+                queue.push_back(lhs);
+                queue.push_back(rhs);
+            }
+
+            Expr::Multiply {
+                lhs,
+                rhs,
+                inferred_type,
+                ..
+            } => {
+                lhs.add_infer_type_mut(inferred_type.clone());
+                rhs.add_infer_type_mut(inferred_type.clone());
+                queue.push_back(lhs);
+                queue.push_back(rhs);
+            }
+
+            // Note that binary math operations cannot be pushed down. There is no way to properly
+            // determine what should be the individual expressions just by looking at the result type
             _ => outer_expr.visit_children_mut_bottom_up(&mut queue),
         }
     }

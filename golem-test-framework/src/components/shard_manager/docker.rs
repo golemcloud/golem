@@ -41,14 +41,6 @@ impl DockerShardManager {
         number_of_shards_override: Option<usize>,
         verbosity: Level,
     ) -> Self {
-        Self::new_base(number_of_shards_override, redis, verbosity).await
-    }
-
-    pub async fn new_base(
-        number_of_shards_override: Option<usize>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> Self {
         info!("Starting golem-shard-manager container");
 
         let env_vars = super::env_vars(

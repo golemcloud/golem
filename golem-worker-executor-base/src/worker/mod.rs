@@ -29,7 +29,7 @@ use crate::model::{
     ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType,
     WorkerConfig,
 };
-use crate::services::events::Event;
+use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
@@ -84,7 +84,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     owned_worker_id: OwnedWorkerId,
 
     oplog: Arc<dyn Oplog + Send + Sync>,
-    event_service: Arc<dyn WorkerEventService + Send + Sync>, // TODO: rename
+    worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
 
     deps: All<Ctx>,
 
@@ -271,7 +271,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(Worker {
             owned_worker_id,
             oplog,
-            event_service: Arc::new(WorkerEventServiceDefault::new(
+            worker_event_service: Arc::new(WorkerEventServiceDefault::new(
                 deps.config().limits.event_broadcast_capacity,
                 deps.config().limits.event_history_size,
             )),
@@ -396,7 +396,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
-        self.event_service.clone()
+        self.worker_event_service.clone()
     }
 
     pub fn is_loading(&self) -> bool {
@@ -510,15 +510,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
+    ) -> Result<ResultOrSubscription, GolemError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
-            LookupResult::Complete(output) => Ok(Some(output)),
+            LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
             LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-            LookupResult::Pending => Ok(None),
+            LookupResult::Pending => {
+                let subscription = self.events().subscribe();
+                Ok(ResultOrSubscription::Pending(subscription))
+            }
             LookupResult::New => {
                 // Invoke the function in the background
+                let subscription = self.events().subscribe();
+
                 self.enqueue(
                     idempotency_key,
                     full_function_name,
@@ -526,7 +531,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     invocation_context,
                 )
                 .await;
-                Ok(None)
+                Ok(ResultOrSubscription::Pending(subscription))
             }
         }
     }
@@ -550,12 +555,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?
         {
-            Some(Ok(output)) => Ok(output),
-            Some(Err(err)) => Err(err),
-            None => {
+            ResultOrSubscription::Finished(Ok(output)) => Ok(output),
+            ResultOrSubscription::Finished(Err(err)) => Err(err),
+            ResultOrSubscription::Pending(subscription) => {
                 debug!("Waiting for idempotency key to complete",);
 
-                let result = self.wait_for_invocation_result(&idempotency_key).await;
+                let result = self
+                    .wait_for_invocation_result(&idempotency_key, subscription)
+                    .await;
 
                 debug!("Idempotency key lookup result: {:?}", result);
                 match result {
@@ -594,7 +601,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.oplog.add_and_commit(entry).await;
         self.update_metadata()
             .await
-            .expect("update_metadata failed"); // TODO
+            .expect("update_metadata failed");
     }
 
     /// Enqueues a manual update.
@@ -626,7 +633,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         self.update_metadata()
             .await
-            .expect("update_metadata failed"); // TODO
+            .expect("update_metadata failed");
     }
 
     pub async fn pending_invocations(&self) -> Vec<TimestampedWorkerInvocation> {
@@ -710,7 +717,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .concat();
         let mut map = self.invocation_results.write().await;
         for key in keys_to_fail {
-            let stderr = self.event_service.get_last_invocation_errors();
+            let stderr = self.worker_event_service.get_last_invocation_errors();
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
@@ -865,7 +872,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.update_metadata()
             .await
-            .expect("update_metadata failed"); // TODO
+            .expect("update_metadata failed");
     }
 
     pub async fn list_directory(
@@ -1060,8 +1067,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn wait_for_invocation_result(
         &self,
         key: &IdempotencyKey,
+        mut subscription: EventsSubscription,
     ) -> Result<LookupResult, RecvError> {
-        let mut subscription = self.events().subscribe();
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
@@ -1425,18 +1432,21 @@ impl RunningWorker {
             "invocation-loop",
             worker_id = parent.owned_worker_id.worker_id.to_string(),
         );
-        let handle = tokio::task::spawn(async move {
-            RunningWorker::invocation_loop(
-                receiver,
-                active_clone,
-                owned_worker_id_clone,
-                parent,
-                waiting_for_command_clone,
-                oom_retry_count,
-            )
-            .instrument(span)
-            .await;
-        });
+        let handle = tokio::task::spawn(
+            async move {
+                RunningWorker::invocation_loop(
+                    receiver,
+                    active_clone,
+                    owned_worker_id_clone,
+                    parent,
+                    waiting_for_command_clone,
+                    oom_retry_count,
+                )
+                .instrument(span)
+                .await;
+            }
+            .in_current_span(),
+        );
 
         RunningWorker {
             handle: Some(handle),
@@ -1548,7 +1558,7 @@ impl RunningWorker {
             parent.key_value_service(),
             parent.blob_store_service(),
             parent.rdbms_service(),
-            parent.event_service.clone(),
+            parent.worker_event_service.clone(),
             parent.active_workers(),
             parent.oplog_service(),
             parent.oplog.clone(),
@@ -1774,4 +1784,9 @@ impl QueuedWorkerInvocation {
             _ => false,
         }
     }
+}
+
+pub enum ResultOrSubscription {
+    Finished(Result<TypeAnnotatedValue, GolemError>),
+    Pending(EventsSubscription),
 }

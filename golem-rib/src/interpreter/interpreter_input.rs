@@ -15,7 +15,7 @@
 use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 
-// Acts as the structure to hold the global input values
+// Acts as the structure to hold the global input values to the Rib script
 #[derive(Debug, Default, Clone)]
 pub struct RibInput {
     pub input: HashMap<String, ValueAndType>,

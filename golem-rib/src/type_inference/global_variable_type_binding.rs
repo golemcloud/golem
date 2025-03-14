@@ -130,6 +130,8 @@ mod internal {
                                     },
                                     false,
                                 ));
+
+                                path = type_spec.path.clone();
                             }
                         } else {
                             temp_stack.push_front((expr.clone(), true));
@@ -158,6 +160,7 @@ mod internal {
                         &type_spec.inferred_type,
                         type_annotation,
                         source_span,
+                        type_spec,
                     )?;
                 }
 
@@ -850,23 +853,34 @@ mod internal {
         override_type: &InferredType,
         type_name: &Option<TypeName>,
         source_span: &SourceSpan,
+        type_spec: &GlobalVariableTypeSpec,
     ) -> Result<(), RibCompilationError> {
         let (expr, part_of_path) = temp_stack
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
 
+        // found = true, keep searching
+        // otherwise make break the search
+        let mut found = false;
+
         if part_of_path {
             match path.current() {
-                Some(PathElem::Field(name)) if name == field => path.progress(),
+                Some(PathElem::Field(name)) if name == field => {
+                    found = true;
+                    path.progress()
+                }
                 Some(PathElem::Field(_)) => {}
                 Some(PathElem::Index(_)) => {}
                 None => {}
             }
 
+            // continue search here implies, we haven't yet reached the last selection field yet
             if path.is_empty() {
                 let new_type = if continue_search {
                     current_field_type.clone()
                 } else {
+                    // if there is nothing to continue, we reset the path
+                    *path = type_spec.path.clone();
                     current_field_type.merge(override_type.clone())
                 };
 
@@ -877,11 +891,15 @@ mod internal {
                     continue_search,
                 ));
             } else {
+                // We reset the path if the path is wrong
+                if !found {
+                    *path = type_spec.path.clone();
+                }
                 temp_stack.push_front((
                     Expr::select_field(expr.clone(), field, type_name.clone())
                         .with_inferred_type(current_field_type.clone())
                         .with_source_span(source_span.clone()),
-                    true,
+                    found,
                 ));
             }
         } else {
@@ -1162,14 +1180,10 @@ mod internal {
             .map(|x| x.0)
             .unwrap_or(original_left_expr.clone());
 
-        let right_expr_type = right_expr.inferred_type();
-        let left_expr_type = left_expr.inferred_type();
-        let new_result_type = result_type.merge(right_expr_type).merge(left_expr_type);
-
         let new_math_op = f(
             Box::new(left_expr),
             Box::new(right_expr),
-            new_result_type.clone(),
+            result_type.clone(),
         );
 
         temp_stack.push_front((new_math_op, false));
@@ -1341,6 +1355,13 @@ mod internal {
                 function_name,
                 worker,
             } => {
+                let new_worker = worker.as_ref().map(|worker| {
+                    temp_stack
+                        .pop_front()
+                        .map(|x| x.0)
+                        .unwrap_or(worker.deref().clone())
+                });
+
                 let mut function_name = function_name.clone();
 
                 let resource_params = function_name.function.raw_resource_params_mut();
@@ -1392,36 +1413,16 @@ mod internal {
                     None => inferred_type.clone(),
                 };
 
-                // worker in the call type
-                let new_call = if let Some(worker) = worker {
-                    let worker = temp_stack
-                        .pop_front()
-                        .map(|x| x.0)
-                        .unwrap_or(worker.deref().clone());
-
-                    Expr::Call {
-                        call_type: CallType::Function {
-                            function_name,
-                            worker: Some(Box::new(worker)),
-                        },
-                        generic_type_parameter: generic_type_parameter.clone(),
-                        args: new_arg_exprs,
-                        inferred_type: new_inferred_type,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    }
-                } else {
-                    Expr::Call {
-                        call_type: CallType::Function {
-                            function_name,
-                            worker: None,
-                        },
-                        generic_type_parameter: generic_type_parameter.clone(),
-                        args: new_arg_exprs,
-                        inferred_type: new_inferred_type,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    }
+                let new_call = Expr::Call {
+                    call_type: CallType::Function {
+                        function_name,
+                        worker: new_worker.map(Box::new),
+                    },
+                    generic_type_parameter: generic_type_parameter.clone(),
+                    args: new_arg_exprs,
+                    inferred_type: new_inferred_type,
+                    source_span: source_span.clone(),
+                    type_annotation: type_annotation.clone(),
                 };
 
                 temp_stack.push_front((new_call, false));

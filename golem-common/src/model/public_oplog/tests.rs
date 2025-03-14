@@ -312,6 +312,21 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
                     typ: record(vec![field("x", s16()), field("y", s16())]),
                 },
             ]),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["a".to_string(), "b".to_string()],
+            invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: rounded_ts(Timestamp::now_utc()),
+                parent_id: None,
+                linked_context: None,
+                attributes: HashMap::from_iter(vec![(
+                    "a".to_string(),
+                    PublicAttributeValue::String(StringAttributeValue {
+                        value: "b".to_string(),
+                    }),
+                )]),
+                inherited: true,
+            })]],
         }),
     });
     let serialized = entry.to_json_string();

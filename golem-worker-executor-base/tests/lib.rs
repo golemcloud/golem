@@ -308,9 +308,9 @@ pub struct Tracing;
 
 #[test_dep]
 pub fn tracing() -> Tracing {
-    init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
-        "worker-executor-tests",
-    ));
+    init_tracing_with_default_debug_env_filter(
+        &TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides(),
+    );
 
     Tracing
 }

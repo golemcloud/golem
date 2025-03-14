@@ -144,6 +144,9 @@ message ExportedFunctionInvocationParameters {
   string function_name = 2;
   repeated wasm.rpc.TypeAnnotatedValue input = 3;
   bool valid_input = 4;
+  string trace_id = 5;
+  repeated string trace_states = 6;
+  repeated InvocationSpan invocation_context = 7;
 }
 
 message WorkerInvocation {

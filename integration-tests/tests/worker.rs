@@ -21,6 +21,7 @@ use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use tracing::Instrument;
 
 use crate::Tracing;
 use axum::extract::Query;
@@ -1027,8 +1028,8 @@ async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         )
         .await;
 
-    println!("result: {:?}", create_results);
-    println!("result: {:?}", get_auctions_result);
+    info!("result: {:?}", create_results);
+    info!("result: {:?}", get_auctions_result);
 
     check!(create_results.iter().all(|r| r.is_ok()));
 }
@@ -1059,7 +1060,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let check_worker_ids = worker_ids
         .iter()
-        .choose_multiple(&mut rand::thread_rng(), workers_count / 10);
+        .choose_multiple(&mut rand::rng(), workers_count / 10);
 
     for worker_id in check_worker_ids {
         let _ = deps
@@ -1151,19 +1152,22 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
             "/poll",
-            get(move |query: Query<HashMap<String, String>>| async move {
-                let component_id = query.get("component_id");
-                let worker_name = query.get("worker_name");
-                if let (Some(component_id), Some(worker_name)) = (component_id, worker_name) {
-                    let component_id: ComponentId = component_id.as_str().try_into().unwrap();
-                    let worker_id = WorkerId {
-                        component_id,
-                        worker_name: worker_name.clone(),
-                    };
-                    let mut ids = polling_worker_ids_clone.lock().unwrap();
-                    ids.insert(worker_id.clone());
+            get(move |query: Query<HashMap<String, String>>| {
+                async move {
+                    let component_id = query.get("component_id");
+                    let worker_name = query.get("worker_name");
+                    if let (Some(component_id), Some(worker_name)) = (component_id, worker_name) {
+                        let component_id: ComponentId = component_id.as_str().try_into().unwrap();
+                        let worker_id = WorkerId {
+                            component_id,
+                            worker_name: worker_name.clone(),
+                        };
+                        let mut ids = polling_worker_ids_clone.lock().unwrap();
+                        ids.insert(worker_id.clone());
+                    }
+                    "initial"
                 }
-                "initial"
+                .in_current_span()
             }),
         );
 

@@ -25,22 +25,16 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
-async-fs = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound"] }
+async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-recursion = { workspace = true }
 async-scoped = { version = "0.9.0", features = [ "use-tokio" ] }
-async-stream = { version = "0.3", optional = true }
 async-trait = { workspace = true }
-aws-config = { workspace = true }
-aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
-bitflags = "2.6.0"
 bigdecimal = { workspace = true }
-bit-vec = { version = "0.6", features = ["serde"] }
+bit-vec = { version = "0.6.3", features = ["serde"] }
 bytes = { workspace = true }
-cap-fs-ext = "3.4.2"                                # keep in sync with wasmtime
 cap-std = { workspace = true }
 cap-time-ext = "3.4.2"                              # keep in sync with wasmtime
 chrono = { workspace = true }
@@ -48,12 +42,11 @@ dashmap = { workspace = true }
 drop-stream = { workspace = true }
 evicting_cache_map = "0.4.0"
 figment = { workspace = true }
-flume = "0.11.1"
 fred = { workspace = true }
-fs-set-times = "0.20.2"
+fs-set-times = "0.20.3"
 futures = { workspace = true }
 futures-util = { workspace = true }
-gethostname = "0.5.0"
+gethostname = "1.0.0"
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -61,12 +54,10 @@ http-body-util = { workspace = true }
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
-io-extras = "0.18.4"
-iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-log = "0.4.22"
-mac_address = { version = "1.1.7", features = ["serde"] }
+log = "0.4.26"
+mac_address = { version = "1.1.8", features = ["serde"] }
 md5 = "0.7.0"
 metrohash = "1.0.7"
 nonempty-collections = { workspace = true}
@@ -74,16 +65,13 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 ringbuf = "0.4.7"
-rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
-sysinfo = "0.33.0"
+sysinfo = "0.33.1"
 tempfile = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
@@ -96,7 +84,6 @@ uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
-windows-sys = "0.59.0"
 zstd = "0.13"
 
 [dev-dependencies]
@@ -104,17 +91,12 @@ golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
 
 assert2 = { workspace = true }
 axum = { workspace = true }
-console-subscriber = { workspace = true }
-goldenfile = "1.7.3"
-once_cell = { workspace = true }
+goldenfile = "1.8.0"
 proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
-tracing-subscriber = { workspace = true }
 system-interface = { workspace = true }
 
 [[test]]

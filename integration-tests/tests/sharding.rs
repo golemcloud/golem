@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 test_r::enable!();
 
 #[test_r::sequential]
@@ -7,11 +21,12 @@ mod tests {
     use async_trait::async_trait;
     use golem_wasm_rpc::IntoValueAndType;
     use rand::prelude::*;
+    use rand::rng;
     use std::env;
     use std::time::Duration;
     use tokio::sync::mpsc;
     use tokio::task::JoinSet;
-    use tracing::{error, info};
+    use tracing::{error, info, Instrument};
 
     use golem_api_grpc::proto::golem::worker;
     use golem_common::model::{IdempotencyKey, WorkerId};
@@ -25,7 +40,9 @@ mod tests {
 
     impl Tracing {
         pub fn init() -> Self {
-            init_tracing_with_default_debug_env_filter(&TracingConfig::test("sharding-tests"));
+            init_tracing_with_default_debug_env_filter(
+                &TracingConfig::test("sharding-tests").with_env_overrides(),
+            );
             Self
         }
     }
@@ -216,9 +233,12 @@ mod tests {
 
         let deps_clone = deps.clone();
         let (stop_tx, stop_rx) = mpsc::channel(128);
-        let chaos = tokio::spawn(async move {
-            unstable_environment(&deps_clone, stop_rx).await;
-        });
+        let chaos = tokio::spawn(
+            async move {
+                unstable_environment(&deps_clone, stop_rx).await;
+            }
+            .in_current_span(),
+        );
 
         info!("All workers started");
 
@@ -255,16 +275,22 @@ mod tests {
         let (env_event_tx, env_event_rx) = mpsc::channel(128);
 
         let deps_clone = deps.clone();
-        let chaos = tokio::spawn(async move {
-            coordinated_environment(&deps_clone, env_command_rx, env_event_tx).await;
-        });
+        let chaos = tokio::spawn(
+            async move {
+                coordinated_environment(&deps_clone, env_command_rx, env_event_tx).await;
+            }
+            .in_current_span(),
+        );
 
         let mut checked_command_sender = CheckedCommandSender::new(env_command_tx, env_event_rx);
 
         let deps_clone = deps.clone();
-        let invoker = tokio::task::spawn(async move {
-            worker_invocation(&deps_clone, worker_command_rx, worker_event_tx).await;
-        });
+        let invoker = tokio::task::spawn(
+            async move {
+                worker_invocation(&deps_clone, worker_command_rx, worker_event_tx).await;
+            }
+            .in_current_span(),
+        );
 
         for step in steps {
             let formatted_step = format!("{:?}", step);
@@ -346,7 +372,7 @@ mod tests {
     }
 
     fn randomize<T>(slice: &mut [T]) {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         slice.shuffle(&mut rng);
     }
 
@@ -405,6 +431,7 @@ mod tests {
                                 .await,
                         )
                     }
+                    .in_current_span()
                 });
             }
 
@@ -430,9 +457,12 @@ mod tests {
             let mut tasks = JoinSet::new();
             for idx in stopped {
                 let self_clone = self.clone();
-                tasks.spawn(async move {
-                    self_clone.worker_executor_cluster().start(idx).await;
-                });
+                tasks.spawn(
+                    async move {
+                        self_clone.worker_executor_cluster().start(idx).await;
+                    }
+                    .in_current_span(),
+                );
             }
             while let Some(result) = tasks.join_next().await {
                 result.unwrap()
@@ -451,7 +481,7 @@ mod tests {
             let mut stopped = self.worker_executor_cluster().stopped_indices().await;
             if !stopped.is_empty() {
                 {
-                    let mut rng = thread_rng();
+                    let mut rng = rng();
                     stopped.shuffle(&mut rng);
                 }
 
@@ -460,12 +490,15 @@ mod tests {
                 let mut tasks = JoinSet::new();
                 for idx in to_start {
                     let self_clone = self.clone();
-                    tasks.spawn({
-                        let idx = idx.to_owned();
-                        async move {
-                            self_clone.worker_executor_cluster().start(idx).await;
+                    tasks.spawn(
+                        {
+                            let idx = idx.to_owned();
+                            async move {
+                                self_clone.worker_executor_cluster().start(idx).await;
+                            }
                         }
-                    });
+                        .in_current_span(),
+                    );
                 }
                 while let Some(result) = tasks.join_next().await {
                     result.unwrap()
@@ -712,7 +745,7 @@ mod tests {
                 Command::RestartShardManager,
             ];
             {
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 commands.shuffle(&mut rng);
             }
             let command = &commands[0];
@@ -733,8 +766,8 @@ mod tests {
         }
 
         fn random_seconds() -> u64 {
-            let mut rng = thread_rng();
-            rng.gen_range(1..10)
+            let mut rng = rng();
+            rng.random_range(1..10)
         }
 
         while stop_rx.try_recv().is_err() {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -41,7 +41,7 @@ pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
 
         match config.max_jitter_factor {
             Some(max_jitter_factor) => {
-                let jitter_factor = thread_rng().gen_range(0.0f64..max_jitter_factor);
+                let jitter_factor = rng().random_range(0.0f64..max_jitter_factor);
                 base_delay.saturating_add((base_delay as f64 * jitter_factor) as u64)
             }
             None => base_delay,

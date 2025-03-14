@@ -218,6 +218,9 @@ pub struct ExportedFunctionParameters {
     pub idempotency_key: IdempotencyKey,
     pub full_function_name: String,
     pub function_input: Option<Vec<ValueAndType>>,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<Vec<PublicSpanData>>,
 }
 
 impl IntoValue for ExportedFunctionParameters {

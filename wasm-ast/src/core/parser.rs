@@ -1808,7 +1808,6 @@ impl TryFrom<OperatorsReader<'_>> for Expr {
                 Operator::I64MulWideU => {
                     return Err("Wide Arithmetic proposal is not supported".to_string());
                 }
-                _ => return Err(format!("Unexpected operator: {:?}", op)),
             };
 
             if let Some(instr) = instr {

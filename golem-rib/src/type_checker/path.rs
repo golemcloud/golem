@@ -96,7 +96,7 @@ impl Display for Path {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PathElem {
     Field(String),
     Index(usize),

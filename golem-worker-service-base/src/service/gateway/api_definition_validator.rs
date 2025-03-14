@@ -18,7 +18,7 @@ use golem_service_base::model::Component;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
-// TODO; This is more specific to specific protocol validations
+// TODO: This is more specific to specific protocol validations
 // There should be a separate validator for worker binding as it is a common to validation to all protocols
 pub trait ApiDefinitionValidatorService<ApiDefinition> {
     fn validate(

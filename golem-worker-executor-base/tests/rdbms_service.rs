@@ -35,6 +35,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
 use tokio::task::JoinSet;
+use tracing::{info, Instrument};
 use uuid::Uuid;
 
 #[test_dep]
@@ -1137,7 +1138,7 @@ async fn postgres_create_insert_select_array_test(
                 .into_iter()
                 .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
                 .collect(),
-            Some(TransactionEnd::Commit),
+            None,
         ),
     )
     .await;
@@ -2549,7 +2550,7 @@ fn check_test_results<T: RdbmsType + Clone>(
                         }
                     }
                     v => {
-                        println!("execute result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
+                        info!("execute result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
                         check!(false, "execute result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
@@ -2567,7 +2568,7 @@ fn check_test_results<T: RdbmsType + Clone>(
                         }
                     }
                     v => {
-                        println!("query result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
+                        info!("query result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
                         check!(false, "query result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
@@ -2585,7 +2586,7 @@ fn check_test_results<T: RdbmsType + Clone>(
                         }
                     }
                     v => {
-                        println!("query stream result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
+                        info!("query stream result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
                         check!(false, "query stream result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
@@ -2942,19 +2943,22 @@ async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
             let rdbms_clone = rdbms.clone();
             let db_address_clone = db_address.clone();
             let test_clone = test.clone();
-            let _ = fibers.spawn(async move {
-                let worker_id = new_worker_id();
+            let _ = fibers.spawn(
+                async move {
+                    let worker_id = new_worker_id();
 
-                let connection = rdbms_clone.create(&db_address_clone, &worker_id).await;
+                    let connection = rdbms_clone.create(&db_address_clone, &worker_id).await;
 
-                let pool_key = connection.unwrap();
+                    let pool_key = connection.unwrap();
 
-                let result =
-                    execute_rdbms_test(rdbms_clone.clone(), &pool_key, &worker_id, test_clone)
-                        .await;
+                    let result =
+                        execute_rdbms_test(rdbms_clone.clone(), &pool_key, &worker_id, test_clone)
+                            .await;
 
-                (worker_id, pool_key, result)
-            });
+                    (worker_id, pool_key, result)
+                }
+                .in_current_span(),
+            );
         }
     }
 

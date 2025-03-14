@@ -95,8 +95,8 @@ async fn auction_example_1(
 
     drop(executor);
 
-    println!("result: {:?}", create_auction_result);
-    println!("result: {:?}", get_auctions_result);
+    info!("result: {:?}", create_auction_result);
+    info!("result: {:?}", get_auctions_result);
     check!(create_auction_result.is_ok());
 
     let auction_id = &create_auction_result.unwrap()[0];
@@ -179,8 +179,8 @@ async fn auction_example_2(
 
     drop(executor);
 
-    println!("result: {:?}", create_auction_result);
-    println!("result: {:?}", get_auctions_result);
+    info!("result: {:?}", create_auction_result);
+    info!("result: {:?}", get_auctions_result);
     check!(create_auction_result.is_ok());
 
     let auction_id = &create_auction_result.unwrap()[0];

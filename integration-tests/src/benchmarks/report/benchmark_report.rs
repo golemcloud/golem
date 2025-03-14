@@ -19,7 +19,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         CliReportParams::GetReport(args) => {
             let final_report = BenchmarkReport::from(args.files)?;
-
             println!("{}", &final_report.to_markdown_table());
         }
     }

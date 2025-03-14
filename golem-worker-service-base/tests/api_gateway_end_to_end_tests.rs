@@ -85,6 +85,7 @@ async fn test_legacy_api_def_for_valid_input() {
     let api_request =
         get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
 
+    // In legacy API definitions, we have worker name outside API definitions
     let worker_name = r#"
       let id: u64 = request.path.user-id;
       "shopping-cart-${id}"
@@ -200,7 +201,7 @@ async fn test_legacy_api_def_for_invalid_input_with_type_mismatch_1() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_for_invalid_input_with_type_mismatch_1() {
+async fn test_api_def_for_invalid_input_with_type_mismatch_1() {
     let response_mapping = r#"
       let id: u64 = request.path.user-id;
       let worker = instance("shopping-cart-${id}");
@@ -263,7 +264,7 @@ async fn test_legacy_api_def_for_invalid_input_with_type_mismatch_2() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_for_invalid_input_with_type_mismatch_2() {
+async fn test_api_def_for_invalid_input_with_type_mismatch_2() {
     // RibInput (request.path.user-id) to form response is expected to be a u64
     let response_mapping = r#"
       let user: u64 = request.path.user-id;
@@ -297,13 +298,10 @@ async fn test_api_def_with_security_for_input_with_invalid_signatures() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
       response
     "#;
 
@@ -315,7 +313,6 @@ async fn test_api_def_with_security_for_input_with_invalid_signatures() {
 
     let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
-        worker_name,
         response_mapping,
         &auth_call_back_url,
         &invalid_identity_provider_resolver,
@@ -396,13 +393,10 @@ async fn test_api_def_with_security_for_input_when_session_expired() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
       response
     "#;
 
@@ -413,7 +407,6 @@ async fn test_api_def_with_security_for_input_when_session_expired() {
 
     let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
-        worker_name,
         response_mapping,
         &auth_call_back_url,
         &invalid_identity_provider,
@@ -499,13 +492,10 @@ async fn test_api_def_with_security_for_input_with_expired_token() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
       response
     "#;
 
@@ -517,7 +507,6 @@ async fn test_api_def_with_security_for_input_with_expired_token() {
 
     let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
-        worker_name,
         response_mapping,
         &auth_call_back_url,
         &invalid_identity_provider_resolver,
@@ -599,13 +588,10 @@ async fn test_api_def_with_security_for_valid_input() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
       let email: string = request.auth.email;
       { body: response, headers: {email: email} }
     "#;
@@ -617,7 +603,6 @@ async fn test_api_def_with_security_for_valid_input() {
 
     let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
-        worker_name,
         response_mapping,
         &auth_call_back_url,
         &identity_provider,
@@ -725,13 +710,10 @@ async fn test_api_def_with_security_for_valid_input_relative_callback() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
       let email: string = request.auth.email;
       { body: response, headers: {email: email} }
     "#;
@@ -745,7 +727,6 @@ async fn test_api_def_with_security_for_valid_input_relative_callback() {
 
     let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
-        worker_name,
         response_mapping,
         &absolute_auth_call_back_url,
         &identity_provider,
@@ -969,20 +950,17 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
     )
     .unwrap();
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker-name = "shopping-cart-${id}";
+      let worker = instance(worker-name);
+      let response = worker.get-cart-contents("a", "b");
       response
     "#;
 
     let api_specification: HttpApiDefinition =
         get_api_def_with_cors_preflight_for_get_endpoint_resource(
             "/foo/{user-id}",
-            worker_name,
             response_mapping,
             &cors,
         )
@@ -1044,22 +1022,15 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
     let api_request =
         get_gateway_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
 
-    let worker_name = r#"
-        let x: u64 = request.path.user-id;
-        "shopping-cart-${x}"
-    "#;
-
     let response_mapping = r#"
-        let response = golem:it/api.{get-cart-contents}(request.path.token-id, request.path.token-id);
+        let x: u64 = request.path.user-id;
+        let my-instance = instance("shopping-cart-${x}");
+        let response = my-instance.get-cart-contents(request.path.token-id, request.path.token-id);
         response
     "#;
 
-    let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
-        "/foo/{user-id}?{token-id}",
-        Some(worker_name),
-        response_mapping,
-    )
-    .await;
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", None, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1105,21 +1076,17 @@ async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input(
     );
 
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
-      response
-    "#;
-
-    let worker_name = r#"
       let n: u64 = 100;
       let age: u64 = request.body.age;
       let zero: u64 = 0; let one: u64 = 1;
       let res = if age > n then zero else one;
-      "shopping-cart-${res}"
+      let worker = instance("shopping-cart-${res}");
+      let response = worker.get-cart-contents("a", "b");
+      response
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1230,28 +1197,22 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
         "/foo/bar",
         None,
         &empty_headers,
-        serde_json::Value::Object(request_body),
+        Value::Object(request_body),
     );
 
-    let worker_name = r#"
-        let userid: string = request.path.user-id;
-        let max: u64 = 100;
-        let zero: u64 = 0;
-        let one: u64 = 1;
-        let res = if userid == "bar" then one else zero;
-        "shopping-cart-${res}"
-    "#;
-
     let response_mapping = r#"
-          let param1 = request.body.foo_key;
-          let param2 = request.body.bar_key[0];
-          let response = golem:it/api.{get-cart-contents}(param1, param2);
-          response
+         let userid: string = request.path.user-id;
+         let res = if userid == "bar" then 1:u64 else 0: u64;
+         let worker = instance("shopping-cart-${res}");
+         let param1 = request.body.foo_key;
+         let param2 = request.body.bar_key[0];
+         let response = worker.get-cart-contents(param1, param2);
+
+         response
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1306,23 +1267,17 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
         Value::Object(request_body.clone()),
     );
 
-    let worker_name = r#"
+    let response_mapping = r#"
         let userid: u64 = request.path.user-id;
         let max: u64 = 100;
-        let zero: u64 = 0;
-        let one: u64 = 1;
-        let res = if userid > max then zero else one;
-        "shopping-cart-${res}"
-    "#;
-
-    let response_mapping = r#"
-          let response = golem:it/api.{get-cart-contents}(request.body.foo_key, request.body.bar_key[0]);
-          response
+        let res = if userid > max then 0:u64 else 1:u64;
+        let worker = instance("shopping-cart-${res}");
+        let response = worker.get-cart-contents(request.body.foo_key, request.body.bar_key[0]);
+        response
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1360,16 +1315,14 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
         let api_request = get_gateway_request("/getcartcontent/1", None, header_map, Value::Null);
 
         let expression = r#"
-            let response = golem:it/api.{get-cart-contents}("foo", "bar");
+            let x: u64 = request.path.cart-id;
+            let my-instance = instance("shopping-cart-${x}");
+            let response = my-instance.get-cart-contents("foo", "bar");
             response
             "#;
 
-        let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
-            "/getcartcontent/{cart-id}",
-            Some("${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}"),
-            expression,
-        )
-        .await;
+        let api_specification: HttpApiDefinition =
+            get_api_def_with_worker_binding("/getcartcontent/{cart-id}", None, expression).await;
 
         let session_store = internal::get_session_store();
 
@@ -1540,7 +1493,6 @@ async fn get_api_def_with_worker_binding(
 // https://swagger.io/docs/specification/v3_0/authentication/openid-connect-discovery/
 async fn get_api_def_with_security(
     path_pattern: &str,
-    worker_name: &str,
     rib_expression: &str,
     auth_call_back_url: &RedirectUrl,
     test_identity_provider: &TestIdentityProvider,
@@ -1585,14 +1537,9 @@ async fn get_api_def_with_security(
               componentId:
                 componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
                 version: 0
-              workerName: '{}'
               response: '${{{}}}'
         "#,
-        security_scheme_identifier,
-        path_pattern,
-        security_scheme_identifier,
-        worker_name,
-        rib_expression
+        security_scheme_identifier, path_pattern, security_scheme_identifier, rib_expression
     );
 
     let user_facing_definition_request: api::HttpApiDefinitionRequest =
@@ -1696,7 +1643,6 @@ async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) ->
 
 async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
     path_pattern: &str,
-    worker_name: &str,
     rib_expression: &str,
     cors: &HttpCors,
 ) -> HttpApiDefinition {
@@ -1726,7 +1672,6 @@ async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
               componentId:
                 componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
                 version: 0
-              workerName: '{}'
               response: '${{{}}}'
 
         "#,
@@ -1738,7 +1683,6 @@ async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
         cors.get_allow_credentials().unwrap_or_default(),
         cors.get_max_age().unwrap_or_default(),
         path_pattern,
-        worker_name,
         rib_expression
     );
 

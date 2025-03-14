@@ -17,7 +17,6 @@ harness = false
 test = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "=0.0.0" }
@@ -25,23 +24,9 @@ golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-bytes = { workspace = true }
-cap-std = { workspace = true }
-console-subscriber = { workspace = true }
-futures = { workspace = true }
-figment = { workspace = true }
-humantime-serde = { workspace = true }
 prometheus = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true }
-tonic = { workspace = true }
-tonic-health = { workspace = true }
-tonic-reflection = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }

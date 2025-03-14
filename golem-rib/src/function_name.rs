@@ -1136,11 +1136,10 @@ mod protobuf {
 
 #[cfg(test)]
 mod function_name_tests {
+    use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
     use golem_wasm_ast::analysis::analysed_type::{field, record, u64};
     use golem_wasm_rpc::Value;
     use test_r::test;
-
-    use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 
     #[test]
     fn parse_function_name_global() {
@@ -1161,7 +1160,6 @@ mod function_name_tests {
     #[test]
     fn parse_function_name_in_exported_interface_no_package() {
         let parsed = ParsedFunctionName::parse("interface.{fn1}").expect("Parsing failed");
-        println!("{:?}", parsed);
         assert_eq!(
             parsed.site().interface_name(),
             Some("interface".to_string())

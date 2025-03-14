@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_component_service_base::model::plugin::{
+    PluginDefinitionCreation, PluginTypeSpecificCreation,
+};
 use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::all::repo::sqlite::SqliteDb;
 use crate::all::repo::{constraint_data, get_component_data};
 use crate::Tracing;
 use golem_common::model::component::DefaultComponentOwner;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginInstallation,
+    PluginInstallationCreation,
+};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId,
-    ComponentType,
+    ComponentType, Empty,
 };
 use golem_common::SafeDisplay;
+use golem_component_service_base::config::PluginTransformationsConfig;
 use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
@@ -31,13 +38,16 @@ use golem_component_service_base::repo::component::{
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
+    LazyComponentService,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
 };
 use golem_component_service_base::service::component_object_store;
 use golem_component_service_base::service::component_object_store::ComponentObjectStore;
-use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
+use golem_component_service_base::service::plugin::{
+    PluginError, PluginService, PluginServiceDefault,
+};
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -58,9 +68,7 @@ async fn db_pool() -> SqliteDb {
 }
 
 #[test_dep]
-fn sqlite_component_repo(
-    db: &SqliteDb,
-) -> Arc<dyn ComponentRepo<DefaultComponentOwner> + Send + Sync> {
+fn sqlite_component_repo(db: &SqliteDb) -> Arc<dyn ComponentRepo<DefaultComponentOwner>> {
     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
         db.pool.clone(),
     )))
@@ -69,19 +77,19 @@ fn sqlite_component_repo(
 #[test_dep]
 fn sqlite_plugin_repo(
     db: &SqliteDb,
-) -> Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
+) -> Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope>> {
     Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
 }
 
 #[test_dep]
 fn object_store(
     blob_storage: &Arc<dyn BlobStorage + Send + Sync>,
-) -> Arc<dyn ComponentObjectStore + Send + Sync> {
+) -> Arc<dyn ComponentObjectStore> {
     Arc::new(component_object_store::BlobStorageComponentObjectStore::new(blob_storage.clone()))
 }
 
 #[test_dep]
-fn component_compilation_service() -> Arc<dyn ComponentCompilationService + Send + Sync> {
+fn component_compilation_service() -> Arc<dyn ComponentCompilationService> {
     Arc::new(ComponentCompilationServiceDisabled)
 }
 
@@ -109,43 +117,53 @@ fn plugin_wasm_files_service(
 }
 
 #[test_dep]
+fn lazy_component_service(_tracing: &Tracing) -> Arc<LazyComponentService<DefaultComponentOwner>> {
+    Arc::new(LazyComponentService::new())
+}
+
+#[test_dep]
 fn plugin_service(
-    plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope>>,
     library_plugin_files_service: &Arc<PluginWasmFilesService>,
-) -> Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
+    component_service: &Arc<LazyComponentService<DefaultComponentOwner>>,
+) -> Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>> {
     Arc::new(PluginServiceDefault::new(
         plugin_repo.clone(),
         library_plugin_files_service.clone(),
+        component_service.clone(),
     ))
 }
 
 #[test_dep]
-fn component_service(
-    component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Send + Sync>,
-    object_store: &Arc<dyn ComponentObjectStore + Send + Sync>,
-    component_compilation_service: &Arc<dyn ComponentCompilationService + Send + Sync>,
+async fn component_service(
+    lazy_component_service: &Arc<LazyComponentService<DefaultComponentOwner>>,
+    component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner>>,
+    object_store: &Arc<dyn ComponentObjectStore>,
+    component_compilation_service: &Arc<dyn ComponentCompilationService>,
     initial_component_files_service: &Arc<InitialComponentFilesService>,
-    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
     plugin_wasm_files_service: &Arc<PluginWasmFilesService>,
     _tracing: &Tracing,
-) -> Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync> {
-    Arc::new(ComponentServiceDefault::new(
-        component_repo.clone(),
-        object_store.clone(),
-        component_compilation_service.clone(),
-        initial_component_files_service.clone(),
-        plugin_service.clone(),
-        plugin_wasm_files_service.clone(),
-    ))
+) -> Arc<dyn ComponentService<DefaultComponentOwner>> {
+    lazy_component_service
+        .set_implementation(ComponentServiceDefault::new(
+            component_repo.clone(),
+            object_store.clone(),
+            component_compilation_service.clone(),
+            initial_component_files_service.clone(),
+            plugin_service.clone(),
+            plugin_wasm_files_service.clone(),
+            PluginTransformationsConfig::default(),
+        ))
+        .await;
+    lazy_component_service.clone()
 }
 
 const COMPONENT_ARCHIVE: &str = "../test-components/cli-project-yaml/data.zip";
 
 #[test]
 #[tracing::instrument]
-async fn test_services(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
-) {
+async fn test_services(component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>) {
     let component_name1 = ComponentName("shopping-cart-services".to_string());
     let component_name2 = ComponentName("rust-echo-services".to_string());
 
@@ -421,7 +439,7 @@ async fn test_services(
 #[test]
 #[tracing::instrument]
 async fn test_initial_component_file_upload(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
 ) {
     let data = get_component_data("shopping-cart");
 
@@ -478,7 +496,7 @@ async fn test_initial_component_file_upload(
 #[test]
 #[tracing::instrument]
 async fn test_initial_component_file_data_sharing(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
 ) {
     let data = get_component_data("shopping-cart");
 
@@ -546,7 +564,7 @@ async fn test_initial_component_file_data_sharing(
 #[test]
 #[tracing::instrument]
 async fn test_component_constraint_incompatible_updates(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
 ) {
     let component_name = ComponentName("shopping-cart-constraint-incompatible-updates".to_string());
 
@@ -615,4 +633,149 @@ async fn test_component_constraint_incompatible_updates(
     .to_safe_string();
 
     assert_eq!(component_update_error, expected_error)
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_component_oplog_process_plugin_creation(
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+) {
+    let plugin_component_name =
+        ComponentName("oplog-processor-oplog-processor-plugin-creation".to_string());
+    let component_name = ComponentName("shopping-cart-oplog-processor-plugin-creation".to_string());
+
+    // Create a component that will be used as a plugin
+    let created_plugin_component = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &plugin_component_name,
+            ComponentType::Durable,
+            get_component_data("oplog-processor"),
+            None,
+            vec![],
+            HashMap::new(),
+            &DefaultComponentOwner,
+        )
+        .await
+        .unwrap();
+
+    // create an oplog processor plugin
+    let plugin_name = "oplog-processor-oplog-processor-plugin-creation";
+    let plugin_version = "1";
+    let plugin_priority = 0;
+
+    plugin_service
+        .create_plugin(PluginDefinitionCreation {
+            name: plugin_name.to_string(),
+            version: plugin_version.to_string(),
+            description: "a plugin".to_string(),
+            icon: vec![],
+            homepage: "".to_string(),
+            specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
+                component_id: created_plugin_component.versioned_component_id.component_id,
+                component_version: created_plugin_component.versioned_component_id.version,
+            }),
+            scope: DefaultPluginScope::Global(Empty {}),
+            owner: DefaultPluginOwner,
+        })
+        .await
+        .unwrap();
+
+    // Create a shopping cart
+    let created_component = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &component_name,
+            ComponentType::Durable,
+            get_component_data("shopping-cart"),
+            None,
+            vec![],
+            HashMap::new(),
+            &DefaultComponentOwner,
+        )
+        .await
+        .unwrap();
+
+    // install oplog processer plugin to the shopping cart
+    component_service
+        .create_plugin_installation_for_component(
+            &DefaultComponentOwner,
+            &created_component.versioned_component_id.component_id,
+            PluginInstallationCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                parameters: HashMap::new(),
+                priority: plugin_priority,
+            },
+        )
+        .await
+        .unwrap();
+
+    // get component and check we have an installation
+    let final_component = component_service
+        .get_latest_version(
+            &created_component.versioned_component_id.component_id,
+            &created_component.owner,
+        )
+        .await
+        .unwrap();
+    let installed_plugins = final_component.expect("no component").installed_plugins;
+    assert_eq!(installed_plugins.len(), 1);
+    assert!(matches!(&installed_plugins[0], PluginInstallation {
+        name,
+        version,
+        priority,
+        ..
+    } if name == plugin_name && version == plugin_version && *priority == plugin_priority))
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_component_oplog_process_plugin_creation_invalid_plugin(
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+) {
+    let plugin_component_name =
+        ComponentName("oplog-processor-oplog-processor-plugin-creation-invalid-plugin".to_string());
+
+    // Create a component that will be used as a plugin. The component _does not_ implement the required interfaces
+    let created_plugin_component = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &plugin_component_name,
+            ComponentType::Durable,
+            get_component_data("shopping-cart"),
+            None,
+            vec![],
+            HashMap::new(),
+            &DefaultComponentOwner,
+        )
+        .await
+        .unwrap();
+
+    // create an oplog processor plugin
+    let plugin_name = "oplog-processor-oplog-processor-plugin-creation-invalid-plugin";
+    let plugin_version = "1";
+
+    let result = plugin_service
+        .create_plugin(PluginDefinitionCreation {
+            name: plugin_name.to_string(),
+            version: plugin_version.to_string(),
+            description: "a plugin".to_string(),
+            icon: vec![],
+            homepage: "".to_string(),
+            specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
+                component_id: created_plugin_component.versioned_component_id.component_id,
+                component_version: created_plugin_component.versioned_component_id.version,
+            }),
+            scope: DefaultPluginScope::Global(Empty {}),
+            owner: DefaultPluginOwner,
+        })
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(PluginError::InvalidOplogProcessorPlugin)
+    ));
 }

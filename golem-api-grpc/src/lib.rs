@@ -218,23 +218,9 @@ pub mod proto {
 
     #[cfg(test)]
     mod tests {
-        use test_r::test;
-
         use crate::proto::golem;
         use prost::Message;
-        use std::str::FromStr;
-
-        #[test]
-        fn test_uuid() {
-            let template_id = uuid::Uuid::from_str("040eeaee-08fa-4273-83ea-bc26e10574c1").unwrap();
-            let token = uuid::Uuid::from_str("5816ed13-4d6e-40d0-8391-f0eb75378476").unwrap();
-
-            let template_id_proto: golem::common::Uuid = template_id.into();
-            let token_proto: golem::common::Uuid = token.into();
-
-            println!("template_id_proto: {:?}", template_id_proto);
-            println!("token_proto: {:?}", token_proto);
-        }
+        use test_r::test;
 
         #[test]
         fn target_worker_id_and_worker_id_are_bin_compatible() {

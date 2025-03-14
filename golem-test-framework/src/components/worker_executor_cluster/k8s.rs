@@ -25,7 +25,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{info, Level};
+use tracing::{info, Instrument, Level};
 
 pub struct K8sWorkerExecutorCluster {
     worker_executors: Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>,
@@ -81,19 +81,22 @@ impl K8sWorkerExecutorCluster {
         let mut worker_executors_joins = Vec::new();
 
         for idx in 0..size {
-            let worker_executor_join = tokio::spawn(Self::make_worker_executor(
-                idx,
-                namespace.clone(),
-                routing_type.clone(),
-                redis.clone(),
-                component_service.clone(),
-                shard_manager.clone(),
-                worker_service.clone(),
-                verbosity,
-                timeout,
-                service_annotations.clone(),
-                shared_client,
-            ));
+            let worker_executor_join = tokio::spawn(
+                Self::make_worker_executor(
+                    idx,
+                    namespace.clone(),
+                    routing_type.clone(),
+                    redis.clone(),
+                    component_service.clone(),
+                    shard_manager.clone(),
+                    worker_service.clone(),
+                    verbosity,
+                    timeout,
+                    service_annotations.clone(),
+                    shared_client,
+                )
+                .in_current_span(),
+            );
 
             worker_executors_joins.push(worker_executor_join);
         }

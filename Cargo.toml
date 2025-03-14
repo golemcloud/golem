@@ -34,7 +34,6 @@ exclude = [
     "test-components/environment-service",
     "test-components/failing-component",
     "test-components/file-service",
-    "test-components/file-server",
     "test-components/file-write-read-delete",
     "test-components/flags-service",
     "test-components/golem-rust-tests",
@@ -53,7 +52,6 @@ exclude = [
     "test-components/rust-echo",
     "test-components/rust-service",
     "test-components/scheduled-invocation",
-    "test-components/scheduled-invocation-linked",
     "test-components/shopping-cart",
     "test-components/shopping-cart-resource",
     "test-components/stdio-cc",
@@ -69,27 +67,27 @@ exclude = [
     "test-components/wasi-http-incoming-request-handler-state",
     "test-components/write-stderr",
     "test-components/write-stdout",
-    "test-components/rdbms-service",
-    "app/desktop/src-tauri"
+    "test-components/rdbms-service"
 ]
 
 [workspace.dependencies]
-anyhow = "1.0.94"
+anyhow = "1.0.97"
 assert2 = "0.3.15"
 async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-recursion = "1.1.1"
-async-trait = "0.1.83"
+async-trait = "0.1.87"
 async_zip = "0.0.17"
-aws-config = "1.5.10"
-aws-sdk-s3 = "1.65.0"
+aws-config = "=1.5.10" # Pinned because newer versions were failing with localstack
+aws-sdk-s3 = "=1.65.0" # Pinned because newer versions were failing with localstack
 axum = { version = "0.7.9", features = ["multipart"] }
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
-bincode = { version = "2.0.0-rc.3", features = ["serde"] }
-bytes = "1.9.0"
+bincode = { version = "=2.0.0-rc.3", features = ["serde"] }
+bincode_derive = { version = "=2.0.0-rc.3" }
+bytes = "1.10.1"
 cap-std = "3.4.2" # keep in sync with wasmtime
-chrono = { version = "0.4.39", features = ["serde"] }
-clap = { version = "4.5.23", features = [
+chrono = { version = "0.4.40", features = ["serde"] }
+clap = { version = "4.5.32", features = [
     "derive",
     "suggestions",
     "color",
@@ -100,7 +98,7 @@ combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
 dashmap = "6.1.0"
-derive_more = { version = "1.0.0", features = ["display", "into", "from_str"] }
+derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 drop-stream = "0.3.2"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 fred = { version = "=9.4.0", features = [
@@ -113,30 +111,30 @@ futures-core = "0.3.31"
 futures-util = "0.3.31"
 git-version = "0.3.9"
 hex = "0.4.3"
-http = "1.2.0" # keep in sync with wasmtime
-http-body = "1.0.1"                                 # keep in sync with wasmtime
-http-body-util = "0.1.0"                            # keep in sync with wasmtime
+http = "1.3.1"
+http-body = "1.0.1"
+http-body-util = "0.1.3"
 humansize = "2.1.3"
 humantime-serde = "1.1.1"
-hyper = { version = "1.5.1", features = ["full"] } # keep in sync with wasmtime
+hyper = { version = "1.6.0", features = ["full"] }
 include_dir = "0.7.4"
-iso8601-timestamp = "0.3.2"
-itertools = "0.13.0"
-k8s-openapi = { version = "0.23.0", features = ["earliest"] }
-kube = { version = "0.97.0", features = ["runtime", "derive"] }
-kube-derive = "0.97.0"
+iso8601-timestamp = "0.3.3"
+itertools = "0.14.0"
+k8s-openapi = { version = "0.24.0", features = ["earliest"] }
+kube = { version = "0.98.0", features = ["runtime", "derive"] }
+kube-derive = "0.98.0"
 lazy_static = "1.5.0"
-log = "0.4.22"
+log = "0.4.26"
 nom = "7.1.3"
 nonempty-collections = "0.3.0"
 num-traits = "0.2.19"
-once_cell = "1.20.2"
+once_cell = "1.21.0"
 openapiv3 = "2.0.0"
 openidconnect = "3.5.0"
-opentelemetry = "0.27.1"
-opentelemetry-prometheus = "0.27.0"
-opentelemetry_sdk = "0.27.1"
-poem-openapi = { version = "5.1.4", features = [
+opentelemetry = "0.28.0"
+opentelemetry-prometheus = "0.28.0"
+opentelemetry_sdk = "0.28.0"
+poem-openapi = { version = "=5.1.5", features = [ # pinned temporarily because 5.1.8 generats invalid OpenAPI yaml
     "swagger-ui",
     "chrono",
     "time",
@@ -145,23 +143,28 @@ poem-openapi = { version = "5.1.4", features = [
     "url",
     "websocket",
 ] }
-poem = { version = "3.1.5", features = ["prometheus", "opentelemetry", "test"] }
-postgres = "0.19.9"
+poem = { version = "=3.1.6", features = [
+    "prometheus",
+    "opentelemetry",
+    "test",
+] }
+poem-openapi-derive = "=5.1.4"
+postgres = "0.19.10"
 prometheus = { version = "0.13.4", features = ["process"] }
-proptest = "1.5.0"
-prost = "0.13.4"
-prost-types = "0.13.4"
-redis = { version = "0.27.6", features = ["default", "tokio-comp"] }
+proptest = "=1.5.0"
+prost = "0.13.5"
+prost-types = "0.13.5"
+redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
-reqwest = { version = "0.12.9", features = [
+reqwest = { version = "0.12.13", features = [
     "gzip",
     "json",
     "multipart",
     "stream",
 ] }
-rustls = { version = "0.23.19" }
-rand = "0.8.5"
-semver = "1.0.23"
+rustls = { version = "0.23.23" }
+rand = "0.9.0"
+semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = { version = "0.9.34" }
@@ -179,23 +182,23 @@ sqlx = { version = "0.8", features = [
     "bigdecimal",
     "mac_address",
     "bit-vec",
-    "ipnetwork"
+    "ipnetwork",
 ] }
-strum = "0.26.3"
-strum_macros = "0.26.4"
+strum = "0.27.1"
+strum_macros = "0.27.1"
 system-interface = "0.27.3"
 tap = "1.0.1"
-tempfile = "3.14.0"
-testcontainers = { version = "0.23.1" }
-testcontainers-modules = { version = "0.11.4", features = [
+tempfile = "3.18.0"
+testcontainers = { version = "0.23.3" }
+testcontainers-modules = { version = "0.11.6", features = [
     "postgres",
     "redis",
     "minio",
-    "mysql"
+    "mysql",
 ] }
 test-r = { version = "2.1.0", default-features = true }
-thiserror = "2.0.6"
-tokio = { version = "1.42", features = [
+thiserror = "2.0.12"
+tokio = { version = "1.44", features = [
     "macros",
     "rt-multi-thread",
     "sync",
@@ -204,12 +207,12 @@ tokio = { version = "1.42", features = [
     "tracing",
     "process",
 ] }
-tokio-postgres = "0.7.12"
-tokio-rustls = { version = "0.26.1" }
+tokio-postgres = "0.7.13"
+tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.25.0" }
 tokio-util = "0.7.13"
-toml = "0.8.19"
+toml = "0.8.20"
 tonic = { version = "0.12.3", features = ["gzip"] }
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
@@ -223,11 +226,11 @@ tracing-subscriber = { version = "0.3.19", features = [
 ] }
 tracing-test = "0.2.5"
 typed-path = "0.10.0"
-url = "2.5.4"
+url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
-uuid = { version = "1.11.0", features = ["serde", "v4", "v5"] }
+uuid = { version = "1.15.1", features = ["serde", "v4", "v5"] }
 wac-graph = "=0.6.1"
-wasm-wave = "0.222.0"
+wasm-wave = "0.227.1"
 wasmtime = { version = "=27.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=27.0.0" }
 wasmtime-wasi-http = { version = "=27.0.0" }

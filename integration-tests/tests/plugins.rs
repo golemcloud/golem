@@ -29,7 +29,7 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
-use tracing::{debug, info};
+use tracing::{debug, info, Instrument};
 use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
 
@@ -63,7 +63,8 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
         .unwrap();
-    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let server_handle =
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }.in_current_span());
 
     let _installation_id = deps
         .install_plugin_to_component(

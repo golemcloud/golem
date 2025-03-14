@@ -22,7 +22,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 
 use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
 use http::Uri;
 use rand::prelude::IteratorRandom;
@@ -136,7 +136,7 @@ impl serde::Serialize for Timestamp {
 impl<'de> serde::Deserialize<'de> for Timestamp {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de>,
+        D: Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
             iso8601_timestamp::Timestamp::deserialize(deserializer).map(Self)
@@ -186,13 +186,13 @@ impl From<u64> for Timestamp {
 }
 
 impl IntoValue for Timestamp {
-    fn into_value(self) -> golem_wasm_rpc::Value {
+    fn into_value(self) -> Value {
         let d = self
             .0
             .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
-        golem_wasm_rpc::Value::Record(vec![
-            golem_wasm_rpc::Value::U64(d.whole_seconds() as u64),
-            golem_wasm_rpc::Value::U32(d.subsec_nanoseconds() as u32),
+        Value::Record(vec![
+            Value::U64(d.whole_seconds() as u64),
+            Value::U32(d.subsec_nanoseconds() as u32),
         ])
     }
 
@@ -356,9 +356,7 @@ impl RoutingTable {
     }
 
     pub fn random(&self) -> Option<&Pod> {
-        self.shard_assignments
-            .values()
-            .choose(&mut rand::thread_rng())
+        self.shard_assignments.values().choose(&mut rand::rng())
     }
 
     pub fn first(&self) -> Option<&Pod> {
@@ -480,7 +478,7 @@ impl Serialize for IdempotencyKey {
 impl<'de> Deserialize<'de> for IdempotencyKey {
     fn deserialize<D>(deserializer: D) -> Result<IdempotencyKey, D::Error>
     where
-        D: serde::Deserializer<'de>,
+        D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
         Ok(IdempotencyKey { value })
@@ -488,12 +486,12 @@ impl<'de> Deserialize<'de> for IdempotencyKey {
 }
 
 impl IntoValue for IdempotencyKey {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::String(self.value)
+    fn into_value(self) -> Value {
+        Value::String(self.value)
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::str()
+        str()
     }
 }
 
@@ -533,8 +531,8 @@ impl WorkerMetadata {
 }
 
 impl IntoValue for WorkerMetadata {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(vec![
+    fn into_value(self) -> Value {
+        Value::Record(vec![
             self.worker_id.into_value(),
             self.args.into_value(),
             self.env.into_value(),
@@ -846,15 +844,15 @@ impl From<WorkerStatus> for i32 {
 }
 
 impl IntoValue for WorkerStatus {
-    fn into_value(self) -> golem_wasm_rpc::Value {
+    fn into_value(self) -> Value {
         match self {
-            WorkerStatus::Running => golem_wasm_rpc::Value::Enum(0),
-            WorkerStatus::Idle => golem_wasm_rpc::Value::Enum(1),
-            WorkerStatus::Suspended => golem_wasm_rpc::Value::Enum(2),
-            WorkerStatus::Interrupted => golem_wasm_rpc::Value::Enum(3),
-            WorkerStatus::Retrying => golem_wasm_rpc::Value::Enum(4),
-            WorkerStatus::Failed => golem_wasm_rpc::Value::Enum(5),
-            WorkerStatus::Exited => golem_wasm_rpc::Value::Enum(6),
+            WorkerStatus::Running => Value::Enum(0),
+            WorkerStatus::Idle => Value::Enum(1),
+            WorkerStatus::Suspended => Value::Enum(2),
+            WorkerStatus::Interrupted => Value::Enum(3),
+            WorkerStatus::Retrying => Value::Enum(4),
+            WorkerStatus::Failed => Value::Enum(5),
+            WorkerStatus::Exited => Value::Enum(6),
         }
     }
 
@@ -1060,8 +1058,8 @@ impl Display for AccountId {
 }
 
 impl IntoValue for AccountId {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(vec![golem_wasm_rpc::Value::String(self.value)])
+    fn into_value(self) -> Value {
+        Value::Record(vec![Value::String(self.value)])
     }
 
     fn get_type() -> AnalysedType {
@@ -1972,7 +1970,7 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
         D: Deserializer<'de>,
     {
         let str = String::deserialize(deserializer)?;
-        Self::from_abs_str(&str).map_err(serde::de::Error::custom)
+        Self::from_abs_str(&str).map_err(de::Error::custom)
     }
 }
 
@@ -2098,7 +2096,7 @@ impl<'de> Deserialize<'de> for GatewayBindingType {
         impl de::Visitor<'_> for GatewayBindingTypeVisitor {
             type Value = GatewayBindingType;
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
                 formatter.write_str("a string representing the binding type")
             }
 
@@ -2133,12 +2131,12 @@ impl TryFrom<String> for GatewayBindingType {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
     use std::collections::HashSet;
     use std::str::FromStr;
     use std::time::SystemTime;
     use std::vec;
+    use test_r::test;
+    use tracing::info;
 
     use crate::model::oplog::OplogIndex;
 
@@ -2149,7 +2147,7 @@ mod tests {
     };
     use bincode::{Decode, Encode};
 
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
     use serde::{Deserialize, Serialize};
 
     #[test]
@@ -2390,14 +2388,14 @@ mod tests {
 
     #[test]
     fn target_worker_id_force_shards() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         const SHARD_COUNT: usize = 1000;
         const EXAMPLE_COUNT: usize = 1000;
         for _ in 0..EXAMPLE_COUNT {
             let mut shard_ids = HashSet::new();
-            let count = rng.gen_range(0..100);
+            let count = rng.random_range(0..100);
             for _ in 0..count {
-                let shard_id = rng.gen_range(0..SHARD_COUNT);
+                let shard_id = rng.random_range(0..SHARD_COUNT);
                 shard_ids.insert(ShardId {
                     value: shard_id as i64,
                 });
@@ -2412,7 +2410,7 @@ mod tests {
             let start = SystemTime::now();
             let worker_id = target_worker_id.into_worker_id(&shard_ids, SHARD_COUNT);
             let end = SystemTime::now();
-            println!(
+            info!(
                 "Time with {count} valid shards: {:?}",
                 end.duration_since(start).unwrap()
             );

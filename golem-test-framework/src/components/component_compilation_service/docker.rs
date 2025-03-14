@@ -40,13 +40,6 @@ impl DockerComponentCompilationService {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
     ) -> Self {
-        Self::new_base(component_service, verbosity).await
-    }
-
-    pub async fn new_base(
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> Self {
         info!("Starting golem-component-compilation-service container");
 
         let env_vars = super::env_vars(
@@ -60,6 +53,7 @@ impl DockerComponentCompilationService {
         let container =
             GolemComponentCompilationServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
                 .with_network(NETWORK)
+                .with_container_name(Self::NAME)
                 .start()
                 .await
                 .expect("Failed to start golem-component-compilation-service container");

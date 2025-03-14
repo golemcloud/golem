@@ -239,7 +239,7 @@ impl TryFrom<FileRecord> for InitialComponentFile {
 }
 
 #[async_trait]
-pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
+pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
     async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError>;
 
     /// Creates a new component version (ignores component.version) and copies the plugin

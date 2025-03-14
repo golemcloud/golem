@@ -63,7 +63,7 @@ use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
-use tracing::{debug, info};
+use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
@@ -667,6 +667,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             })
             .await?;
 
+        debug!("Received worker metadata: {:?}", response);
+
         match response.result {
             None => Err(anyhow!("No response from connect_worker")),
             Some(get_worker_metadata_response::Result::Success(metadata)) => {
@@ -993,21 +995,24 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_service
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                })
-                .await
-                .expect("Failed to connect worker");
+        tokio::spawn(
+            async move {
+                let mut response = cloned_service
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                    })
+                    .await
+                    .expect("Failed to connect worker");
 
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                debug!("Received event: {:?}", event);
-                tx.send(event).expect("Failed to send event");
+                while let Some(event) = response.message().await.expect("Failed to get message") {
+                    debug!("Received event: {:?}", event);
+                    tx.send(event).expect("Failed to send event");
+                }
+
+                debug!("Finished receiving events");
             }
-
-            debug!("Finished receiving events");
-        });
+            .in_current_span(),
+        );
 
         rx
     }
@@ -1020,43 +1025,46 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
         let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let mut abort = false;
-            while !abort {
-                let mut response = cloned_service
-                    .connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                    })
-                    .await
-                    .expect("Failed to connect worker");
+        tokio::spawn(
+            async move {
+                let mut abort = false;
+                while !abort {
+                    let mut response = cloned_service
+                        .connect_worker(ConnectWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                        })
+                        .await
+                        .expect("Failed to connect worker");
 
-                loop {
-                    select! {
-                        msg = response.message() => {
-                            match msg {
-                                Ok(Some(event)) =>  {
-                                    debug!("Received event: {:?}", event);
-                                    tx.send(Some(event)).expect("Failed to send event");
-                                }
-                                Ok(None) => {
-                                    break;
-                                }
-                                Err(e) => {
-                                    panic!("Failed to get message: {:?}", e);
+                    loop {
+                        select! {
+                            msg = response.message() => {
+                                match msg {
+                                    Ok(Some(event)) =>  {
+                                        debug!("Received event: {:?}", event);
+                                        tx.send(Some(event)).expect("Failed to send event");
+                                    }
+                                    Ok(None) => {
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        panic!("Failed to get message: {:?}", e);
+                                    }
                                 }
                             }
-                        }
-                        _ = (&mut abort_rx) => {
-                            abort = true;
-                            break;
+                            _ = (&mut abort_rx) => {
+                                abort = true;
+                                break;
+                            }
                         }
                     }
                 }
-            }
 
-            tx.send(None).expect("Failed to send event");
-            debug!("Finished receiving events");
-        });
+                tx.send(None).expect("Failed to send event");
+                debug!("Finished receiving events");
+            }
+            .in_current_span(),
+        );
 
         (rx, abort_tx)
     }
@@ -1068,22 +1076,25 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_service
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                })
-                .await
-                .expect("Failed to connect to worker");
+        tokio::spawn(
+            async move {
+                let mut response = cloned_service
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                    })
+                    .await
+                    .expect("Failed to connect to worker");
 
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                debug!("Received event: {:?}", event);
-                tx.send(Some(event)).expect("Failed to send event");
+                while let Some(event) = response.message().await.expect("Failed to get message") {
+                    debug!("Received event: {:?}", event);
+                    tx.send(Some(event)).expect("Failed to send event");
+                }
+
+                debug!("Finished receiving events");
+                tx.send(None).expect("Failed to send termination event");
             }
-
-            debug!("Finished receiving events");
-            tx.send(None).expect("Failed to send termination event");
-        });
+            .in_current_span(),
+        );
 
         rx
     }
@@ -1091,18 +1102,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn log_output(&self, worker_id: &WorkerId) {
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_service
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                })
-                .await
-                .expect("Failed to connect worker");
+        tokio::spawn(
+            async move {
+                let mut response = cloned_service
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                    })
+                    .await
+                    .expect("Failed to connect worker");
 
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                info!("Received event: {:?}", event);
+                while let Some(event) = response.message().await.expect("Failed to get message") {
+                    info!("Received event: {:?}", event);
+                }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {

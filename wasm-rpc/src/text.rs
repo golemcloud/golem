@@ -1167,7 +1167,6 @@ mod type_annotated_value {
 
         fn round_trip(value: Value, typ: AnalysedType) {
             let typed_value = TypeAnnotatedValue::create(&value, &typ).unwrap();
-            println!("{:?}", typed_value.clone());
 
             let s = print_type_annotated_value(&typed_value).unwrap();
             let round_trip_value: TypeAnnotatedValue =

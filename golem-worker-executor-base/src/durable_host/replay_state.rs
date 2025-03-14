@@ -241,13 +241,36 @@ impl ReplayState {
         let mut start = self.last_replayed_index.get().next();
 
         const CHUNK_SIZE: u64 = 1024;
+
+        let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
+
         while start < replay_target {
             let entries = self
                 .oplog_service
                 .read(&self.owned_worker_id, start, CHUNK_SIZE)
                 .await;
             for (idx, entry) in &entries {
-                // TODO: handle skipped regions
+                if current_next_skip_region
+                    .as_ref()
+                    .map(|r| r.contains(*idx))
+                    .unwrap_or(false)
+                {
+                    // If we are in the current skip region, ignore the entry
+                    continue;
+                }
+                if current_next_skip_region
+                    .as_ref()
+                    .map(|r| &r.end == idx)
+                    .unwrap_or(false)
+                {
+                    // if we are at the end of the current skip region, find the next one
+                    current_next_skip_region = self
+                        .internal
+                        .read()
+                        .await
+                        .skipped_regions
+                        .find_next_deleted_region(idx.next());
+                }
                 if end_check(entry, begin_idx) {
                     return Some(*idx);
                 } else if !for_all_intermediate(entry, begin_idx) {
