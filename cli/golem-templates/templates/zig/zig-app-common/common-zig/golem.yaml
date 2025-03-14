@@ -1,0 +1,39 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+templates:
+  zig:
+    profiles:
+      debug:
+        build:
+          - command: zig build
+            mkdirs:
+              - src/bindings
+            sources:
+            - wit-generated
+            - src
+            targets:
+            - src/bindings
+            - zig-out
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: zig-out/bin/component.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
+      release:
+        build:
+          - command: zig build -Doptimize=ReleaseSafe
+            mkdirs:
+              - src/bindings
+            sources:
+              - wit-generated
+              - src
+            targets:
+              - src/bindings
+              - zig-out
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: zig-out/bin/component.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
+    defaultProfile: debug

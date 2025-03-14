@@ -1,0 +1,22 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+templates:
+  scalajs:
+    build:
+      - command: sbt wasmComponent
+        sources:
+          - src
+          - wit-generated
+    sourceWit: wit
+    generatedWit: wit-generated
+    componentWasm: target/dist/main.wasm
+    linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}.wasm
+    clean:
+    - target
+    - wit-generated
+    customCommands:
+      regenerate-stubs:
+      - command: sbt wasmComponentRegenerateSkeleton

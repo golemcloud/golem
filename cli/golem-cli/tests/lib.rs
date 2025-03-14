@@ -15,7 +15,7 @@
 use assert2::{assert, check};
 use colored::Colorize;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_examples::model::GuestLanguage;
+use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

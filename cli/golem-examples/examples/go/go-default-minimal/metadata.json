@@ -1,9 +1,0 @@
-{
-  "description": "A simple stateful Golem worker written in Go with no dependencies on external services",
-  "requiresAdapter": true,
-  "adapterTarget": "adapters",
-  "exclude": [
-    "component_name",
-    "main.wasm"
-  ]
-}

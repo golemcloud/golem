@@ -431,7 +431,7 @@ pub enum GolemCliSubcommand {
 pub mod shared_args {
     use crate::model::{ComponentName, WorkerName};
     use clap::Args;
-    use golem_examples::model::GuestLanguage;
+    use golem_templates::model::GuestLanguage;
     use golem_wasm_rpc_stubgen::model::app::AppBuildStep;
 
     pub type ComponentTemplateName = String;
@@ -512,7 +512,7 @@ pub mod shared_args {
 pub mod app {
     use crate::command::shared_args::{AppOptionalComponentNames, BuildArgs, ForceBuildArg};
     use clap::Subcommand;
-    use golem_examples::model::GuestLanguage;
+    use golem_templates::model::GuestLanguage;
 
     #[derive(Debug, Subcommand)]
     pub enum AppSubcommand {
@@ -555,7 +555,7 @@ pub mod component {
         ComponentTemplatePositionalArg, ForceBuildArg,
     };
     use clap::Subcommand;
-    use golem_examples::model::PackageName;
+    use golem_templates::model::PackageName;
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {

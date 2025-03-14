@@ -15,7 +15,7 @@
 use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
 
 use colored::Colorize;
-use golem_examples::model::GuestLanguage;
+use golem_templates::model::GuestLanguage;
 use indoc::indoc;
 use regex::Regex;
 use std::cmp::max;
@@ -29,7 +29,7 @@ use walkdir::DirEntry;
 
 pub mod cli {
     use clap::Parser;
-    use golem_examples::model::GuestLanguage;
+    use golem_templates::model::GuestLanguage;
 
     #[derive(Parser, Debug)]
     #[command()]
@@ -47,6 +47,8 @@ enum Language {
     Python,
     Rust,
     Zig,
+    ScalaJs,
+    MoonBit,
 }
 
 struct SelectedLanguage {
@@ -65,6 +67,8 @@ impl SelectedLanguage {
             GuestLanguage::Rust => Some(Language::Rust),
             GuestLanguage::TypeScript => Some(Language::JsTs),
             GuestLanguage::Zig => Some(Language::Zig),
+            GuestLanguage::ScalaJs => Some(Language::ScalaJs),
+            GuestLanguage::MoonBit => Some(Language::MoonBit),
         };
 
         language.map(|language| SelectedLanguage {
@@ -171,6 +175,15 @@ impl Language {
                 Tool::GolemSdkRust,
             ],
             Language::Zig => vec![Tool::Zig, Tool::WitBindgen, Tool::WasmTools],
+            Language::ScalaJs => vec![
+                Tool::Npm,
+                Tool::Jco,
+                Tool::ComponentizeJs,
+                // TODO: sbt
+            ],
+            Language::MoonBit => vec![
+                // TODO: moon
+            ],
         }
     }
 
@@ -179,14 +192,20 @@ impl Language {
             Language::CCcp => vec!["https://learn.golem.cloud/docs/ccpp-language-guide/setup"],
             Language::Go => vec!["https://learn.golem.cloud/docs/go-language-guide/setup"],
             Language::JsTs => vec![
-                "https://learn.golem.cloud/docs/experimental-languages/js-language-guide/setup",
-                "https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/setup",
+                "https://learn.golem.cloud/docs/js-language-guide/setup",
+                "https://learn.golem.cloud/docs/ts-language-guide/setup",
             ],
             Language::Python => vec!["https://learn.golem.cloud/docs/python-language-guide/setup"],
             Language::Rust => vec!["https://learn.golem.cloud/docs/rust-language-guide/setup"],
             Language::Zig => vec![
                 "https://learn.golem.cloud/docs/experimental-languages/zig-language-guide/setup",
             ],
+            Language::ScalaJs => vec![
+                "https://learn.golem.cloud/docs/experimental-languages/scalajs-language-guide/setup",
+            ],
+            Language::MoonBit => vec![
+                "https://learn.golem.cloud/docs/experimental-languages/moonbit-language-guide/setup",
+            ]
         }
     }
 
@@ -210,6 +229,8 @@ impl Display for Language {
             Language::Python => f.write_str("Python"),
             Language::Rust => f.write_str("Rust"),
             Language::Zig => f.write_str("Zig"),
+            Language::ScalaJs => f.write_str("Scala.js"),
+            Language::MoonBit => f.write_str("MoonBit"),
         }
     }
 }

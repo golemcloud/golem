@@ -1,0 +1,64 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+templates:
+  moonbit:
+    profiles:
+      release:
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../golem-temp/release/{{ componentName }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
+        build:
+          - command: wit-bindgen moonbit wit-generated --ignore-stub --derive-error --derive-show
+            sources:
+              - wit-generated
+            targets:
+              - ffi
+              - interface
+              - world
+          - command: moon build --target wasm
+          - command: wasm-tools component embed wit-generated target/wasm/release/build/gen/gen.wasm -o ../../golem-temp/release/{{ componentName }}.module.wasm --encoding utf16
+            mkdirs:
+              - ../../golem-temp/release
+          - command: wasm-tools component new ../../golem-temp/release/{{ componentName }}.module.wasm -o ../../golem-temp/release/{{ componentName }}.wasm
+        clean:
+          - target
+          - wit-generated
+        customCommands:
+          update-deps:
+            - command: wit-deps update
+              dir: ..
+          regenerate-stubs:
+            - command: wit-bindgen moonbit wit-generated
+      debug:
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../golem-temp/debug/{{ componentName }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
+        build:
+          - command: wit-bindgen moonbit wit-generated --ignore-stub --derive-error --derive-show
+            sources:
+              - wit-generated
+            targets:
+              - ffi
+              - interface
+              - world
+          - command: moon build --target wasm -g
+          - command: wasm-tools component embed wit-generated target/wasm/debug/build/gen/gen.wasm -o ../../golem-temp/debug/{{ componentName }}.module.wasm --encoding utf16
+            mkdirs:
+              - ../../golem-temp/debug
+          - command: wasm-tools component new ../../golem-temp/debug/{{ componentName }}.module.wasm -o ../../golem-temp/debug/{{ componentName }}.wasm
+        clean:
+          - target
+          - wit-generated
+        customCommands:
+          update-deps:
+            - command: wit-deps update
+              dir: ..
+          regenerate-stubs:
+            - command: wit-bindgen moonbit wit-generated
+    defaultProfile: release
+

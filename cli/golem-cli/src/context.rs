@@ -47,8 +47,8 @@ use golem_cloud_client::api::TokenClientLive as TokenClientCloud;
 use golem_cloud_client::api::WorkerClientLive as WorkerClientCloud;
 use golem_cloud_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_cloud_client::{Context as ContextCloud, Security};
-use golem_examples::model::{ComposableAppGroupName, GuestLanguage};
-use golem_examples::ComposableAppExample;
+use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
+use golem_templates::ComposableAppTemplate;
 use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode};
 use golem_wasm_rpc_stubgen::log::{set_log_output, LogOutput, Output};
 use golem_wasm_rpc_stubgen::model::app::AppBuildStep;
@@ -75,7 +75,7 @@ pub struct Context {
     // Lazy initialized
     clients: tokio::sync::OnceCell<Clients>,
     templates: std::sync::OnceLock<
-        BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppExample>>,
+        BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>>,
     >,
 
     // Directly mutable
@@ -242,9 +242,9 @@ impl Context {
 
     pub fn templates(
         &self,
-    ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppExample>> {
+    ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
-            .get_or_init(golem_examples::all_composable_app_examples)
+            .get_or_init(golem_templates::all_composable_app_templates)
     }
 }
 

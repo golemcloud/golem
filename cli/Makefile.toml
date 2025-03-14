@@ -136,7 +136,7 @@ dependencies = ["install-golem-cli"]
 description = "Run template integration tests"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --package golem-examples --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-templates --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 ## ** DESKTOP APP **
@@ -194,13 +194,13 @@ dependencies = [
     "publish-golem-cli",
 ]
 
-[tasks.publish-golem-examples]
-description = "Publishes golem-examples package to crates.io"
+[tasks.publish-golem-templates]
+description = "Publishes golem-templates package to crates.io"
 command = "cargo"
 args = [
     "publish",
     "-p",
-    "golem-examples",
+    "golem-templates",
     "--all-features",
     "--allow-dirty",
     "--no-verify",
@@ -208,7 +208,7 @@ args = [
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-wasm-ast package to crates.io"
-dependencies = ["publish-golem-examples"]
+dependencies = ["publish-golem-templates"]
 command = "cargo"
 args = [
     "publish",

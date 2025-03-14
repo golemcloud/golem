@@ -23,9 +23,9 @@ use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::ComponentName;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_examples::add_component_by_example;
-use golem_examples::model::{
-    ComposableAppGroupName, Example, ExampleName, GuestLanguage, PackageName,
+use golem_templates::add_component_by_template;
+use golem_templates::model::{
+    ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,
 };
 use golem_wasm_rpc_stubgen::commands::app::ComponentSelectMode;
 use golem_wasm_rpc_stubgen::fs;
@@ -155,7 +155,7 @@ impl AppCommandHandler {
             // TODO: cleanup add_component_by_example, so we don't have to pass a dummy arg
             let dummy_package_name = PackageName::from_string("app:comp").unwrap();
             for common_template in common_templates.into_iter().flatten() {
-                match add_component_by_example(
+                match add_component_by_template(
                     Some(common_template),
                     None,
                     &app_dir,
@@ -329,7 +329,7 @@ impl AppCommandHandler {
     pub fn get_template(
         &self,
         requested_template_name: &str,
-    ) -> anyhow::Result<(Option<&Example>, &Example)> {
+    ) -> anyhow::Result<(Option<&Template>, &Template)> {
         let segments = requested_template_name.split("/").collect::<Vec<_>>();
         let (language, template_name): (String, Option<String>) = match segments.len() {
             1 => (segments[0].to_string(), None),
@@ -357,8 +357,8 @@ impl AppCommandHandler {
             }
         };
         let template_name = template_name
-            .map(ExampleName::from)
-            .unwrap_or_else(|| ExampleName::from("default"));
+            .map(TemplateName::from)
+            .unwrap_or_else(|| TemplateName::from("default"));
 
         let Some(lang_templates) = self.ctx.templates().get(&language) else {
             log_error(format!("No templates found for language: {}", language).as_str());

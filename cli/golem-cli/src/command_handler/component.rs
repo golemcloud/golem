@@ -34,8 +34,8 @@ use golem_client::model::DynamicLinking as DynamicLinkingOss;
 use golem_cloud_client::api::ComponentClient as ComponentClientCloud;
 use golem_cloud_client::model::ComponentQuery;
 use golem_common::model::ComponentType;
-use golem_examples::add_component_by_example;
-use golem_examples::model::PackageName;
+use golem_templates::add_component_by_template;
+use golem_templates::model::PackageName;
 use golem_wasm_rpc_stubgen::commands::app::{
     ApplicationContext, ComponentSelectMode, DynamicHelpSections,
 };
@@ -150,7 +150,7 @@ impl ComponentCommandHandler {
         // Unloading app context, so we can reload after the new component is created
         self.ctx.unload_app_context().await;
 
-        match add_component_by_example(
+        match add_component_by_template(
             common_template,
             Some(component_template),
             &PathBuf::from("."),

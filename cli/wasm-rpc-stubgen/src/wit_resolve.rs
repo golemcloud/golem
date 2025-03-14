@@ -58,7 +58,7 @@ impl ResolvedWitDir {
 }
 
 fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
-    // TODO: Can be removed once we fixed all docs and examples
+    // TODO: Can be removed once we fixed all docs and templates
     std::env::set_var("WIT_REQUIRE_F32_F64", "0");
 
     let mut resolve = Resolve::new();
@@ -188,7 +188,7 @@ impl ResolvedWitApplication {
         app: &Application<CPE>,
         profile: Option<&BuildProfileName>,
     ) -> ValidatedResult<Self> {
-        // TODO: Can be removed once we fixed all docs and examples
+        // TODO: Can be removed once we fixed all docs and templates
         std::env::set_var("WIT_REQUIRE_F32_F64", "0");
 
         log_action("Resolving", "application wit directories");
@@ -691,7 +691,7 @@ pub struct WitDepsResolver {
 
 impl WitDepsResolver {
     pub fn new(sources: Vec<PathBuf>) -> anyhow::Result<Self> {
-        // TODO: Can be removed once we fixed all docs and examples
+        // TODO: Can be removed once we fixed all docs and templates
         std::env::set_var("WIT_REQUIRE_F32_F64", "0");
 
         let mut packages = HashMap::<PathBuf, HashMap<PackageName, UnresolvedPackageGroup>>::new();

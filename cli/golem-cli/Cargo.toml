@@ -28,7 +28,7 @@ harness = false
 
 [dependencies]
 # Workspace deps
-golem-examples = { path = "../golem-examples", version = "=0.0.0" }
+golem-templates = { path = "../golem-templates", version = "=0.0.0" }
 golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "=0.0.0" }
 
 # Golem deps

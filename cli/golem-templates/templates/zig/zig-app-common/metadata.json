@@ -1,0 +1,12 @@
+{
+  "description": "Composable App Common template for Zig",
+  "appCommonGroup": "default",
+  "appCommonSkipIfExists": "common-zig/golem.yaml",
+  "adapterTarget": "common-adapters",
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "witDepsPaths": [
+    "wit/deps"
+  ],
+  "transform": false
+}

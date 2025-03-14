@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "build": "jco componentize --bind-functions-to-interface --expect-top-level-resource-classes --wit wit-generated --out target/dist/main.wasm target/dist/main.js",
+    "componentize": "npm run build"
+  },
+  "devDependencies": {
+    "@golemcloud/componentize-js": "0.10.5-golem.4",
+    "@golemcloud/jco": "1.4.4-golem.2"
+  }
+}

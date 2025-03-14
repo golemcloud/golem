@@ -37,7 +37,7 @@ use clap::{Arg, Error, ValueEnum};
 use clap_verbosity_flag::Verbosity;
 use golem_client::model::{ApiDefinitionInfo, ApiSite, Provider};
 use golem_common::model::trim_date::TrimDateTime;
-use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
+use golem_templates::model::{GuestLanguage, GuestLanguageTier, Template, TemplateName};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -345,20 +345,20 @@ impl TypedValueParser for JsonValueParser {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
-pub struct ExampleDescription {
-    pub name: ExampleName,
+pub struct TemplateDescription {
+    pub name: TemplateName,
     pub language: GuestLanguage,
     pub tier: GuestLanguageTier,
     pub description: String,
 }
 
-impl ExampleDescription {
-    pub fn from_example(example: &Example) -> Self {
+impl TemplateDescription {
+    pub fn from_template(template: &Template) -> Self {
         Self {
-            name: example.name.clone(),
-            language: example.language,
-            description: example.description.clone(),
-            tier: example.language.tier(),
+            name: template.name.clone(),
+            language: template.language,
+            description: template.description.clone(),
+            tier: template.language.tier(),
         }
     }
 }

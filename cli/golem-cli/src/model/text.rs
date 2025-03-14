@@ -768,16 +768,16 @@ pub mod component {
     }
 }
 
-pub mod example {
+pub mod template {
     use crate::model::text::fmt::*;
-    use crate::model::ExampleDescription;
+    use crate::model::TemplateDescription;
     use cli_table::Table;
-    use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
+    use golem_templates::model::{GuestLanguage, GuestLanguageTier, TemplateName};
 
     #[derive(Table)]
-    pub struct ExampleDescriptionTableView {
+    pub struct TemplateDescriptionTableView {
         #[table(title = "Name")]
-        pub name: ExampleName,
+        pub name: TemplateName,
         #[table(title = "Language")]
         pub language: GuestLanguage,
         #[table(title = "Tier")]
@@ -786,8 +786,8 @@ pub mod example {
         pub description: String,
     }
 
-    impl From<&ExampleDescription> for ExampleDescriptionTableView {
-        fn from(value: &ExampleDescription) -> Self {
+    impl From<&TemplateDescription> for TemplateDescriptionTableView {
+        fn from(value: &TemplateDescription) -> Self {
             Self {
                 name: value.name.clone(),
                 language: value.language,
@@ -797,9 +797,9 @@ pub mod example {
         }
     }
 
-    impl TextView for Vec<ExampleDescription> {
+    impl TextView for Vec<TemplateDescription> {
         fn log(&self) {
-            log_table::<_, ExampleDescriptionTableView>(self);
+            log_table::<_, TemplateDescriptionTableView>(self);
         }
     }
 }

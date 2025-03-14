@@ -4,7 +4,7 @@ resolver = "2"
 members = [
     "golem",
     "golem-cli",
-    "golem-examples",
+    "golem-templates",
     "wasm-rpc-stubgen",
 ]
 

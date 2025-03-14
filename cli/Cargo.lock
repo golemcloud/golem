@@ -3528,8 +3528,8 @@ dependencies = [
  "golem-client",
  "golem-cloud-client",
  "golem-common 1.1.25",
- "golem-examples",
  "golem-rib 1.1.25",
+ "golem-templates",
  "golem-test-framework",
  "golem-wasm-ast 1.1.25",
  "golem-wasm-rpc 1.1.25",
@@ -3819,31 +3819,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-examples"
-version = "0.0.0"
-dependencies = [
- "Inflector",
- "assert2",
- "cargo_metadata",
- "clap",
- "colored",
- "dir-diff",
- "fancy-regex",
- "fs_extra",
- "golem-wit",
- "include_dir",
- "itertools 0.14.0",
- "nanoid",
- "regex",
- "serde",
- "serde_json",
- "strum 0.27.1",
- "strum_macros 0.27.1",
- "test-r",
- "toml_edit",
-]
-
-[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4049,6 +4024,32 @@ dependencies = [
  "tonic-health",
  "tonic-reflection",
  "tracing",
+]
+
+[[package]]
+name = "golem-templates"
+version = "0.0.0"
+dependencies = [
+ "Inflector",
+ "anyhow",
+ "assert2",
+ "cargo_metadata",
+ "clap",
+ "colored",
+ "dir-diff",
+ "fancy-regex",
+ "fs_extra",
+ "golem-wit",
+ "include_dir",
+ "itertools 0.14.0",
+ "nanoid",
+ "regex",
+ "serde",
+ "serde_json",
+ "strum 0.27.1",
+ "strum_macros 0.27.1",
+ "test-r",
+ "toml_edit",
 ]
 
 [[package]]
