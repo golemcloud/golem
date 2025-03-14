@@ -127,12 +127,12 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         ))
     }
 
-    async fn run_server(
+    async fn run_grpc_server(
         &self,
         service_dependencies: All<DebugContext<CloudGolemTypes>>,
         _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext<CloudGolemTypes>>>,
         join_set: &mut JoinSet<Result<(), Error>>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<u16> {
         run_debug_server(service_dependencies, join_set).await
     }
 
@@ -320,7 +320,7 @@ pub fn create_debug_wasmtime_linker<T: GolemTypes>(
 pub async fn run_debug_server<T: GolemTypes>(
     service_dependencies: All<DebugContext<T>>,
     join_set: &mut JoinSet<Result<(), Error>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u16> {
     let debug_service = Arc::new(DebugServiceDefault::new(service_dependencies.clone()));
 
     let handle_ws = |ws| websocket::handle_ws(ws, debug_service);
@@ -348,9 +348,9 @@ pub async fn run_debug_server<T: GolemTypes>(
         .in_current_span(),
     );
 
-    info!("Jrpc server started on {local_addr}");
+    info!("Debug server started on {local_addr}");
 
-    Ok(())
+    Ok(config.port)
 }
 
 pub async fn run(

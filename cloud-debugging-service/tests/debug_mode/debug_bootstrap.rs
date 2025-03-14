@@ -95,12 +95,12 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         )
     }
 
-    async fn run_server(
+    async fn run_grpc_server(
         &self,
         service_dependencies: All<DebugContext<DefaultGolemTypes>>,
         _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext<DefaultGolemTypes>>>,
         join_set: &mut JoinSet<Result<(), Error>>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<u16> {
         run_debug_server(service_dependencies, join_set).await
     }
 

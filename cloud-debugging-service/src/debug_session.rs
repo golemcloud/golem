@@ -7,7 +7,6 @@ use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use bincode::Encode;
 use cloud_common::auth::CloudNamespace;
-use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
@@ -479,11 +478,11 @@ fn get_oplog_entry_from_public_oplog_entry(
             span_id: start_span.span_id,
             parent_id: start_span.parent_id,
             linked_context_id: start_span.linked_context,
-            attributes: HashMap::new(), /*start_span
-                                        .attributes
-                                        .into_iter()
-                                        .map(|(k, v)| (k, v.into()))
-                                        .collect(),*/ // TODO: Add From<PublicAttributeValue> for AttributeValue in OSS
+            attributes: start_span
+                .attributes
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
         }),
         PublicOplogEntry::FinishSpan(finish_span) => Ok(OplogEntry::FinishSpan {
             timestamp: finish_span.timestamp,
@@ -494,7 +493,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 timestamp: set_span_attribute.timestamp,
                 span_id: set_span_attribute.span_id,
                 key: set_span_attribute.key,
-                value: AttributeValue::String("TODO".to_string()), // set_span_attribute.value.into() // TODO: Add From<PublicAttributeValue> for AttributeValue in OSS
+                value: set_span_attribute.value.into(),
             })
         }
     }
