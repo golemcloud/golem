@@ -178,7 +178,7 @@ pub fn instantiate_example(
 
 pub fn add_component_by_example(
     common_example: Option<&Example>,
-    component_example: &Example,
+    component_example: Option<&Example>,
     target_path: &Path,
     package_name: &PackageName,
 ) -> io::Result<()> {
@@ -210,11 +210,13 @@ pub fn add_component_by_example(
         }
     }
 
-    instantiate_example(
-        component_example,
-        &parameters,
-        TargetExistsResolveMode::MergeOrFail,
-    )?;
+    if let Some(component_example) = component_example {
+        instantiate_example(
+            component_example,
+            &parameters,
+            TargetExistsResolveMode::MergeOrFail,
+        )?;
+    }
 
     Ok(())
 }

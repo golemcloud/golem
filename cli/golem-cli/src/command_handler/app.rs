@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::app::AppSubcommand;
-use crate::command::shared_args::{BuildArgs, ComponentTemplatePositionalArgs};
+use crate::command::shared_args::BuildArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit};
@@ -27,12 +27,13 @@ use golem_examples::add_component_by_example;
 use golem_examples::model::{
     ComposableAppGroupName, Example, ExampleName, GuestLanguage, PackageName,
 };
-use golem_wasm_rpc_stubgen::commands::app::{ComponentSelectMode, DynamicHelpSections};
+use golem_wasm_rpc_stubgen::commands::app::ComponentSelectMode;
 use golem_wasm_rpc_stubgen::fs;
 use golem_wasm_rpc_stubgen::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use itertools::Itertools;
 use std::path::PathBuf;
 use std::sync::Arc;
+use strum::IntoEnumIterator;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -47,8 +48,8 @@ impl AppCommandHandler {
         match subcommand {
             AppSubcommand::New {
                 application_name,
-                template_name,
-            } => self.new_app(&application_name, template_name).await,
+                language,
+            } => self.new_app(&application_name, language).await,
             AppSubcommand::Build {
                 component_name,
                 build: build_args,
@@ -101,7 +102,7 @@ impl AppCommandHandler {
     async fn new_app(
         &mut self,
         application_name: &str,
-        template_name: ComponentTemplatePositionalArgs,
+        languages: Vec<GuestLanguage>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -124,9 +125,6 @@ impl AppCommandHandler {
             }
         }
 
-        // Unload app context, so we can reload it after the app is created
-        self.ctx.unload_app_context().await;
-
         let app_dir = PathBuf::from(&application_name);
         if app_dir.exists() {
             bail!(
@@ -144,44 +142,36 @@ impl AppCommandHandler {
             ),
         );
 
-        let templates = template_name
-            .component_template
+        let common_templates = languages
             .iter()
-            .map(|template_name| {
-                self.get_template(template_name).map(|(common, component)| {
-                    (
-                        PackageName::from_string(format!(
-                            "app:{}",
-                            template_name.to_string().to_lowercase()
-                        ))
-                        .unwrap(),
-                        common,
-                        component,
-                    )
-                })
+            .map(|language| {
+                self.get_template(&language.id())
+                    .map(|(common, _component)| common)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         {
             let _indent = LogIndent::new();
-            for (component_name, common_template, component_template) in templates {
+            // TODO: cleanup add_component_by_example, so we don't have to pass a dummy arg
+            let dummy_package_name = PackageName::from_string("app:comp").unwrap();
+            for common_template in common_templates.into_iter().flatten() {
                 match add_component_by_example(
-                    common_template,
-                    component_template,
+                    Some(common_template),
+                    None,
                     &app_dir,
-                    &component_name,
+                    &dummy_package_name,
                 ) {
                     Ok(()) => {
                         log_action(
                             "Added",
                             format!(
-                                "new app component: {}",
-                                component_name.to_string_with_colon().log_color_highlight()
+                                "common template for {}",
+                                common_template.language.name().log_color_highlight()
                             ),
                         );
                     }
                     Err(error) => {
-                        bail!("Failed to add new app component: {}", error)
+                        bail!("Failed to add common template for new app: {}", error)
                     }
                 }
             }
@@ -189,22 +179,18 @@ impl AppCommandHandler {
 
         log_action(
             "Created",
-            format!(
-                "application {}, loading application manifest..",
-                application_name.log_color_highlight()
-            ),
+            format!("application {}", application_name.log_color_highlight()),
         );
 
-        std::env::set_current_dir(&app_dir)?;
-        // TODO: check how this interacts with the app manifest dir flag
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-
         logln("");
-        app_ctx.log_dynamic_help(&DynamicHelpSections {
-            components: true,
-            custom_commands: true,
-        })?;
+        logln(
+            format!(
+                "To add components to the application, switch to the {} directory, and use the `{}` command.",
+                application_name.log_color_highlight(),
+                "component new".log_color_highlight(),
+            )
+        );
+        logln("");
 
         Ok(())
     }
@@ -394,6 +380,17 @@ impl AppCommandHandler {
         };
 
         Ok((lang_templates.common.as_ref(), component_template))
+    }
+
+    pub fn log_languages_help(&self) {
+        logln(format!("\n{}", "Available languages:".underline().bold(),));
+        for language in GuestLanguage::iter() {
+            logln(format!(
+                "- {}: {}",
+                language.name(),
+                language.id().log_color_highlight()
+            ));
+        }
     }
 
     pub fn log_templates_help(&self) {

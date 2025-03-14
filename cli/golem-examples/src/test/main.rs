@@ -138,25 +138,23 @@ pub fn main() -> io::Result<()> {
                 used_languages.insert(*language);
 
                 let default_examples = examples.get(&ComposableAppGroupName::default()).unwrap();
-                // TODO:
-                assert_eq!(default_examples.components.len(), 1);
-                let (_, default_component_example) =
-                    &default_examples.components.iter().next().unwrap();
-
-                for _ in 1..=2 {
-                    let component_name = format!("app:comp-{}", nanoid!(10, &alphabet));
-                    println!(
-                        "Adding component {} ({})",
-                        component_name.bright_blue(),
-                        language.name().blue()
-                    );
-                    let package_name = PackageName::from_string(component_name).unwrap();
-                    add_component_by_example(
-                        default_examples.common.as_ref(),
-                        default_component_example,
-                        &target_path,
-                        &package_name,
-                    )?
+                for (name, component_example) in &default_examples.components {
+                    for _ in 1..=2 {
+                        let component_name =
+                            format!("app:comp-{}-{}", name, nanoid!(10, &alphabet));
+                        println!(
+                            "Adding component {} ({})",
+                            component_name.bright_blue(),
+                            language.name().blue()
+                        );
+                        let package_name = PackageName::from_string(component_name).unwrap();
+                        add_component_by_example(
+                            default_examples.common.as_ref(),
+                            Some(component_example),
+                            &target_path,
+                            &package_name,
+                        )?
+                    }
                 }
             }
 

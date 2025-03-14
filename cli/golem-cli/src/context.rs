@@ -66,7 +66,7 @@ pub struct Context {
     // Readonly
     config_dir: PathBuf,
     format: Format,
-    profile_name: ProfileName, // TODO
+    profile_name: ProfileName,
     profile_kind: ProfileKind,
     profile: Profile,
     app_context_config: ApplicationContextConfig,

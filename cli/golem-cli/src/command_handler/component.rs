@@ -152,7 +152,7 @@ impl ComponentCommandHandler {
 
         match add_component_by_example(
             common_template,
-            component_template,
+            Some(component_template),
             &PathBuf::from("."),
             &component_package_name,
         ) {
@@ -798,7 +798,6 @@ impl ComponentCommandHandler {
     }
 }
 
-// TODO: cloud
 struct ComponentDeployProperties {
     component_type: ComponentType,
     linked_wasm_path: PathBuf,

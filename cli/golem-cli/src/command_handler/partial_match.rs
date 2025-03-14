@@ -39,8 +39,11 @@ impl ErrorHandler {
         partial_match: GolemCliCommandPartialMatch,
     ) -> anyhow::Result<()> {
         match partial_match {
-            GolemCliCommandPartialMatch::AppNewMissingTemplate
-            | GolemCliCommandPartialMatch::ComponentNewMissingTemplate => {
+            GolemCliCommandPartialMatch::AppNewMissingLanguage => {
+                self.ctx.app_handler().log_languages_help();
+                Ok(())
+            }
+            GolemCliCommandPartialMatch::ComponentNewMissingTemplate => {
                 self.ctx.app_handler().log_templates_help();
                 Ok(())
             }
@@ -58,8 +61,6 @@ impl ErrorHandler {
                         components: true,
                         custom_commands: true,
                     })?
-                } else {
-                    // TODO: maybe add hint that this command should use app manifest
                 }
 
                 Ok(())
@@ -78,8 +79,6 @@ impl ErrorHandler {
                         components: true,
                         custom_commands: false,
                     })?
-                } else {
-                    // TODO: maybe add hint that this command should use app manifest
                 }
 
                 Ok(())

@@ -30,7 +30,7 @@ use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::init_tracing;
 use crate::model::text::fmt::log_error;
-use golem_wasm_rpc_stubgen::log::logln;
+use golem_wasm_rpc_stubgen::log::{logln, set_log_output, Output};
 use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -69,7 +69,6 @@ pub struct CommandHandler<Hooks: CommandHandlerHooks> {
 
 impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
     fn new(global_flags: &GolemCliGlobalFlags, hooks: Arc<Hooks>) -> anyhow::Result<Self> {
-        // TODO: enum for builtin and generic profiles
         let profile_name = {
             if global_flags.local {
                 Some(ProfileName::local())
@@ -102,7 +101,6 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
 
                 match Self::new(&command.global_flags, hooks) {
                     Ok(mut handler) => {
-                        // TODO: handle hint errors
                         let result = handler
                             .handle_command(command)
                             .await
@@ -111,6 +109,7 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
                         match result {
                             Ok(result) => Ok(result),
                             Err(error) => {
+                                set_log_output(Output::Stderr);
                                 if let Some(hint_error) = error.downcast_ref::<HintError>() {
                                     handler
                                         .ctx
@@ -132,17 +131,21 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
                 partial_match,
             } => {
                 init_tracing(fallback_command.global_flags.verbosity);
+
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error, &fallback_command);
                 error.print().unwrap();
 
                 match Self::new(&fallback_command.global_flags, hooks) {
-                    Ok(handler) => handler
-                        .ctx
-                        .error_handler()
-                        .handle_partial_match(partial_match)
-                        .await
-                        .map(|_| clamp_exit_code(error.exit_code())),
+                    Ok(handler) => {
+                        set_log_output(Output::Stderr);
+                        handler
+                            .ctx
+                            .error_handler()
+                            .handle_partial_match(partial_match)
+                            .await
+                            .map(|_| clamp_exit_code(error.exit_code()))
+                    }
                     Err(err) => Err(err),
                 }
             }

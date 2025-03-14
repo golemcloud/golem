@@ -92,21 +92,13 @@ args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "--no-deps",
 
 ## ** INSTALL **
 [tasks.install]
-dependencies = ["install-golem-cli", "setup-golem-cli-ci"]
+dependencies = ["install-golem-cli"]
 
 [tasks.install-golem-cli]
 description = "Install golem-cli"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo install --path golem-cli --bin golem-cli --target-dir target --locked --offline
-'''
-
-[tasks.setup-golem-cli-ci]
-description = "Setup golem-cli"
-condition = { profiles = ["ci"] }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error golem-cli profile add --set-active --component-url http://localhost:9881/ default
 '''
 
 ## ** TEST **
