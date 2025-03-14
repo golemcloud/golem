@@ -18,6 +18,7 @@ use crate::config::TestDependencies;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -34,7 +35,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
-use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
@@ -202,6 +203,11 @@ pub trait TestDsl {
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
+
+    async fn get_latest_component_metadata(
+        &self,
+        component_id: &ComponentId,
+    ) -> crate::Result<ComponentMetadata>;
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
@@ -520,6 +526,22 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .add_component_with_id(&source_path, component_id, name, ComponentType::Durable)
             .await
             .expect("Failed to store component");
+    }
+
+    async fn get_latest_component_metadata(
+        &self,
+        component_id: &ComponentId,
+    ) -> crate::Result<ComponentMetadata> {
+        self.component_service()
+            .get_latest_component_metadata(GetLatestComponentRequest {
+                component_id: Some(component_id.clone().into()),
+            })
+            .await
+            .and_then(|c| {
+                c.metadata
+                    .ok_or(anyhow!("metadata not found"))
+                    .and_then(|cm| cm.try_into().map_err(|e: String| anyhow!(e)))
+            })
     }
 
     async fn add_initial_component_file(
@@ -1836,6 +1858,8 @@ pub trait TestDslUnsafe {
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
 
+    async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata;
+
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
     async fn update_component_with_files(
         &self,
@@ -2051,6 +2075,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
         <T as TestDsl>::store_component_with_id(self, name, component_id).await
+    }
+
+    async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata {
+        <T as TestDsl>::get_latest_component_metadata(self, component_id)
+            .await
+            .expect("Failed to get latest component metadata")
     }
 
     async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {

@@ -1,5 +1,5 @@
 [package]
-name = "app-and-library-plugin-app"
+name = "app-and-library-app"
 version = "0.0.1"
 edition = "2021"
 
@@ -8,7 +8,7 @@ path = "wit"
 world = "app"
 
 [package.metadata.component.target.dependencies]
-"it:app-and-library-plugin-library" = { path = "../library/wit" }
+"it:app-and-library-library" = { path = "../library/wit" }
 
 [dependencies]
 once_cell = "1.19.0"

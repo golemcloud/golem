@@ -1,4 +1,3 @@
-/// NOTE: NOT FINALIZED YET
 package golem:durability@1.2.0;
 
 interface durability {

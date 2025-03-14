@@ -4378,6 +4378,7 @@ dependencies = [
  "assert2",
  "async-trait",
  "axum",
+ "bytes 1.10.1",
  "clap",
  "golem-api-grpc",
  "golem-client",

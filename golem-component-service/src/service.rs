@@ -33,6 +33,7 @@ use golem_component_service_base::service::component_object_store::{
     ComponentObjectStore, LoggedComponentObjectStore,
 };
 use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
+use golem_component_service_base::service::transformer_plugin_caller::TransformerPluginCallerDefault;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -142,6 +143,10 @@ impl Services {
             component_service.clone(),
         ));
 
+        let transformer_plugin_caller = Arc::new(TransformerPluginCallerDefault::new(
+            config.plugin_transformations.clone(),
+        ));
+
         component_service
             .set_implementation(ComponentServiceDefault::new(
                 component_repo.clone(),
@@ -150,7 +155,7 @@ impl Services {
                 initial_component_files_service.clone(),
                 plugin_service.clone(),
                 plugin_wasm_files_service.clone(),
-                config.plugin_transformations.clone(),
+                transformer_plugin_caller.clone(),
             ))
             .await;
 

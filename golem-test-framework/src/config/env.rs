@@ -261,6 +261,7 @@ impl EnvBasedTestDependencies {
     async fn make_component_service(
         config: Arc<EnvBasedTestDependenciesConfig>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         if config.golem_docker_services {
             Arc::new(
@@ -273,6 +274,7 @@ impl EnvBasedTestDependencies {
                     rdb,
                     config.default_verbosity(),
                     config.golem_client_protocol,
+                    plugin_wasm_files_service,
                 )
                 .await,
             )
@@ -290,6 +292,7 @@ impl EnvBasedTestDependencies {
                     config.default_stdout_level(),
                     config.default_stderr_level(),
                     config.golem_client_protocol,
+                    plugin_wasm_files_service,
                 )
                 .await,
             )
@@ -408,6 +411,16 @@ impl EnvBasedTestDependencies {
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> Self {
         let config = Arc::new(config);
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let redis = Self::make_redis(config.clone()).await;
         {
             let mut connection = redis.get_connection(0);
@@ -416,21 +429,23 @@ impl EnvBasedTestDependencies {
 
         let rdb_and_component_service_join = {
             let config = config.clone();
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
 
-            tokio::spawn(
-                async move {
-                    let rdb = Self::make_rdb(config.clone()).await;
-                    let component_service =
-                        Self::make_component_service(config.clone(), rdb.clone()).await;
-                    let component_compilation_service = Self::make_component_compilation_service(
-                        config.clone(),
-                        component_service.clone(),
-                    )
-                    .await;
-                    (rdb, component_service, component_compilation_service)
-                }
-                .in_current_span(),
-            )
+            tokio::spawn(async move {
+                let rdb = Self::make_rdb(config.clone()).await;
+                let component_service = Self::make_component_service(
+                    config.clone(),
+                    rdb.clone(),
+                    plugin_wasm_files_service,
+                )
+                .await;
+                let component_compilation_service = Self::make_component_compilation_service(
+                    config.clone(),
+                    component_service.clone(),
+                )
+                .await;
+                (rdb, component_service, component_compilation_service)
+            })
         };
 
         let redis_monitor_join =
@@ -462,16 +477,6 @@ impl EnvBasedTestDependencies {
         .await;
 
         let redis_monitor = redis_monitor_join.await.expect("Failed to join");
-
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
         Self {
             config: config.clone(),

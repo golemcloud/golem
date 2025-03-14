@@ -1,5 +1,5 @@
 [package]
-name = "app-and-library-plugin-library"
+name = "app-and-library-library"
 version = "0.0.1"
 edition = "2021"
 

@@ -26,6 +26,7 @@ mod api_deployment;
 mod api_security;
 mod component;
 mod invocation_context;
+mod plugins;
 mod worker;
 
 tag_suite!(api_security, http_only);

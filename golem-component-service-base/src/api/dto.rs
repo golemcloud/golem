@@ -18,7 +18,7 @@ pub enum PluginTypeSpecificCreation {
 }
 
 impl PluginTypeSpecificCreation {
-    fn widen(self) -> local_plugin_model::PluginTypeSpecificCreation {
+    pub fn widen(self) -> local_plugin_model::PluginTypeSpecificCreation {
         match self {
             Self::ComponentTransformer(inner) => {
                 local_plugin_model::PluginTypeSpecificCreation::ComponentTransformer(inner)

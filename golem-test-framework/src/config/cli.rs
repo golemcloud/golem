@@ -231,6 +231,8 @@ pub enum TestMode {
         worker_executor_http_port: u16,
         #[arg(long, default_value = "9100")]
         worker_executor_grpc_port: u16,
+        #[arg(long, default_value = "9100")]
+        blob_storage_path: PathBuf,
     },
     #[command()]
     Docker {
@@ -344,8 +346,21 @@ impl CliTestDependencies {
     ) -> Self {
         let params_clone = params.clone();
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let component_directory = PathBuf::from(&params.component_directory);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
+
             tokio::spawn(
                 async move {
                     let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
@@ -368,6 +383,7 @@ impl CliTestDependencies {
                                 rdb.clone(),
                                 params_clone.service_verbosity(),
                                 params.golem_client_protocol,
+                                plugin_wasm_files_service,
                             )
                             .await,
                         );
@@ -426,16 +442,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -482,11 +488,21 @@ impl CliTestDependencies {
             Level::INFO
         };
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let params = params.clone();
             let workspace_root = workspace_root.clone();
             let build_root = build_root.clone();
             let component_directory = PathBuf::from(&params.component_directory);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
 
             tokio::spawn(
                 async move {
@@ -512,6 +528,7 @@ impl CliTestDependencies {
                                 out_level,
                                 Level::ERROR,
                                 params.golem_client_protocol,
+                                plugin_wasm_files_service.clone(),
                             )
                             .await,
                         );
@@ -603,15 +620,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -639,10 +647,22 @@ impl CliTestDependencies {
         let namespace = K8sNamespace(namespace.to_string());
         let timeout = Duration::from_secs(90);
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let namespace = namespace.clone();
             let routing_type = routing_type.clone();
             let component_directory = PathBuf::from(&params.component_directory);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
+
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
@@ -666,6 +686,7 @@ impl CliTestDependencies {
                         timeout,
                         None,
                         params.golem_client_protocol,
+                        plugin_wasm_files_service.clone(),
                     )
                     .await,
                 );
@@ -749,16 +770,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -787,11 +798,22 @@ impl CliTestDependencies {
         let service_annotations = Some(aws_nlb_service_annotations());
         let timeout = Duration::from_secs(900);
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let namespace = namespace.clone();
             let routing_type = routing_type.clone();
             let service_annotations = service_annotations.clone();
             let component_directory = PathBuf::from(&params.component_directory);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
 
             tokio::spawn(
                 async move {
@@ -825,6 +847,7 @@ impl CliTestDependencies {
                                 timeout,
                                 service_annotations.clone(),
                                 params.golem_client_protocol,
+                                plugin_wasm_files_service,
                             )
                             .await,
                         );
@@ -910,16 +933,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -959,7 +972,19 @@ impl CliTestDependencies {
                 worker_executor_host,
                 worker_executor_http_port,
                 worker_executor_grpc_port,
+                blob_storage_path,
             } => {
+                let blob_storage = Arc::new(
+                    FileSystemBlobStorage::new(&PathBuf::from(blob_storage_path))
+                        .await
+                        .unwrap(),
+                );
+                let initial_component_files_service =
+                    Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+                let plugin_wasm_files_service =
+                    Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(ProvidedRedis::new(
@@ -983,6 +1008,7 @@ impl CliTestDependencies {
                         *component_service_http_port,
                         *component_service_grpc_port,
                         params.golem_client_protocol,
+                        plugin_wasm_files_service.clone(),
                     )
                     .await,
                 );
@@ -1011,19 +1037,6 @@ impl CliTestDependencies {
                     *worker_executor_grpc_port,
                     true,
                 ));
-
-                let blob_storage = Arc::new(
-                    FileSystemBlobStorage::new(&PathBuf::from(
-                        "/tmp/ittest-local-object-store/golem",
-                    ))
-                    .await
-                    .unwrap(),
-                );
-                let initial_component_files_service =
-                    Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-                let plugin_wasm_files_service =
-                    Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
                 Self {
                     rdb,

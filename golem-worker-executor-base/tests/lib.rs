@@ -192,9 +192,7 @@ impl WorkerExecutorTestDependencies {
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
         );
-        let component_directory = Path::new("../test-components").to_path_buf();
-        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-            Arc::new(FileSystemComponentService::new(Path::new("data/components")).await);
+
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
                 .await
@@ -204,6 +202,15 @@ impl WorkerExecutorTestDependencies {
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
+        let component_directory = Path::new("../test-components").to_path_buf();
+        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+            FileSystemComponentService::new(
+                Path::new("data/components"),
+                plugin_wasm_files_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             redis,
