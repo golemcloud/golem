@@ -338,7 +338,12 @@ impl ComponentService<DefaultGolemTypes> for ComponentServiceGrpc {
 
                             let start = Instant::now();
                             let component_id_clone2 = component_id_clone.clone();
+
+                            let span = tracing::Span::current();
+
                             let component = spawn_blocking(move || {
+                                let _enter = span.enter();
+
                                 Component::from_binary(&engine, &bytes).map_err(|e| {
                                     GolemError::ComponentParseFailed {
                                         component_id: component_id_clone2,

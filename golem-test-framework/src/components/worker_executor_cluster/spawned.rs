@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, Level};
+use tracing::{info, Instrument, Level};
 
 pub struct SpawnedWorkerExecutorCluster {
     worker_executors: Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>,
@@ -120,20 +120,23 @@ impl SpawnedWorkerExecutorCluster {
             let http_port = base_http_port + i as u16;
             let grpc_port = base_grpc_port + i as u16;
 
-            let worker_executor_join = tokio::spawn(Self::make_worker_executor(
-                executable.to_path_buf(),
-                working_directory.to_path_buf(),
-                http_port,
-                grpc_port,
-                redis.clone(),
-                component_service.clone(),
-                shard_manager.clone(),
-                worker_service.clone(),
-                verbosity,
-                out_level,
-                err_level,
-                shared_client,
-            ));
+            let worker_executor_join = tokio::spawn(
+                Self::make_worker_executor(
+                    executable.to_path_buf(),
+                    working_directory.to_path_buf(),
+                    http_port,
+                    grpc_port,
+                    redis.clone(),
+                    component_service.clone(),
+                    shard_manager.clone(),
+                    worker_service.clone(),
+                    verbosity,
+                    out_level,
+                    err_level,
+                    shared_client,
+                )
+                .in_current_span(),
+            );
 
             worker_executors_joins.push(worker_executor_join);
         }

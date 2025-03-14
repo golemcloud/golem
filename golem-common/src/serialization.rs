@@ -82,14 +82,13 @@ pub fn try_deserialize_with_version<T: Decode>(
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
+    use crate::model::ComponentId;
     use bincode::{Decode, Encode};
     use rand::distr::Alphanumeric;
     use rand::Rng;
     use serde::{Deserialize, Serialize};
-
-    use crate::model::ComponentId;
+    use test_r::test;
+    use tracing::info;
 
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
     enum Example {
@@ -119,7 +118,7 @@ mod tests {
     #[test]
     pub fn roundtrip_component_id() {
         let example = Some(ComponentId::new_v4());
-        println!("example: {example:?}");
+        info!("example: {example:?}");
         let serialized = super::serialize(&example).unwrap();
         let deserialized = super::deserialize(&serialized).unwrap();
         assert_eq!(example, deserialized);

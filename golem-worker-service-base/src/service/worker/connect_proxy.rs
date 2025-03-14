@@ -329,7 +329,7 @@ mod keep_alive {
         use tokio::time::{timeout, Duration};
         use tokio_stream::wrappers::ReceiverStream;
         use tokio_util::sync::PollSender;
-        use tracing::Level;
+        use tracing::{Instrument, Level};
 
         static TRACING_SETUP: Once = Once::new();
 
@@ -369,20 +369,23 @@ mod keep_alive {
 
             // Task and flag to simulate a response message.
             let send_pong = std::sync::Arc::new(AtomicBool::new(true));
-            tokio::spawn({
-                let pong_tx = pong_tx.clone();
-                let send_pong = send_pong.clone();
-                async move {
-                    while ping_rx.recv().await.is_some() {
-                        if send_pong.load(Ordering::Relaxed) {
-                            pong_tx
-                                .send(Ok(Message::Pong(Vec::new())))
-                                .await
-                                .expect("Failed to send pong");
+            tokio::spawn(
+                {
+                    let pong_tx = pong_tx.clone();
+                    let send_pong = send_pong.clone();
+                    async move {
+                        while ping_rx.recv().await.is_some() {
+                            if send_pong.load(Ordering::Relaxed) {
+                                pong_tx
+                                    .send(Ok(Message::Pong(Vec::new())))
+                                    .await
+                                    .expect("Failed to send pong");
+                            }
                         }
                     }
                 }
-            });
+                .in_current_span(),
+            );
 
             // Poll the WebSocketKeepAlive stream to trigger the keep-alive mechanism
             let next = websocket_keep_alive.next().await;

@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
-
+use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
-use std::collections::HashMap;
-use std::net::SocketAddr;
-
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
@@ -26,11 +23,11 @@ use chrono::Datelike;
 use golem_test_framework::dsl::{log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::HeaderMap;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use test_r::{inherit_test_dep, test};
+use tracing::{info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -151,7 +148,6 @@ async fn tinygo_http_client(
 
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
-    let http_host_port = context.host_http_port();
 
     async fn request_handler(
         captured_body_clone: Arc<Mutex<Option<String>>>,
@@ -162,7 +158,7 @@ async fn tinygo_http_client(
         {
             let mut capture = captured_body_clone.lock().unwrap();
             *capture = Some(body_str.clone());
-            println!("captured body: {}", body_str);
+            info!("captured body: {}", body_str);
         }
         let header = headers.get("X-Test");
         format!(
@@ -173,25 +169,25 @@ async fn tinygo_http_client(
         )
     }
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/post-example",
-            post(|headers, body| request_handler(captured_body_clone, headers, body)),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", http_host_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/post-example",
+                post(|headers, body| request_handler(captured_body_clone, headers, body)),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("tinygo-wasi-http").store().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "tinygo-wasi-http-1", vec![], env)

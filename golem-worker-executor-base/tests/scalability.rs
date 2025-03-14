@@ -26,7 +26,7 @@ use std::future::Future;
 use std::time::Duration;
 use tokio::spawn;
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -80,18 +80,21 @@ async fn spawning_many_workers_that_sleep(
     let fibers: Vec<_> = input
         .into_iter()
         .map(|(n, component_id, executor_clone)| {
-            spawn(async move {
-                let worker = executor_clone
-                    .start_worker(&component_id, &worker_name(n))
-                    .await;
-                timed(async move {
-                    executor_clone
-                        .invoke_and_await(&worker, "run", vec![])
-                        .await
-                        .unwrap()
+            {
+                spawn(async move {
+                    let worker = executor_clone
+                        .start_worker(&component_id, &worker_name(n))
+                        .await;
+                    timed(async move {
+                        executor_clone
+                            .invoke_and_await(&worker, "run", vec![])
+                            .await
+                            .unwrap()
+                    })
+                    .await
                 })
-                .await
-            })
+            }
+            .in_current_span()
         })
         .collect();
 
@@ -173,18 +176,25 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     let fibers: Vec<_> = input
         .into_iter()
         .map(|(n, component_id, executor_clone)| {
-            spawn(async move {
-                let worker = executor_clone
-                    .start_worker(&component_id, &worker_name(n))
-                    .await;
-                timed(async move {
-                    executor_clone
-                        .invoke_and_await(&worker, "sleep-for", vec![15.0f64.into_value_and_type()])
-                        .await
-                        .unwrap()
-                })
-                .await
-            })
+            spawn(
+                async move {
+                    let worker = executor_clone
+                        .start_worker(&component_id, &worker_name(n))
+                        .await;
+                    timed(async move {
+                        executor_clone
+                            .invoke_and_await(
+                                &worker,
+                                "sleep-for",
+                                vec![15.0f64.into_value_and_type()],
+                            )
+                            .await
+                            .unwrap()
+                    })
+                    .await
+                }
+                .in_current_span(),
+            )
         })
         .collect();
 
@@ -251,15 +261,18 @@ async fn initial_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_id_clone = component_id.clone();
-        handles.spawn(async move {
-            let worker = executor_clone
-                .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
-                .await;
-            executor_clone
-                .invoke_and_await(&worker, "run", vec![])
-                .await
-                .unwrap()
-        });
+        handles.spawn(
+            async move {
+                let worker = executor_clone
+                    .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
+                    .await;
+                executor_clone
+                    .invoke_and_await(&worker, "run", vec![])
+                    .await
+                    .unwrap()
+            }
+            .in_current_span(),
+        );
     }
 
     while let Some(result) = handles.join_next().await {
@@ -293,15 +306,18 @@ async fn dynamic_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_id_clone = component_id.clone();
-        handles.spawn(async move {
-            let worker = executor_clone
-                .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
-                .await;
-            executor_clone
-                .invoke_and_await(&worker, "run", vec![])
-                .await
-                .unwrap()
-        });
+        handles.spawn(
+            async move {
+                let worker = executor_clone
+                    .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
+                    .await;
+                executor_clone
+                    .invoke_and_await(&worker, "run", vec![])
+                    .await
+                    .unwrap()
+            }
+            .in_current_span(),
+        );
     }
 
     while let Some(result) = handles.join_next().await {

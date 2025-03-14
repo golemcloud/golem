@@ -168,7 +168,7 @@ async fn postgres_check_if_running(info: &PostgresInfo) -> Result<(), sqlx::Erro
 
     let r = conn.execute(sqlx::query("SELECT 1;")).await;
     if let Err(e) = r {
-        eprintln!("Postgres connection error: {}", e);
+        error!("Postgres connection error: {}", e);
     }
 
     Ok(())
@@ -298,7 +298,7 @@ async fn mysql_check_if_running(info: &MysqlInfo) -> Result<(), sqlx::Error> {
 
     let r = conn.execute(sqlx::query("SELECT 1;")).await;
     if let Err(e) = r {
-        eprintln!("Mysql connection error: {}", e);
+        error!("Mysql connection error: {}", e);
     }
 
     Ok(())

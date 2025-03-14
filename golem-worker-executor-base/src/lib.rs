@@ -112,12 +112,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
-    async fn run_server(
+    async fn run_grpc_server(
         &self,
         service_dependencies: All<Ctx>,
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<u16> {
         let golem_config = service_dependencies.config();
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
@@ -160,7 +160,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .in_current_span(),
         );
 
-        Ok(())
+        Ok(grpc_port)
     }
 
     #[allow(clippy::type_complexity)]
@@ -245,8 +245,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             ISizeFormatter::new(worker_memory, BINARY)
         );
 
-        let addr = golem_config.grpc_addr()?;
-
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
 
         let (worker_executor_impl, epoch_thread) = create_worker_executor_impl::<Ctx, Self>(
@@ -257,7 +255,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         )
         .await?;
 
-        self.run_server(worker_executor_impl, lazy_worker_activator, join_set)
+        let grpc_port = self
+            .run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set)
             .await?;
 
         let http_port = golem_service_base::observability::start_health_and_metrics_server(
@@ -270,7 +269,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         Ok(RunDetails {
             http_port,
-            grpc_port: addr.port(),
+            grpc_port,
             epoch_thread,
         })
     }

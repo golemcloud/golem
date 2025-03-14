@@ -2131,12 +2131,12 @@ impl TryFrom<String> for GatewayBindingType {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
     use std::collections::HashSet;
     use std::str::FromStr;
     use std::time::SystemTime;
     use std::vec;
+    use test_r::test;
+    use tracing::info;
 
     use crate::model::oplog::OplogIndex;
 
@@ -2410,7 +2410,7 @@ mod tests {
             let start = SystemTime::now();
             let worker_id = target_worker_id.into_worker_id(&shard_ids, SHARD_COUNT);
             let end = SystemTime::now();
-            println!(
+            info!(
                 "Time with {count} valid shards: {:?}",
                 end.duration_since(start).unwrap()
             );
