@@ -1,11 +1,10 @@
 name: CI
 on:
   push:
-    # TODO: Tag and publishing is not enabled until merging history
-    # tags:
-    # - "v*.*.*"
+    tags:
+      - "v*.*.*"
     branches:
-    - main
+      - main
   pull_request:
 
 concurrency:
@@ -23,61 +22,167 @@ jobs:
   build-and-test:
     runs-on: blacksmith-16vcpu-ubuntu-2204
     env:
-      CARGO_BUILD_JOBS: 6
+      CARGO_BUILD_JOBS: 10
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-        submodules: recursive
-    - name: Fetch tag
-      run: git fetch origin --deepen=1
-    - name: Setup Rust
-      run: rustup update stable --no-self-update && rustup default stable
-    - uses: davidB/rust-cargo-make@v1
-    - uses: cargo-bins/cargo-binstall@main
-    - name: Install cargo-component
-      run: cargo install cargo-component@0.20.0
-    - name: Install wasm-tools
-      run: cargo install --force --locked wasm-tools@1.223.0
-    - name: Install wit-bindgen
-      run: cargo install --force --locked wit-bindgen-cli@0.37.0
-    - name: Install Protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-    - name: Install componentize-py
-      run: pip install componentize-py==0.16.0
-    - name: Install WASI SDK
-      run: |
-        WASI_VERSION=25
-        WASI_SDK_PATH=/opt/wasi-sdk
-        wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/wasi-sdk-${WASI_VERSION}.0-x86_64-linux.tar.gz
-        tar -xvf wasi-sdk-${WASI_VERSION}.0-x86_64-linux.tar.gz
-        sudo mv wasi-sdk-${WASI_VERSION}.0-x86_64-linux ${WASI_SDK_PATH}
-        echo "WASI_SDK_PATH=${WASI_SDK_PATH}" >> $GITHUB_ENV
-    - uses: mlugg/setup-zig@v1
-    - uses: actions/setup-go@v5.3.0
-    - uses: acifani/setup-tinygo@v2.0.0
-      with:
-        tinygo-version: '0.35.0'
-    - uses: useblacksmith/rust-cache@v3
-      with:
-        shared-key: debug
-        cache-all-crates: true
-        save-if: true
-    - name: Build all targets
-      run: cargo make --profile ci build
-    - name: Unit tests
-      run: cargo make --profile ci unit-tests
-    - name: Integration tests
-      run: cargo make --profile ci integration-tests
-    - name: Check formatting and clippy rules
-      run: cargo make --profile ci check
-    - name: Publish Test Report
-      uses: mikepenz/action-junit-report@v5
-      if: always()
-      with:
-        report_paths: '**/target/report-*.xml'
-        detailed_summary: true
-        include_passed: true
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-component
+        run: cargo install cargo-component@0.20.0
+      - name: Install wasm-tools
+        run: cargo install --force --locked wasm-tools@1.223.0
+      - name: Install wit-bindgen
+        run: cargo install --force --locked wit-bindgen-cli@0.37.0
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install componentize-py
+        run: pip install componentize-py==0.16.0
+      - name: Install WASI SDK
+        run: |
+          WASI_VERSION=25
+          WASI_SDK_PATH=/opt/wasi-sdk
+          wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/wasi-sdk-${WASI_VERSION}.0-x86_64-linux.tar.gz
+          tar -xvf wasi-sdk-${WASI_VERSION}.0-x86_64-linux.tar.gz
+          sudo mv wasi-sdk-${WASI_VERSION}.0-x86_64-linux ${WASI_SDK_PATH}
+          echo "WASI_SDK_PATH=${WASI_SDK_PATH}" >> $GITHUB_ENV
+      - uses: mlugg/setup-zig@v1
+      - uses: actions/setup-go@v5.3.0
+      - uses: acifani/setup-tinygo@v2.0.0
+        with:
+          tinygo-version: '0.35.0'
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: 'v0-rust'
+          shared-key: debug
+          cache-all-crates: true
+          save-if: true
+      - name: Build all targets
+        run: cargo make --profile ci build
+      - name: Unit tests
+        run: cargo make --profile ci unit-tests
+      - name: Integration tests
+        run: cargo make --profile ci integration-tests
+      - name: Check formatting and clippy rules
+        run: cargo make --profile ci check
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: '**/target/report-*.xml'
+          detailed_summary: true
+          include_passed: true
+
+  publish-crates:
+    needs: build-and-test
+    if: "startsWith(github.ref, 'refs/tags/v')"
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: davidB/rust-cargo-make@v1
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: 'v0-rust'
+          shared-key: release
+          cache-all-crates: true
+          save-if: true
+      - id: get_version
+        uses: battila7/get-version-action@v2
+      - name: Publish all packages
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ steps.get_version.outputs.version-without-v }}
+        run: cargo make --profile ci publish
+
+  publish-binaries:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem-cli'
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - golem-cli
+          - golem
+        cfg:
+          - rust-target: x86_64-unknown-linux-gnu
+            os: blacksmith-16vcpu-ubuntu-2204
+          - rust-target: aarch64-unknown-linux-gnu
+            os: blacksmith-16vcpu-ubuntu-2204
+            cross: true
+          - rust-target: x86_64-apple-darwin
+            os: macos-latest
+          - rust-target: aarch64-apple-darwin
+            os: macos-latest
+          - rust-target: x86_64-pc-windows-gnu
+            os: windows-latest
+    name: Publish binaries of ${{ matrix.project }}
+    runs-on: ${{ matrix.cfg.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
+      - uses: davidB/rust-cargo-make@v1
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: 'v0-rust'
+          shared-key: release-${{ matrix.cfg.rust-target }}
+          cache-all-crates: true
+          save-if: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - id: get_version
+        uses: battila7/get-version-action@v2
+      - name: Set version for all packages
+        env:
+          VERSION: ${{ steps.get_version.outputs.version-without-v }}
+        run: cargo make --profile ci set-version
+
+      - run: cargo install cross
+        if: ${{ matrix.cfg.cross }}
+      - uses: ilammy/setup-nasm@v1
+
+      - run: cargo build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
+        if: ${{ ! matrix.cfg.cross }}
+      - run: cross build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
+        if: ${{ matrix.cfg.cross }}
+
+      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}.exe ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
+        if: matrix.cfg.os == 'windows-latest'
+      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+        if: matrix.cfg.os != 'windows-latest'
+      - name: Login GH CLI
+        shell: bash
+        run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
+      - run: gh release upload -R golemcloud/golem-cli --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
+        if: matrix.cfg.os == 'windows-latest'
+      - run: gh release upload -R golemcloud/golem-cli--clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+        if: matrix.cfg.os != 'windows-latest'

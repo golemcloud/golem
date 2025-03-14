@@ -49,37 +49,10 @@ command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
 
 [tasks.build-release]
-description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
-to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
-for docker images."""
-dependencies = [
-    "set-version",
-    "build-release-default",
-    "build-release-override-linux-amd64",
-    "build-release-override-linux-arm64",
-]
-
-# There are three variants of build-release, and only one of them will run based on the value of
-# the PLATFORM_OVERRIDE environment variable
-
-[tasks.build-release-default]
-description = "Build the project in release mode"
-condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
+description = """Builds everything in release mode"""
+dependencies = ["set-version"]
 command = "cargo"
 args = ["build", "--release"]
-
-[tasks.build-release-override-linux-amd64]
-description = "Build the project in release mode with target platform override to linux/amd64"
-condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
-command = "cargo"
-args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
-
-[tasks.build-release-override-linux-arm64]
-description = "Build the project in release mode with target platform override to linux/arm64"
-condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
-install_crate = "cross"
-command = "cross"
-args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
 
 ## ** CHECK **
 
@@ -194,3 +167,62 @@ description = "Install npm dependencies"
 command = "npm"
 args = ["install"]
 cwd = "./desktop-app"
+
+## Publishing
+[tasks.set-version]
+description = "Sets the version in all Cargo.toml files to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+script = '''
+grep -rl --include 'Cargo.toml' '0\.0\.0' | xargs sed -i "s/0\.0\.0/${VERSION}/g"
+'''
+
+[tasks.set-version.mac]
+condition = { env_set = ["VERSION"] }
+script = '''
+grep -rl --include '.*Cargo\.toml' '0\.0\.0' | xargs sed -i "" "s/0\.0\.0/${VERSION}/g"
+'''
+
+[tasks.set-version.windows]
+script_runner = "powershell"
+script_extension = "ps1"
+condition = { env_set = ["VERSION"] }
+script = '''
+$cargoFiles = Get-ChildItem . Cargo.toml -rec
+foreach ($file in $cargoFiles)
+{
+    (Get-Content $file.PSPath) |
+    Foreach-Object { $_ -replace "0.0.0", $Env:VERSION } |
+    Set-Content $file.PSPath
+}
+'''
+
+[tasks.publish]
+description = "Publishes packages to crates.io"
+dependencies = [
+    "publish-golem-cli",
+]
+
+[tasks.publish-golem-examples]
+description = "Publishes golem-examples package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-examples",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-cli]
+description = "Publishes golem-wasm-ast package to crates.io"
+dependencies = ["publish-golem-examples"]
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-cli",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]

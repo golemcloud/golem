@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use golem_client::model::{
-    PluginDefinitionWithoutOwnerDefaultPluginScope, PluginTypeSpecificDefinition,
+    PluginDefinitionCreationDefaultPluginScope, PluginTypeSpecificCreation,
+    PluginTypeSpecificDefinition,
 };
 use golem_common::model::plugin::DefaultPluginScope;
 use serde::{Deserialize, Serialize};
@@ -75,7 +76,7 @@ pub trait FromPluginManifest {
     ) -> Self;
 }
 
-impl FromPluginManifest for PluginDefinitionWithoutOwnerDefaultPluginScope {
+impl FromPluginManifest for PluginDefinitionCreationDefaultPluginScope {
     type PluginScope = DefaultPluginScope;
 
     fn from_plugin_manifest(
@@ -84,13 +85,22 @@ impl FromPluginManifest for PluginDefinitionWithoutOwnerDefaultPluginScope {
         specs: PluginTypeSpecificDefinition,
         icon: Vec<u8>,
     ) -> Self {
-        PluginDefinitionWithoutOwnerDefaultPluginScope {
+        PluginDefinitionCreationDefaultPluginScope {
             name: manifest.name,
             version: manifest.version,
             description: manifest.description,
             icon,
             homepage: manifest.homepage,
-            specs,
+            specs: match specs {
+                PluginTypeSpecificDefinition::ComponentTransformer(params) => {
+                    PluginTypeSpecificCreation::ComponentTransformer(params)
+                }
+                PluginTypeSpecificDefinition::OplogProcessor(params) => {
+                    PluginTypeSpecificCreation::OplogProcessor(params)
+                }
+                PluginTypeSpecificDefinition::Library(_) => unimplemented!(), // TODO
+                PluginTypeSpecificDefinition::App(_) => unimplemented!(),     // TODO
+            },
             scope,
         }
     }

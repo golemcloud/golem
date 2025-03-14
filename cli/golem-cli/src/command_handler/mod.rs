@@ -38,8 +38,6 @@ use tracing::{debug, Level};
 
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
-#[cfg(feature = "server-commands")]
-use std::future::Future;
 
 mod app;
 mod cloud;
@@ -58,7 +56,7 @@ pub trait CommandHandlerHooks {
         &self,
         ctx: Arc<Context>,
         subcommand: ServerSubcommand,
-    ) -> impl Future<Output = anyhow::Result<()>>;
+    ) -> impl std::future::Future<Output = anyhow::Result<()>>;
 }
 
 // CommandHandle is responsible for matching commands and producing CLI output using Context,

@@ -898,7 +898,8 @@ pub mod worker {
     use colored::Colorize;
     use golem_client::model::PublicOplogEntry;
     use golem_common::model::public_oplog::{
-        PluginInstallationDescription, PublicUpdateDescription, PublicWorkerInvocation,
+        PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
+        PublicWorkerInvocation, StringAttributeValue,
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::{print_type_annotated_value, ValueAndType};
@@ -1558,6 +1559,67 @@ pub mod worker {
                         format_id(&params.idempotency_key),
                     ));
                 }
+                PublicOplogEntry::StartSpan(params) => {
+                    logln(format_message_highlight("START SPAN"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}span id:           {}",
+                        format_id(&params.span_id)
+                    ));
+                    if let Some(parent_id) = &params.parent_id {
+                        logln(format!("{pad}parent span:       {}", format_id(&parent_id),));
+                    }
+                    if let Some(linked_id) = &params.linked_context {
+                        logln(format!("{pad}linked span:       {}", format_id(&linked_id),));
+                    }
+                    logln(format!("{pad}attributes:"));
+                    for (k, v) in &params.attributes {
+                        logln(format!(
+                            "{pad}  - {}: {}",
+                            k,
+                            match v {
+                                PublicAttributeValue::String(StringAttributeValue { value }) =>
+                                    format_id(value),
+                            }
+                        ));
+                    }
+                }
+                PublicOplogEntry::FinishSpan(params) => {
+                    logln(format_message_highlight("FINISH SPAN"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}span id:           {}",
+                        format_id(&params.span_id)
+                    ));
+                }
+                PublicOplogEntry::SetSpanAttribute(params) => {
+                    logln(format_message_highlight("SET SPAN ATTRIBUTE"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}span id:           {}",
+                        format_id(&params.span_id)
+                    ));
+                    logln(format!(
+                        "{pad}key:               {}",
+                        format_id(&params.key)
+                    ));
+                    logln(format!(
+                        "{pad}value:             {}",
+                        match &params.value {
+                            PublicAttributeValue::String(StringAttributeValue { value }) =>
+                                format_id(value),
+                        }
+                    ));
+                }
             }
         }
     }
@@ -1629,6 +1691,8 @@ pub mod plugin_oss {
                     PluginTypeSpecificDefinition::OplogProcessor(_) => {
                         "Oplog Processor".to_string()
                     }
+                    PluginTypeSpecificDefinition::Library(_) => "Library".to_string(),
+                    PluginTypeSpecificDefinition::App(_) => "App".to_string(),
                 },
                 scope: match &value.scope {
                     DefaultPluginScope::Global(_) => "Global".to_string(),
@@ -1686,6 +1750,8 @@ pub mod plugin_oss {
                     fields.fmt_field("Component ID", &specs.component_id, format_id);
                     fields.fmt_field("Component Version", &specs.component_version, format_id);
                 }
+                PluginTypeSpecificDefinition::Library(_) => {}
+                PluginTypeSpecificDefinition::App(_) => {}
             }
 
             fields.build()
@@ -2492,6 +2558,8 @@ pub mod plugin_cloud {
                     PluginTypeSpecificDefinition::OplogProcessor(_) => {
                         "Oplog Processor".to_string()
                     }
+                    PluginTypeSpecificDefinition::Library(_) => "Library".to_string(),
+                    PluginTypeSpecificDefinition::App(_) => "App".to_string(),
                 },
                 scope: match &value.0.scope {
                     CloudPluginScope::Global(_) => "Global".to_string(),
@@ -2559,6 +2627,8 @@ pub mod plugin_cloud {
                     fields.fmt_field("Component ID", &specs.component_id, format_id);
                     fields.fmt_field("Component Version", &specs.component_version, format_id);
                 }
+                PluginTypeSpecificDefinition::Library(_) => {}
+                PluginTypeSpecificDefinition::App(_) => {}
             }
 
             fields.build()
