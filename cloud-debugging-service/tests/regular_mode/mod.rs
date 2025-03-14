@@ -46,11 +46,13 @@ pub async fn start_regular_worker_executor(
     loop {
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
         if client.is_ok() {
-            let deps = deps.per_test_dependencies(
-                &context.redis_prefix(),
-                context.http_port(),
-                context.grpc_port(),
-            );
+            let deps = deps
+                .per_test_dependencies(
+                    &context.redis_prefix(),
+                    context.http_port(),
+                    context.grpc_port(),
+                )
+                .await;
             break Ok(TestRegularWorkerExecutor::new(Some(join_set), deps));
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));

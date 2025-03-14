@@ -4,7 +4,8 @@ use crate::service::CloudComponentError;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::BaseAuthService;
 use cloud_common::model::{CloudPluginOwner, Role};
-use golem_common::model::plugin::{PluginDefinition, PluginDefinitionWithoutOwner};
+use golem_common::model::plugin::PluginDefinition;
+use golem_component_service_base::api::dto;
 use golem_component_service_base::service::plugin::PluginService;
 use std::sync::Arc;
 
@@ -73,7 +74,7 @@ impl CloudPluginService {
     pub async fn create_plugin(
         &self,
         auth: &CloudAuthCtx,
-        definition: PluginDefinitionWithoutOwner<CloudPluginScope>,
+        definition: dto::PluginDefinitionCreation<CloudPluginScope>,
     ) -> Result<(), CloudComponentError> {
         let owner = self.authorize(auth, Role::CreatePlugin).await?;
         let definition = definition.with_owner(owner.clone());

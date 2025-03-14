@@ -4,9 +4,9 @@ use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::protocol::frame::Utf8Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use url::Url;
 
 pub type DebugServiceClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub type DebugWrite = SplitSink<DebugServiceClient, Message>;
@@ -36,7 +36,9 @@ impl DebugWorkerExecutorClient {
         let id = Id::Str(uuid.to_string());
 
         self.write_msg
-            .send(Message::Text(serde_json::to_string(&jrpc_request)?))
+            .send(Message::Text(Utf8Payload::from(serde_json::to_string(
+                &jrpc_request,
+            )?)))
             .await?;
 
         Ok(id)
@@ -48,7 +50,7 @@ impl DebugWorkerExecutorClient {
             if let Some(msg) = self.read_msg.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        let response: JsonRpcResponse = serde_json::from_str(&text)
+                        let response: JsonRpcResponse = serde_json::from_str(text.as_str())
                             .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))?;
 
                         if response.id == id {
@@ -79,7 +81,7 @@ impl DebugWorkerExecutorClient {
     }
 
     pub async fn connect(port: u16) -> Result<Self, anyhow::Error> {
-        let server_url = Url::parse(format!("ws://127.0.0.1:{port}/ws").as_str())?;
+        let server_url = format!("ws://127.0.0.1:{port}/ws");
 
         // Connect to the WebSocket server
         let ws_stream = connect_async(server_url)

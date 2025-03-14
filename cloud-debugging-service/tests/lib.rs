@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
+use golem_common::model::RetryConfig;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
@@ -33,6 +35,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::test_dep;
 use tracing::Level;
 
@@ -108,6 +111,8 @@ pub fn get_golem_config(
             host: "localhost".to_string(),
             port: server_port,
             access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
+            retries: RetryConfig::max_attempts_5(),
+            connect_timeout: Duration::from_secs(120),
         },
         memory: MemoryConfig::default(),
         ..Default::default()
@@ -134,6 +139,7 @@ pub struct RegularWorkerExecutorPerTestDependencies {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
 }
 
@@ -145,6 +151,10 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
 
     fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
         self.redis.clone()
+    }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.blob_storage.clone()
     }
 
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
@@ -177,12 +187,12 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
         panic!("Debugging executor tests do not support worker executor clusters")
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
-        self.blob_storage.clone()
-    }
-
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
     }
 }
 
@@ -192,6 +202,7 @@ pub struct RegularWorkerExecutorTestDependencies {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
 }
 
@@ -223,6 +234,7 @@ impl RegularWorkerExecutorTestDependencies {
         );
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
         Self {
             redis,
@@ -230,11 +242,12 @@ impl RegularWorkerExecutorTestDependencies {
             component_directory,
             component_service,
             blob_storage,
+            plugin_wasm_files_service,
             initial_component_files_service,
         }
     }
 
-    pub fn per_test_dependencies(
+    pub async fn per_test_dependencies(
         &self,
         redis_prefix: &str,
         http_port: u16,
@@ -254,6 +267,7 @@ impl RegularWorkerExecutorTestDependencies {
         let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
             ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
         );
+
         RegularWorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),
@@ -263,6 +277,7 @@ impl RegularWorkerExecutorTestDependencies {
             component_directory: self.component_directory.clone(),
             blob_storage: self.blob_storage.clone(),
             initial_component_files_service: self.initial_component_files_service.clone(),
+            plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
         }
     }
 }
@@ -313,5 +328,9 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
     }
 }

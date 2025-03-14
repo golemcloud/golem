@@ -1,16 +1,11 @@
-use async_trait::async_trait;
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::Arc;
-use tracing::Instrument;
-
 use crate::grpcapi::{auth, bad_request_error, internal_error, require_component_id};
 use crate::service;
 use crate::service::component::CloudComponentService;
+use async_trait::async_trait;
 use cloud_common::grpc::proto_project_id_string;
 use futures_util::stream::BoxStream;
+use futures_util::StreamExt;
 use futures_util::TryStreamExt;
-use futures_util::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -46,8 +41,11 @@ use golem_common::SafeDisplay;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::service::component::ComponentError as BaseComponentError;
 use golem_component_service_base::service::plugin::PluginError;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
+use tracing::Instrument;
 
 impl From<service::CloudComponentError> for ComponentError {
     fn from(value: service::CloudComponentError) -> Self {
@@ -182,10 +180,7 @@ impl ComponentGrpcApi {
         &self,
         request: DownloadComponentRequest,
         metadata: MetadataMap,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
-        ComponentError,
-    > {
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let auth = auth(metadata)?;
         let id = require_component_id(&request.component_id)?;
         let version = request.version;

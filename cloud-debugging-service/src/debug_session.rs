@@ -7,6 +7,7 @@ use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use bincode::Encode;
 use cloud_common::auth::CloudNamespace;
+use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
@@ -329,6 +330,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 function_name: exported_function_invoked_parameters.function_name,
                 request: oplog_payload,
                 idempotency_key: exported_function_invoked_parameters.idempotency_key,
+                trace_id: exported_function_invoked_parameters.trace_id,
+                trace_states: exported_function_invoked_parameters.trace_states,
+                invocation_context: vec![], // TODO: Make decode_public_span_data public in OSS and use it here
             })
         }
 
@@ -468,6 +472,29 @@ fn get_oplog_entry_from_public_oplog_entry(
             Ok(OplogEntry::CancelPendingInvocation {
                 timestamp: cancel_invocation_params.timestamp,
                 idempotency_key: cancel_invocation_params.idempotency_key,
+            })
+        }
+        PublicOplogEntry::StartSpan(start_span) => Ok(OplogEntry::StartSpan {
+            timestamp: start_span.timestamp,
+            span_id: start_span.span_id,
+            parent_id: start_span.parent_id,
+            linked_context_id: start_span.linked_context,
+            attributes: HashMap::new(), /*start_span
+                                        .attributes
+                                        .into_iter()
+                                        .map(|(k, v)| (k, v.into()))
+                                        .collect(),*/ // TODO: Add From<PublicAttributeValue> for AttributeValue in OSS
+        }),
+        PublicOplogEntry::FinishSpan(finish_span) => Ok(OplogEntry::FinishSpan {
+            timestamp: finish_span.timestamp,
+            span_id: finish_span.span_id,
+        }),
+        PublicOplogEntry::SetSpanAttribute(set_span_attribute) => {
+            Ok(OplogEntry::SetSpanAttribute {
+                timestamp: set_span_attribute.timestamp,
+                span_id: set_span_attribute.span_id,
+                key: set_span_attribute.key,
+                value: AttributeValue::String("TODO".to_string()), // set_span_attribute.value.into() // TODO: Add From<PublicAttributeValue> for AttributeValue in OSS
             })
         }
     }

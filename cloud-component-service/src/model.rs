@@ -11,7 +11,8 @@ use golem_common::model::{
 };
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
-use poem_openapi::types::{ParseError, ParseFromParameter, ParseResult};
+use poem::web::Field;
+use poem_openapi::types::{ParseError, ParseFromMultipartField, ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -91,6 +92,19 @@ impl ParseFromParameter for CloudPluginScope {
             }
         } else {
             Err(ParseError::custom("Unexpected representation of plugin scope - must be 'global', 'component:<component_id>' or 'project:<project_id>'"))
+        }
+    }
+}
+
+impl ParseFromMultipartField for CloudPluginScope {
+    async fn parse_from_multipart(field: Option<Field>) -> ParseResult<Self> {
+        use poem_openapi::types::ParseFromParameter;
+        match field {
+            Some(field) => {
+                let s = field.text().await?;
+                Self::parse_from_parameter(&s)
+            }
+            None => Err(ParseError::expected_input()),
         }
     }
 }

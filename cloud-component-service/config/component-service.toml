@@ -26,8 +26,16 @@ multiplier = 2.0
 type = "Enabled"
 
 [compilation.config]
+connect_timeout = "10s"
 host = "localhost"
 port = 9091
+
+[compilation.config.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [db]
 type = "Sqlite"
@@ -35,6 +43,13 @@ type = "Sqlite"
 [db.config]
 database = "golem_service.db"
 max_connections = 10
+
+[plugin_transformations.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [tracing]
 console = false

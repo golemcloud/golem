@@ -115,6 +115,14 @@ impl From<PluginError> for ComponentError {
             PluginError::InvalidScope { .. } => ComponentError::Unauthorized(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
+            PluginError::BlobStorageError(_) => ComponentError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            PluginError::InvalidOplogProcessorPlugin => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
         }
     }
 }

@@ -3,9 +3,10 @@ use crate::model::CloudPluginScope;
 use crate::service::plugin::CloudPluginService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use cloud_common::model::CloudPluginOwner;
-use golem_common::model::plugin::{PluginDefinition, PluginDefinitionWithoutOwner};
+use golem_common::model::plugin::PluginDefinition;
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
+use golem_component_service_base::api::dto;
 use golem_service_base::model::ErrorBody;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -77,7 +78,7 @@ impl PluginApi {
     #[oai(path = "/", method = "post", operation_id = "create_plugin")]
     pub async fn create_plugin(
         &self,
-        plugin: Json<PluginDefinitionWithoutOwner<CloudPluginScope>>,
+        plugin: Json<dto::PluginDefinitionCreation<CloudPluginScope>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(

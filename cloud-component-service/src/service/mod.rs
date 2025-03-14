@@ -15,9 +15,9 @@ use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
-use golem_component_service_base::service::component::ComponentServiceDefault as BaseComponentServiceDefault;
+use golem_component_service_base::service::component::ComponentError as BaseComponentError;
 use golem_component_service_base::service::component::{
-    ComponentError as BaseComponentError, ComponentService as BaseComponentService,
+    ComponentServiceDefault as BaseComponentServiceDefault, LazyComponentService,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
@@ -33,6 +33,7 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
@@ -125,7 +126,11 @@ impl Services {
         let compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
             match config.compilation.clone() {
                 ComponentCompilationConfig::Enabled(config) => {
-                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
+                    Arc::new(ComponentCompilationServiceDefault::new(
+                        config.uri(),
+                        config.retries,
+                        config.connect_timeout,
+                    ))
                 }
                 ComponentCompilationConfig::Disabled(_) => {
                     Arc::new(ComponentCompilationServiceDisabled)
@@ -138,19 +143,30 @@ impl Services {
         let initial_component_files_service: Arc<InitialComponentFilesService> =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
+        let plugin_wasm_files_service: Arc<PluginWasmFilesService> =
+            Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
+        let base_component_service = Arc::new(LazyComponentService::new());
+
         let base_plugin_service: Arc<
             dyn PluginService<CloudPluginOwner, CloudPluginScope> + Send + Sync,
-        > = Arc::new(PluginServiceDefault::new(plugin_repo.clone()));
-
-        let base_component_service: Arc<
-            dyn BaseComponentService<CloudComponentOwner> + Send + Sync,
-        > = Arc::new(BaseComponentServiceDefault::new(
-            component_repo.clone(),
-            object_store.clone(),
-            compilation_service.clone(),
-            initial_component_files_service.clone(),
-            base_plugin_service.clone(),
+        > = Arc::new(PluginServiceDefault::new(
+            plugin_repo.clone(),
+            plugin_wasm_files_service.clone(),
+            base_component_service.clone(),
         ));
+
+        base_component_service
+            .set_implementation(BaseComponentServiceDefault::new(
+                component_repo.clone(),
+                object_store.clone(),
+                compilation_service.clone(),
+                initial_component_files_service.clone(),
+                base_plugin_service.clone(),
+                plugin_wasm_files_service.clone(),
+                config.plugin_transformations.clone(),
+            ))
+            .await;
 
         let component_service: Arc<CloudComponentService> = Arc::new(CloudComponentService::new(
             base_component_service,

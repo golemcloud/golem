@@ -1,6 +1,8 @@
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::invocation_context::{self, InvocationContextStack};
+use golem_common::model::invocation_context::{
+    self, AttributeValue, InvocationContextStack, SpanId,
+};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -594,27 +596,42 @@ impl UpdateManagement for TestWorkerCtx {
 
 #[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
-    fn start_span(
+    async fn start_span(
         &mut self,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
-        self.durable_ctx.start_span(initial_attributes)
+        self.durable_ctx.start_span(initial_attributes).await
     }
 
-    fn start_child_span(
+    async fn start_child_span(
         &mut self,
         parent: &invocation_context::SpanId,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
         self.durable_ctx
             .start_child_span(parent, initial_attributes)
+            .await
     }
 
-    fn finish_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
-        self.durable_ctx.finish_span(span_id)
+    async fn finish_span(
+        &mut self,
+        span_id: &invocation_context::SpanId,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id).await
     }
 
     fn remove_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
         self.durable_ctx.remove_span(span_id)
+    }
+
+    async fn set_span_attribute(
+        &mut self,
+        span_id: &SpanId,
+        key: &str,
+        value: AttributeValue,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx
+            .set_span_attribute(span_id, key, value)
+            .await
     }
 }

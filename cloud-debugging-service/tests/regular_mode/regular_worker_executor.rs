@@ -12,6 +12,7 @@ use golem_test_framework::config::TestDependencies;
 use crate::RegularWorkerExecutorPerTestDependencies;
 use tokio::task::JoinSet;
 
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -98,5 +99,9 @@ impl TestDependencies for TestRegularWorkerExecutor {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.deps.initial_component_files_service()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.deps.plugin_wasm_files_service()
     }
 }

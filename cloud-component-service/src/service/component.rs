@@ -1,11 +1,12 @@
 use crate::model::CloudPluginScope;
 use crate::service::CloudComponentError;
+use bytes::Bytes;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::BaseAuthService;
 use cloud_common::clients::limit::LimitService;
 use cloud_common::clients::project::ProjectService;
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, ProjectAction};
-use futures_util::Stream;
+use futures_util::stream::BoxStream;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{
@@ -20,7 +21,6 @@ use golem_component_service_base::service::component::{ComponentError, Component
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use golem_service_base::model::*;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct CloudComponentService {
@@ -249,10 +249,7 @@ impl CloudComponentService {
         component_id: &ComponentId,
         version: Option<u64>,
         auth: &CloudAuthCtx,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
-        CloudComponentError,
-    > {
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
@@ -452,6 +449,23 @@ impl CloudComponentService {
         self.base_component_service
             .delete_plugin_installation_for_component(&owner, installation_id, component_id)
             .await
+    }
+
+    pub async fn get_file_contents(
+        &self,
+        auth: &CloudAuthCtx,
+        component_id: &ComponentId,
+        version: ComponentVersion,
+        path: &str,
+    ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, CloudComponentError> {
+        let owner = self
+            .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
+            .await?;
+        let result = self
+            .base_component_service
+            .get_file_contents(component_id, version, path, &owner)
+            .await?;
+        Ok(result)
     }
 
     async fn is_authorized_by_component(

@@ -86,6 +86,7 @@ fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
 max_active_workers = 1024
 max_concurrent_streams = 1024
+max_oplog_query_pages_size = 100
 
 [memory]
 acquire_retry_delay = "500ms"
@@ -112,6 +113,7 @@ type = "Grpc"
 
 [plugin_service.config]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+connect_timeout = "10s"
 host = "localhost"
 plugin_cache_size = 1024
 port = 9090
@@ -125,8 +127,16 @@ multiplier = 3.0
 
 [public_worker_api]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+connect_timeout = "10s"
 host = "localhost"
 port = 9007
+
+[public_worker_api.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [rdbms.pool]
 eviction_period = "2m"
@@ -268,6 +278,7 @@ without_time = false
 # invocation_result_broadcast_capacity = 100000
 # max_active_workers = 1024
 # max_concurrent_streams = 1024
+# max_oplog_query_pages_size = 100
 # 
 # [memory]
 # acquire_retry_delay = "500ms"
@@ -294,6 +305,7 @@ without_time = false
 # 
 # [plugin_service.config]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# connect_timeout = "10s"
 # host = "localhost"
 # plugin_cache_size = 1024
 # port = 9090
@@ -307,8 +319,16 @@ without_time = false
 # 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# connect_timeout = "10s"
 # host = "localhost"
 # port = 9007
+# 
+# [public_worker_api.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [rdbms.pool]
 # eviction_period = "2m"

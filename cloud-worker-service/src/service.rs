@@ -234,6 +234,7 @@ impl ApiServices {
             Arc::new(RemoteComponentService::new(
                 config.base_config.component_service.uri(),
                 config.base_config.component_service.retries.clone(),
+                config.base_config.component_service.connect_timeout,
             ));
 
         let identity_provider = Arc::new(DefaultIdentityProvider);

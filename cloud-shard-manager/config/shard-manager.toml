@@ -62,6 +62,7 @@ without_time = false
 
 [worker_executors]
 assign_shards_timeout = "5s"
+connect_timeout = "10s"
 health_check_timeout = "2s"
 revoke_shards_timeout = "5s"
 
@@ -138,6 +139,7 @@ multiplier = 2.0
 # 
 # [worker_executors]
 # assign_shards_timeout = "5s"
+# connect_timeout = "10s"
 # health_check_timeout = "2s"
 # revoke_shards_timeout = "5s"
 # 

@@ -480,6 +480,44 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Download file in a Component
+    #[oai(
+        path = "/:component_id/versions/:version/file-contents/:file_path",
+        method = "get",
+        operation_id = "download_component_file"
+    )]
+    async fn download_component_file(
+        &self,
+        component_id: Path<ComponentId>,
+        version: Path<String>,
+        file_path: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Binary<Body>> {
+        let auth = CloudAuthCtx::new(token.secret());
+
+        let record = recorded_http_api_request!(
+            "download_component_file",
+            component_id = component_id.0.to_string(),
+            version = version.0,
+            file_path = file_path.0.as_str()
+        );
+
+        let version_int = Self::parse_version_path_segment(&version.0)?;
+
+        let response = self
+            .component_service
+            .get_file_contents(&auth, &component_id.0, version_int, file_path.0.as_str())
+            .await
+            .map_err(|e| e.into())
+            .map(|bytes| {
+                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })))
+            });
+
+        record.result(response)
+    }
+
     fn handle_not_found(response: Option<Component>) -> Result<Json<Component>> {
         match response {
             Some(component) => Ok(Json(component)),

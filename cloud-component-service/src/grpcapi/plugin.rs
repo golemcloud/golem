@@ -10,6 +10,7 @@ use cloud_api_grpc::proto::golem::cloud::component::v1::{
 use cloud_api_grpc::proto::golem::cloud::component::PluginDefinition;
 use cloud_common::model::CloudPluginOwner;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
+use golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_plugin_response, delete_plugin_response, ComponentError,
     CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginRequest,
@@ -17,6 +18,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
+use golem_component_service_base::api::dto;
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
@@ -77,7 +79,7 @@ impl PluginGrpcApi {
     ) -> Result<(), ComponentError> {
         let auth = auth(metadata)?;
 
-        let plugin = plugin_definition_wo_owner_from_grpc(
+        let plugin = plugin_definition_creation_from_grpc(
             request
                 .plugin
                 .clone()
@@ -282,10 +284,10 @@ fn plugin_definition_to_grpc(
     }
 }
 
-fn plugin_definition_wo_owner_from_grpc(
+fn plugin_definition_creation_from_grpc(
     plugin_definition: PluginDefinition,
-) -> Result<golem_common::model::plugin::PluginDefinitionWithoutOwner<CloudPluginScope>, String> {
-    Ok(golem_common::model::plugin::PluginDefinitionWithoutOwner {
+) -> Result<dto::PluginDefinitionCreation<CloudPluginScope>, String> {
+    Ok(dto::PluginDefinitionCreation {
         name: plugin_definition.name,
         version: plugin_definition.version,
         scope: plugin_definition
@@ -295,9 +297,22 @@ fn plugin_definition_wo_owner_from_grpc(
         description: plugin_definition.description,
         icon: plugin_definition.icon,
         homepage: plugin_definition.homepage,
-        specs: plugin_definition
-            .specs
-            .ok_or("Missing specs field")?
-            .try_into()?,
+        specs: {
+            let specs = plugin_definition
+                .specs
+                .ok_or("Missing specs field")?
+                .definition
+                .ok_or("Missing specs definition field")?;
+            match specs {
+                Definition::ComponentTransformer(specs) => {
+                    dto::PluginTypeSpecificCreation::ComponentTransformer(specs.try_into()?)
+                }
+                Definition::OplogProcessor(specs) => {
+                    dto::PluginTypeSpecificCreation::OplogProcessor(specs.try_into()?)
+                }
+                Definition::Library(_) => unimplemented!(), // TODO
+                Definition::App(_) => unimplemented!(),     // TODO
+            }
+        },
     })
 }

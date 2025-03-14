@@ -113,7 +113,9 @@ impl ApiEndpointError {
 impl From<ApiDeploymentError<CloudNamespace>> for ApiEndpointError {
     fn from(value: ApiDeploymentError<CloudNamespace>) -> Self {
         match value {
-            ApiDeploymentError::ApiDefinitionNotFound(_, _) => ApiEndpointError::not_found(value),
+            ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => {
+                ApiEndpointError::not_found(value)
+            }
             ApiDeploymentError::ApiDeploymentNotFound(_, _) => ApiEndpointError::not_found(value),
             ApiDeploymentError::ApiDeploymentConflict(_) => ApiEndpointError::already_exists(value),
             ApiDeploymentError::ApiDefinitionsConflict(_) => ApiEndpointError::bad_request(value),
@@ -183,7 +185,7 @@ impl From<BaseApiDefinitionError> for ApiEndpointError {
                 ApiEndpointError::bad_request(value)
             }
             BaseApiDefinitionError::ApiDefinitionNotFound(_) => ApiEndpointError::not_found(value),
-            BaseApiDefinitionError::ApiDefinitionAlreadyExists(_) => {
+            BaseApiDefinitionError::ApiDefinitionAlreadyExists(_, _) => {
                 ApiEndpointError::already_exists(value)
             }
             BaseApiDefinitionError::ComponentNotFoundError(_) => {
