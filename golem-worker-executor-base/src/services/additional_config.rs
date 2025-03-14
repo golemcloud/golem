@@ -94,6 +94,8 @@ pub struct ComponentServiceGrpcConfig {
     pub access_token: String,
     pub retries: RetryConfig,
     pub max_component_size: usize,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
 impl ComponentServiceGrpcConfig {
@@ -120,6 +122,7 @@ impl Default for ComponentServiceGrpcConfig {
             access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
             retries: RetryConfig::max_attempts_3(),
             max_component_size: 50 * 1024 * 1024,
+            connect_timeout: Duration::from_secs(30),
         }
     }
 }

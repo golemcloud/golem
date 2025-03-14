@@ -176,6 +176,16 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::FailedToDownloadFile => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::InvalidFilePath(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
         }
     }
 }

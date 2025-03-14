@@ -557,7 +557,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         idempotency_key,
                         full_function_name,
                         function_input,
-                        invocation_context: _invocation_context,
+                        invocation_context,
                     } => {
                         let metadata = components
                             .get_metadata(
@@ -591,11 +591,15 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                             }
                         }
 
-                        // TODO: store invocation context
+                        let span_data = invocation_context.to_oplog_data();
+
                         PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
                             idempotency_key,
                             full_function_name,
                             function_input: params,
+                            trace_id: invocation_context.trace_id.clone(),
+                            trace_states: invocation_context.trace_states.clone(),
+                            invocation_context: encode_span_data(&span_data),
                         })
                     }
                     WorkerInvocation::ManualUpdate { target_version } => {

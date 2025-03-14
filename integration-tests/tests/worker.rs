@@ -1059,7 +1059,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let check_worker_ids = worker_ids
         .iter()
-        .choose_multiple(&mut rand::thread_rng(), workers_count / 10);
+        .choose_multiple(&mut rand::rng(), workers_count / 10);
 
     for worker_id in check_worker_ids {
         let _ = deps

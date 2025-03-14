@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
+use std::time::Duration;
 use uuid::Uuid;
 
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
@@ -76,6 +77,7 @@ impl ComponentServiceConfig {
 pub struct CompileWorkerConfig {
     pub retries: RetryConfig,
     pub max_component_size: usize,
+    pub connect_timeout: Duration,
 }
 
 impl Default for ServerConfig {
@@ -123,6 +125,7 @@ impl Default for CompileWorkerConfig {
         Self {
             retries: RetryConfig::max_attempts_3(),
             max_component_size: 1000000,
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }

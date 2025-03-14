@@ -32,6 +32,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
 use http::Uri;
 use std::sync::Arc;
+use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use uuid::Uuid;
@@ -120,6 +121,7 @@ pub fn default_configured(
                         .parse::<Uuid>()
                         .expect("Access token must be an UUID"),
                     config.retries.clone(),
+                    config.connect_timeout,
                 ),
                 config.plugin_cache_size,
             );
@@ -286,7 +288,12 @@ struct DefaultGrpcPlugins {
 }
 
 impl DefaultGrpcPlugins {
-    pub fn new(endpoint: Uri, access_token: Uuid, retry_config: RetryConfig) -> Self {
+    pub fn new(
+        endpoint: Uri,
+        access_token: Uuid,
+        retry_config: RetryConfig,
+        connect_timeout: Duration,
+    ) -> Self {
         Self {
             plugins_client: GrpcClient::new(
                 "plugins_service",
@@ -298,7 +305,7 @@ impl DefaultGrpcPlugins {
                 endpoint.clone(),
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
-                    ..Default::default() // TODO
+                    connect_timeout,
                 },
             ),
             components_client: GrpcClient::new(

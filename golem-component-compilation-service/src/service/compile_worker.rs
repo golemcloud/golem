@@ -82,7 +82,7 @@ impl CompileWorker {
                 uri,
                 GrpcClientConfig {
                     retries_on_unavailable: config.retries.clone(),
-                    ..Default::default() // TODO
+                    connect_timeout: config.connect_timeout,
                 },
             ),
         };

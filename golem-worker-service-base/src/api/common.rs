@@ -18,27 +18,15 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiD
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::SafeDisplay;
-use golem_service_base::model::ErrorBody;
+use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Object, Union};
+use poem_openapi::{ApiResponse, Union};
 
 #[derive(Union, Clone, Debug)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum WorkerServiceErrorsBody {
-    Messages(MessagesErrorsBody),
-    Validation(ValidationErrorsBody),
-}
-
-// TODO: These should probably use golem_common ErrorBody and ErrorsBody instead.
-
-#[derive(Clone, Debug, Object)]
-pub struct MessagesErrorsBody {
-    errors: Vec<String>,
-}
-
-#[derive(Clone, Debug, Object)]
-pub struct ValidationErrorsBody {
-    errors: Vec<String>,
+    Messages(ErrorsBody),
+    Validation(ErrorsBody),
 }
 
 #[derive(ApiResponse, Clone, Debug)]
@@ -90,11 +78,9 @@ impl ApiEndpointError {
     }
 
     pub fn bad_request<T: SafeDisplay>(error: T) -> Self {
-        Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(
-            MessagesErrorsBody {
-                errors: vec![error.to_safe_string()],
-            },
-        )))
+        Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(ErrorsBody {
+            errors: vec![error.to_safe_string()],
+        })))
     }
 
     pub fn not_found<T: SafeDisplay>(error: T) -> Self {
@@ -159,7 +145,7 @@ impl TraceErrorKind for ApiDefinitionTraceErrorKind<'_> {
 }
 
 mod conversion {
-    use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
+    use super::{ApiEndpointError, WorkerServiceErrorsBody};
     use crate::service::gateway::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
     use crate::service::gateway::api_definition_validator::ValidationErrors;
     use crate::service::gateway::api_deployment::ApiDeploymentError;
@@ -274,9 +260,10 @@ mod conversion {
 
     impl From<ValidationErrors> for ApiEndpointError {
         fn from(error: ValidationErrors) -> Self {
-            let error = WorkerServiceErrorsBody::Validation(ValidationErrorsBody {
-                errors: error.errors,
-            });
+            let error =
+                WorkerServiceErrorsBody::Validation(golem_service_base::model::ErrorsBody {
+                    errors: error.errors,
+                });
 
             ApiEndpointError::BadRequest(Json(error))
         }

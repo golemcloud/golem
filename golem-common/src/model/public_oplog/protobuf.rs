@@ -1015,6 +1015,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicW
                     } else {
                         None
                     },
+                    trace_id: TraceId::from_string(&exported_function.trace_id)?,
+                    trace_states: exported_function.trace_states,
+                    invocation_context: encode_public_span_data(
+                        exported_function.invocation_context,
+                    )?,
                 }),
             ),
             worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
@@ -1047,6 +1052,9 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
                                         format!("Failed to convert request: {}", errors.join(", "))
                                     },
                                 )).collect::<Result<Vec<_>, _>>()?,
+                            trace_id: exported_function.trace_id.to_string(),
+                            trace_states: exported_function.trace_states,
+                            invocation_context: decode_public_span_data(&exported_function.invocation_context, 0),
                         },
                     )),
                 }

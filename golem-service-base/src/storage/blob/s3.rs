@@ -46,6 +46,7 @@ pub struct S3BlobStorage {
 }
 
 impl S3BlobStorage {
+    #[allow(deprecated)]
     pub async fn new(config: S3BlobStorageConfig) -> Self {
         let region = config.region.clone();
 

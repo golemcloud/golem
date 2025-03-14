@@ -909,7 +909,6 @@ mod tests {
         test_string_expr_parse_and_encode("worker.response");
     }
 
-    // TODO; Avoid having to pass null to fix tests
     fn get_api_spec(
         path_pattern: &str,
         worker_id: &str,

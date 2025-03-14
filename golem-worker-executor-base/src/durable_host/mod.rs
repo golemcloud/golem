@@ -44,7 +44,9 @@ use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::function_result_interpreter::interpret_function_results;
-use crate::worker::invocation::{find_first_available_function, invoke_worker, InvokeResult};
+use crate::worker::invocation::{
+    find_first_available_function, invoke_observed_and_traced, InvokeResult,
+};
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
@@ -574,7 +576,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         .as_context_mut()
                                         .data_mut()
                                         .begin_call_snapshotting_function();
-                                    let load_result = invoke_worker(
+                                    let load_result = invoke_observed_and_traced(
                                         load_snapshot,
                                         vec![Value::List(
                                             data.iter().map(|b| Value::U8(*b)).collect(),
@@ -1486,7 +1488,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .await?;
 
                         let full_function_name = function_name.to_string();
-                        let invoke_result = invoke_worker(
+                        let invoke_result = invoke_observed_and_traced(
                             full_function_name.clone(),
                             function_input.clone(),
                             store,
