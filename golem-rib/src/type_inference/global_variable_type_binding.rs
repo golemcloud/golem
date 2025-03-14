@@ -116,7 +116,14 @@ mod internal {
                 } => {
                     if variable_id == &type_spec.variable_id {
                         if path.is_empty() {
-                            let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, .. }) if expr0.as_ref() == expr);
+                            let continue_traverse ={
+                                match expr_queue.back() {
+                                    Some(Expr::SelectField { expr: expr0, .. }) => {
+                                        expr0.as_ref() == expr
+                                    },
+                                    _ => false
+                                }
+                            };
 
                             if continue_traverse {
                                 temp_stack.push_front((expr.clone(), true));
@@ -130,6 +137,8 @@ mod internal {
                                     },
                                     false,
                                 ));
+
+                                path = type_spec.path.clone();
                             }
                         } else {
                             temp_stack.push_front((expr.clone(), true));
@@ -146,7 +155,16 @@ mod internal {
                     inferred_type,
                     source_span,
                 } => {
-                    let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, ..}) if expr0.as_ref() == outer);
+                    let continue_search = {
+                        let parent_expr = expr_queue.back();
+                        match parent_expr {
+                            // Is the next expression in a select field, and it's expression is same as the current one
+                            Some(Expr::SelectField { expr: expr0, field, .. }) => {
+                                expr0.as_ref() == outer
+                            },
+                            _ => false
+                        }
+                    };
 
                     handle_select_field(
                         expr,
@@ -158,6 +176,7 @@ mod internal {
                         &type_spec.inferred_type,
                         type_annotation,
                         source_span,
+                        type_spec,
                     )?;
                 }
 
@@ -850,23 +869,34 @@ mod internal {
         override_type: &InferredType,
         type_name: &Option<TypeName>,
         source_span: &SourceSpan,
+        type_spec: &GlobalVariableTypeSpec,
     ) -> Result<(), RibCompilationError> {
         let (expr, part_of_path) = temp_stack
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
 
+        // found = true, keep searching
+        // otherwise make break the search
+        let mut found = false;
+
         if part_of_path {
             match path.current() {
-                Some(PathElem::Field(name)) if name == field => path.progress(),
+                Some(PathElem::Field(name)) if name == field => {
+                    found = true;
+                    path.progress()
+                },
                 Some(PathElem::Field(_)) => {}
                 Some(PathElem::Index(_)) => {}
                 None => {}
             }
 
+            // continue search here implies, we haven't yet reached the last selection field yet
             if path.is_empty() {
                 let new_type = if continue_search {
                     current_field_type.clone()
                 } else {
+                    // if there is nothing to continue, we reset the path
+                    *path = type_spec.path.clone();
                     current_field_type.merge(override_type.clone())
                 };
 
@@ -876,12 +906,17 @@ mod internal {
                         .with_source_span(source_span.clone()),
                     continue_search,
                 ));
+
             } else {
+                // We reset the path if the path is wrong
+                if !found {
+                    *path = type_spec.path.clone();
+                }
                 temp_stack.push_front((
                     Expr::select_field(expr.clone(), field, type_name.clone())
                         .with_inferred_type(current_field_type.clone())
                         .with_source_span(source_span.clone()),
-                    true,
+                    found
                 ));
             }
         } else {

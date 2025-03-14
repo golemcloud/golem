@@ -1233,7 +1233,7 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
         "shopping-cart-${res}"
     "#;
 
-    let response_mapping = r#"
+        let response_mapping = r#"
          let userid: string = request.path.user-id;
          let max: u64 = 100;
          let zero: u64 = 0;
@@ -1242,13 +1242,13 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
          let worker = instance("shopping-cart-${res}");
          let param1 = request.body.foo_key;
          let param2 = request.body.bar_key[0];
-         let response = golem:it/api.{get-cart-contents}(param1, param2);
+         let response = worker.get-cart-contents(param1, param2);
 
          response
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping)
             .await;
 
     let session_store = internal::get_session_store();

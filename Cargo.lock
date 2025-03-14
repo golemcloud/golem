@@ -3195,6 +3195,7 @@ dependencies = [
  "async-trait",
  "bigdecimal",
  "bincode",
+ "clap",
  "combine",
  "golem-api-grpc",
  "golem-wasm-ast",
