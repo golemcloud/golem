@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::CompileWorkerConfig;
+use crate::config::{CompileWorkerConfig, StaticComponentServiceConfig};
 use crate::model::*;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -29,13 +29,12 @@ use golem_worker_executor_base::grpc::is_grpc_retriable;
 use golem_worker_executor_base::grpc::GrpcError;
 use golem_worker_executor_base::metrics::component::record_compilation_time;
 use golem_worker_executor_base::services::compiled_component::CompiledComponentService;
-use http::Uri;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tracing::Instrument;
+use tracing::{info, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -44,19 +43,17 @@ use wasmtime::Engine;
 #[derive(Clone)]
 pub struct CompileWorker {
     // Config
-    access_token: Uuid,
     config: CompileWorkerConfig,
 
     // Resources
     engine: Engine,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
-    client: GrpcClient<ComponentServiceClient<Channel>>,
+    client: Arc<Mutex<Option<ClientWithToken>>>,
 }
 
 impl CompileWorker {
-    pub fn start(
-        uri: Uri,
-        access_token: Uuid,
+    pub async fn start(
+        component_service_config: Option<StaticComponentServiceConfig>,
         config: CompileWorkerConfig,
 
         engine: Engine,
@@ -65,32 +62,28 @@ impl CompileWorker {
         sender: mpsc::Sender<CompiledComponent>,
         mut recv: mpsc::Receiver<CompilationRequest>,
     ) {
-        let max_component_size = config.max_component_size;
         let worker = Self {
             engine,
             compiled_component_service,
             config: config.clone(),
-            access_token,
-            client: GrpcClient::new(
-                "component_service",
-                move |channel| {
-                    ComponentServiceClient::new(channel)
-                        .max_decoding_message_size(max_component_size)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                },
-                uri,
-                GrpcClientConfig {
-                    retries_on_unavailable: config.retries.clone(),
-                    connect_timeout: config.connect_timeout,
-                },
-            ),
+            client: Arc::new(Mutex::new(None)),
         };
+
+        if let Some(component_service_config) = component_service_config {
+            worker.set_client(component_service_config).await;
+        }
 
         tokio::spawn(
             async move {
                 while let Some(request) = recv.recv().await {
                     crate::metrics::decrement_queue_length();
+
+                    if let Some(sender) = request.sender {
+                        if worker.client.lock().await.is_none() {
+                            worker.set_client(sender).await;
+                        }
+                    }
+
                     let result = worker.compile_component(&request.component).await;
                     match result {
                         Err(_) => {}
@@ -113,6 +106,34 @@ impl CompileWorker {
             }
             .in_current_span(),
         );
+    }
+
+    async fn set_client(&self, config: StaticComponentServiceConfig) {
+        info!(
+            "Initializing component service client for {}:{}",
+            config.host, config.port
+        );
+
+        let access_token = config.access_token;
+        let max_component_size = self.config.max_component_size;
+        let client = GrpcClient::new(
+            "component_service",
+            move |channel| {
+                ComponentServiceClient::new(channel)
+                    .max_decoding_message_size(max_component_size)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
+            config.uri(),
+            GrpcClientConfig {
+                retries_on_unavailable: self.config.retries.clone(),
+                connect_timeout: self.config.connect_timeout,
+            },
+        );
+        self.client.lock().await.replace(ClientWithToken {
+            client,
+            access_token,
+        });
     }
 
     async fn compile_component(
@@ -143,34 +164,40 @@ impl CompileWorker {
             }
         };
 
-        let bytes = download_via_grpc(
-            &self.client,
-            &self.access_token,
-            &self.config.retries,
-            &component_with_version.id,
-            component_with_version.version,
-        )
-        .await?;
+        if let Some(client) = &*self.client.lock().await {
+            let bytes = download_via_grpc(
+                &client.client,
+                &client.access_token,
+                &self.config.retries,
+                &component_with_version.id,
+                component_with_version.version,
+            )
+            .await?;
 
-        let start = Instant::now();
-        let component = Component::from_binary(&engine, &bytes).map_err(|e| {
-            CompilationError::CompileFailure(format!(
-                "Failed to compile component {:?}: {}",
-                component_with_version, e
+            let start = Instant::now();
+            let component = Component::from_binary(&engine, &bytes).map_err(|e| {
+                CompilationError::CompileFailure(format!(
+                    "Failed to compile component {:?}: {}",
+                    component_with_version, e
+                ))
+            })?;
+            let end = Instant::now();
+
+            let compilation_time = end.duration_since(start);
+
+            record_compilation_time(compilation_time);
+
+            tracing::debug!(
+                "Compiled {component_with_version:?} in {}ms",
+                compilation_time.as_millis(),
+            );
+
+            Ok(component)
+        } else {
+            Err(CompilationError::Unexpected(
+                "Component service is not configured".to_string(),
             ))
-        })?;
-        let end = Instant::now();
-
-        let compilation_time = end.duration_since(start);
-
-        record_compilation_time(compilation_time);
-
-        tracing::debug!(
-            "Compiled {component_with_version:?} in {}ms",
-            compilation_time.as_millis(),
-        );
-
-        Ok(component)
+        }
     }
 }
 
@@ -235,4 +262,9 @@ async fn download_via_grpc(
         tracing::error!("Failed to download component {component_id}@{component_version}: {error}");
         CompilationError::ComponentDownloadFailed(error.to_string())
     })
+}
+
+struct ClientWithToken {
+    client: GrpcClient<ComponentServiceClient<Channel>>,
+    access_token: Uuid,
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::ComponentServiceConfig;
 use crate::service::compile_service::ComponentCompilationServiceImpl;
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
@@ -107,17 +108,24 @@ pub async fn run(
 
     let compilation_service = ComponentCompilationServiceImpl::new(
         config.compile_worker,
-        config.component_service,
+        config.component_service.clone(),
         engine,
         compiled_component,
-    );
+    )
+    .await;
 
     let compilation_service = Arc::new(compilation_service);
 
     let ipv4_address: Ipv4Addr = config.grpc_host.parse().expect("Invalid IP address");
     let address = SocketAddr::new(ipv4_address.into(), config.grpc_port);
 
-    let grpc_port = start_grpc_server(address, compilation_service, join_set).await?;
+    let grpc_port = start_grpc_server(
+        address,
+        compilation_service,
+        config.component_service,
+        join_set,
+    )
+    .await?;
 
     info!("Server started on port {}", config.grpc_port);
 
@@ -130,6 +138,7 @@ pub async fn run(
 async fn start_grpc_server(
     addr: SocketAddr,
     service: Arc<dyn CompilationService + Send + Sync>,
+    component_service_config: ComponentServiceConfig,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> anyhow::Result<u16> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -146,7 +155,7 @@ async fn start_grpc_server(
             tonic::transport::Server::builder()
                 .add_service(health_service)
                 .add_service(
-                    ComponentCompilationServiceServer::new(CompileGrpcService::new(service))
+                    ComponentCompilationServiceServer::new(CompileGrpcService::new(service, component_service_config))
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip),
                 )
