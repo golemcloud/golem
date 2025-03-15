@@ -3995,6 +3995,62 @@ mod interpreter_tests {
         assert_eq!(result_val, expected);
     }
 
+    #[test]
+    async fn test_interpreter_durable_worker_with_resource_18() {
+        let expr = r#"
+
+            let initial = 1: u64;
+            let final = 5: u64;
+            let range = initial..final;
+                let worker = instance("my-worker");
+                let cart = worker.cart[golem:it]("bar");
+
+            for i in range {
+                yield cart.add-item(request.body);
+            };
+
+            "success"
+        "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+
+        let mut input = HashMap::new();
+
+        let rib_input_key = "request";
+        let rib_input_value = ValueAndType::new(
+            Value::Record(vec![Value::Record(vec![
+                Value::String("mac-book".to_string()),
+                Value::String("mac".to_string()),
+                Value::U32(1),
+                Value::F32(1.0),
+            ])]),
+            record(vec![field(
+                "body",
+                record(vec![
+                    field("name", str()),
+                    field("product-id", str()),
+                    field("quantity", u32()),
+                    field("price", f32()),
+                ]),
+            )]),
+        );
+
+        input.insert(rib_input_key.to_string(), rib_input_value);
+
+        let rib_input = RibInput::new(input);
+
+        let mut rib_interpreter = test_utils::interpreter_static_response(
+            &"success".into_value_and_type(),
+            Some(rib_input),
+        );
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+    }
+
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
