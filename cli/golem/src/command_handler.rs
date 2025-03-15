@@ -14,6 +14,7 @@
 
 use crate::launch::{launch_golem_services, LaunchArgs};
 use anyhow::anyhow;
+use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::ServerSubcommand;
 use golem_cli::command_handler::CommandHandlerHooks;
 use golem_cli::context::Context;
@@ -55,6 +56,14 @@ impl CommandHandlerHooks for ServerCommandHandler {
                 Ok(())
             }
             ServerSubcommand::Clean => clean_data_dir(&default_data_dir()?).await,
+        }
+    }
+
+    fn override_verbosity(verbosity: Verbosity) -> Verbosity {
+        if verbosity.is_present() {
+            verbosity
+        } else {
+            Verbosity::new(2, 0)
         }
     }
 }

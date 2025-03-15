@@ -37,6 +37,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
+clap-verbosity-flag = { workspace = true }
 dirs = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }

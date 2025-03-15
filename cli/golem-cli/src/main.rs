@@ -9,6 +9,7 @@ mod hooks {
     use golem_cli::command_handler::CommandHandlerHooks;
     use golem_cli::context::Context;
 
+    use clap_verbosity_flag::Verbosity;
     use std::sync::Arc;
 
     pub struct NoHooks {}
@@ -21,6 +22,11 @@ mod hooks {
             _subcommand: ServerSubcommand,
         ) -> anyhow::Result<()> {
             unimplemented!()
+        }
+
+        #[cfg(feature = "server-commands")]
+        fn override_verbosity(verbosity: Verbosity) -> Verbosity {
+            verbosity
         }
     }
 }

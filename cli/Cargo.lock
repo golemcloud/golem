@@ -3437,6 +3437,7 @@ dependencies = [
  "async-trait",
  "bytes 1.10.1",
  "clap",
+ "clap-verbosity-flag",
  "dirs 6.0.0",
  "futures",
  "golem-cli",

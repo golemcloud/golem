@@ -30,6 +30,7 @@ use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::init_tracing;
 use crate::model::text::fmt::log_error;
+use clap_verbosity_flag::Verbosity;
 use golem_wasm_rpc_stubgen::log::{logln, set_log_output, Output};
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -57,6 +58,9 @@ pub trait CommandHandlerHooks {
         ctx: Arc<Context>,
         subcommand: ServerSubcommand,
     ) -> impl std::future::Future<Output = anyhow::Result<()>>;
+
+    #[cfg(feature = "server-commands")]
+    fn override_verbosity(verbosity: Verbosity) -> Verbosity;
 }
 
 // CommandHandle is responsible for matching commands and producing CLI output using Context,
@@ -97,7 +101,15 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
     {
         let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
             GolemCliCommandParseResult::FullMatch(command) => {
-                init_tracing(command.global_flags.verbosity);
+                #[cfg(feature = "server-commands")]
+                let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
+                    Hooks::override_verbosity(command.global_flags.verbosity)
+                } else {
+                    command.global_flags.verbosity
+                };
+                #[cfg(not(feature = "server-commands"))]
+                let verbosity = command.global_flags.verbosity;
+                init_tracing(verbosity);
 
                 match Self::new(&command.global_flags, hooks) {
                     Ok(mut handler) => {
