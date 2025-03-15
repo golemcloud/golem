@@ -3117,6 +3117,32 @@ mod interpreter_tests {
             "error in the following rib found at line 3, column 30\n`x.bar(\"bar\")`\ncause: invalid function call `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
         );
     }
+
+    #[test]
+    async fn test_interpreter_ephemeral_worker_7() {
+        let expr = r#"
+                let worker = instance();
+                let invokes: list<u8> = [1, 2, 3, 4];
+
+                for i in invokes {
+                    yield worker.qux[wasi:clocks]("bar");
+                };
+
+                "success"
+            "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata();
+
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+
+        let mut rib_interpreter =
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+    }
+
     /// Durable worker
     #[test]
     async fn test_interpreter_durable_worker_0() {
@@ -3414,6 +3440,31 @@ mod interpreter_tests {
         );
 
         assert_eq!(result.get_val().unwrap(), expected_val);
+    }
+
+    #[test]
+    async fn test_interpreter_durable_worker_11() {
+        let expr = r#"
+                let worker = instance("my-worker");
+                let invokes: list<u8> = [1, 2, 3, 4];
+
+                for i in invokes {
+                    yield worker.qux[wasi:clocks]("bar");
+                };
+
+                "success"
+            "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata();
+
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+
+        let mut rib_interpreter =
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
     }
 
     #[test]
