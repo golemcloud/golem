@@ -14,7 +14,7 @@
 
 use crate::InferredType;
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record};
+use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, tuple};
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
     TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
@@ -44,7 +44,7 @@ impl TryFrom<AnalysedTypeWithUnit> for AnalysedType {
 
     fn try_from(value: AnalysedTypeWithUnit) -> Result<Self, Self::Error> {
         match value {
-            AnalysedTypeWithUnit::Unit => Err("Cannot convert Unit to AnalysedType".to_string()),
+            AnalysedTypeWithUnit::Unit => Ok(tuple(vec![])),
             AnalysedTypeWithUnit::Type(typ) => Ok(typ),
         }
     }
