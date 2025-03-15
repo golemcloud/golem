@@ -25,10 +25,10 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeParameters, UpdateMode};
-use golem_common::client::GrpcClient;
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, RetryConfig, WorkerId};
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, WitValue};
@@ -36,6 +36,7 @@ use http::Uri;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
@@ -184,7 +185,12 @@ pub struct RemoteWorkerProxy {
 }
 
 impl RemoteWorkerProxy {
-    pub fn new(endpoint: Uri, access_token: Uuid) -> Self {
+    pub fn new(
+        endpoint: Uri,
+        access_token: Uuid,
+        retry_config: RetryConfig,
+        connect_timeout: Duration,
+    ) -> Self {
         Self {
             client: GrpcClient::new(
                 "worker_service",
@@ -194,7 +200,10 @@ impl RemoteWorkerProxy {
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
                 endpoint,
-                Default::default(), // TODO
+                GrpcClientConfig {
+                    retries_on_unavailable: retry_config,
+                    connect_timeout,
+                },
             ),
             access_token,
         }

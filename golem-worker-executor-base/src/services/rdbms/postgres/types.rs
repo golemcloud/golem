@@ -882,7 +882,7 @@ pub enum DbColumnType {
 }
 
 impl DbColumnType {
-    pub(crate) fn into_array(self) -> DbColumnType {
+    pub fn into_array(self) -> DbColumnType {
         if let DbColumnType::Array(_) = self {
             self
         } else {

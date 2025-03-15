@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
+use super::PoemMultipartTypeRequirements;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -74,6 +76,22 @@ impl poem_openapi::types::ParseFromParameter for DefaultPluginScope {
     }
 }
 
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromMultipartField for DefaultPluginScope {
+    async fn parse_from_multipart(
+        field: Option<poem::web::Field>,
+    ) -> poem_openapi::types::ParseResult<Self> {
+        use poem_openapi::types::ParseFromParameter;
+        match field {
+            Some(field) => {
+                let s = field.text().await?;
+                Self::parse_from_parameter(&s)
+            }
+            None => ::std::result::Result::Err(poem_openapi::types::ParseError::expected_input()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -93,6 +111,7 @@ pub struct PluginInstallation {
 pub struct PluginInstallationCreation {
     pub name: String,
     pub version: String,
+    /// Plugins will be applied in order of increasing priority
     pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
@@ -228,41 +247,14 @@ pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
     pub owner: Owner,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PluginDefinitionWithoutOwner<Scope: PluginScope> {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub icon: Vec<u8>,
-    pub homepage: String,
-    pub specs: PluginTypeSpecificDefinition,
-    pub scope: Scope,
-}
-
-impl<Scope: PluginScope> PluginDefinitionWithoutOwner<Scope> {
-    pub fn with_owner<Owner: PluginOwner>(self, owner: Owner) -> PluginDefinition<Owner, Scope> {
-        PluginDefinition {
-            name: self.name,
-            version: self.version,
-            description: self.description,
-            icon: self.icon,
-            homepage: self.homepage,
-            specs: self.specs,
-            scope: self.scope,
-            owner,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[repr(i8)]
 pub enum PluginType {
     ComponentTransformer = 0,
     OplogProcessor = 1,
+    Library = 2,
+    App = 3,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -272,6 +264,8 @@ pub enum PluginType {
 pub enum PluginTypeSpecificDefinition {
     ComponentTransformer(ComponentTransformerDefinition),
     OplogProcessor(OplogProcessorDefinition),
+    Library(LibraryPluginDefinition),
+    App(AppPluginDefinition),
 }
 
 impl PluginTypeSpecificDefinition {
@@ -281,6 +275,8 @@ impl PluginTypeSpecificDefinition {
                 PluginType::ComponentTransformer
             }
             PluginTypeSpecificDefinition::OplogProcessor(_) => PluginType::OplogProcessor,
+            PluginTypeSpecificDefinition::Library(_) => PluginType::Library,
+            PluginTypeSpecificDefinition::App(_) => PluginType::App,
         }
     }
 }
@@ -305,6 +301,26 @@ pub struct OplogProcessorDefinition {
     pub component_version: ComponentVersion,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+pub struct PluginWasmFileKey(pub String);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPluginDefinition {
+    pub blob_storage_key: PluginWasmFileKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct AppPluginDefinition {
+    pub blob_storage_key: PluginWasmFileKey,
+}
+
 #[async_trait]
 pub trait PluginScope:
     Debug
@@ -313,6 +329,7 @@ pub trait PluginScope:
     + Serialize
     + for<'de> Deserialize<'de>
     + PoemTypeRequirements
+    + PoemMultipartTypeRequirements
     + Send
     + Sync
     + 'static
@@ -379,9 +396,9 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::plugin::{
-        ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope,
-        OplogProcessorDefinition, PluginDefinition, PluginInstallation,
-        PluginTypeSpecificDefinition,
+        AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginOwner,
+        DefaultPluginScope, LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
+        PluginInstallation, PluginTypeSpecificDefinition, PluginWasmFileKey,
     };
 
     impl From<DefaultPluginScope> for golem_api_grpc::proto::golem::component::DefaultPluginScope {
@@ -503,6 +520,12 @@ mod protobuf {
                 },
                 PluginTypeSpecificDefinition::OplogProcessor(value) => golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
                     definition: Some(golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::OplogProcessor(value.into()))
+                },
+                PluginTypeSpecificDefinition::Library(value) => golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
+                    definition: Some(golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::Library(value.into()))
+                },
+                PluginTypeSpecificDefinition::App(value) => golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
+                    definition: Some(golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::App(value.into()))
                 }
             }
         }
@@ -519,6 +542,8 @@ mod protobuf {
             match value.definition.ok_or("Missing plugin type specific definition")? {
                 golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::ComponentTransformer(value) => Ok(PluginTypeSpecificDefinition::ComponentTransformer(value.try_into()?)),
                 golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::OplogProcessor(value) => Ok(PluginTypeSpecificDefinition::OplogProcessor(value.try_into()?)),
+                golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::Library(value) => Ok(PluginTypeSpecificDefinition::Library(value.try_into()?)),
+                golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::App(value) => Ok(PluginTypeSpecificDefinition::App(value.try_into()?))
             }
         }
     }
@@ -578,6 +603,50 @@ mod protobuf {
                     .ok_or("Missing component_id")?
                     .try_into()?,
                 component_version: value.component_version,
+            })
+        }
+    }
+
+    impl From<LibraryPluginDefinition>
+        for golem_api_grpc::proto::golem::component::LibraryPluginDefinition
+    {
+        fn from(value: LibraryPluginDefinition) -> Self {
+            golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
+                blob_storage_key: value.blob_storage_key.0,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::LibraryPluginDefinition>
+        for LibraryPluginDefinition
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::LibraryPluginDefinition,
+        ) -> Result<Self, Self::Error> {
+            Ok(LibraryPluginDefinition {
+                blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
+            })
+        }
+    }
+
+    impl From<AppPluginDefinition> for golem_api_grpc::proto::golem::component::AppPluginDefinition {
+        fn from(value: AppPluginDefinition) -> Self {
+            golem_api_grpc::proto::golem::component::AppPluginDefinition {
+                blob_storage_key: value.blob_storage_key.0,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::AppPluginDefinition> for AppPluginDefinition {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::AppPluginDefinition,
+        ) -> Result<Self, Self::Error> {
+            Ok(AppPluginDefinition {
+                blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
             })
         }
     }

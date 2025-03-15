@@ -40,13 +40,24 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ComponentApi {
-    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+    component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
+    plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
+    pub fn new(
+        component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
+        plugin_service: Arc<
+            dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+        >,
+    ) -> Self {
+        Self {
+            component_service,
+            plugin_service,
+        }
+    }
+
     /// Create a new component
     ///
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
@@ -497,6 +508,43 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Download file in a Component
+    #[oai(
+        path = "/:component_id/versions/:version/file-contents/:file_key",
+        method = "get",
+        operation_id = "download_component_file"
+    )]
+    async fn download_component_file(
+        &self,
+        component_id: Path<ComponentId>,
+        version: Path<String>,
+        file_key: Path<String>,
+    ) -> Result<Binary<Body>> {
+        let record = recorded_http_api_request!(
+            "download_component_file",
+            component_id = component_id.0.to_string()
+        );
+
+        let version_int = Self::parse_version_path_segment(&version.0)?;
+
+        let response = self
+            .component_service
+            .get_file_contents(
+                &component_id.0,
+                version_int,
+                file_key.0.as_str(),
+                &DefaultComponentOwner,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(|bytes| {
+                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })))
+            });
+
+        record.result(response)
+    }
     fn parse_version_path_segment(version: &str) -> Result<u64> {
         version.parse::<u64>().map_err(|_| {
             ComponentError::BadRequest(Json(ErrorsBody {

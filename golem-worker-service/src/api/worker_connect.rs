@@ -51,18 +51,21 @@ pub async fn ws(
         .map(|(worker_id, worker_stream)| {
             websocket
                 .on_upgrade(move |socket| {
-                    tokio::spawn(async move {
-                        let (sink, stream) = socket.split();
-                        let _ = proxy_worker_connection(
-                            worker_id,
-                            worker_stream,
-                            sink,
-                            stream,
-                            PING_INTERVAL,
-                            PING_TIMEOUT,
-                        )
-                        .await;
-                    })
+                    tokio::spawn(
+                        async move {
+                            let (sink, stream) = socket.split();
+                            let _ = proxy_worker_connection(
+                                worker_id,
+                                worker_stream,
+                                sink,
+                                stream,
+                                PING_INTERVAL,
+                                PING_TIMEOUT,
+                            )
+                            .await;
+                        }
+                        .in_current_span(),
+                    )
                 })
                 .into_response()
         })

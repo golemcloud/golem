@@ -18,7 +18,9 @@ use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::function_result_interpreter::interpret_function_results;
-use crate::worker::invocation::{find_first_available_function, invoke_worker, InvokeResult};
+use crate::worker::invocation::{
+    find_first_available_function, invoke_observed_and_traced, InvokeResult,
+};
 use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -510,7 +512,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // the invocation writes the invocation start oplog entry
         self.store.data().update_pending_invocations().await;
 
-        let result = invoke_worker(
+        let result = invoke_observed_and_traced(
             full_function_name.to_string(),
             function_input.to_owned(),
             self.store,
@@ -518,8 +520,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         )
         .await;
 
+        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
+        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
+        // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
+        // are finished at ExportedFunctionCompleted.
         for span_id in local_span_ids {
-            self.store.data_mut().finish_span(&span_id)?;
+            self.store.data_mut().remove_span(&span_id)?;
         }
         for span_id in inherited_span_ids {
             self.store.data_mut().remove_span(&span_id)?;
@@ -549,14 +555,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(Some(export_function)) => {
                 let function_results = export_function.results.into_iter().collect();
 
-                self.exported_function_invocation_finished_with_type(
-                    full_function_name,
-                    function_input,
-                    output,
-                    consumed_fuel,
-                    function_results,
-                )
-                .await
+                match self
+                    .exported_function_invocation_finished_with_type(
+                        full_function_name,
+                        function_input,
+                        output,
+                        consumed_fuel,
+                        function_results,
+                    )
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        self.store
+                            .data_mut()
+                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown(
+                                error.to_string(),
+                            )))
+                            .await;
+                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                    }
+                }
             }
 
             Ok(None) => {
@@ -588,7 +607,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         output: Vec<Value>,
         consumed_fuel: i64,
         function_results: Vec<AnalysedFunctionResult>,
-    ) -> CommandOutcome {
+    ) -> Result<CommandOutcome, GolemError> {
         let result = interpret_function_results(output, function_results).map_err(|e| {
             GolemError::ValueMismatch {
                 details: e.join(", "),
@@ -605,14 +624,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         consumed_fuel,
                         result,
                     )
-                    .await
-                    .unwrap(); // TODO: handle this error
+                    .await?;
 
                 if self.store.data().component_metadata().component_type == ComponentType::Ephemeral
                 {
-                    CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                    Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
                 } else {
-                    CommandOutcome::Continue
+                    Ok(CommandOutcome::Continue)
                 }
             }
             Err(error) => {
@@ -622,7 +640,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .data_mut()
                     .on_invocation_failure(&trap_type)
                     .await;
-                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
             }
         }
     }
@@ -683,7 +701,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         ) {
             self.store.data_mut().begin_call_snapshotting_function();
 
-            let result = invoke_worker(save_snapshot, vec![], self.store, self.instance).await;
+            let result =
+                invoke_observed_and_traced(save_snapshot, vec![], self.store, self.instance).await;
             self.store.data_mut().end_call_snapshotting_function();
 
             match result {

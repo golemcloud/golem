@@ -17,7 +17,9 @@ use golem_common::config::{
 };
 use golem_common::model::Empty;
 use golem_common::tracing::TracingConfig;
-use golem_component_service_base::config::ComponentCompilationConfig;
+use golem_component_service_base::config::{
+    ComponentCompilationConfig, PluginTransformationsConfig,
+};
 use golem_service_base::config::BlobStorageConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -30,6 +32,7 @@ pub struct ComponentServiceConfig {
     pub db: DbConfig,
     pub compilation: ComponentCompilationConfig,
     pub blob_storage: BlobStorageConfig,
+    pub plugin_transformations: PluginTransformationsConfig,
 }
 
 impl Default for ComponentServiceConfig {
@@ -44,6 +47,7 @@ impl Default for ComponentServiceConfig {
             }),
             compilation: ComponentCompilationConfig::default(),
             blob_storage: BlobStorageConfig::default(),
+            plugin_transformations: PluginTransformationsConfig::default(),
         }
     }
 }

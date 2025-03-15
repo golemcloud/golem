@@ -4,9 +4,11 @@ import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/plugin_installation_id.proto";
 import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/type_annotated_value.proto";
+
 
 package golem.worker;
 
@@ -41,6 +43,9 @@ message OplogEntry {
     DeactivatePluginParameters DeactivatePlugin = 27;
     RevertParameters Revert = 28;
     CancelInvocationParameters CancelInvocation = 29;
+    StartSpanParameters StartSpan = 30;
+    FinishSpanParameters FinishSpan = 31;
+    SetSpanAttributeParameters SetSpanAttribute = 32;
   }
 }
 
@@ -89,6 +94,9 @@ message ExportedFunctionInvokedParameters {
   string function_name = 2;
   repeated wasm.rpc.TypeAnnotatedValue request = 3;
   IdempotencyKey idempotency_key = 4;
+  string trace_id = 5;
+  repeated string trace_states = 6;
+  repeated InvocationSpan invocation_context = 7;
 }
 
 message ExportedFunctionCompletedParameters {
@@ -136,6 +144,9 @@ message ExportedFunctionInvocationParameters {
   string function_name = 2;
   repeated wasm.rpc.TypeAnnotatedValue input = 3;
   bool valid_input = 4;
+  string trace_id = 5;
+  repeated string trace_states = 6;
+  repeated InvocationSpan invocation_context = 7;
 }
 
 message WorkerInvocation {
@@ -225,6 +236,26 @@ message RevertParameters {
 message CancelInvocationParameters {
   google.protobuf.Timestamp timestamp = 1;
   IdempotencyKey idempotency_key = 2;
+}
+
+message StartSpanParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 span_id = 2;
+  optional uint64 parent_id = 3;
+  optional uint64 linked_context = 4;
+  map<string, AttributeValue> attributes = 5;
+}
+
+message FinishSpanParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 span_id = 2;
+}
+
+message SetSpanAttributeParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 span_id = 2;
+  string key = 3;
+  AttributeValue value = 4;
 }
 
 enum OplogLogLevel {

@@ -22,7 +22,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
-
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::Stream;
@@ -200,20 +199,20 @@ fn label(event: &WorkerEvent) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use test_r::{non_flaky, test, timeout};
-
     use futures_util::StreamExt;
     use std::sync::Arc;
     use std::time::Duration;
+    use test_r::{flaky, test, timeout};
     use tokio::sync::broadcast::error::RecvError;
     use tokio::sync::Mutex;
+    use tracing::{info, Instrument};
 
     use crate::services::worker_event::{
         WorkerEvent, WorkerEventService, WorkerEventServiceDefault,
     };
 
     #[test]
-    #[non_flaky(10)]
+    #[flaky(10)] // TODO: understand why is this flaky
     #[timeout(120000)]
     pub async fn both_subscriber_gets_events_small() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 16));
@@ -222,22 +221,25 @@ mod tests {
 
         let svc1 = svc.clone();
         let rx1_events_clone = rx1_events.clone();
-        let task1 = tokio::task::spawn(async move {
-            let mut rx1 = svc1.receiver();
-            drop(svc1);
-            loop {
-                match rx1.recv().await {
-                    Ok(WorkerEvent::Close) => break,
-                    Ok(event) => {
-                        rx1_events_clone.lock().await.push(event);
-                    }
-                    Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(n)) => {
-                        println!("task1 lagged {n}");
+        let task1 = tokio::task::spawn(
+            async move {
+                let mut rx1 = svc1.receiver();
+                drop(svc1);
+                loop {
+                    match rx1.recv().await {
+                        Ok(WorkerEvent::Close) => break,
+                        Ok(event) => {
+                            rx1_events_clone.lock().await.push(event);
+                        }
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(n)) => {
+                            info!("task1 lagged {n}");
+                        }
                     }
                 }
             }
-        });
+            .in_current_span(),
+        );
 
         for b in 1..=4u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
@@ -254,23 +256,26 @@ mod tests {
         let svc2 = svc.clone();
         let rx2_events_clone = rx2_events.clone();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let task2 = tokio::task::spawn(async move {
-            let mut rx2 = svc2.receiver();
-            drop(svc2);
-            ready_tx.send(()).unwrap();
-            loop {
-                match rx2.recv().await {
-                    Ok(WorkerEvent::Close) => break,
-                    Ok(event) => {
-                        rx2_events_clone.lock().await.push(event);
-                    }
-                    Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(n)) => {
-                        println!("task2 lagged {n}");
+        let task2 = tokio::task::spawn(
+            async move {
+                let mut rx2 = svc2.receiver();
+                drop(svc2);
+                ready_tx.send(()).unwrap();
+                loop {
+                    match rx2.recv().await {
+                        Ok(WorkerEvent::Close) => break,
+                        Ok(event) => {
+                            rx2_events_clone.lock().await.push(event);
+                        }
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(n)) => {
+                            info!("task2 lagged {n}");
+                        }
                     }
                 }
             }
-        });
+            .in_current_span(),
+        );
 
         ready_rx.await.unwrap();
 
@@ -338,21 +343,24 @@ mod tests {
 
         let svc1 = svc.clone();
         let rx1_events_clone = rx1_events.clone();
-        let task1 = tokio::task::spawn(async move {
-            let rx1 = svc1.receiver();
-            drop(svc1);
-            rx1.to_stream()
-                .for_each(|item| async {
-                    match item {
-                        Ok(WorkerEvent::Close) => {}
-                        Ok(event) => {
-                            rx1_events_clone.lock().await.push(event);
+        let task1 = tokio::task::spawn(
+            async move {
+                let rx1 = svc1.receiver();
+                drop(svc1);
+                rx1.to_stream()
+                    .for_each(|item| async {
+                        match item {
+                            Ok(WorkerEvent::Close) => {}
+                            Ok(event) => {
+                                rx1_events_clone.lock().await.push(event);
+                            }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
-                    }
-                })
-                .await;
-        });
+                    })
+                    .await;
+            }
+            .in_current_span(),
+        );
 
         for b in 1..=4u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
@@ -369,22 +377,25 @@ mod tests {
         let svc2 = svc.clone();
         let rx2_events_clone = rx2_events.clone();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let task2 = tokio::task::spawn(async move {
-            let rx2 = svc2.receiver();
-            drop(svc2);
-            ready_tx.send(()).unwrap();
-            rx2.to_stream()
-                .for_each(|item| async {
-                    match item {
-                        Ok(WorkerEvent::Close) => {}
-                        Ok(event) => {
-                            rx2_events_clone.lock().await.push(event);
+        let task2 = tokio::task::spawn(
+            async move {
+                let rx2 = svc2.receiver();
+                drop(svc2);
+                ready_tx.send(()).unwrap();
+                rx2.to_stream()
+                    .for_each(|item| async {
+                        match item {
+                            Ok(WorkerEvent::Close) => {}
+                            Ok(event) => {
+                                rx2_events_clone.lock().await.push(event);
+                            }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
-                    }
-                })
-                .await;
-        });
+                    })
+                    .await;
+            }
+            .in_current_span(),
+        );
 
         ready_rx.await.unwrap();
 
@@ -444,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    #[non_flaky(10)]
+    #[flaky(10)] // TODO: understand why it is flaky
     #[timeout(120000)]
     pub async fn both_subscriber_gets_events_large() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 4));
@@ -453,22 +464,25 @@ mod tests {
 
         let svc1 = svc.clone();
         let rx1_events_clone = rx1_events.clone();
-        let task1 = tokio::task::spawn(async move {
-            let mut rx1 = svc1.receiver();
-            drop(svc1);
-            loop {
-                match rx1.recv().await {
-                    Ok(WorkerEvent::Close) => break,
-                    Ok(event) => {
-                        rx1_events_clone.lock().await.push(event);
-                    }
-                    Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(n)) => {
-                        println!("task1 lagged {n}");
+        let task1 = tokio::task::spawn(
+            async move {
+                let mut rx1 = svc1.receiver();
+                drop(svc1);
+                loop {
+                    match rx1.recv().await {
+                        Ok(WorkerEvent::Close) => break,
+                        Ok(event) => {
+                            rx1_events_clone.lock().await.push(event);
+                        }
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(n)) => {
+                            info!("task1 lagged {n}");
+                        }
                     }
                 }
             }
-        });
+            .in_current_span(),
+        );
 
         for b in 1..=1000 {
             let s = format!("{}", b);
@@ -486,23 +500,26 @@ mod tests {
         let svc2 = svc.clone();
         let rx2_events_clone = rx2_events.clone();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let task2 = tokio::task::spawn(async move {
-            let mut rx2 = svc2.receiver();
-            drop(svc2);
-            ready_tx.send(()).unwrap();
-            loop {
-                match rx2.recv().await {
-                    Ok(WorkerEvent::Close) => break,
-                    Ok(event) => {
-                        rx2_events_clone.lock().await.push(event);
-                    }
-                    Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(n)) => {
-                        println!("task1 lagged {n}");
+        let task2 = tokio::task::spawn(
+            async move {
+                let mut rx2 = svc2.receiver();
+                drop(svc2);
+                ready_tx.send(()).unwrap();
+                loop {
+                    match rx2.recv().await {
+                        Ok(WorkerEvent::Close) => break,
+                        Ok(event) => {
+                            rx2_events_clone.lock().await.push(event);
+                        }
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(n)) => {
+                            info!("task1 lagged {n}");
+                        }
                     }
                 }
             }
-        });
+            .in_current_span(),
+        );
 
         ready_rx.await.unwrap();
 

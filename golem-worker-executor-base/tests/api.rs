@@ -40,15 +40,14 @@ use redis::Commands;
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use system_interface::fs::FileIoExt;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, inherit_test_dep, test, test_gen, timeout};
 use tokio::time::sleep;
-use tracing::{debug, info};
+use tracing::{debug, info, Instrument, Span};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -74,11 +73,14 @@ async fn interruption(
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
-    let fiber = tokio::spawn(async move {
-        executor_clone
-            .invoke_and_await(worker_id_clone, "run", vec![])
-            .await
-    });
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(worker_id_clone, "run", vec![])
+                .await
+        }
+        .in_current_span(),
+    );
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -113,11 +115,14 @@ async fn simulated_crash(
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
-    let fiber = tokio::spawn(async move {
-        executor_clone
-            .invoke_and_await(worker_id_clone, "run", vec![])
-            .await
-    });
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(worker_id_clone, "run", vec![])
+                .await
+        }
+        .in_current_span(),
+    );
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
@@ -462,7 +467,7 @@ async fn promise(
         .await
         .unwrap();
     let promise_id = ValueAndType::new(result[0].clone(), PromiseId::get_type());
-    println!("promise_id: {:?}", promise_id);
+    info!("promise_id: {:?}", promise_id);
 
     let poll1 = executor
         .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
@@ -472,15 +477,18 @@ async fn promise(
     let worker_id_clone = worker_id.clone();
     let promise_id_clone = promise_id.clone();
 
-    let fiber = tokio::spawn(async move {
-        executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:it/api.{await}",
-                vec![promise_id_clone],
-            )
-            .await
-    });
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:it/api.{await}",
+                    vec![promise_id_clone],
+                )
+                .await
+        }
+        .in_current_span(),
+    );
 
     // While waiting for the promise, the worker gets suspended
     executor
@@ -642,7 +650,7 @@ async fn get_workers_from_worker(
             .await
             .unwrap();
 
-        println!("result: {:?}", result.clone());
+        info!("result: {:?}", result.clone());
 
         match result.first() {
             Some(Value::List(list)) => {
@@ -1346,15 +1354,18 @@ async fn get_worker_metadata(
 
     let worker_id_clone = worker_id.clone();
     let executor_clone = executor.clone();
-    let fiber = tokio::spawn(async move {
-        executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:it/api.{sleep}",
-                vec![2u64.into_value_and_type()],
-            )
-            .await
-    });
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:it/api.{sleep}",
+                    vec![2u64.into_value_and_type()],
+                )
+                .await
+        }
+        .in_current_span(),
+    );
 
     let metadata1 = executor
         .wait_for_statuses(
@@ -1649,7 +1660,10 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let target_dir = cwd.join(Path::new("data/components"));
     let component_path = target_dir.join(format!("wasms/{component_id}-0.wasm"));
 
-    {
+    let span = Span::current();
+    tokio::task::spawn_blocking(move || {
+        let _enter = span.enter();
+
         let mut file = std::fs::File::options()
             .write(true)
             .truncate(false)
@@ -1658,7 +1672,9 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         file.write_at(&[1, 2, 3, 4], 0)
             .expect("Failed to write to component file");
         file.flush().expect("Failed to flush component file");
-    }
+    })
+    .await
+    .unwrap();
 
     let result = executor.try_start_worker(&component_id, "bad-wasm-1").await;
 
@@ -1684,14 +1700,10 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("write-stdout").store().await;
 
-    let worker_id = executor
-        .try_start_worker(&component_id, "bad-wasm-2")
-        .await
-        .unwrap();
+    let worker_id = executor.start_worker(&component_id, "bad-wasm-2").await;
 
-    // worker is idle. if we restart the server it won't get recovered
+    // worker is idle. if we restart the server it will get recovered
     drop(executor);
-    let executor = start(deps, &context).await.unwrap();
 
     // corrupting the uploaded WASM
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -1701,7 +1713,9 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         "data/blobs/compilation_cache/{component_id}/0.cwasm"
     )));
 
-    {
+    let span = Span::current();
+    tokio::task::spawn_blocking(move || {
+        let _enter = span.enter();
         debug!("Corrupting {:?}", component_path);
         let mut file = std::fs::File::options()
             .write(true)
@@ -1715,7 +1729,13 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         debug!("Deleting {:?}", compiled_component_path);
         std::fs::remove_file(&compiled_component_path)
             .expect("Failed to delete compiled component");
-    }
+    })
+    .await
+    .unwrap();
+
+    let executor = start(deps, &context).await.unwrap();
+
+    debug!("Trying to invoke recovered worker");
 
     // trying to invoke the previously created worker
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
@@ -1745,26 +1765,25 @@ async fn long_running_poll_loop_works_as_expected(
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
-    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -1816,26 +1835,25 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
-    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -1858,6 +1876,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(20))
         .await;
+
     let values1 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
@@ -1877,6 +1896,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
             Duration::from_secs(5),
         )
         .await;
+
     let values2 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
@@ -1887,32 +1907,42 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         )
         .await;
 
-    let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
-    let fiber = tokio::spawn(async move {
-        // Invoke blocks until the invocation starts
-        executor_clone
-            .invoke(
-                &worker_id_clone,
-                "golem:it/api.{start-polling}",
-                vec!["second".into_value_and_type()],
-            )
-            .await
-            .unwrap();
-    });
+    executor
+        .invoke(
+            &worker_id,
+            "golem:it/api.{start-polling}",
+            vec!["second".into_value_and_type()],
+        )
+        .await
+        .unwrap();
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(20))
         .await;
+
+    let mut rx = executor.capture_output_with_termination(&worker_id).await;
 
     {
         let mut response = response.lock().unwrap();
         *response = "first".to_string();
     }
 
-    fiber.await.unwrap();
-
-    sleep(Duration::from_secs(1)).await;
+    // wait for first invocation to finish
+    {
+        let mut found = false;
+        while !found {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Poll loop finished\n") {
+                        found = true;
+                    }
+                }
+                _ => {
+                    panic!("Did not receive the expected log events");
+                }
+            }
+        }
+    }
 
     {
         let mut response = response.lock().unwrap();
@@ -1945,26 +1975,25 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
-    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -1988,21 +2017,21 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
-    let start = Instant::now();
-
-    let mut found1 = false;
-    let mut found2 = false;
-    while (!found1 || !found2) && start.elapsed() < Duration::from_secs(5) {
-        match rx.recv().await {
-            Some(Some(event)) => {
-                if stdout_event_matching(&event, "Calling the poll endpoint\n") {
-                    found1 = true;
-                } else if stdout_event_matching(&event, "Received initial\n") {
-                    found2 = true;
+    {
+        let mut found1 = false;
+        let mut found2 = false;
+        while !(found1 && found2) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        found1 = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        found2 = true;
+                    }
                 }
-            }
-            _ => {
-                panic!("Did not receive the expected log events");
+                _ => {
+                    panic!("Did not receive the expected log events");
+                }
             }
         }
     }
@@ -2028,26 +2057,25 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
-    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -2101,26 +2129,25 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
-    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -2156,29 +2183,51 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         .await;
     let mut rx = executor.capture_output_with_termination(&worker_id).await;
 
+    // wait for one loop to finish
+    {
+        let mut found1 = false;
+        let mut found2 = false;
+        while !(found1 && found2) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        found1 = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        found2 = true;
+                    }
+                }
+                _ => {
+                    panic!("Did not receive the expected log events");
+                }
+            }
+        }
+    }
+
+    // change the response. Next loop will be the last
     {
         let mut response = response.lock().unwrap();
         *response = "first".to_string();
     }
 
-    let start = Instant::now();
-
-    let mut found1 = false;
-    let mut found2 = false;
-    let mut found3 = false;
-    while (!found1 || !found2 || !found3) && start.elapsed() < Duration::from_secs(5) {
-        match rx.recv().await {
-            Some(Some(event)) => {
-                if stdout_event_matching(&event, "Calling the poll endpoint\n") {
-                    found1 = true;
-                } else if stdout_event_matching(&event, "Received initial\n") {
-                    found2 = true;
-                } else if stdout_event_matching(&event, "Poll loop finished\n") {
-                    found3 = true;
+    // check we are getting the full last loop
+    {
+        let mut found1 = false;
+        let mut found2 = false;
+        let mut found3 = false;
+        while !(found1 && found2 && found3) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        found1 = true;
+                    } else if stdout_event_matching(&event, "Received first\n") {
+                        found2 = true;
+                    } else if stdout_event_matching(&event, "Poll loop finished\n") {
+                        found3 = true;
+                    }
                 }
-            }
-            _ => {
-                panic!("Did not receive the expected log events");
+                _ => {
+                    panic!("Did not receive the expected log events");
+                }
             }
         }
     }
@@ -2209,26 +2258,25 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
-    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -2290,7 +2338,7 @@ async fn shopping_cart_resource_example(
         )
         .await
         .unwrap();
-    println!("cart: {:?}", cart);
+    info!("cart: {:?}", cart);
 
     let _ = executor
         .invoke_and_await(
@@ -2711,11 +2759,14 @@ async fn reconstruct_interrupted_state(
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
-    let fiber = tokio::spawn(async move {
-        executor_clone
-            .invoke_and_await(&worker_id_clone, "run", vec![])
-            .await
-    });
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(&worker_id_clone, "run", vec![])
+                .await
+        }
+        .in_current_span(),
+    );
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -2764,26 +2815,25 @@ async fn invocation_queue_is_persistent(
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
-    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -3089,10 +3139,7 @@ async fn cancelling_pending_invocations(
     check!(cancel4.is_err()); // cannot cancel a non-existing invocation
     check!(final_result == vec![Value::U64(12)]);
 
-    // FIXME: This is currently failing due to a value / type mismatch when parsing an external invocation:
-    // ValueAndType { value: Record([Record([Record([Record([U64(3560302769035693415), U64(13755298306296285132)])]), String("cancel-pending-invocations")]), U64(12)]), typ: Handle(TypeHandle { resource_id: AnalysedResourceId(0), mode: Borrowed }) }
-    //
-    // executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 /// Test resolving a component_id from the name.

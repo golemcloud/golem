@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, test_dep};
+use tracing::Instrument;
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
@@ -953,16 +954,19 @@ async fn rdbms_workers_test<T: RdbmsType>(
         let worker_id_clone = worker_id.clone();
         let executor_clone = executor.clone();
         let test_clone = test.clone();
-        let _ = fibers.spawn(async move {
-            let result = execute_worker_test::<T>(
-                &executor_clone,
-                &worker_id_clone,
-                &IdempotencyKey::fresh(),
-                test_clone,
-            )
-            .await;
-            (worker_id_clone, result)
-        });
+        let _ = fibers.spawn(
+            async move {
+                let result = execute_worker_test::<T>(
+                    &executor_clone,
+                    &worker_id_clone,
+                    &IdempotencyKey::fresh(),
+                    test_clone,
+                )
+                .await;
+                (worker_id_clone, result)
+            }
+            .in_current_span(),
+        );
     }
 
     while let Some(res) = fibers.join_next().await {
@@ -1113,15 +1117,18 @@ async fn workers_resume_test(executor: &TestWorkerExecutor, worker_ids: Vec<Work
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();
         let executor_clone = executor.clone();
-        let _ = fibers.spawn(async move {
-            executor_clone.interrupt(&worker_id_clone).await;
-            executor_clone.resume(&worker_id_clone, false).await;
-            let metadata = executor_clone
-                .wait_for_status(&worker_id_clone, WorkerStatus::Idle, Duration::from_secs(3))
-                .await;
-            let status = metadata.last_known_status.status;
-            (worker_id_clone, status)
-        });
+        let _ = fibers.spawn(
+            async move {
+                executor_clone.interrupt(&worker_id_clone).await;
+                executor_clone.resume(&worker_id_clone, false).await;
+                let metadata = executor_clone
+                    .wait_for_status(&worker_id_clone, WorkerStatus::Idle, Duration::from_secs(3))
+                    .await;
+                let status = metadata.last_known_status.status;
+                (worker_id_clone, status)
+            }
+            .in_current_span(),
+        );
     }
 
     while let Some(res) = fibers.join_next().await {

@@ -52,10 +52,10 @@ pub type ApiServices = (
 pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
     OpenApiService::new(
         (
-            component::ComponentApi {
-                component_service: services.component_service.clone(),
-                plugin_service: services.plugin_service.clone(),
-            },
+            component::ComponentApi::new(
+                services.component_service.clone(),
+                services.plugin_service.clone(),
+            ),
             healthcheck::HealthcheckApi,
             plugin::PluginApi {
                 plugin_service: services.plugin_service.clone(),
@@ -171,6 +171,21 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::PluginApplicationFailed(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::FailedToDownloadFile => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::InvalidFilePath(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -205,6 +220,14 @@ impl From<PluginError> for ComponentError {
             PluginError::InvalidScope { .. } => ComponentError::Unauthorized(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
+            PluginError::BlobStorageError(_) => ComponentError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            PluginError::InvalidOplogProcessorPlugin => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
         }
     }
 }

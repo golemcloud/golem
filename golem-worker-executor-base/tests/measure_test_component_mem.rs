@@ -11,7 +11,7 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use humansize::{ISizeFormatter, BINARY};
 use rand::prelude::SliceRandom;
-use rand::thread_rng;
+use rand::rng;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::Path;
@@ -44,7 +44,7 @@ async fn measure(
         }
     }
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
     // measure
     let mut results = BTreeMap::new();

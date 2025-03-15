@@ -3,6 +3,7 @@ package golem:api;
 world golem {
   import golem:api/host@0.2.2;
   import golem:api/host@1.1.5;
+  import golem:api/context@1.1.5;
   import golem:api/oplog@1.1.5;
   import golem:durability/durability@1.2.0;
   import wasi:blobstore/blobstore;
@@ -15,7 +16,7 @@ world golem {
   import wasi:keyvalue/types@0.1.0;
   import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
   import wasi:logging/logging;
-  import wasi:rdbms/mysql@0.0.1;
-  import wasi:rdbms/postgres@0.0.1;
-  import wasi:rdbms/types@0.0.1;
+  import golem:rdbms/mysql@0.0.1;
+  import golem:rdbms/postgres@0.0.1;
+  import golem:rdbms/types@0.0.1;
 }

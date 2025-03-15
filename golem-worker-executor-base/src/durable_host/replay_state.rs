@@ -115,41 +115,67 @@ impl ReplayState {
     /// Returns the oplog index of the entry read, no matter how many more hint entries
     /// were read.
     pub async fn get_oplog_entry(&mut self) -> (OplogIndex, OplogEntry) {
+        self.try_get_oplog_entry(|_| true).await.unwrap()
+    }
+
+    /// Reads the next oplog entry, and if it matches the given condition, skips
+    /// every hint entry following it and returns the oplog index of the entry read.
+    /// If the condition is not met, returns None and the current replay state remains
+    /// unchanged.
+    pub async fn try_get_oplog_entry(
+        &mut self,
+        condition: impl FnOnce(&OplogEntry) -> bool,
+    ) -> Option<(OplogIndex, OplogEntry)> {
+        let saved_replay_idx = self.last_replayed_index.get();
+        let saved_next_skipped_region = {
+            let internal = self.internal.read().await;
+            internal.next_skipped_region.clone()
+        };
+
         let read_idx = self.last_replayed_index.get().next();
         let entry = self.internal_get_next_oplog_entry().await;
 
-        // Skipping hint entries and recording log entries
-        let mut logs = HashSet::new();
-        while self.is_replay() {
-            let saved_replay_idx = self.last_replayed_index.get();
-            let internal = self.internal.read().await;
-            let saved_next_skipped_region = internal.next_skipped_region.clone();
-            drop(internal);
-            let entry = self.internal_get_next_oplog_entry().await;
-            if !entry.is_hint() {
-                self.last_replayed_index.set(saved_replay_idx);
-                let mut internal = self.internal.write().await;
-                // TODO: cache the last hint entry to avoid reading it again
-                internal.next_skipped_region = saved_next_skipped_region;
-                break;
-            } else if let OplogEntry::Log {
-                level,
-                context,
-                message,
-                ..
-            } = &entry
-            {
-                let hash = Self::hash_log_entry(*level, context, message);
-                logs.insert(hash);
+        if condition(&entry) {
+            // Skipping hint entries and recording log entries
+            let mut logs = HashSet::new();
+            while self.is_replay() {
+                let saved_replay_idx = self.last_replayed_index.get();
+                let saved_next_skipped_region = {
+                    let internal = self.internal.read().await;
+                    internal.next_skipped_region.clone()
+                };
+                let entry = self.internal_get_next_oplog_entry().await;
+                if !entry.is_hint() {
+                    self.last_replayed_index.set(saved_replay_idx);
+                    let mut internal = self.internal.write().await;
+                    // TODO: cache the last hint entry to avoid reading it again
+                    internal.next_skipped_region = saved_next_skipped_region;
+                    break;
+                } else if let OplogEntry::Log {
+                    level,
+                    context,
+                    message,
+                    ..
+                } = &entry
+                {
+                    let hash = Self::hash_log_entry(*level, context, message);
+                    logs.insert(hash);
+                }
             }
+
+            self.has_seen_logs
+                .store(!logs.is_empty(), Ordering::Relaxed);
+            let mut internal = self.internal.write().await;
+            internal.log_hashes = logs;
+
+            Some((read_idx, entry))
+        } else {
+            self.last_replayed_index.set(saved_replay_idx);
+            let mut internal = self.internal.write().await;
+            internal.next_skipped_region = saved_next_skipped_region;
+
+            None
         }
-
-        self.has_seen_logs
-            .store(!logs.is_empty(), Ordering::Relaxed);
-        let mut internal = self.internal.write().await;
-        internal.log_hashes = logs;
-
-        (read_idx, entry)
     }
 
     /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
@@ -215,13 +241,36 @@ impl ReplayState {
         let mut start = self.last_replayed_index.get().next();
 
         const CHUNK_SIZE: u64 = 1024;
+
+        let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
+
         while start < replay_target {
             let entries = self
                 .oplog_service
                 .read(&self.owned_worker_id, start, CHUNK_SIZE)
                 .await;
             for (idx, entry) in &entries {
-                // TODO: handle skipped regions
+                if current_next_skip_region
+                    .as_ref()
+                    .map(|r| r.contains(*idx))
+                    .unwrap_or(false)
+                {
+                    // If we are in the current skip region, ignore the entry
+                    continue;
+                }
+                if current_next_skip_region
+                    .as_ref()
+                    .map(|r| &r.end == idx)
+                    .unwrap_or(false)
+                {
+                    // if we are at the end of the current skip region, find the next one
+                    current_next_skip_region = self
+                        .internal
+                        .read()
+                        .await
+                        .skipped_regions
+                        .find_next_deleted_region(idx.next());
+                }
                 if end_check(entry, begin_idx) {
                     return Some(*idx);
                 } else if !for_all_intermediate(entry, begin_idx) {
@@ -242,7 +291,7 @@ impl ReplayState {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
-                    OplogEntry::ExportedFunctionInvoked {
+                    OplogEntry::ExportedFunctionInvokedV1 {
                         function_name,
                         idempotency_key,
                         ..
@@ -264,7 +313,39 @@ impl ReplayState {
                             function_name.to_string(),
                             request,
                             idempotency_key.clone(),
-                            InvocationContextStack::fresh(), // TODO: read from oplog
+                            InvocationContextStack::fresh(),
+                        )));
+                    }
+                    OplogEntry::ExportedFunctionInvoked {
+                        function_name,
+                        idempotency_key,
+                        trace_id,
+                        trace_states: trace_state,
+                        invocation_context: spans,
+                        ..
+                    } => {
+                        let request: Vec<golem_wasm_rpc::protobuf::Val> = self
+                            .oplog
+                            .get_payload_of_entry(&oplog_entry)
+                            .await
+                            .expect("failed to deserialize function request payload")
+                            .unwrap();
+                        let request = request
+                            .into_iter()
+                            .map(|val| {
+                                val.try_into()
+                                    .expect("failed to decode serialized protobuf value")
+                            })
+                            .collect::<Vec<Value>>();
+
+                        let invocation_context =
+                            InvocationContextStack::from_oplog_data(trace_id, trace_state, spans);
+
+                        break Ok(Some((
+                            function_name.to_string(),
+                            request,
+                            idempotency_key.clone(),
+                            invocation_context,
                         )));
                     }
                     entry if entry.is_hint() => {}

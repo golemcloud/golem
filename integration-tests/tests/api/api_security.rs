@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::Tracing;
 use assert2::assert;
 use golem_client::model::{Provider, SecuritySchemeData};
@@ -47,7 +61,7 @@ fn new_security_scheme() -> SecuritySchemeData {
         scheme_identifier: format!("security-scheme-{}", Uuid::new_v4()),
         client_id: "client_id".to_string(),
         client_secret: "super_secret".to_string(),
-        redirect_url: "http://localhost/redirect-url".to_string(),
+        redirect_url: format!("http://localhost/{}", Uuid::new_v4()),
         scopes: vec!["custom-scope-1".to_string(), "custom-scope-2".to_string()],
     }
 }

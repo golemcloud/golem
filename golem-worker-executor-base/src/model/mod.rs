@@ -474,6 +474,10 @@ impl InvocationContext {
         }
     }
 
+    pub fn get(&self, span_id: &SpanId) -> Result<Arc<InvocationContextSpan>, String> {
+        Ok(self.span(span_id)?.clone())
+    }
+
     pub fn start_span(
         &mut self,
         current_span_id: &SpanId,
@@ -481,8 +485,12 @@ impl InvocationContext {
     ) -> Result<Arc<InvocationContextSpan>, String> {
         let current_span = self.span(current_span_id)?;
         let span = current_span.start_span(new_span_id);
-        self.spans.insert(span.span_id().clone(), span.clone());
+        self.add_span(span.clone());
         Ok(span)
+    }
+
+    pub fn add_span(&mut self, span: Arc<InvocationContextSpan>) {
+        self.spans.insert(span.span_id().clone(), span);
     }
 
     pub fn finish_span(&mut self, span_id: &SpanId) -> Result<Option<SpanId>, String> {
@@ -642,10 +650,10 @@ impl Debug for InvocationContext {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
     use super::*;
     use golem_common::model::ComponentId;
+    use test_r::test;
+    use tracing::info;
     use uuid::Uuid;
 
     fn example_trace_id_1() -> TraceId {
@@ -753,7 +761,7 @@ mod tests {
             worker_name: "instanceName".to_string(),
         };
         let hash = ShardId::hash_worker_id(&worker_id);
-        println!("hash: {:?}", hash);
+        info!("hash: {:?}", hash);
         assert_eq!(hash, -6692039695739768661);
     }
 

@@ -24,7 +24,7 @@ use golem_common::virtual_exports;
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
-use tracing::{debug, error};
+use tracing::{debug, error, Instrument};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::bindings::Proxy;
@@ -39,8 +39,7 @@ use wasmtime_wasi_http::WasiHttpView;
 /// - `function_input`: the input parameters for the function
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
-// TODO: rename - this just adds outcome metrics recording?
-pub async fn invoke_worker<Ctx: WorkerCtx>(
+pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     full_function_name: String,
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
@@ -49,7 +48,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    let result = invoke_or_fail(
+    let result = invoke_observed(
         full_function_name.clone(),
         function_input,
         &mut store,
@@ -83,7 +82,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
             result
         }
         Ok(InvokeResult::Interrupted { .. }) => {
-            record_invocation(was_live_before, "restarted"); // TODO: do we want to record this?
+            record_invocation(was_live_before, "restarted");
             result
         }
         Ok(InvokeResult::Failed { .. }) => {
@@ -193,8 +192,8 @@ fn find_function<'a, Ctx: WorkerCtx>(
     }
 }
 
-// TODO: rename
-async fn invoke_or_fail<Ctx: WorkerCtx>(
+/// Invokes a worker and calls the appropriate hooks to observe the invocation
+async fn invoke_observed<Ctx: WorkerCtx>(
     full_function_name: String,
     mut function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
@@ -370,7 +369,6 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
     }
 }
 
-// TODO: rename
 async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
@@ -474,11 +472,12 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         // The caller must ensure that the lifetime ’a is valid until the returned future is fully driven. Dropping the future is okay, but blocks the current thread until all spawned futures complete.
         unsafe {
             async_scoped::TokioScope::scope_and_collect(|s| {
-                s.spawn(proxy.wasi_http_incoming_handler().call_handle(
-                    store_context,
-                    incoming,
-                    outgoing,
-                ));
+                s.spawn(
+                    proxy
+                        .wasi_http_incoming_handler()
+                        .call_handle(store_context, incoming, outgoing)
+                        .in_current_span(),
+                );
             })
             .await
         }

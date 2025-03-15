@@ -21,7 +21,9 @@ use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
-use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
+use golem_component_service_base::service::component::{
+    ComponentService, ComponentServiceDefault, LazyComponentService,
+};
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
@@ -31,9 +33,11 @@ use golem_component_service_base::service::component_object_store::{
     ComponentObjectStore, LoggedComponentObjectStore,
 };
 use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
+use golem_component_service_base::service::transformer_plugin_caller::TransformerPluginCallerDefault;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
@@ -41,10 +45,9 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Services {
-    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
+    pub compilation_service: Arc<dyn ComponentCompilationService>,
+    pub plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
 }
 
 impl Services {
@@ -108,6 +111,9 @@ impl Services {
         let initial_component_files_service: Arc<InitialComponentFilesService> =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
+        let plugin_wasm_files_service: Arc<PluginWasmFilesService> =
+            Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let object_store: Arc<dyn ComponentObjectStore + Sync + Send> =
             Arc::new(LoggedComponentObjectStore::new(
                 BlobStorageComponentObjectStore::new(blob_storage.clone()),
@@ -116,25 +122,42 @@ impl Services {
         let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
             match config.compilation.clone() {
                 ComponentCompilationConfig::Enabled(config) => {
-                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
+                    Arc::new(ComponentCompilationServiceDefault::new(
+                        config.uri(),
+                        config.retries,
+                        config.connect_timeout,
+                    ))
                 }
                 ComponentCompilationConfig::Disabled(_) => {
                     Arc::new(ComponentCompilationServiceDisabled)
                 }
             };
 
+        let component_service = Arc::new(LazyComponentService::new());
+
         let plugin_service: Arc<
             dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
-        > = Arc::new(PluginServiceDefault::new(plugin_repo));
+        > = Arc::new(PluginServiceDefault::new(
+            plugin_repo,
+            plugin_wasm_files_service.clone(),
+            component_service.clone(),
+        ));
 
-        let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
-            Arc::new(ComponentServiceDefault::new(
+        let transformer_plugin_caller = Arc::new(TransformerPluginCallerDefault::new(
+            config.plugin_transformations.clone(),
+        ));
+
+        component_service
+            .set_implementation(ComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),
                 compilation_service.clone(),
                 initial_component_files_service.clone(),
                 plugin_service.clone(),
-            ));
+                plugin_wasm_files_service.clone(),
+                transformer_plugin_caller.clone(),
+            ))
+            .await;
 
         Ok(Services {
             component_service,

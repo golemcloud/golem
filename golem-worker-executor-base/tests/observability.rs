@@ -13,12 +13,19 @@
 // limitations under the License.
 
 use assert2::check;
+use axum::routing::post;
+use axum::{Json, Router};
 use golem_wasm_rpc::{IntoValueAndType, Value};
+use http::HeaderMap;
 use log::info;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
+use tracing::Instrument;
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId};
@@ -191,11 +198,6 @@ async fn search_oplog_1(
 
     drop(executor);
 
-    // println!("oplog\n{:#?}", oplog);
-    // println!("result1\n{:#?}", result1);
-    // println!("result2\n{:#?}", result2);
-    // println!("result3\n{:#?}", result3);
-
     assert_eq!(result1.len(), 4); // two invocations and two log messages
     assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
     assert_eq!(result3.len(), 2); // two invocations
@@ -247,8 +249,6 @@ async fn get_oplog_with_api_changing_updates(
         .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
-    // println!("oplog\n{:#?}", oplog);
-
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 17);
 }
@@ -281,4 +281,134 @@ async fn get_oplog_starting_with_updated_component(
 
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 3);
+}
+
+#[test]
+#[tracing::instrument]
+#[allow(clippy::await_holding_lock)]
+async fn invocation_context_test(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let contexts_clone = contexts.clone();
+
+    let traceparents = Arc::new(Mutex::new(Vec::new()));
+    let traceparents_clone = traceparents.clone();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/invocation-context",
+                post(
+                    move |headers: HeaderMap, body: Json<serde_json::Value>| async move {
+                        contexts_clone.lock().unwrap().push(body.0);
+                        traceparents_clone
+                            .lock()
+                            .unwrap()
+                            .push(headers.get("traceparent").cloned());
+                        "ok"
+                    },
+                ),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let component_id = executor
+        .component("golem_ictest")
+        .with_dynamic_linking(&[(
+            "golem:ictest-client/golem-ictest-client",
+            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                target_interface_name: HashMap::from_iter(vec![(
+                    "golem-ictest-api".to_string(),
+                    "golem:ictest-exports/golem-ictest-api".to_string(),
+                )]),
+            }),
+        )])
+        .store()
+        .await;
+    let worker_id = executor
+        .start_worker_with(&component_id, "w1", vec![], env.clone())
+        .await;
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:ictest-exports/golem-ictest-api.{test1}",
+            vec![],
+        )
+        .await;
+
+    let start = std::time::Instant::now();
+    loop {
+        let contexts = contexts.lock().unwrap();
+        if contexts.len() == 3 {
+            break;
+        }
+        drop(contexts);
+
+        if start.elapsed().as_secs() > 30 {
+            check!(false, "Timeout waiting for contexts");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    }
+
+    let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
+    info!("{:#?}", dump);
+
+    http_server.abort();
+    drop(executor);
+
+    let traceparents = traceparents.lock().unwrap();
+
+    check!(result.is_ok());
+    check!(traceparents.len() == 3);
+    check!(traceparents.iter().all(|tp| tp.is_some()));
+
+    check!(
+        dump[0]
+            .as_object()
+            .unwrap()
+            .get("spans")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+            == 2
+    ); // root, invoke-exported-function
+    check!(
+        dump[1]
+            .as_object()
+            .unwrap()
+            .get("spans")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+            == 5
+    ); // + rpc-connection, rpc-invocation, invoke-exported-function
+    check!(
+        dump[2]
+            .as_object()
+            .unwrap()
+            .get("spans")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+            == 10
+    ); // + custom1, custom2, rpc-connection, rpc-invocation, invoke-exported-function
 }

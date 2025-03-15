@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -57,6 +58,7 @@ pub mod keyvalue;
 pub mod measure_test_component_mem;
 pub mod observability;
 pub mod rdbms;
+pub mod rdbms_service;
 pub mod revert;
 pub mod rust_rpc;
 pub mod rust_rpc_stubless;
@@ -106,6 +108,7 @@ pub struct WorkerExecutorPerTestDependencies {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
 }
 
@@ -156,6 +159,10 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
     }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
 }
 
 pub struct WorkerExecutorTestDependencies {
@@ -164,6 +171,7 @@ pub struct WorkerExecutorTestDependencies {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
 }
 
@@ -184,9 +192,7 @@ impl WorkerExecutorTestDependencies {
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
         );
-        let component_directory = Path::new("../test-components").to_path_buf();
-        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-            Arc::new(FileSystemComponentService::new(Path::new("data/components")).await);
+
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
                 .await
@@ -195,6 +201,17 @@ impl WorkerExecutorTestDependencies {
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
+        let component_directory = Path::new("../test-components").to_path_buf();
+        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+            FileSystemComponentService::new(
+                Path::new("data/components"),
+                plugin_wasm_files_service.clone(),
+            )
+            .await,
+        );
+
         Self {
             redis,
             redis_monitor,
@@ -202,6 +219,7 @@ impl WorkerExecutorTestDependencies {
             component_service,
             blob_storage,
             initial_component_files_service,
+            plugin_wasm_files_service,
         }
     }
 
@@ -234,6 +252,7 @@ impl WorkerExecutorTestDependencies {
             component_directory: self.component_directory.clone(),
             blob_storage: self.blob_storage.clone(),
             initial_component_files_service: self.initial_component_files_service.clone(),
+            plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
         }
     }
 }
@@ -285,6 +304,10 @@ impl TestDependencies for WorkerExecutorTestDependencies {
     fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
         self.blob_storage.clone()
     }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -292,9 +315,9 @@ pub struct Tracing;
 
 #[test_dep]
 pub fn tracing() -> Tracing {
-    init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
-        "worker-executor-tests",
-    ));
+    init_tracing_with_default_debug_env_filter(
+        &TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides(),
+    );
 
     Tracing
 }

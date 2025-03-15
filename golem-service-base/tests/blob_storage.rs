@@ -12,34 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use assert2::check;
+use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
+use bytes::{BufMut, Bytes, BytesMut};
+use futures::stream::BoxStream;
+use futures::TryStreamExt;
 use golem_common::model::{AccountId, ComponentId};
+use golem_common::widen_infallible;
 use golem_service_base::config::S3BlobStorageConfig;
+use golem_service_base::replayable_stream::ErasedReplayableStream;
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{fs, memory, s3, BlobStorage, BlobStorageNamespace};
 use golem_service_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
+use test_r::{define_matrix_dimension, test, test_dep};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
-
-use test_r::{define_matrix_dimension, test, test_dep};
-
-use assert2::check;
-use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
-use futures::{Stream, TryStreamExt};
-use golem_service_base::storage::blob::*;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
 
 #[async_trait]
 trait GetBlobStorage: Debug {
@@ -200,8 +201,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>>, String>
-    {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         self.storage
             .get_stream(target_label, op_label, namespace, path)
             .await
@@ -252,7 +252,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<(), String> {
         self.storage
             .put_stream(target_label, op_label, namespace, path, stream)
@@ -501,16 +501,22 @@ async fn get_put_get_new_dir_streaming(
     let storage = test.get_blob_storage().await;
 
     let path = Path::new("non-existing-dir/test-path");
+
+    let result1 = storage
+        .get_stream("get_put_get_new_dir", "get-raw", namespace.clone(), path)
+        .await
+        .unwrap();
+
     let mut data = BytesMut::new();
     for n in 1..(10 * 1024 * 1024) {
         data.put_u8((n % 100) as u8);
     }
     let data = data.freeze();
 
-    let result1 = storage
-        .get_stream("get_put_get_new_dir", "get-raw", namespace.clone(), path)
-        .await
-        .unwrap();
+    let stream = (&data)
+        .map_item(|i| i.map_err(widen_infallible))
+        .map_error(widen_infallible)
+        .erased();
 
     storage
         .put_stream(
@@ -518,7 +524,7 @@ async fn get_put_get_new_dir_streaming(
             "put-raw",
             namespace.clone(),
             path,
-            &data,
+            &stream,
         )
         .await
         .unwrap();

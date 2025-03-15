@@ -321,9 +321,6 @@ fn exports_auction_registry_composed_component() {
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
 
-    println!("{:?}", metadata);
-    // [Instance(AnalysedInstance { name: "auction:registry/api", funcs: [AnalysedFunction { name: "create-bidder", params: [AnalysedFunctionParameter { name: "name", typ: Str }, AnalysedFunctionParameter { name: "address", typ: Str }], results: [AnalysedFunctionResult { name: None, typ: Record([("bidder-id", Str)]) }] }, AnalysedFunction { name: "create-auction", params: [AnalysedFunctionParameter { name: "name", typ: Str }, AnalysedFunctionParameter { name: "description", typ: Str }, AnalysedFunctionParameter { name: "limit-price", typ: F32 }, AnalysedFunctionParameter { name: "expiration", typ: U64 }], results: [AnalysedFunctionResult { name: None, typ: Record([("auction-id", Str)]) }] }, AnalysedFunction { name: "get-auctions", params: [], results: [AnalysedFunctionResult { name: None, typ: List(Record([("auction-id", Record([("auction-id", Str)])), ("name", Str), ("description", Str), ("limit-price", F32), ("expiration", U64)])) }] }] })]
-
     pretty_assertions::assert_eq!(
         metadata,
         vec![AnalysedExport::Instance(AnalysedInstance {

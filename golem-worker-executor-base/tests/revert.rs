@@ -244,10 +244,9 @@ async fn revert_manual_update(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = crate::hot_update::TestHttpServer::start(host_http_port);
+    let http_server = crate::hot_update::TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor

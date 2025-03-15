@@ -25,11 +25,10 @@ use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::StatusCode;
 use log::info;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tracing::debug;
+use tracing::{debug, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -61,51 +60,57 @@ impl F1Control {
 pub struct TestHttpServer {
     handle: JoinHandle<()>,
     f1_blocker: Arc<Mutex<Option<F1Blocker>>>,
+    port: u16,
 }
 
 impl TestHttpServer {
-    pub fn start(host_http_port: u16) -> Self {
-        Self::start_custom(host_http_port)
-    }
+    pub async fn start() -> Self {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-    pub fn start_custom(host_http_port: u16) -> Self {
+        let port = listener.local_addr().unwrap().port();
+
         let f1_blocker = Arc::new(Mutex::new(None::<F1Blocker>));
         let f1_blocker_clone = f1_blocker.clone();
+
         let handle = spawn(async move {
             let route = Router::new().route(
                 "/f1",
-                post(move |body: Bytes| async move {
-                    let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
-                    debug!("f1: {}", body);
+                post(move |body: Bytes| {
+                    async move {
+                        let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
+                        debug!("f1: {}", body);
 
-                    let mut guard = f1_blocker_clone.lock().await;
-                    if let Some(blocker) = &*guard {
-                        if blocker.value == body {
-                            let F1Blocker {
-                                reached, resume, ..
-                            } = guard.take().unwrap();
-                            debug!("Reached f1 blocking point");
-                            reached.send(()).unwrap();
-                            debug!("Awaiting resume at f1 blocking point");
-                            resume.await.unwrap();
-                            debug!("Resuming from f1 blocking point");
+                        let mut guard = f1_blocker_clone.lock().await;
+                        if let Some(blocker) = &*guard {
+                            if blocker.value == body {
+                                let F1Blocker {
+                                    reached, resume, ..
+                                } = guard.take().unwrap();
+                                debug!("Reached f1 blocking point");
+                                reached.send(()).unwrap();
+                                debug!("Awaiting resume at f1 blocking point");
+                                resume.await.unwrap();
+                                debug!("Resuming from f1 blocking point");
+                            }
                         }
-                    }
 
-                    StatusCode::OK
+                        StatusCode::OK
+                    }
+                    .in_current_span()
                 }),
             );
 
-            let listener = tokio::net::TcpListener::bind(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
             axum::serve(listener, route).await.unwrap();
         });
-        Self { handle, f1_blocker }
+        Self {
+            handle,
+            f1_blocker,
+            port,
+        }
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     pub fn abort(&self) {
@@ -139,10 +144,9 @@ async fn auto_update_on_running(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let mut http_server = TestHttpServer::start(host_http_port);
+    let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -159,16 +163,19 @@ async fn auto_update_on_running(
     let worker_id_clone = worker_id.clone();
 
     let mut control = http_server.f1_control(100).await;
-    let fiber = spawn(async move {
-        executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:component/api.{f1}",
-                vec![50u64.into_value_and_type()],
-            )
-            .await
-            .unwrap()
-    });
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:component/api.{f1}",
+                    vec![50u64.into_value_and_type()],
+                )
+                .await
+                .unwrap()
+        }
+        .in_current_span(),
+    );
 
     control.await_reached().await;
     executor
@@ -255,10 +262,10 @@ async fn failing_auto_update_on_idle(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port);
+    let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -371,10 +378,9 @@ async fn failing_auto_update_on_running(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let mut http_server = TestHttpServer::start(host_http_port);
+    let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -396,16 +402,19 @@ async fn failing_auto_update_on_running(
     let worker_id_clone = worker_id.clone();
 
     let mut control = http_server.f1_control(100).await;
-    let fiber = spawn(async move {
-        executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:component/api.{f1}",
-                vec![20u64.into_value_and_type()],
-            )
-            .await
-            .unwrap()
-    });
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:component/api.{f1}",
+                    vec![20u64.into_value_and_type()],
+                )
+                .await
+                .unwrap()
+        }
+        .in_current_span(),
+    );
 
     control.await_reached().await;
     executor
@@ -452,10 +461,9 @@ async fn manual_update_on_idle(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port);
+    let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
@@ -517,10 +525,9 @@ async fn manual_update_on_idle_without_save_snapshot(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port);
+    let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -581,10 +588,9 @@ async fn auto_update_on_running_followed_by_manual(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let mut http_server = TestHttpServer::start(host_http_port);
+    let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -612,16 +618,19 @@ async fn auto_update_on_running_followed_by_manual(
 
     let mut control = http_server.f1_control(100).await;
 
-    let fiber = spawn(async move {
-        executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:component/api.{f1}",
-                vec![20u64.into_value_and_type()],
-            )
-            .await
-            .unwrap()
-    });
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:component/api.{f1}",
+                    vec![20u64.into_value_and_type()],
+                )
+                .await
+                .unwrap()
+        }
+        .in_current_span(),
+    );
 
     control.await_reached().await;
     executor
@@ -673,10 +682,9 @@ async fn manual_update_on_idle_with_failing_load(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port);
+    let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
@@ -736,10 +744,9 @@ async fn manual_update_on_idle_using_v11(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = TestHttpServer::start(host_http_port);
+    let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
-    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component_id = executor
         .component("update-test-v2-11")

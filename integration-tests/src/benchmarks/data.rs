@@ -3,8 +3,8 @@ use std::time::SystemTime;
 
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value};
-use rand::distributions::{Alphanumeric, DistString};
-use rand::thread_rng;
+use rand::distr::{Alphanumeric, SampleString};
+use rand::rng;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Data {
@@ -17,7 +17,7 @@ pub struct Data {
 impl Data {
     pub fn generate() -> Self {
         fn generate_random_string(len: usize) -> String {
-            let mut rng = thread_rng();
+            let mut rng = rng();
             Alphanumeric.sample_string(&mut rng, len)
         }
 

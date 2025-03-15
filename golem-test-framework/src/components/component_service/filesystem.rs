@@ -15,7 +15,6 @@
 use crate::components::component_service::{
     AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
 };
-use crate::config::GolemClientProtocol;
 use anyhow::Context;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
@@ -25,21 +24,26 @@ use golem_common::model::{
     ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
 use golem_common::testing::LocalFileSystemComponentMetadata;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedExport;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 use tracing::{debug, info};
 use uuid::Uuid;
+
+use super::ComponentServiceInternal;
 
 const WASMS_DIRNAME: &str = "wasms";
 
 pub struct FileSystemComponentService {
     root: PathBuf,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
 impl FileSystemComponentService {
-    pub async fn new(root: &Path) -> Self {
+    pub async fn new(root: &Path, plugin_wasm_files_service: Arc<PluginWasmFilesService>) -> Self {
         info!("Using a directory for storing components: {root:?}");
 
         // If we keep metadata around for multiple runs invariants like unique name
@@ -49,6 +53,7 @@ impl FileSystemComponentService {
 
         Self {
             root: root.to_path_buf(),
+            plugin_wasm_files_service,
         }
     }
 
@@ -197,15 +202,7 @@ impl FileSystemComponentService {
 }
 
 #[async_trait]
-impl ComponentService for FileSystemComponentService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        panic!("No real component service running")
-    }
-
-    fn handles_ifs_upload(&self) -> bool {
-        false
-    }
-
+impl ComponentServiceInternal for FileSystemComponentService {
     fn component_client(&self) -> ComponentServiceClient {
         panic!("No real component service running")
     }
@@ -214,6 +211,13 @@ impl ComponentService for FileSystemComponentService {
         panic!("No real component service running")
     }
 
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
+}
+
+#[async_trait]
+impl ComponentService for FileSystemComponentService {
     async fn get_or_add_component(
         &self,
         local_path: &Path,

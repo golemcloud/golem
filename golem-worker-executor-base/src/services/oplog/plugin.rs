@@ -47,6 +47,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tracing::Instrument;
 
 #[async_trait]
 pub trait OplogProcessorPlugin {
@@ -230,7 +231,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             }
         }
         wave_config.push(']');
-        let function_name = format!("golem:api/oplog-processor@1.1.0.{{processor({wave_account_info}, {wave_component_id}, {wave_config}).process}}");
+        let function_name = format!("golem:api/oplog-processor@1.1.5.{{processor({wave_account_info}, {wave_component_id}, {wave_config}).process}}");
 
         let val_worker_id = worker_metadata.worker_id.clone().into_value();
         let val_metadata = worker_metadata.into_value();
@@ -610,6 +611,7 @@ impl<T: GolemTypes> ForwardingOplog<T> {
                     }
                 }
             }
+            .in_current_span()
         });
         Self {
             inner,

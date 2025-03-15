@@ -18,13 +18,15 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     ComponentCompilationRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, RetryConfig};
 use http::Uri;
+use std::fmt::{Debug, Formatter};
+use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 #[async_trait]
-pub trait ComponentCompilationService {
+pub trait ComponentCompilationService: Debug + Send + Sync {
     async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64);
 }
 
@@ -33,7 +35,7 @@ pub struct ComponentCompilationServiceDefault {
 }
 
 impl ComponentCompilationServiceDefault {
-    pub fn new(uri: Uri) -> Self {
+    pub fn new(uri: Uri, retries: RetryConfig, connect_timeout: Duration) -> Self {
         let client = GrpcClient::new(
             "component-compilation-service",
             |channel| {
@@ -42,9 +44,19 @@ impl ComponentCompilationServiceDefault {
                     .accept_compressed(CompressionEncoding::Gzip)
             },
             uri,
-            GrpcClientConfig::default(), // TODO
+            GrpcClientConfig {
+                retries_on_unavailable: retries,
+                connect_timeout,
+            },
         );
         Self { client }
+    }
+}
+
+impl Debug for ComponentCompilationServiceDefault {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComponentCompilationServiceDefault")
+            .finish()
     }
 }
 
@@ -82,6 +94,13 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
 }
 
 pub struct ComponentCompilationServiceDisabled;
+
+impl Debug for ComponentCompilationServiceDisabled {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComponentCompilationServiceDisabled")
+            .finish()
+    }
+}
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDisabled {

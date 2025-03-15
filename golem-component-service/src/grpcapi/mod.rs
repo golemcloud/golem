@@ -54,10 +54,10 @@ pub async fn start_grpc_server(
                 .add_service(reflection_service)
                 .add_service(health_service)
                 .add_service(
-                    ComponentServiceServer::new(ComponentGrpcApi {
-                        component_service: services.component_service.clone(),
-                        plugin_service: services.plugin_service.clone(),
-                    })
+                    ComponentServiceServer::new(ComponentGrpcApi::new(
+                        services.component_service.clone(),
+                        services.plugin_service.clone(),
+                    ))
                     .accept_compressed(CompressionEncoding::Gzip)
                     .send_compressed(CompressionEncoding::Gzip),
                 )

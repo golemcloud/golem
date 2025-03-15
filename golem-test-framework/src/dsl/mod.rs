@@ -18,6 +18,7 @@ use crate::config::TestDependencies;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -34,11 +35,13 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
-use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginWasmFileKey,
+};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
@@ -51,7 +54,9 @@ use golem_common::model::{
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
+use golem_common::widen_infallible;
 use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -59,7 +64,7 @@ use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
-use tracing::{debug, info};
+use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
@@ -199,6 +204,11 @@ pub trait TestDsl {
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
 
+    async fn get_latest_component_metadata(
+        &self,
+        component_id: &ComponentId,
+    ) -> crate::Result<ComponentMetadata>;
+
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
     async fn update_component_with_files(
@@ -234,6 +244,8 @@ pub trait TestDsl {
         }
         added_files
     }
+
+    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey>;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -516,6 +528,22 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .expect("Failed to store component");
     }
 
+    async fn get_latest_component_metadata(
+        &self,
+        component_id: &ComponentId,
+    ) -> crate::Result<ComponentMetadata> {
+        self.component_service()
+            .get_latest_component_metadata(GetLatestComponentRequest {
+                component_id: Some(component_id.clone().into()),
+            })
+            .await
+            .and_then(|c| {
+                c.metadata
+                    .ok_or(anyhow!("metadata not found"))
+                    .and_then(|cm| cm.try_into().map_err(|e: String| anyhow!(e)))
+            })
+    }
+
     async fn add_initial_component_file(
         &self,
         account_id: &AccountId,
@@ -526,10 +554,36 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await
             .expect("Failed to read file");
         let bytes = Bytes::from(data);
+
+        let stream = bytes
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible);
+
         self.initial_component_files_service()
-            .put_if_not_exists(account_id, &bytes)
+            .put_if_not_exists(account_id, stream)
             .await
             .expect("Failed to add initial component file")
+    }
+
+    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let data = tokio::fs::read(&source_path)
+            .await
+            .map_err(|e| anyhow!("Failed to read file: {e}"))?;
+
+        let bytes = Bytes::from(data);
+
+        let stream = bytes
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible);
+
+        let key = self
+            .plugin_wasm_files_service()
+            .put_if_not_exists(&AccountId::placeholder(), stream)
+            .await
+            .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
+
+        Ok(key)
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
@@ -634,6 +688,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 worker_id: Some(worker_id),
             })
             .await?;
+
+        debug!("Received worker metadata: {:?}", response);
 
         match response.result {
             None => Err(anyhow!("No response from connect_worker")),
@@ -961,21 +1017,24 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_service
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                })
-                .await
-                .expect("Failed to connect worker");
+        tokio::spawn(
+            async move {
+                let mut response = cloned_service
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                    })
+                    .await
+                    .expect("Failed to connect worker");
 
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                debug!("Received event: {:?}", event);
-                tx.send(event).expect("Failed to send event");
+                while let Some(event) = response.message().await.expect("Failed to get message") {
+                    debug!("Received event: {:?}", event);
+                    tx.send(event).expect("Failed to send event");
+                }
+
+                debug!("Finished receiving events");
             }
-
-            debug!("Finished receiving events");
-        });
+            .in_current_span(),
+        );
 
         rx
     }
@@ -988,43 +1047,46 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
         let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let mut abort = false;
-            while !abort {
-                let mut response = cloned_service
-                    .connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                    })
-                    .await
-                    .expect("Failed to connect worker");
+        tokio::spawn(
+            async move {
+                let mut abort = false;
+                while !abort {
+                    let mut response = cloned_service
+                        .connect_worker(ConnectWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                        })
+                        .await
+                        .expect("Failed to connect worker");
 
-                loop {
-                    select! {
-                        msg = response.message() => {
-                            match msg {
-                                Ok(Some(event)) =>  {
-                                    debug!("Received event: {:?}", event);
-                                    tx.send(Some(event)).expect("Failed to send event");
-                                }
-                                Ok(None) => {
-                                    break;
-                                }
-                                Err(e) => {
-                                    panic!("Failed to get message: {:?}", e);
+                    loop {
+                        select! {
+                            msg = response.message() => {
+                                match msg {
+                                    Ok(Some(event)) =>  {
+                                        debug!("Received event: {:?}", event);
+                                        tx.send(Some(event)).expect("Failed to send event");
+                                    }
+                                    Ok(None) => {
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        panic!("Failed to get message: {:?}", e);
+                                    }
                                 }
                             }
-                        }
-                        _ = (&mut abort_rx) => {
-                            abort = true;
-                            break;
+                            _ = (&mut abort_rx) => {
+                                abort = true;
+                                break;
+                            }
                         }
                     }
                 }
-            }
 
-            tx.send(None).expect("Failed to send event");
-            debug!("Finished receiving events");
-        });
+                tx.send(None).expect("Failed to send event");
+                debug!("Finished receiving events");
+            }
+            .in_current_span(),
+        );
 
         (rx, abort_tx)
     }
@@ -1036,22 +1098,25 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_service
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                })
-                .await
-                .expect("Failed to connect to worker");
+        tokio::spawn(
+            async move {
+                let mut response = cloned_service
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                    })
+                    .await
+                    .expect("Failed to connect to worker");
 
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                debug!("Received event: {:?}", event);
-                tx.send(Some(event)).expect("Failed to send event");
+                while let Some(event) = response.message().await.expect("Failed to get message") {
+                    debug!("Received event: {:?}", event);
+                    tx.send(Some(event)).expect("Failed to send event");
+                }
+
+                debug!("Finished receiving events");
+                tx.send(None).expect("Failed to send termination event");
             }
-
-            debug!("Finished receiving events");
-            tx.send(None).expect("Failed to send termination event");
-        });
+            .in_current_span(),
+        );
 
         rx
     }
@@ -1059,18 +1124,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn log_output(&self, worker_id: &WorkerId) {
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_service
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                })
-                .await
-                .expect("Failed to connect worker");
+        tokio::spawn(
+            async move {
+                let mut response = cloned_service
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                    })
+                    .await
+                    .expect("Failed to connect worker");
 
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                info!("Received event: {:?}", event);
+                while let Some(event) = response.message().await.expect("Failed to get message") {
+                    info!("Received event: {:?}", event);
+                }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {
@@ -1790,6 +1858,8 @@ pub trait TestDslUnsafe {
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
 
+    async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata;
+
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
     async fn update_component_with_files(
         &self,
@@ -1808,6 +1878,8 @@ pub trait TestDslUnsafe {
         account_id: &AccountId,
         files: &[(&str, &str, ComponentFilePermissions)],
     ) -> Vec<(PathBuf, InitialComponentFile)>;
+
+    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
@@ -2003,6 +2075,18 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
         <T as TestDsl>::store_component_with_id(self, name, component_id).await
+    }
+
+    async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata {
+        <T as TestDsl>::get_latest_component_metadata(self, component_id)
+            .await
+            .expect("Failed to get latest component metadata")
+    }
+
+    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
+        <T as TestDsl>::add_plugin_wasm(self, name)
+            .await
+            .expect("Failed to add plugin wasm")
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {

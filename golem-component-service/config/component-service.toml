@@ -12,8 +12,16 @@ root = "../data/blob_storage"
 type = "Enabled"
 
 [compilation.config]
+connect_timeout = "10s"
 host = "localhost"
 port = 9091
+
+[compilation.config.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [db]
 type = "Sqlite"
@@ -21,6 +29,13 @@ type = "Sqlite"
 [db.config]
 database = "../data/golem_component.sqlite"
 max_connections = 10
+
+[plugin_transformations.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [tracing]
 console = false
@@ -68,6 +83,7 @@ without_time = false
 # initial_component_files_bucket = "golem-initial-component-files"
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
+# plugin_wasm_files_bucket = "golem-plugin-wasm-files"
 # region = "us-east-1"
 # use_minio_credentials = false
 # 
@@ -93,6 +109,13 @@ without_time = false
 # password = "postgres"
 # port = 5432
 # username = "postgres"
+# 
+# [plugin_transformations.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [tracing]
 # console = false

@@ -1,5 +1,6 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceConfig, ComponentServiceLocalConfig, DefaultAdditionalGolemConfig,
 };
@@ -14,23 +15,22 @@ use prometheus::Registry;
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::path::Path;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock, Weak};
-
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, GolemConfig,
     IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, WorkerServiceGrpcConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock, Weak};
 
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
@@ -60,7 +60,7 @@ use golem_worker_executor_base::workerctx::{
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
+use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes, RunDetails};
 
 use tokio::runtime::Handle;
 
@@ -264,6 +264,10 @@ impl TestDependencies for TestWorkerExecutor {
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.deps.initial_component_files_service()
     }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.deps.plugin_wasm_files_service()
+    }
 }
 
 pub struct TestContext {
@@ -284,18 +288,6 @@ impl TestContext {
     pub fn redis_prefix(&self) -> String {
         format!("test-{}-{}:", self.base_prefix, self.unique_id)
     }
-
-    pub fn grpc_port(&self) -> u16 {
-        9000 + (self.unique_id * 3)
-    }
-
-    pub fn http_port(&self) -> u16 {
-        9001 + (self.unique_id * 3)
-    }
-
-    pub fn host_http_port(&self) -> u16 {
-        9002 + (self.unique_id * 3)
-    }
 }
 
 pub async fn start(
@@ -314,7 +306,7 @@ pub async fn start_limited(
     let redis_monitor = deps.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
-    println!("Using Redis on port {}", redis.public_port());
+    info!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
@@ -327,8 +319,8 @@ pub async fn start_limited(
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: Path::new("data/blobs").to_path_buf(),
         }),
-        port: context.grpc_port(),
-        http_port: context.http_port(),
+        port: 0,
+        http_port: 0,
 
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
@@ -336,11 +328,6 @@ pub async fn start_limited(
         shard_manager_service: ShardManagerServiceConfig::SingleShard(
             ShardManagerServiceSingleShardConfig {},
         ),
-        public_worker_api: WorkerServiceGrpcConfig {
-            host: "localhost".to_string(),
-            port: context.grpc_port(),
-            access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
-        },
         memory: MemoryConfig {
             system_memory_override,
             ..Default::default()
@@ -357,21 +344,17 @@ pub async fn start_limited(
 
     let handle = Handle::current();
 
-    let grpc_port = config.port;
-
     let mut join_set = JoinSet::new();
 
-    run(config, additional_config, prometheus, handle, &mut join_set).await?;
+    let details = run(config, additional_config, prometheus, handle, &mut join_set).await?;
+    let grpc_port = details.grpc_port;
 
     let start = std::time::Instant::now();
     loop {
+        info!("Waiting for worker-executor to be reachable on port {grpc_port}");
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
         if client.is_ok() {
-            let deps = deps.per_test(
-                &context.redis_prefix(),
-                context.http_port(),
-                context.grpc_port(),
-            );
+            let deps = deps.per_test(&context.redis_prefix(), details.http_port, grpc_port);
             break Ok(TestWorkerExecutor {
                 _join_set: Some(join_set),
                 deps,
@@ -388,14 +371,12 @@ async fn run(
     prometheus_registry: Registry,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
+) -> Result<RunDetails, anyhow::Error> {
     info!("Golem Worker Executor starting up...");
 
     ServerBootstrap { additional_config }
         .run(golem_config, prometheus_registry, runtime, join_set)
-        .await?;
-
-    Ok(())
+        .await
 }
 
 struct TestWorkerCtx {
@@ -940,29 +921,42 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+#[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
-    fn start_span(
+    async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
-        self.durable_ctx.start_span(initial_attributes)
+        self.durable_ctx.start_span(initial_attributes).await
     }
 
-    fn start_child_span(
+    async fn start_child_span(
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, GolemError> {
         self.durable_ctx
             .start_child_span(parent, initial_attributes)
+            .await
     }
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
         self.durable_ctx.remove_span(span_id)
     }
 
-    fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
-        self.durable_ctx.finish_span(span_id)
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id).await
+    }
+
+    async fn set_span_attribute(
+        &mut self,
+        span_id: &SpanId,
+        key: &str,
+        value: AttributeValue,
+    ) -> Result<(), GolemError> {
+        self.durable_ctx
+            .set_span_attribute(span_id, key, value)
+            .await
     }
 }
 
@@ -1122,6 +1116,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_api_0_2_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(
             &mut linker,

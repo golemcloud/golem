@@ -14,7 +14,6 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -58,7 +57,6 @@ use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
-use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 pub(crate) fn bad_request_error(error: &str) -> ComponentError {
@@ -78,13 +76,21 @@ fn internal_error(error: &str) -> ComponentError {
 }
 
 pub struct ComponentGrpcApi {
-    pub component_service:
-        Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+    component_service: Arc<dyn component::ComponentService<DefaultComponentOwner>>,
+    plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
 }
 
 impl ComponentGrpcApi {
+    pub fn new(
+        component_service: Arc<dyn component::ComponentService<DefaultComponentOwner>>,
+        plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    ) -> Self {
+        Self {
+            component_service,
+            plugin_service,
+        }
+    }
+
     fn require_component_id(
         source: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
     ) -> Result<ComponentId, ComponentError> {
@@ -161,10 +167,7 @@ impl ComponentGrpcApi {
     async fn download(
         &self,
         request: DownloadComponentRequest,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
-        ComponentError,
-    > {
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let id = Self::require_component_id(&request.component_id)?;
         let version = request.version;
         let result = self

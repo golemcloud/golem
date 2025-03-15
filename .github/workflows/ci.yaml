@@ -19,7 +19,230 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
 jobs:
+  build:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Building all executables
+        env:
+          QUIET: true
+        run: cargo make --profile ci build
+        timeout-minutes: 30
+
+  unit-tests-and-checks:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Unit tests
+        run: cargo make --profile ci unit-tests
+      - name: Check formatting and clippy rules
+        run: cargo make --profile ci check
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "**/target/report-*.xml"
+          detailed_summary: true
+          include_passed: true
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "**/target/report-*.xml"
+          detailed_summary: true
+          include_passed: true
+
+  worker-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: true
+      matrix:
+        group:
+          - name: untagged
+          - name: group1
+          - name: group2
+          - name: group3
+          - name: group4
+          - name: group5
+          - name: group6
+          - name: group7
+          - name: group8
+    name: worker-tests-${{ matrix.group.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.35.1
+        with:
+          redis-version: latest
+          auto-start: false
+      - name: Worker Executor integration tests
+        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
+        timeout-minutes: 40
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "**/target/report-*.xml"
+          detailed_summary: true
+          include_passed: true
+
+  api-and-integration-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: true
+      matrix:
+        group:
+          - name: integration-tests-group1
+            description: "Full integration tests"
+          - name: integration-tests-group2
+            description: "Component service integration tests"
+          - name: integration-tests-group3
+            description: "Worker service integration tests"
+          - name: integration-tests-group4
+            description: "Base service integration tests"
+          - name: integration-tests-group5
+            description: "Sharding tests"
+          - name: api-tests
+            description: "API tests"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.35.1
+        with:
+          redis-version: latest
+          auto-start: false
+      - name: ${{ matrix.group.description }}
+        env:
+          QUIET: true
+        run: cargo make --profile ci ${{ matrix.group.name }}
+        timeout-minutes: 30
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "**/target/report-*.xml"
+          detailed_summary: true
+          include_passed: true
+
+  wasm-rpc-stub:
+    runs-on: blacksmith
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Install cargo-component
+        run: cargo install --force --locked cargo-component@0.20.0
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare WIT dependencies
+        run: cargo make wit
+      - name: Build wasm-rpc in stub mode
+        run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
+
   docker-targets-build:
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
@@ -51,6 +274,12 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -74,9 +303,11 @@ jobs:
         with:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
+
   docker-publish:
     runs-on: blacksmith
-    needs: [docker-targets-build]
+    needs:
+      - docker-targets-build
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
@@ -206,348 +437,16 @@ jobs:
           tags: ${{ steps.meta-golem-router.outputs.tags }}
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
-  build-and-test:
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: true
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check that wit-deps are up-to-date
-        run: cargo make --profile ci check-wit
-      - name: Build all targets
-        run: cargo make --profile ci build
-      - name: Check that OpenAPI specs are up-to-date
-        run: cargo make --profile ci check-openapi
-      - name: Check that configs are up-to-date
-        run: cargo make --profile ci check-configs
-      - name: Unit tests
-        run: cargo make --profile ci unit-tests
-      - name: Check formatting and clippy rules
-        run: cargo make --profile ci check
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
-
-  wasm-rpc-stub:
-    runs-on: blacksmith
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - name: Install cargo-component
-        run: cargo install --force --locked cargo-component@0.20.0
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Prepare WIT dependencies
-        run: cargo make wit
-      - name: Build wasm-rpc in stub mode
-        run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
-
-  worker-tests-group1:
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    name: worker-tests-group1
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug-workertests
-          cache-all-crates: true
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
-        with:
-          redis-version: latest
-          auto-start: false
-      - name: Worker Executor integration tests
-        run: cargo make --profile ci worker-executor-tests-group1
-        timeout-minutes: 20
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
-  worker-tests:
-    needs: [worker-tests-group1]
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    strategy:
-      fail-fast: true
-      matrix:
-        group:
-          - name: group2
-          - name: group3
-          - name: group4
-          - name: group5
-          - name: group6
-          - name: group7
-          - name: group8
-    name: worker-tests-${{ matrix.group.name }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug-workertests
-          cache-all-crates: true
-          save-if: false
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
-        with:
-          redis-version: latest
-          auto-start: false
-      - name: Worker Executor integration tests
-        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
-        timeout-minutes: 40
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
-  build-bins:
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug-bins
-          cache-all-crates: true
-          save-if: true
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Building executables for tests
-        env:
-          QUIET: true
-        run: cargo make --profile ci build-bins
-        timeout-minutes: 30
-      - name: Upload compiled component-compilation-service
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-component-compilation-service
-          path: |
-            target/debug/golem-component-compilation-service
-      - name: Upload compiled component-service
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-component-service
-          path: |
-            target/debug/golem-component-service
-      - name: Upload compiled shard-manager
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-shard-manager
-          path: |
-            target/debug/golem-shard-manager
-      - name: Upload compiled worker-service
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-golem-worker-service
-          path: |
-            target/debug/golem-worker-service
-      - name: Upload compiled worker-executor
-        uses: actions/upload-artifact@v4
-        with:
-          name: target-debug-worker-executor
-          path: |
-            target/debug/worker-executor
-
-  # Integration tess not requiring prebuilt executables
-  api-and-integration-tests-1:
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    strategy:
-      fail-fast: true
-      matrix:
-        group:
-          - name: integration-tests-group2
-            description: "Component service integration tests"
-          - name: integration-tests-group3
-            description: "Worker service integration tests"
-          - name: integration-tests-group4
-            description: "Base service integration tests"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
-        with:
-          redis-version: latest
-          auto-start: false
-      - name: ${{ matrix.group.description }}
-        env:
-          QUIET: true
-        run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
-
-  # Integration tests requiring prebuilt executables
-  api-and-integration-tests-2:
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    needs: build-bins
-    strategy:
-      fail-fast: true
-      matrix:
-        group:
-          - name: integration-tests-group1
-            description: "Full integration tests"
-          - name: integration-tests-group5
-            description: "Sharding tests"
-          - name: api-tests
-            description: "API tests"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          shared-key: debug-bins
-          cache-all-crates: true
-          save-if: false
-
-      - name: Download specific files from target
-        uses: actions/download-artifact@v4
-        with:
-          pattern: target-debug-*
-          path: target/debug
-          merge-multiple: true
-      - name: Fix permissions
-        working-directory: target/debug
-        run: chmod +x golem-component-compilation-service golem-component-service golem-shard-manager golem-worker-service worker-executor
-
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
-        with:
-          redis-version: latest
-          auto-start: false
-
-      - name: ${{ matrix.group.description }}
-        env:
-          QUIET: true
-        run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
-
   publish:
-    needs: [build-and-test, wasm-rpc-stub, worker-tests, api-and-integration-tests-1, api-and-integration-tests-2]
+    needs:
+      - build
+      - unit-tests-and-checks
+      - wasm-rpc-stub
+      - worker-tests
+      - api-and-integration-tests
     if: "startsWith(github.ref, 'refs/tags/v')"
+    env:
+      CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
@@ -561,8 +460,10 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
+          prefix-key: v2-rust
           shared-key: release
           cache-all-crates: true
+          safe-if: true
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -577,8 +478,10 @@ jobs:
         run: cargo make --profile ci publish
 
   publish-slack-notification:
+    needs:
+      - publish
+      - docker-publish
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [publish, docker-publish]
     runs-on: blacksmith
     steps:
       - name: Publish Slack Notification

@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task;
 use tokio::time::interval;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 #[async_trait]
 pub trait GatewaySession {
@@ -296,17 +296,22 @@ impl SqliteGatewaySession {
     }
 
     pub fn spawn_expiration_task(cleanup_internal: Duration, db_pool: SqlitePool) {
-        task::spawn(async move {
-            let mut cleanup_interval = interval(cleanup_internal);
+        task::spawn(
+            async move {
+                let mut cleanup_interval = interval(cleanup_internal);
 
-            loop {
-                cleanup_interval.tick().await;
+                loop {
+                    cleanup_interval.tick().await;
 
-                if let Err(e) = Self::cleanup_expired(db_pool.clone(), Self::current_time()).await {
-                    error!("Failed to expire sessions: {}", e);
+                    if let Err(e) =
+                        Self::cleanup_expired(db_pool.clone(), Self::current_time()).await
+                    {
+                        error!("Failed to expire sessions: {}", e);
+                    }
                 }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     pub async fn cleanup_expired(pool: SqlitePool, current_time: i64) -> Result<(), String> {

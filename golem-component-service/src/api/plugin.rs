@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use crate::api::{ComponentError, Result};
-use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginDefinitionWithoutOwner,
-};
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
+use golem_component_service_base::api::dto;
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::ErrorBody;
@@ -26,20 +25,19 @@ use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
 use std::sync::Arc;
 use tracing::Instrument;
-
 pub struct PluginApi {
     pub plugin_service:
         Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v1/plugins", tag = ApiTags::Plugin)]
+#[OpenApi(prefix_path = "/v1", tag = ApiTags::Plugin)]
 impl PluginApi {
     /// Lists all the registered plugins (including all versions of each).
-    #[oai(path = "/", method = "get", operation_id = "list_plugins")]
+    #[oai(path = "/plugins/", method = "get", operation_id = "list_plugins")]
     pub async fn list_plugins(
         &self,
         scope: Query<Option<DefaultPluginScope>>,
-    ) -> Result<Json<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
+    ) -> Result<Json<Vec<dto::PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
         let record = recorded_http_api_request!("list_plugins",);
 
         let response = if let Some(scope) = scope.0 {
@@ -48,25 +46,29 @@ impl PluginApi {
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
-                .map(|response| Json(response.into_iter().collect()))
+                .map(|response| Json(response.into_iter().map(|p| p.into()).collect()))
         } else {
             self.plugin_service
                 .list_plugins(&DefaultPluginOwner)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
-                .map(|response| Json(response.into_iter().collect()))
+                .map(|response| Json(response.into_iter().map(|p| p.into()).collect()))
         };
 
         record.result(response)
     }
 
     /// Lists all the registered versions of a specific plugin identified by its name
-    #[oai(path = "/:name", method = "get", operation_id = "list_plugin_versions")]
+    #[oai(
+        path = "/plugins/:name",
+        method = "get",
+        operation_id = "list_plugin_versions"
+    )]
     pub async fn list_plugin_versions(
         &self,
         name: Path<String>,
-    ) -> Result<Json<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
+    ) -> Result<Json<Vec<dto::PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
         let record = recorded_http_api_request!("list_plugin_versions", plugin_name = name.0);
 
         let response = self
@@ -75,16 +77,16 @@ impl PluginApi {
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
-            .map(|response| Json(response.into_iter().collect()));
+            .map(|response| Json(response.into_iter().map(|p| p.into()).collect()));
 
         record.result(response)
     }
 
     /// Registers a new plugin
-    #[oai(path = "/", method = "post", operation_id = "create_plugin")]
+    #[oai(path = "/plugins/", method = "post", operation_id = "create_plugin")]
     pub async fn create_plugin(
         &self,
-        plugin: Json<PluginDefinitionWithoutOwner<DefaultPluginScope>>,
+        plugin: Json<dto::PluginDefinitionCreation<DefaultPluginScope>>,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "create_plugin",
@@ -103,13 +105,71 @@ impl PluginApi {
         record.result(response)
     }
 
+    /// Registers a new library plugin
+    #[oai(
+        path = "/library-plugins/",
+        method = "post",
+        operation_id = "create_library_plugin"
+    )]
+    pub async fn create_library_plugin(
+        &self,
+        plugin: dto::LibraryPluginDefinitionCreation<DefaultPluginScope>,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "create_library_plugin",
+            plugin_name = plugin.name,
+            plugin_version = plugin.version
+        );
+
+        let response = self
+            .plugin_service
+            .create_plugin(plugin.with_owner(DefaultPluginOwner))
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    /// Registers a new app plugin
+    #[oai(
+        path = "/app-plugins/",
+        method = "post",
+        operation_id = "create_app_plugin"
+    )]
+    pub async fn create_app_plugin(
+        &self,
+        plugin: dto::AppPluginDefinitionCreation<DefaultPluginScope>,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "create_app_plugin",
+            plugin_name = plugin.name,
+            plugin_version = plugin.version
+        );
+
+        let response = self
+            .plugin_service
+            .create_plugin(plugin.with_owner(DefaultPluginOwner))
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
     /// Gets a registered plugin by its name and version
-    #[oai(path = "/:name/:version", method = "get", operation_id = "get_plugin")]
+    #[oai(
+        path = "/plugins/:name/:version",
+        method = "get",
+        operation_id = "get_plugin"
+    )]
     pub async fn get_plugin(
         &self,
         name: Path<String>,
         version: Path<String>,
-    ) -> Result<Json<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>> {
+    ) -> Result<Json<dto::PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>> {
         let record = recorded_http_api_request!(
             "get_plugin",
             plugin_name = name.0,
@@ -123,7 +183,7 @@ impl PluginApi {
             .await
             .map_err(|e| e.into())
             .and_then(|response| match response {
-                Some(response) => Ok(Json(response)),
+                Some(response) => Ok(Json(response.into())),
                 None => Err(ComponentError::NotFound(Json(ErrorBody {
                     error: "Plugin not found".to_string(),
                 }))),
@@ -134,7 +194,7 @@ impl PluginApi {
 
     /// Deletes a registered plugin by its name and version
     #[oai(
-        path = "/:name/:version",
+        path = "/plugins/:name/:version",
         method = "delete",
         operation_id = "delete_plugin"
     )]

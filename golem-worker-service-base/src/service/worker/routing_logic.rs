@@ -269,17 +269,20 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
             let mut fibers = JoinSet::new();
             for pod in pods {
                 let worker_executor_clients = context.worker_executor_clients().clone();
-                let _ = fibers.spawn({
-                    let pod = pod.clone();
-                    let f = f.clone();
-                    let description = description.clone();
-                    async move {
-                        worker_executor_clients
-                            .call(description, pod.uri(), f)
-                            .await
-                            .map_err(|err| (err, pod))
+                let _ = fibers.spawn(
+                    {
+                        let pod = pod.clone();
+                        let f = f.clone();
+                        let description = description.clone();
+                        async move {
+                            worker_executor_clients
+                                .call(description, pod.uri(), f)
+                                .await
+                                .map_err(|err| (err, pod))
+                        }
                     }
-                });
+                    .in_current_span(),
+                );
             }
             let mut results = Vec::new();
             while let Some(result) = fibers.join_next().await {

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use golem_common::tracing::{init_tracing, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use itertools::Itertools;
@@ -23,7 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::Level;
+use tracing::{Instrument, Level};
 
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
@@ -84,6 +85,7 @@ pub struct CliTestDependencies {
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
 }
 
@@ -229,6 +231,8 @@ pub enum TestMode {
         worker_executor_http_port: u16,
         #[arg(long, default_value = "9100")]
         worker_executor_grpc_port: u16,
+        #[arg(long, default_value = "9100")]
+        blob_storage_path: PathBuf,
     },
     #[command()]
     Docker {
@@ -320,15 +324,18 @@ impl TestMode {
 
 impl CliTestDependencies {
     pub fn init_logging(params: &CliParams) {
-        init_tracing(&TracingConfig::test("cli-tests"), |_output| {
-            golem_common::tracing::filter::boxed::env_with_directives(
-                params
-                    .default_log_level()
-                    .parse()
-                    .expect("Failed to parse log cli test log level"),
-                golem_common::tracing::directive::default_deps(),
-            )
-        });
+        init_tracing(
+            &TracingConfig::test("cli-tests").with_env_overrides(),
+            |_output| {
+                golem_common::tracing::filter::boxed::env_with_directives(
+                    params
+                        .default_log_level()
+                        .parse()
+                        .expect("Failed to parse log cli test log level"),
+                    golem_common::tracing::directive::default_deps(),
+                )
+            },
+        );
     }
 
     async fn make_docker(
@@ -339,44 +346,62 @@ impl CliTestDependencies {
     ) -> Self {
         let params_clone = params.clone();
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let component_directory = PathBuf::from(&params.component_directory);
-            tokio::spawn(async move {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new().await);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
 
-                let component_compilation_service = if !compilation_service_disabled {
-                    Some((
-                        DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
-                    ))
-                } else {
-                    None
-                };
+            tokio::spawn(
+                async move {
+                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                        Arc::new(DockerPostgresRdb::new().await);
 
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    DockerComponentService::new(
-                        component_directory,
-                        component_compilation_service,
-                        rdb.clone(),
-                        params_clone.service_verbosity(),
-                        params.golem_client_protocol,
-                    )
-                    .await,
-                );
+                    let component_compilation_service = if !compilation_service_disabled {
+                        Some((
+                            DockerComponentCompilationService::NAME,
+                            DockerComponentCompilationService::GRPC_PORT.as_u16(),
+                        ))
+                    } else {
+                        None
+                    };
 
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    DockerComponentCompilationService::new(
-                        component_service.clone(),
-                        params_clone.service_verbosity(),
-                    )
-                    .await,
-                );
+                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                        Arc::new(
+                            DockerComponentService::new(
+                                component_directory,
+                                component_compilation_service,
+                                rdb.clone(),
+                                params_clone.service_verbosity(),
+                                params.golem_client_protocol,
+                                plugin_wasm_files_service,
+                            )
+                            .await,
+                        );
 
-                (rdb, component_service, component_compilation_service)
-            })
+                    let component_compilation_service: Arc<
+                        dyn ComponentCompilationService + Send + Sync + 'static,
+                    > = Arc::new(
+                        DockerComponentCompilationService::new(
+                            component_service.clone(),
+                            params_clone.service_verbosity(),
+                        )
+                        .await,
+                    );
+
+                    (rdb, component_service, component_compilation_service)
+                }
+                .in_current_span(),
+            )
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
@@ -417,14 +442,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -436,6 +453,7 @@ impl CliTestDependencies {
             worker_executor_cluster,
             blob_storage,
             initial_component_files_service,
+            plugin_wasm_files_service,
             component_directory: params.component_directory.clone().into(),
         }
     }
@@ -470,55 +488,70 @@ impl CliTestDependencies {
             Level::INFO
         };
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let params = params.clone();
             let workspace_root = workspace_root.clone();
             let build_root = build_root.clone();
             let component_directory = PathBuf::from(&params.component_directory);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
 
-            tokio::spawn(async move {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new().await);
+            tokio::spawn(
+                async move {
+                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                        Arc::new(DockerPostgresRdb::new().await);
 
-                let component_compilation_service_port = if !compilation_service_disabled {
-                    Some(component_compilation_service_grpc_port)
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    SpawnedComponentService::new(
-                        component_directory,
-                        &build_root.join("golem-component-service"),
-                        &workspace_root.join("golem-component-service"),
-                        component_service_http_port,
-                        component_service_grpc_port,
-                        component_compilation_service_port,
-                        rdb.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                        params.golem_client_protocol,
-                    )
-                    .await,
-                );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    SpawnedComponentCompilationService::new(
-                        &build_root.join("golem-component-compilation-service"),
-                        &workspace_root.join("golem-component-compilation-service"),
-                        component_compilation_service_http_port,
-                        component_compilation_service_grpc_port,
-                        component_service.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                    )
-                    .await,
-                );
+                    let component_compilation_service_port = if !compilation_service_disabled {
+                        Some(component_compilation_service_grpc_port)
+                    } else {
+                        None
+                    };
+                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                        Arc::new(
+                            SpawnedComponentService::new(
+                                component_directory,
+                                &build_root.join("golem-component-service"),
+                                &workspace_root.join("golem-component-service"),
+                                component_service_http_port,
+                                component_service_grpc_port,
+                                component_compilation_service_port,
+                                rdb.clone(),
+                                params.service_verbosity(),
+                                out_level,
+                                Level::ERROR,
+                                params.golem_client_protocol,
+                                plugin_wasm_files_service.clone(),
+                            )
+                            .await,
+                        );
+                    let component_compilation_service: Arc<
+                        dyn ComponentCompilationService + Send + Sync + 'static,
+                    > = Arc::new(
+                        SpawnedComponentCompilationService::new(
+                            &build_root.join("golem-component-compilation-service"),
+                            &workspace_root.join("golem-component-compilation-service"),
+                            component_compilation_service_http_port,
+                            component_compilation_service_grpc_port,
+                            component_service.clone(),
+                            params.service_verbosity(),
+                            out_level,
+                            Level::ERROR,
+                        )
+                        .await,
+                    );
 
-                (rdb, component_service, component_compilation_service)
-            })
+                    (rdb, component_service, component_compilation_service)
+                }
+                .in_current_span(),
+            )
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
@@ -587,14 +620,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -606,6 +631,7 @@ impl CliTestDependencies {
             worker_executor_cluster,
             component_directory: Path::new(&params.component_directory).to_path_buf(),
             blob_storage,
+            plugin_wasm_files_service,
             initial_component_files_service,
         }
     }
@@ -621,10 +647,22 @@ impl CliTestDependencies {
         let namespace = K8sNamespace(namespace.to_string());
         let timeout = Duration::from_secs(90);
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let namespace = namespace.clone();
             let routing_type = routing_type.clone();
             let component_directory = PathBuf::from(&params.component_directory);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
+
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
@@ -648,6 +686,7 @@ impl CliTestDependencies {
                         timeout,
                         None,
                         params.golem_client_protocol,
+                        plugin_wasm_files_service.clone(),
                     )
                     .await,
                 );
@@ -731,14 +770,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -750,6 +781,7 @@ impl CliTestDependencies {
             worker_executor_cluster,
             blob_storage,
             initial_component_files_service,
+            plugin_wasm_files_service,
             component_directory: Path::new(&params.component_directory).to_path_buf(),
         }
     }
@@ -766,61 +798,77 @@ impl CliTestDependencies {
         let service_annotations = Some(aws_nlb_service_annotations());
         let timeout = Duration::from_secs(900);
 
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
         let rdb_and_component_service_join = {
             let namespace = namespace.clone();
             let routing_type = routing_type.clone();
             let service_annotations = service_annotations.clone();
             let component_directory = PathBuf::from(&params.component_directory);
+            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
 
-            tokio::spawn(async move {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
-                    K8sPostgresRdb::new(
-                        &namespace,
-                        &routing_type,
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
+            tokio::spawn(
+                async move {
+                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
+                        K8sPostgresRdb::new(
+                            &namespace,
+                            &routing_type,
+                            timeout,
+                            service_annotations.clone(),
+                        )
+                        .await,
+                    );
 
-                let component_compilation_service = if !compilation_service_disabled {
-                    Some((
-                        K8sComponentCompilationService::NAME,
-                        K8sComponentCompilationService::GRPC_PORT,
-                    ))
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    K8sComponentService::new(
-                        component_directory,
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_compilation_service,
-                        rdb.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                        params.golem_client_protocol,
-                    )
-                    .await,
-                );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    K8sComponentCompilationService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_service.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
+                    let component_compilation_service = if !compilation_service_disabled {
+                        Some((
+                            K8sComponentCompilationService::NAME,
+                            K8sComponentCompilationService::GRPC_PORT,
+                        ))
+                    } else {
+                        None
+                    };
+                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                        Arc::new(
+                            K8sComponentService::new(
+                                component_directory,
+                                &namespace,
+                                &routing_type,
+                                Level::INFO,
+                                component_compilation_service,
+                                rdb.clone(),
+                                timeout,
+                                service_annotations.clone(),
+                                params.golem_client_protocol,
+                                plugin_wasm_files_service,
+                            )
+                            .await,
+                        );
+                    let component_compilation_service: Arc<
+                        dyn ComponentCompilationService + Send + Sync + 'static,
+                    > = Arc::new(
+                        K8sComponentCompilationService::new(
+                            &namespace,
+                            &routing_type,
+                            Level::INFO,
+                            component_service.clone(),
+                            timeout,
+                            service_annotations.clone(),
+                        )
+                        .await,
+                    );
 
-                (rdb, component_service, component_compilation_service)
-            })
+                    (rdb, component_service, component_compilation_service)
+                }
+                .in_current_span(),
+            )
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
@@ -885,14 +933,6 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
         Self {
             rdb,
             redis,
@@ -904,6 +944,7 @@ impl CliTestDependencies {
             worker_executor_cluster,
             component_directory: Path::new(&params.component_directory).to_path_buf(),
             blob_storage,
+            plugin_wasm_files_service,
             initial_component_files_service,
         }
     }
@@ -931,7 +972,19 @@ impl CliTestDependencies {
                 worker_executor_host,
                 worker_executor_http_port,
                 worker_executor_grpc_port,
+                blob_storage_path,
             } => {
+                let blob_storage = Arc::new(
+                    FileSystemBlobStorage::new(&PathBuf::from(blob_storage_path))
+                        .await
+                        .unwrap(),
+                );
+                let initial_component_files_service =
+                    Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+                let plugin_wasm_files_service =
+                    Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(ProvidedRedis::new(
@@ -955,6 +1008,7 @@ impl CliTestDependencies {
                         *component_service_http_port,
                         *component_service_grpc_port,
                         params.golem_client_protocol,
+                        plugin_wasm_files_service.clone(),
                     )
                     .await,
                 );
@@ -984,16 +1038,6 @@ impl CliTestDependencies {
                     true,
                 ));
 
-                let blob_storage = Arc::new(
-                    FileSystemBlobStorage::new(&PathBuf::from(
-                        "/tmp/ittest-local-object-store/golem",
-                    ))
-                    .await
-                    .unwrap(),
-                );
-                let initial_component_files_service =
-                    Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
                 Self {
                     rdb,
                     redis,
@@ -1005,6 +1049,7 @@ impl CliTestDependencies {
                     worker_executor_cluster,
                     component_directory: Path::new(&params.component_directory).to_path_buf(),
                     blob_storage,
+                    plugin_wasm_files_service,
                     initial_component_files_service,
                 }
             }
@@ -1140,6 +1185,10 @@ impl TestDependencies for CliTestDependencies {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
     }
 }
 

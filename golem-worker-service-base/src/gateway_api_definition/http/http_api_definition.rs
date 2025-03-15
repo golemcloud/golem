@@ -16,7 +16,7 @@ use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern
 use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
-use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
+use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding};
 use crate::gateway_binding::{HttpHandlerBindingCompiled, WorkerBindingCompiled};
 use crate::gateway_middleware::{
     HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, HttpMiddlewares,
@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -233,6 +234,32 @@ pub struct CompiledHttpApiDefinition<Namespace> {
 }
 
 impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
+    pub fn remove_auth_call_back_routes(
+        &self,
+        auth_routes: &[CompiledAuthCallBackRoute],
+    ) -> CompiledHttpApiDefinition<Namespace> {
+        let new_routes = self
+            .routes
+            .iter()
+            .filter(|route| {
+                route
+                    .as_auth_callback_route()
+                    .map(|auth_route| !auth_routes.contains(&auth_route))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        CompiledHttpApiDefinition {
+            id: self.id.clone(),
+            version: self.version.clone(),
+            routes: new_routes,
+            draft: self.draft,
+            created_at: self.created_at,
+            namespace: self.namespace.clone(),
+        }
+    }
+
     pub fn from_http_api_definition(
         http_api_definition: &HttpApiDefinition,
         metadata_dictionary: &ComponentMetadataDictionary,
@@ -548,6 +575,29 @@ pub struct CompiledRoute {
     pub middlewares: Option<HttpMiddlewares>,
 }
 
+impl CompiledRoute {
+    pub fn as_auth_callback_route(&self) -> Option<CompiledAuthCallBackRoute> {
+        match &self.binding {
+            GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(auth_callback)) => {
+                Some(CompiledAuthCallBackRoute {
+                    method: self.method.clone(),
+                    path: self.path.clone(),
+                    http_auth_middleware: auth_callback.deref().clone(),
+                })
+            }
+
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledAuthCallBackRoute {
+    pub method: MethodPattern,
+    pub path: AllPathPatterns,
+    pub http_auth_middleware: HttpAuthenticationMiddleware,
+}
+
 #[derive(Debug)]
 pub enum RouteCompilationErrors {
     MetadataNotFoundError(VersionedComponentId),
@@ -859,7 +909,6 @@ mod tests {
         test_string_expr_parse_and_encode("worker.response");
     }
 
-    // TODO; Avoid having to pass null to fix tests
     fn get_api_spec(
         path_pattern: &str,
         worker_id: &str,

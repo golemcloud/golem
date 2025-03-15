@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::oplog::SpanData;
+use crate::model::public_oplog::PublicAttributeValue;
 use crate::model::Timestamp;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_rpc::{IntoValue, Value};
 use nonempty_collections::NEVec;
 use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
@@ -52,6 +57,88 @@ impl TraceId {
 impl Display for TraceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:032x}", self.0)
+    }
+}
+
+impl IntoValue for TraceId {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::str()
+    }
+}
+
+impl Serialize for TraceId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TraceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::from_string(String::deserialize(deserializer)?).map_err(Error::custom)
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::Type for TraceId {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::from(format!("string({})", stringify!(SpanId)))
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Inline(Box::new(
+            poem_openapi::registry::MetaSchema::new("string"),
+        ))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromParameter for TraceId {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Ok(Self::from_string(value)?)
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromJSON for TraceId {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(serde_json::Value::String(s)) => Ok(Self::from_string(&s)?),
+            _ => Err(poem_openapi::types::ParseError::<TraceId>::custom(format!(
+                "Unexpected representation of {}",
+                stringify!(SpanId)
+            ))),
+        }
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ToJSON for TraceId {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::String(self.to_string()))
     }
 }
 
@@ -89,6 +176,88 @@ impl Display for SpanId {
     }
 }
 
+impl IntoValue for SpanId {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::str()
+    }
+}
+
+impl Serialize for SpanId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SpanId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::from_string(String::deserialize(deserializer)?).map_err(Error::custom)
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::Type for SpanId {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::from(format!("string({})", stringify!(SpanId)))
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Inline(Box::new(
+            poem_openapi::registry::MetaSchema::new("string"),
+        ))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromParameter for SpanId {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Ok(Self::from_string(value)?)
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromJSON for SpanId {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(serde_json::Value::String(s)) => Ok(Self::from_string(&s)?),
+            _ => Err(poem_openapi::types::ParseError::<SpanId>::custom(format!(
+                "Unexpected representation of {}",
+                stringify!(SpanId)
+            ))),
+        }
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ToJSON for SpanId {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::String(self.to_string()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum AttributeValue {
     String(String),
@@ -102,11 +271,34 @@ impl Display for AttributeValue {
     }
 }
 
+impl IntoValue for AttributeValue {
+    fn into_value(self) -> Value {
+        match self {
+            Self::String(value) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::String(value))),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::variant(vec![analysed_type::case("string", analysed_type::str())])
+    }
+}
+
+impl From<PublicAttributeValue> for AttributeValue {
+    fn from(value: PublicAttributeValue) -> Self {
+        match value {
+            PublicAttributeValue::String(value) => Self::String(value.value),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct LocalInvocationContextSpanState {
-    parent: Option<Arc<InvocationContextSpan>>,
-    attributes: HashMap<String, AttributeValue>,
-    linked_context: Option<Arc<InvocationContextSpan>>,
+    pub parent: Option<Arc<InvocationContextSpan>>,
+    pub attributes: HashMap<String, AttributeValue>,
+    pub linked_context: Option<Arc<InvocationContextSpan>>,
 }
 
 pub struct LocalInvocationContextSpanBuilder {
@@ -162,6 +354,11 @@ impl LocalInvocationContextSpanBuilder {
 
     pub fn with_inherited(mut self, inherited: bool) -> Self {
         self.inherited = inherited;
+        self
+    }
+
+    pub fn linked_context(mut self, linked_context: Option<Arc<InvocationContextSpan>>) -> Self {
+        self.linked_context = linked_context;
         self
     }
 
@@ -236,6 +433,13 @@ impl InvocationContextSpan {
                 let state = state.read().unwrap();
                 state.linked_context.clone()
             }
+            Self::ExternalParent { .. } => None,
+        }
+    }
+
+    pub fn start(&self) -> Option<Timestamp> {
+        match self {
+            Self::Local { start, .. } => Some(*start),
             Self::ExternalParent { .. } => None,
         }
     }
@@ -590,6 +794,67 @@ impl InvocationContextStack {
             spans: NEVec::new(root_span),
             trace_states,
         }
+    }
+
+    pub fn from_oplog_data(
+        trace_id: &TraceId,
+        trace_states: &[String],
+        spans: &[SpanData],
+    ) -> Self {
+        if spans.is_empty() {
+            let root = InvocationContextSpan::local().build();
+            Self {
+                trace_id: trace_id.clone(),
+                spans: NEVec::new(root),
+                trace_states: trace_states.to_vec(),
+            }
+        } else {
+            let mut result_spans = Vec::new();
+            for span_data in spans.iter().rev() {
+                let result_span = match span_data {
+                    SpanData::ExternalSpan { span_id } => {
+                        InvocationContextSpan::external_parent(span_id.clone())
+                    }
+                    SpanData::LocalSpan {
+                        span_id,
+                        start,
+                        parent_id,
+                        linked_context,
+                        attributes,
+                        inherited,
+                    } => InvocationContextSpan::local()
+                        .with_span_id(span_id.clone())
+                        .with_start(*start)
+                        .parent(
+                            parent_id
+                                .as_ref()
+                                .and_then(|_| result_spans.first().cloned()),
+                        )
+                        .with_attributes(attributes.clone())
+                        .with_inherited(*inherited)
+                        .linked_context(linked_context.as_ref().map(|linked_spans| {
+                            let linked_stack = InvocationContextStack::from_oplog_data(
+                                trace_id,
+                                trace_states,
+                                linked_spans,
+                            );
+                            linked_stack.spans.first().clone()
+                        }))
+                        .build(),
+                };
+                result_spans.insert(0, result_span);
+            }
+
+            InvocationContextStack {
+                trace_id: trace_id.clone(),
+                trace_states: trace_states.to_vec(),
+                spans: NEVec::try_from_vec(result_spans).unwrap(),
+            }
+        }
+    }
+
+    pub fn to_oplog_data(&self) -> Vec<SpanData> {
+        SpanData::from_chain(&self.spans)
     }
 
     pub fn push(&mut self, span: Arc<InvocationContextSpan>) {

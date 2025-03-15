@@ -23,7 +23,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::oplog::{SpanData, WorkerError};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentType, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
@@ -56,6 +56,30 @@ fn tracing() -> Tracing {
 
 fn rounded_ts(ts: Timestamp) -> Timestamp {
     Timestamp::from(ts.to_millis())
+}
+
+fn rounded_span_data(invocation_context: Vec<SpanData>) -> Vec<SpanData> {
+    invocation_context
+        .into_iter()
+        .map(|span_data| match span_data {
+            SpanData::ExternalSpan { span_id } => SpanData::ExternalSpan { span_id },
+            SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                linked_context,
+                attributes,
+                inherited,
+            } => SpanData::LocalSpan {
+                span_id,
+                start: rounded_ts(start),
+                parent_id,
+                linked_context: linked_context.map(rounded_span_data),
+                attributes,
+                inherited,
+            },
+        })
+        .collect()
 }
 
 pub fn rounded(entry: OplogEntry) -> OplogEntry {
@@ -128,16 +152,33 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             response,
             wrapped_function_type,
         },
+        OplogEntry::ExportedFunctionInvokedV1 {
+            timestamp,
+            function_name,
+            request,
+            idempotency_key,
+        } => OplogEntry::ExportedFunctionInvokedV1 {
+            timestamp: rounded_ts(timestamp),
+            function_name,
+            request,
+            idempotency_key,
+        },
         OplogEntry::ExportedFunctionInvoked {
             timestamp,
             function_name,
             request,
             idempotency_key,
+            trace_id,
+            trace_states,
+            invocation_context,
         } => OplogEntry::ExportedFunctionInvoked {
             timestamp: rounded_ts(timestamp),
             function_name,
             request,
             idempotency_key,
+            trace_id,
+            trace_states,
+            invocation_context: rounded_span_data(invocation_context),
         },
         OplogEntry::ExportedFunctionCompleted {
             timestamp,
@@ -294,6 +335,34 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
         } => OplogEntry::CancelPendingInvocation {
             timestamp: rounded_ts(timestamp),
             idempotency_key,
+        },
+        OplogEntry::StartSpan {
+            timestamp,
+            span_id,
+            parent_id,
+            linked_context_id,
+            attributes,
+        } => OplogEntry::StartSpan {
+            timestamp: rounded_ts(timestamp),
+            span_id,
+            parent_id,
+            linked_context_id,
+            attributes,
+        },
+        OplogEntry::FinishSpan { timestamp, span_id } => OplogEntry::FinishSpan {
+            timestamp: rounded_ts(timestamp),
+            span_id,
+        },
+        OplogEntry::SetSpanAttribute {
+            timestamp,
+            span_id,
+            key,
+            value,
+        } => OplogEntry::SetSpanAttribute {
+            timestamp: rounded_ts(timestamp),
+            span_id,
+            key,
+            value,
         },
     }
 }
@@ -468,6 +537,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 "f2".to_string(),
                 &"request".to_string(),
                 IdempotencyKey::fresh(),
+                InvocationContextStack::fresh(),
             )
             .await
             .unwrap(),
@@ -587,6 +657,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 "f2".to_string(),
                 &large_payload2,
                 IdempotencyKey::fresh(),
+                InvocationContextStack::fresh(),
             )
             .await
             .unwrap(),

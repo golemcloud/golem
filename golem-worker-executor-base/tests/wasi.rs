@@ -15,7 +15,6 @@
 use test_r::{inherit_test_dep, test};
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -41,7 +40,7 @@ use http::{HeaderMap, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
-use tracing::info;
+use tracing::{info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -605,26 +604,24 @@ async fn http_client(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let host_http_port = context.host_http_port();
-    let http_server = spawn(async move {
-        let route = Router::new().route(
-            "/",
-            post(move |headers: HeaderMap, body: Bytes| async move {
-                let header = headers.get("X-Test").unwrap().to_str().unwrap();
-                let body = String::from_utf8(body.to_vec()).unwrap();
-                format!("response is {header} {body}")
-            }),
-        );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/",
+                post(move |headers: HeaderMap, body: Bytes| async move {
+                    let header = headers.get("X-Test").unwrap().to_str().unwrap();
+                    let body = String::from_utf8(body.to_vec()).unwrap();
+                    format!("response is {header} {body}")
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client").store().await;
     let mut env = HashMap::new();
@@ -663,36 +660,35 @@ async fn http_client_using_reqwest(
     let executor = start(deps, &context).await.unwrap();
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
-    let host_http_port = context.host_http_port();
-    let http_server = spawn(async move {
-        let route = Router::new().route(
-            "/post-example",
-            post(move |headers: HeaderMap, body: Bytes| async move {
-                let header = headers
-                    .get("X-Test")
-                    .map(|h| h.to_str().unwrap().to_string())
-                    .unwrap_or("no X-Test header".to_string());
-                let body = String::from_utf8(body.to_vec()).unwrap();
-                {
-                    let mut capture = captured_body_clone.lock().unwrap();
-                    *capture = Some(body.clone());
-                }
-                format!(
-                    "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
-                    header
-                )
-            }),
-        );
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/post-example",
+                post(move |headers: HeaderMap, body: Bytes| async move {
+                    let header = headers
+                        .get("X-Test")
+                        .map(|h| h.to_str().unwrap().to_string())
+                        .unwrap_or("no X-Test header".to_string());
+                    let body = String::from_utf8(body.to_vec()).unwrap();
+                    {
+                        let mut capture = captured_body_clone.lock().unwrap();
+                        *capture = Some(body.clone());
+                    }
+                    format!(
+                        "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
+                        header
+                    )
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -787,33 +783,31 @@ async fn http_client_response_persisted_between_invocations(
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
-    let host_http_port = context.host_http_port();
 
-    let http_server = spawn(async move {
-        let call_count = Arc::new(AtomicU8::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
 
-        let route = Router::new().route(
-            "/",
-            post(move |headers: HeaderMap, body: Bytes| async move {
-                let header = headers.get("X-Test").unwrap().to_str().unwrap();
-                let body = String::from_utf8(body.to_vec()).unwrap();
-                let old_count = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                match old_count {
-                    0 => (StatusCode::OK, format!("response is {header} {body}")),
-                    _ => (StatusCode::NOT_FOUND, "".to_string()),
-                }
-            }),
-        );
+    let http_server = spawn(
+        async move {
+            let call_count = Arc::new(AtomicU8::new(0));
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+            let route = Router::new().route(
+                "/",
+                post(move |headers: HeaderMap, body: Bytes| async move {
+                    let header = headers.get("X-Test").unwrap().to_str().unwrap();
+                    let body = String::from_utf8(body.to_vec()).unwrap();
+                    let old_count = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    match old_count {
+                        0 => (StatusCode::OK, format!("response is {header} {body}")),
+                        _ => (StatusCode::NOT_FOUND, "".to_string()),
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client").store().await;
     let mut env = HashMap::new();
@@ -858,40 +852,38 @@ async fn http_client_interrupting_response_stream(
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
-    let host_http_port = context.host_http_port();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
 
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let http_server = spawn(async move {
-        let route = Router::new().route(
-            "/big-byte-array",
-            get(move || async move {
-                let stream = stream::iter(0..100)
-                    .throttle(Duration::from_millis(20))
-                    .map(move |i| {
-                        if i == 50 {
-                            signal_tx.send(()).unwrap();
-                        }
-                        Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
-                    });
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/big-byte-array",
+                get(move || async move {
+                    let stream = stream::iter(0..100)
+                        .throttle(Duration::from_millis(20))
+                        .map(move |i| {
+                            if i == 50 {
+                                signal_tx.send(()).unwrap();
+                            }
+                            Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
+                        });
 
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/octet-stream")
-                    .body(axum::body::Body::from_stream(stream))
-                    .unwrap()
-            }),
-        );
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/octet-stream")
+                        .body(axum::body::Body::from_stream(stream))
+                        .unwrap()
+                }),
+            );
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -907,16 +899,19 @@ async fn http_client_interrupting_response_stream(
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let key_clone = key.clone();
-    let _handle = spawn(async move {
-        let _ = executor_clone
-            .invoke_and_await_with_key(
-                &worker_id_clone,
-                &key_clone,
-                "golem:it/api.{slow-body-stream}",
-                vec![],
-            )
-            .await;
-    });
+    let _handle = spawn(
+        async move {
+            let _ = executor_clone
+                .invoke_and_await_with_key(
+                    &worker_id_clone,
+                    &key_clone,
+                    "golem:it/api.{slow-body-stream}",
+                    vec![],
+                )
+                .await;
+        }
+        .in_current_span(),
+    );
 
     signal_rx.recv().await.unwrap();
 
@@ -1000,16 +995,19 @@ async fn resuming_sleep(
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
-    let fiber = spawn(async move {
-        executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:it/api.{sleep}",
-                vec![10u64.into_value_and_type()],
-            )
-            .await
-            .unwrap();
-    });
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:it/api.{sleep}",
+                    vec![10u64.into_value_and_type()],
+                )
+                .await
+                .unwrap();
+        }
+        .in_current_span(),
+    );
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
