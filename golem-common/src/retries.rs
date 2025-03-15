@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{rng, Rng};
-use std::future::Future;
-use std::pin::Pin;
-use std::time::{Duration, Instant};
-use tracing::{error, info, warn, Level};
-
 use crate::metrics::external_calls::{
     record_external_call_failure, record_external_call_retry, record_external_call_success,
 };
 use crate::model::RetryConfig;
 use crate::retriable_error::IsRetriableError;
+use rand::{rng, Rng};
+use std::future::Future;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
+use tracing::{error, info, warn, Level};
 
 /// Returns the delay to be waited before the next retry attempt.
 /// To be called after a failed attempt, with the number of attempts so far.
@@ -116,6 +115,7 @@ where
         action,
         is_retriable,
         |error| Some(error.to_string()),
+        false,
     )
     .await
 }
@@ -129,6 +129,7 @@ pub async fn with_retries_customized<In, F, R, E>(
     action: F,
     is_retriable: impl Fn(&E) -> bool,
     as_loggable: impl Fn(&E) -> Option<String>,
+    silent: bool,
 ) -> Result<R, E>
 where
     F: for<'a> Fn(&'a In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'a + Send>>,
@@ -154,24 +155,39 @@ where
 
         let delay = match r {
             Ok(result) => {
-                info!(duration_ms = duration.as_millis(), "op success");
+                if !silent {
+                    info!(
+                        duration_ms = duration.as_millis(),
+                        target_label, op_label, op_id, "op success"
+                    );
+                }
                 record_external_call_success(target_label, op_label, duration);
                 return Ok(result);
             }
             Err(error) if is_retriable(&error) => {
                 if let Some(delay) = get_delay(config, attempts) {
                     if let Some(error_string) = as_loggable(&error) {
-                        warn!(
-                            delay_ms = delay.as_millis(),
-                            error = error_string,
-                            "op failure - retrying"
-                        );
+                        if !silent {
+                            warn!(
+                                delay_ms = delay.as_millis(),
+                                target_label,
+                                op_label,
+                                op_id,
+                                error = error_string,
+                                "op failure - retrying"
+                            );
+                        }
                         record_external_call_retry(target_label, op_label);
                     }
                     delay
                 } else {
                     if let Some(error_string) = as_loggable(&error) {
-                        error!(error = error_string, "op failure - no more retries");
+                        if !silent {
+                            error!(
+                                error = error_string,
+                                target_label, op_label, op_id, "op failure - no more retries"
+                            );
+                        }
                         record_external_call_failure(target_label, op_label);
                     }
                     return Err(error);
@@ -179,7 +195,10 @@ where
             }
             Err(error) => {
                 if let Some(error_string) = as_loggable(&error) {
-                    error!(error = error_string, "op failure - non-retriable");
+                    error!(
+                        error = error_string,
+                        target_label, op_label, op_id, "op failure - non-retriable"
+                    );
                     record_external_call_failure(target_label, op_label);
                 }
                 return Err(error);
@@ -213,6 +232,7 @@ where
         action,
         IsRetriableError::is_retriable,
         IsRetriableError::as_loggable,
+        false,
     )
     .await
 }
