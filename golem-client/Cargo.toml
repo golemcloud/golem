@@ -32,4 +32,4 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "=0.0.13"
+golem-openapi-client-generator = { git = "https://github.com/golemcloud/golem-openapi-client-generator.git", rev = "36d1877c3dfb7bef21e9a53a6dc8bc7e0c034717" }
