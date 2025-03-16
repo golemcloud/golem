@@ -15,6 +15,7 @@ golem-rust = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { version = "1.43.0", features = ["rt", "sync", "time"] }
 wit-bindgen-rt = { workspace = true }
 
 [package.metadata.component.bindings]
