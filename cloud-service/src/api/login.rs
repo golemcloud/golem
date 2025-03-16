@@ -36,6 +36,14 @@ impl TraceErrorKind for LoginError {
             LoginError::Internal(_) => "Internal",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            LoginError::BadRequest(_) => true,
+            LoginError::External(_) => true,
+            LoginError::Internal(_) => false,
+        }
+    }
 }
 
 impl LoginError {

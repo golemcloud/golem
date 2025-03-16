@@ -303,4 +303,16 @@ impl TraceErrorKind for TokenTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                token_error::Error::BadRequest(_) => true,
+                token_error::Error::Unauthorized(_) => true,
+                token_error::Error::NotFound(_) => true,
+                token_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }

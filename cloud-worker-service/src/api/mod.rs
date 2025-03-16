@@ -7,8 +7,7 @@ use crate::api::api_domain::ApiDomainApi;
 use crate::api::api_security::SecuritySchemeApi;
 use crate::api::worker::WorkerApi;
 use crate::service::ApiServices;
-use poem::get;
-use poem::{EndpointExt, Route};
+use poem::Route;
 use poem_openapi::OpenApiService;
 
 mod api_certificate;
@@ -18,7 +17,6 @@ mod api_domain;
 mod api_security;
 mod common;
 mod worker;
-mod worker_connect;
 
 type WorkerServiceApis = (
     HealthcheckApi,
@@ -56,20 +54,12 @@ pub fn make_open_api_service(services: ApiServices) -> OpenApiService<WorkerServ
 
 pub fn management_routes(services: ApiServices) -> Route {
     let api_service = make_open_api_service(services.clone());
-    let connect_services = worker_connect::ConnectService::new(
-        services.worker_service.clone(),
-        services.worker_auth_service.clone(),
-    );
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();
     Route::new()
         .nest("/", api_service)
         .nest("/v1/api/docs", ui)
         .nest("/v1/api/specs", spec)
-        .at(
-            "/v1/components/:component_id/workers/:worker_name/connect",
-            get(worker_connect::ws).data(connect_services),
-        )
 }
 
 pub fn custom_http_request_route(services: ApiServices) -> Route {

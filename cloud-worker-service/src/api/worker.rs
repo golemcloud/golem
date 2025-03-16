@@ -1,11 +1,15 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::api::common::ApiTags;
 use crate::service::auth::AuthService;
-use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use crate::service::worker::{
+    ConnectWorkerStream, WorkerError as WorkerServiceError, WorkerService,
+};
+use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
 use cloud_common::clients::auth::AuthServiceError;
-use cloud_common::model::ProjectAction;
+use cloud_common::model::{ProjectAction, TokenSecret};
+use futures::StreamExt;
 use futures_util::TryStreamExt;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::oplog::OplogIndex;
@@ -17,7 +21,8 @@ use golem_common::model::{
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
-use golem_worker_service_base::service::worker::InvocationParameters;
+use golem_worker_service_base::service::worker::{proxy_worker_connection, InvocationParameters};
+use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::Body;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::{Binary, Json};
@@ -26,6 +31,9 @@ use std::str::FromStr;
 use tap::TapFallible;
 use tonic::Status;
 use tracing::Instrument;
+
+const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
+const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum WorkerError {
@@ -58,6 +66,17 @@ impl TraceErrorKind for WorkerError {
             WorkerError::LimitExceeded(_) => "LimitExceeded",
             WorkerError::Unauthorized(_) => "Unauthorized",
             WorkerError::InternalError(_) => "InternalError",
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            WorkerError::BadRequest(_) => true,
+            WorkerError::NotFound(_) => true,
+            WorkerError::AlreadyExists(_) => true,
+            WorkerError::LimitExceeded(_) => true,
+            WorkerError::Unauthorized(_) => true,
+            WorkerError::InternalError(_) => false,
         }
     }
 }
@@ -1282,6 +1301,91 @@ impl WorkerApi {
             .map(|canceled| Json(CancelInvocationResponse { canceled }));
 
         record.result(response)
+    }
+
+    /// Connect to a worker using a websocket and stream events
+    #[oai(
+        path = "/:component_id/workers/:worker_name/connect",
+        method = "get",
+        operation_id = "worker_connect"
+    )]
+    pub async fn worker_connect(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        websocket: WebSocket,
+        token: WrappedGolemSecuritySchema,
+    ) -> Result<BoxWebSocketUpgraded> {
+        tracing::info!("Connect worker {}/{}", component_id.0, worker_name.0);
+
+        let (worker_id, worker_stream) = self
+            .connect_to_worker(component_id.0, worker_name.0, token.0.secret())
+            .await?;
+
+        let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
+            Box::pin(async move {
+                let (sink, stream) = socket_stream.split();
+                let _ = proxy_worker_connection(
+                    worker_id,
+                    worker_stream,
+                    sink,
+                    stream,
+                    WORKER_CONNECT_PING_INTERVAL,
+                    WORKER_CONNECT_PING_TIMEOUT,
+                )
+                .await;
+            })
+        }));
+
+        Ok(upgraded)
+    }
+
+    async fn connect_to_worker(
+        &self,
+        component_id: ComponentId,
+        worker_name: String,
+        token: TokenSecret,
+    ) -> Result<(WorkerId, ConnectWorkerStream)> {
+        validate_worker_name(&worker_name).map_err(|e| {
+            WorkerError::BadRequest(Json(ErrorsBody {
+                errors: vec![format!("Invalid worker name: {e}")],
+            }))
+        })?;
+
+        let worker_id = WorkerId {
+            component_id: component_id.clone(),
+            worker_name: worker_name.clone(),
+        };
+
+        let record =
+            recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
+
+        let auth = CloudAuthCtx::new(token);
+        let namespace = self
+            .worker_auth_service
+            .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
+            .await
+            .map_err(|e| {
+                WorkerError::Unauthorized(Json(ErrorBody {
+                    error: format!("Unauthorized: {e}"),
+                }))
+            })?;
+
+        let result = self
+            .worker_service
+            .connect(&worker_id, namespace)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(worker_stream) => record.succeed(Ok((worker_id, worker_stream))),
+            Err(error) => {
+                tracing::error!("Error connecting to worker: {error}");
+                let error = WorkerError::from(error);
+                let error = record.fail(error.clone(), &error);
+                Err(error)
+            }
+        }
     }
 }
 

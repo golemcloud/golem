@@ -76,6 +76,17 @@ impl TraceErrorKind for ApiEndpointError {
             ApiEndpointError::InternalError(_) => "InternalError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            ApiEndpointError::BadRequest(_) => true,
+            ApiEndpointError::NotFound(_) => true,
+            ApiEndpointError::AlreadyExists(_) => true,
+            ApiEndpointError::LimitExceeded(_) => true,
+            ApiEndpointError::Unauthorized(_) => true,
+            ApiEndpointError::InternalError(_) => false,
+        }
+    }
 }
 
 impl ApiEndpointError {

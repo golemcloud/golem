@@ -6,6 +6,7 @@ rebalance_threshold = 0.1
 
 [health_check]
 delay = "10s"
+silent = false
 
 [health_check.mode]
 type = "Grpc"
@@ -82,6 +83,7 @@ multiplier = 2.0
 # 
 # [health_check]
 # delay = "1s"
+# silent = false
 # 
 # [health_check.mode]
 # type = "K8s"

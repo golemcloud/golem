@@ -331,4 +331,16 @@ impl TraceErrorKind for AccountTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                account_error::Error::BadRequest(_) => true,
+                account_error::Error::Unauthorized(_) => true,
+                account_error::Error::NotFound(_) => true,
+                account_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }

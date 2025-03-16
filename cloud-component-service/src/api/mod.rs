@@ -83,6 +83,17 @@ impl TraceErrorKind for ComponentError {
             ComponentError::InternalError(_) => "InternalError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            ComponentError::BadRequest(_) => true,
+            ComponentError::NotFound(_) => true,
+            ComponentError::AlreadyExists(_) => true,
+            ComponentError::LimitExceeded(_) => true,
+            ComponentError::Unauthorized(_) => true,
+            ComponentError::InternalError(_) => false,
+        }
+    }
 }
 
 impl From<PluginError> for ComponentError {

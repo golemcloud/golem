@@ -28,6 +28,13 @@ impl TraceErrorKind for AccountSummaryError {
             AccountSummaryError::InternalError(_) => "InternalError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            AccountSummaryError::Unauthorized(_) => true,
+            AccountSummaryError::InternalError(_) => false,
+        }
+    }
 }
 
 type Result<T> = std::result::Result<T, AccountSummaryError>;

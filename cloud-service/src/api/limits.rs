@@ -39,6 +39,15 @@ impl TraceErrorKind for LimitsError {
             LimitsError::InternalError(_) => "InternalError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            LimitsError::BadRequest(_) => true,
+            LimitsError::LimitExceeded(_) => true,
+            LimitsError::Unauthorized(_) => true,
+            LimitsError::InternalError(_) => false,
+        }
+    }
 }
 
 type Result<T> = std::result::Result<T, LimitsError>;

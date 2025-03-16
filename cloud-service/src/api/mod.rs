@@ -92,6 +92,15 @@ impl TraceErrorKind for ApiError {
             ApiError::InternalError(_) => "InternalError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            ApiError::BadRequest(_) => true,
+            ApiError::NotFound(_) => true,
+            ApiError::Unauthorized(_) => true,
+            ApiError::InternalError(_) => false,
+        }
+    }
 }
 
 type ApiResult<T> = Result<T, ApiError>;
@@ -227,6 +236,16 @@ impl TraceErrorKind for LimitedApiError {
             LimitedApiError::LimitExceeded(_) => "LimitExceeded",
             LimitedApiError::Unauthorized(_) => "Unauthorized",
             LimitedApiError::InternalError(_) => "InternalError",
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            LimitedApiError::BadRequest(_) => true,
+            LimitedApiError::NotFound(_) => true,
+            LimitedApiError::LimitExceeded(_) => true,
+            LimitedApiError::Unauthorized(_) => true,
+            LimitedApiError::InternalError(_) => false,
         }
     }
 }

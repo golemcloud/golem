@@ -382,4 +382,17 @@ impl TraceErrorKind for ProjectGrantTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                project_grant_error::Error::BadRequest(_) => true,
+                project_grant_error::Error::Unauthorized(_) => true,
+                project_grant_error::Error::NotFound(_) => true,
+                project_grant_error::Error::LimitExceeded(_) => true,
+                project_grant_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }

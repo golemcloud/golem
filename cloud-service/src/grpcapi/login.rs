@@ -265,4 +265,15 @@ impl TraceErrorKind for LoginTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                login_error::Error::BadRequest(_) => true,
+                login_error::Error::Internal(_) => true,
+                login_error::Error::External(_) => false,
+            },
+        }
+    }
 }

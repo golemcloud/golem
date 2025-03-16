@@ -410,4 +410,17 @@ impl TraceErrorKind for ProjectTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                project_error::Error::BadRequest(_) => true,
+                project_error::Error::Unauthorized(_) => true,
+                project_error::Error::LimitExceeded(_) => true,
+                project_error::Error::NotFound(_) => true,
+                project_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }

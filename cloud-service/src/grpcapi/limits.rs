@@ -357,4 +357,16 @@ impl TraceErrorKind for LimitsTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                limits_error::Error::BadRequest(_) => true,
+                limits_error::Error::Unauthorized(_) => true,
+                limits_error::Error::LimitExceeded(_) => true,
+                limits_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }

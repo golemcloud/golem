@@ -360,4 +360,16 @@ impl TraceErrorKind for GrantTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                grant_error::Error::BadRequest(_) => true,
+                grant_error::Error::Unauthorized(_) => true,
+                grant_error::Error::NotFound(_) => true,
+                grant_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }

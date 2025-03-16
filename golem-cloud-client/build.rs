@@ -123,6 +123,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
             ),
         ],
+        &["/v1/components/{component_id}/workers/{worker_name}/connect"],
     )
     .expect("Failed to generate client code from OpenAPI spec.");
 }

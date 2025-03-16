@@ -173,4 +173,14 @@ impl TraceErrorKind for AccountSummaryTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                account_summary_error::Error::Unauthorized(_) => true,
+                account_summary_error::Error::InternalError(_) => true,
+            },
+        }
+    }
 }
