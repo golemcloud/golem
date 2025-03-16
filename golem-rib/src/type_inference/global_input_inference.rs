@@ -19,7 +19,7 @@ pub fn infer_global_inputs(expr: &mut Expr) {
 }
 
 mod internal {
-    use crate::{Expr, InferredType};
+    use crate::{Expr, ExprVisitor, InferredType};
     use std::collections::{HashMap, VecDeque};
 
     // request.path.user is used as a string in one place
@@ -28,25 +28,23 @@ mod internal {
     pub(crate) fn infer_global_inputs(expr: &mut Expr) {
         let global_variables_dictionary = collect_all_global_variables_type(expr);
         // Updating the collected types in all positions of input
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    ..
-                } => {
-                    // We are only interested in global variables
-                    if variable_id.is_global() {
-                        if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
-                            if let Some(all_of) = InferredType::all_of(types.clone()) {
-                                *inferred_type = inferred_type.merge(all_of)
-                            }
+        let mut visitor = ExprVisitor::bottom_up(expr);
+
+        while let Some(expr) = visitor.pop_back() {
+            if let Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } = expr
+            {
+                // We are only interested in global variables
+                if variable_id.is_global() {
+                    if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
+                        if let Some(all_of) = InferredType::all_of(types.clone()) {
+                            *inferred_type = inferred_type.merge(all_of)
                         }
                     }
                 }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
             }
         }
     }
