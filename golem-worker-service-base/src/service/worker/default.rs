@@ -52,7 +52,6 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
-use tracing::{error, info};
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
@@ -373,7 +372,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "create_worker",
             move |worker_executor_client| {
-                info!("Create worker");
                 let worker_id = worker_id_clone.clone();
                 Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.into()),
@@ -412,7 +410,6 @@ impl WorkerService for WorkerServiceDefault {
                 worker_id.clone(),
                 "connect_worker",
                 move |worker_executor_client| {
-                    info!("Connect worker");
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -445,7 +442,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "delete_worker",
             move |worker_executor_client| {
-                info!("Delete worker");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.delete_worker(
                     workerexecutor::v1::DeleteWorkerRequest {
@@ -496,13 +492,11 @@ impl WorkerService for WorkerServiceDefault {
     ) -> WorkerResult<TypeAnnotatedValue> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
-        let function_name_clone = function_name.clone();
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             "invoke_and_await_worker_typed",
             move |worker_executor_client| {
-                info!("Invoking function on {}: {}", worker_id_clone, function_name);
                 Box::pin(worker_executor_client.invoke_and_await_worker_typed(
                     InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
@@ -526,18 +520,15 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         output.type_annotated_value.ok_or("Empty response".into())
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
                         Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
                     } => {
-                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
                         Err(err.into())
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
-                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
                         Err("Empty response".into())
                     }
                 }
@@ -564,7 +555,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "invoke_and_await_worker",
             move |worker_executor_client| {
-                info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
                     InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
@@ -594,11 +584,9 @@ impl WorkerService for WorkerServiceDefault {
                         result:
                         Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(err)),
                     } => {
-                        error!("Invoked function error: {err:?}");
                         Err(err.into())
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponse { .. } => {
-                        error!("Invoked function failed with empty response");
                         Err("Empty response".into())
                     }
                 }
@@ -620,13 +608,11 @@ impl WorkerService for WorkerServiceDefault {
     ) -> WorkerResult<TypeAnnotatedValue> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
-        let function_name_clone = function_name.clone();
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             "invoke_and_await_worker_json",
             move |worker_executor_client| {
-                info!("Invoking function on {}: {}", worker_id_clone, function_name);
                 Box::pin(worker_executor_client.invoke_and_await_worker_json(
                     InvokeAndAwaitWorkerJsonRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
@@ -650,18 +636,15 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         output.type_annotated_value.ok_or("Empty response".into())
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
                         Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
                     } => {
-                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
                         Err(err.into())
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
-                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
                         Err("Empty response".into())
                     }
                 }
@@ -686,7 +669,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "invoke_worker",
             move |worker_executor_client| {
-                info!("Invoke function");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
                     workerexecutor::v1::InvokeWorkerRequest {
@@ -706,10 +688,7 @@ impl WorkerService for WorkerServiceDefault {
                 } => Ok(()),
                 workerexecutor::v1::InvokeWorkerResponse {
                     result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
-                } => {
-                    error!("Invoked function error: {err:?}");
-                    Err(err.into())
-                }
+                } => Err(err.into()),
                 workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
             WorkerServiceError::InternalCallError,
@@ -732,7 +711,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "invoke_worker_json",
             move |worker_executor_client| {
-                info!("Invoke function");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker_json(
                     workerexecutor::v1::InvokeJsonWorkerRequest {
@@ -752,10 +730,7 @@ impl WorkerService for WorkerServiceDefault {
                 } => Ok(()),
                 workerexecutor::v1::InvokeWorkerResponse {
                     result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
-                } => {
-                    error!("Invoked function error: {err:?}");
-                    Err(err.into())
-                }
+                } => Err(err.into()),
                 workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
             WorkerServiceError::InternalCallError,
@@ -781,7 +756,6 @@ impl WorkerService for WorkerServiceDefault {
                 worker_id.clone(),
                 "complete_promise",
                 move |worker_executor_client| {
-                    info!("Complete promise");
                     let promise_id = promise_id.clone();
                     let data = data.clone();
                     Box::pin(
@@ -829,7 +803,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "interrupt_worker",
             move |worker_executor_client| {
-                info!("Interrupt");
                 let worker_id = worker_id.clone();
                 Box::pin(
                     worker_executor_client.interrupt_worker(InterruptWorkerRequest {
@@ -867,7 +840,6 @@ impl WorkerService for WorkerServiceDefault {
             "get_metadata",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                info!("Get metadata");
                 Box::pin(worker_executor_client.get_worker_metadata(
                     workerexecutor::v1::GetWorkerMetadataRequest {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
@@ -887,7 +859,6 @@ impl WorkerService for WorkerServiceDefault {
                         result:
                         Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(err)),
                     } => {
-                        error!("Get metadata error: {err:?}");
                         Err(err.into())
                     }
                     workerexecutor::v1::GetWorkerMetadataResponse { .. } => {
@@ -910,7 +881,6 @@ impl WorkerService for WorkerServiceDefault {
         precise: bool,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
-        info!("Find metadata");
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
                 .find_running_metadata_internal(component_id, filter)
@@ -968,7 +938,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "update_worker",
             move |worker_executor_client| {
-                info!("Update worker");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(worker_id.into()),
@@ -1005,7 +974,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "get_oplog",
             move |worker_executor_client| {
-                info!("Get oplog");
                 let worker_id = worker_id.clone();
                 Box::pin(
                     worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
@@ -1077,7 +1045,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "search_oplog",
             move |worker_executor_client| {
-                info!("Search oplog");
                 let worker_id = worker_id.clone();
                 let query_clone = query.clone();
                 Box::pin(
@@ -1140,7 +1107,6 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "list_directory",
             move |worker_executor_client| {
-                info!("Search oplog");
                 let worker_id = worker_id.clone();
                 Box::pin(
                     worker_executor_client.list_directory(workerexecutor::v1::ListDirectoryRequest {
@@ -1195,7 +1161,6 @@ impl WorkerService for WorkerServiceDefault {
                 worker_id.clone(),
                 "read_file",
                 move |worker_executor_client| {
-                    info!("Connect worker");
                     Box::pin(worker_executor_client.get_file_contents(
                         workerexecutor::v1::GetFileContentsRequest {
                             worker_id: Some(worker_id.clone().into()),
