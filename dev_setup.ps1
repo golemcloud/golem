@@ -59,9 +59,20 @@ rustup target add wasm32-wasip1
 Write-Output "Rust installation complete."
 
 # Install Nginx using winget
-Write-Output "Installing Nginx..."
-winget install -e --id Nginx.Nginx --silent --accept-package-agreements
+Write-Host "Installing Nginx..."
+$ngVersion = "nginx-1.27.4"
+$ngZip = "C:\dev\nginx.zip"
+$ngPath = "C:\dev\nginx"
+
+Invoke-WebRequest -Uri "https://nginx.org/download/$ngVersion.zip" -OutFile $ngZip
+Expand-Archive -Path $ngZip -DestinationPath "C:\dev" -Force
+Remove-Item -Path $ngZip -Force
+
+if (Test-Path $ngPath) { Remove-Item -Path $ngPath -Recurse -Force }
+Rename-Item -Path "C:\dev\$ngVersion" -NewName "nginx"
+
 Write-Output "Nginx installation complete."
+# TODO:ADD Redis & Lnav
 
 # Install CMake using winget
 Write-Output "Installing CMake..."
@@ -79,7 +90,7 @@ Expand-Archive -Path $protobufZipPath -DestinationPath $protobufExtractPath -For
 
 # Update environment variables
 $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-$newPaths = @("$protobufExtractPath\bin", "C:\Users\$env:USERNAME\.cargo\bin", "C:\Program Files\nginx", "C:\Program Files\CMake\bin")
+$newPaths = @("$protobufExtractPath\bin", "C:\Users\$env:USERNAME\.cargo\bin", "$ngPath", "C:\Program Files\CMake\bin")
 
 foreach ($newPath in $newPaths) {
     if ($userPath -notlike "*$newPath*") {
