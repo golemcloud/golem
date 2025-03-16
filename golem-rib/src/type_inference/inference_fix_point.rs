@@ -20,11 +20,11 @@ where
     F: FnMut(&mut Expr) -> Result<(), E>,
 {
     loop {
-        let original = expr.clone();
+        let mut original = expr.clone();
 
         scan_and_infer(expr)?;
 
-        let terminated = internal::equivalent_exprs(&original, expr);
+        let terminated = internal::equivalent_exprs(&mut original, expr);
 
         if terminated {
             break;
@@ -36,31 +36,17 @@ where
 
 mod internal {
 
-    use crate::{Expr, InferredType};
+    use crate::{Expr, ExprVisitor, InferredType};
     use std::collections::VecDeque;
 
-    pub(crate) fn equivalent_exprs(left: &Expr, right: &Expr) -> bool {
-        let mut queue1 = VecDeque::new();
-        let mut left_stack = vec![];
+    pub(crate) fn equivalent_exprs(left: &mut Expr, right: &mut Expr) -> bool {
+        let mut left_stack = ExprVisitor::bottom_up(left);
 
-        queue1.push_back(left);
+        let mut right_stack = ExprVisitor::bottom_up(right);
 
-        while let Some(expr) = queue1.pop_back() {
-            left_stack.push(expr);
-            expr.visit_children_bottom_up(&mut queue1);
-        }
 
-        let mut queue2 = VecDeque::new();
-        queue2.push_back(right);
-        let mut right_stack = vec![];
-
-        while let Some(expr) = queue2.pop_back() {
-            right_stack.push(expr);
-            expr.visit_children_bottom_up(&mut queue2);
-        }
-
-        while let Some(left) = left_stack.pop() {
-            let right = right_stack.pop();
+        while let Some(left) = left_stack.pop_front() {
+            let right = right_stack.pop_front();
 
             if let Some(right) = right {
                 if non_equivalent_types(&left.inferred_type(), &right.inferred_type()) {
@@ -321,10 +307,10 @@ mod tests {
 
     #[test]
     fn test_expr_comparison_1() {
-        let left = Expr::identifier_global("x", None);
-        let right = Expr::identifier_global("x", None);
+        let mut left = Expr::identifier_global("x", None);
+        let mut right = Expr::identifier_global("x", None);
 
-        assert!(equivalent_exprs(&left, &right));
+        assert!(equivalent_exprs(&mut left, &mut right));
     }
 
     #[test]
@@ -336,10 +322,10 @@ mod tests {
         ]);
         let right = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
 
-        let left = Expr::identifier_global("x", None).merge_inferred_type(left);
-        let right = Expr::identifier_global("x", None).merge_inferred_type(right);
+        let mut left = Expr::identifier_global("x", None).merge_inferred_type(left);
+        let mut right = Expr::identifier_global("x", None).merge_inferred_type(right);
 
-        assert!(equivalent_exprs(&left, &right));
+        assert!(equivalent_exprs(&mut left, &mut right));
     }
 
     #[test]
@@ -351,10 +337,10 @@ mod tests {
             InferredType::OneOf(vec![InferredType::U64, InferredType::U32]),
         ]);
 
-        let left = Expr::identifier_global("x", None).merge_inferred_type(left);
-        let right = Expr::identifier_global("x", None).merge_inferred_type(right);
+        let mut left = Expr::identifier_global("x", None).merge_inferred_type(left);
+        let mut right = Expr::identifier_global("x", None).merge_inferred_type(right);
 
-        assert!(!equivalent_exprs(&left, &right));
+        assert!(!equivalent_exprs(&mut left, &mut right));
     }
 
     #[test]
@@ -362,10 +348,10 @@ mod tests {
         let left_identifier = Expr::identifier_global("x", None);
         let right_identifier = Expr::identifier_global("x", None);
 
-        let left = Expr::let_binding("x", left_identifier, None);
-        let right = Expr::let_binding("x", right_identifier, None);
+        let mut left = Expr::let_binding("x", left_identifier, None);
+        let mut right = Expr::let_binding("x", right_identifier, None);
 
-        assert!(equivalent_exprs(&left, &right));
+        assert!(equivalent_exprs(&mut left, &mut right));
     }
 
     #[test]
@@ -376,10 +362,10 @@ mod tests {
         let then_ = Expr::identifier_global("x", None);
         let else_ = Expr::identifier_global("x", None);
 
-        let left = Expr::cond(cond.clone(), then_.clone(), else_.clone());
-        let right = Expr::cond(cond, then_, else_);
+        let mut left = Expr::cond(cond.clone(), then_.clone(), else_.clone());
+        let mut right = Expr::cond(cond, then_, else_);
 
-        assert!(equivalent_exprs(&left, &right));
+        assert!(equivalent_exprs(&mut left, &mut right));
     }
 
     #[test]
