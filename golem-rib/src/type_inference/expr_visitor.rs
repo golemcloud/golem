@@ -3,7 +3,206 @@ use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
-// Visits each children of the expression and push them to the back of the queue
+// It's a visitor implemented with intentional unsafe code
+// to be able to iterate through mutable references to every node in a Expr
+pub struct ExprVisitor {
+    queue: VecDeque<*mut Expr>,
+}
+
+impl ExprVisitor {
+    pub fn new(expr: &mut Expr) -> Self {
+        let mut queue: VecDeque<*mut Expr> = VecDeque::new();
+
+        enqueue_exprs(expr, &mut queue);
+
+        ExprVisitor { queue }
+    }
+
+    pub fn pop_front(&mut self) -> Option<&mut Expr> {
+        self.queue.pop_front().map(|ptr| unsafe { &mut *ptr })
+    }
+}
+
+fn enqueue_exprs(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
+    let mut stack = vec![expr as *mut Expr]; // Store raw pointer
+
+    while let Some(current_ptr) = stack.pop() {
+        queue.push_front(current_ptr);
+
+        let current = unsafe { &mut *current_ptr };
+
+        match current {
+            Expr::Let { expr, .. } => stack.push(&mut **expr as *mut Expr),
+            Expr::SelectField { expr, .. } => stack.push(&mut **expr as *mut Expr),
+            Expr::SelectIndex { expr, index, .. } => {
+                stack.push(&mut **expr as *mut Expr);
+                stack.push(&mut **index as *mut Expr);
+            }
+            Expr::Sequence { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::Record { exprs, .. } => {
+                stack.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr as *mut Expr))
+            }
+            Expr::Tuple { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::Concat { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::ExprBlock { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::Not { expr, .. } => stack.push(&mut **expr as *mut Expr),
+            Expr::Length { expr, .. } => stack.push(&mut **expr as *mut Expr),
+            Expr::GreaterThan { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::LessThanOrEqualTo { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::EqualTo { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::Plus { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::Minus { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::Divide { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::Multiply { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::LessThan { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::Cond { cond, lhs, rhs, .. } => {
+                stack.push(&mut **cond as *mut Expr);
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr);
+            }
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                ..
+            } => {
+                stack.push(&mut **predicate as *mut Expr);
+                for arm in match_arms {
+                    let arm_literal_expressions = arm.arm_pattern.get_expr_literals_mut();
+                    stack.extend(arm_literal_expressions.into_iter().map(|x| {
+                        let x = x.as_mut();
+                        x as *mut Expr
+                    }));
+                    stack.push(&mut *arm.arm_resolution_expr as *mut Expr);
+                }
+            }
+
+            Expr::Range { range, .. } => {
+                for expr in range.get_exprs_mut() {
+                    stack.push(&mut **expr as *mut Expr);
+                }
+            }
+
+            Expr::Option {
+                expr: Some(expr), ..
+            } => stack.push(&mut **expr as *mut Expr),
+            Expr::Result { expr: Ok(expr), .. } => stack.push(&mut **expr as *mut Expr),
+            Expr::Result {
+                expr: Err(expr), ..
+            } => stack.push(&mut **expr as *mut Expr),
+            Expr::Call {
+                call_type,
+                args,
+                inferred_type,
+                ..
+            } => {
+                let (exprs, worker) = internal::get_expressions_in_call_type_mut(call_type);
+                if let Some(exprs) = exprs {
+                    stack.extend(exprs.iter_mut().map(|x| x as *mut Expr));
+                }
+
+                if let Some(worker) = worker {
+                    stack.push(&mut **worker as *mut Expr);
+                }
+
+                // The expr existing in the inferred type should be visited
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    if let Some(worker_expr) = instance_type.worker_mut() {
+                        stack.push(&mut **worker_expr as *mut Expr);
+                    }
+                }
+
+                stack.extend(args.iter_mut().map(|x| x as *mut Expr));
+            }
+            Expr::Unwrap { expr, .. } => stack.push(&mut **expr as *mut Expr), // not yet needed
+            Expr::And { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr)
+            }
+
+            Expr::Or { lhs, rhs, .. } => {
+                stack.push(&mut **lhs as *mut Expr);
+                stack.push(&mut **rhs as *mut Expr)
+            }
+
+            Expr::ListComprehension {
+                iterable_expr,
+                yield_expr,
+                ..
+            } => {
+                stack.push(&mut **iterable_expr as *mut Expr);
+                stack.push(&mut **yield_expr);
+            }
+
+            Expr::ListReduce {
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                ..
+            } => {
+                stack.push(&mut **iterable_expr as *mut Expr);
+                stack.push(&mut **init_value_expr as *mut Expr);
+                stack.push(&mut **yield_expr as *mut Expr);
+            }
+
+            Expr::InvokeMethodLazy {
+                lhs,
+                args,
+                inferred_type,
+                ..
+            } => {
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    if let Some(worker_expr) = instance_type.worker_mut() {
+                        stack.push(&mut **worker_expr as *mut Expr);
+                    }
+                }
+
+                stack.push(&mut **lhs as *mut Expr);
+                stack.extend(args.iter_mut().map(|x| x as *mut Expr));
+            }
+
+            Expr::GetTag { expr, .. } => {
+                stack.push(&mut **expr as *mut Expr);
+            }
+
+            Expr::Literal { .. } => {}
+            Expr::Number { .. } => {}
+            Expr::Flags { .. } => {}
+            Expr::Identifier { .. } => {}
+            Expr::Boolean { .. } => {}
+            Expr::Option { expr: None, .. } => {}
+            Expr::Throw { .. } => {}
+        }
+    }
+}
+
 pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let { expr, .. } => queue.push_back(&mut *expr),
