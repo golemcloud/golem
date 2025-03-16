@@ -48,7 +48,7 @@ pub trait ComponentCompilationService {
             .enqueue_compilation(ComponentCompilationRequest {
                 component_id: Some(component_id.clone().into()),
                 component_version,
-                component_service_port: None
+                component_service_port: None,
             })
             .await
             .expect("Failed to enqueue component compilation")
@@ -114,16 +114,17 @@ async fn env_vars(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
             "/tmp/ittest-local-object-store/golem",
         )
+        .with_str("GOLEM__COMPONENT_SERVICE__TYPE", "Static")
         .with_str(
-            "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
+            "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
             "2A354594-7A63-4091-A46B-CC58D379F677",
         )
         .with(
-            "GOLEM__COMPONENT_SERVICE__HOST",
+            "GOLEM__COMPONENT_SERVICE__CONFIG__HOST",
             component_service.private_host(),
         )
         .with(
-            "GOLEM__COMPONENT_SERVICE__PORT",
+            "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
             component_service.private_grpc_port().to_string(),
         )
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())

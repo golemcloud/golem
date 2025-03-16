@@ -56,6 +56,7 @@ impl ServerConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
 pub enum ComponentServiceConfig {
     Static(StaticComponentServiceConfig),
     Dynamic(DynamicComponentServiceConfig),
