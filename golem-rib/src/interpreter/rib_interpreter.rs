@@ -1639,8 +1639,8 @@ mod tests {
     async fn test_interpreter_variable_scope_0() {
         let rib_expr = r#"
                let x: u64 = 1;
-               let x = x + 2u64;
-               x
+               let y = x + 2u64;
+               y
             "#;
 
         let expr = Expr::from_text(rib_expr).unwrap();

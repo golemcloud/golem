@@ -30,13 +30,9 @@ mod internal {
 
     pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();
-        let visitor = ExprVisitor::bottom_up(expr);
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
-
-        while let Some(expr) = queue.pop_back() {
-            dbg!(expr.clone());
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::Identifier {
                     variable_id,
@@ -56,10 +52,9 @@ mod internal {
                         expr.add_infer_type_mut(inferred_type);
                     }
                     identifier_lookup.update(variable_id.clone(), expr.inferred_type());
-                    queue.push_back(expr)
                 }
 
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => {}
             }
         }
     }
@@ -99,17 +94,16 @@ mod internal {
     }
 
     pub(crate) fn infer_match_binding_variables(expr: &mut Expr) {
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        while let Some(expr) = queue.pop_back() {
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::PatternMatch { match_arms, .. } => {
                     for arm in match_arms {
                         process_arm(arm)
                     }
                 }
-                _ => expr.visit_children_mut_top_down(&mut queue),
+                _ => {}
             }
         }
     }
