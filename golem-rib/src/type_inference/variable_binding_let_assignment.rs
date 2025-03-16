@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor};
-use std::collections::VecDeque;
 
 // This function will assign ids to variables declared with `let` expressions,
 // and propagate these ids to the usage sites (`Expr::Identifier` nodes).
@@ -23,6 +22,7 @@ pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
 
     // Start from the end
     while let Some(expr) = visitor.pop_front() {
+        dbg!(expr.clone());
         match expr {
             Expr::Let {
                 variable_id, ..
@@ -220,3 +220,4 @@ mod name_binding_tests {
         assert_eq!(expr, expected);
     }
 }
+

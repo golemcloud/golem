@@ -21,22 +21,27 @@ impl ExprVisitor {
     pub fn pop_front(&mut self) -> Option<&mut Expr> {
         self.queue.pop_front().map(|ptr| unsafe { &mut *ptr })
     }
+
+    pub fn pop_all(&mut self) -> Vec<&mut Expr> {
+        self.queue.drain(..).map(|ptr| unsafe { &mut *ptr }).collect()
+    }
 }
 
 fn enqueue_exprs(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
-    let mut stack = vec![expr as *mut Expr]; // Store raw pointer
+    let mut stack = VecDeque::new();
+    stack.push_back(expr as *mut Expr);
 
-    while let Some(current_ptr) = stack.pop() {
+    while let Some(current_ptr) = stack.pop_back() {
         queue.push_front(current_ptr);
 
         let current = unsafe { &mut *current_ptr };
 
         match current {
-            Expr::Let { expr, .. } => stack.push(&mut **expr as *mut Expr),
-            Expr::SelectField { expr, .. } => stack.push(&mut **expr as *mut Expr),
+            Expr::Let { expr, .. } => stack.push_back(&mut **expr as *mut Expr),
+            Expr::SelectField { expr, .. } => stack.push_back(&mut **expr as *mut Expr),
             Expr::SelectIndex { expr, index, .. } => {
-                stack.push(&mut **expr as *mut Expr);
-                stack.push(&mut **index as *mut Expr);
+                stack.push_back(&mut **expr as *mut Expr);
+                stack.push_back(&mut **index as *mut Expr);
             }
             Expr::Sequence { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
             Expr::Record { exprs, .. } => {
@@ -45,78 +50,78 @@ fn enqueue_exprs(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
             Expr::Tuple { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
             Expr::Concat { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
             Expr::ExprBlock { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
-            Expr::Not { expr, .. } => stack.push(&mut **expr as *mut Expr),
-            Expr::Length { expr, .. } => stack.push(&mut **expr as *mut Expr),
+            Expr::Not { expr, .. } => stack.push_back(&mut **expr as *mut Expr),
+            Expr::Length { expr, .. } => stack.push_back(&mut **expr as *mut Expr),
             Expr::GreaterThan { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::LessThanOrEqualTo { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::EqualTo { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::Plus { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::Minus { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::Divide { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::Multiply { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::LessThan { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::Cond { cond, lhs, rhs, .. } => {
-                stack.push(&mut **cond as *mut Expr);
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr);
+                stack.push_back(&mut **cond as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr);
             }
             Expr::PatternMatch {
                 predicate,
                 match_arms,
                 ..
             } => {
-                stack.push(&mut **predicate as *mut Expr);
+                stack.push_back(&mut **predicate as *mut Expr);
                 for arm in match_arms {
                     let arm_literal_expressions = arm.arm_pattern.get_expr_literals_mut();
                     stack.extend(arm_literal_expressions.into_iter().map(|x| {
                         let x = x.as_mut();
                         x as *mut Expr
                     }));
-                    stack.push(&mut *arm.arm_resolution_expr as *mut Expr);
+                    stack.push_back(&mut *arm.arm_resolution_expr as *mut Expr);
                 }
             }
 
             Expr::Range { range, .. } => {
                 for expr in range.get_exprs_mut() {
-                    stack.push(&mut **expr as *mut Expr);
+                    stack.push_back(&mut **expr as *mut Expr);
                 }
             }
 
             Expr::Option {
                 expr: Some(expr), ..
-            } => stack.push(&mut **expr as *mut Expr),
-            Expr::Result { expr: Ok(expr), .. } => stack.push(&mut **expr as *mut Expr),
+            } => stack.push_back(&mut **expr as *mut Expr),
+            Expr::Result { expr: Ok(expr), .. } => stack.push_back(&mut **expr as *mut Expr),
             Expr::Result {
                 expr: Err(expr), ..
-            } => stack.push(&mut **expr as *mut Expr),
+            } => stack.push_back(&mut **expr as *mut Expr),
             Expr::Call {
                 call_type,
                 args,
@@ -129,27 +134,27 @@ fn enqueue_exprs(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 }
 
                 if let Some(worker) = worker {
-                    stack.push(&mut **worker as *mut Expr);
+                    stack.push_back(&mut **worker as *mut Expr);
                 }
 
                 // The expr existing in the inferred type should be visited
                 if let InferredType::Instance { instance_type } = inferred_type {
                     if let Some(worker_expr) = instance_type.worker_mut() {
-                        stack.push(&mut **worker_expr as *mut Expr);
+                        stack.push_back(&mut **worker_expr as *mut Expr);
                     }
                 }
 
                 stack.extend(args.iter_mut().map(|x| x as *mut Expr));
             }
-            Expr::Unwrap { expr, .. } => stack.push(&mut **expr as *mut Expr), // not yet needed
+            Expr::Unwrap { expr, .. } => stack.push_back(&mut **expr as *mut Expr), // not yet needed
             Expr::And { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr)
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr)
             }
 
             Expr::Or { lhs, rhs, .. } => {
-                stack.push(&mut **lhs as *mut Expr);
-                stack.push(&mut **rhs as *mut Expr)
+                stack.push_back(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **rhs as *mut Expr)
             }
 
             Expr::ListComprehension {
@@ -157,8 +162,8 @@ fn enqueue_exprs(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 yield_expr,
                 ..
             } => {
-                stack.push(&mut **iterable_expr as *mut Expr);
-                stack.push(&mut **yield_expr);
+                stack.push_back(&mut **iterable_expr as *mut Expr);
+                stack.push_back(&mut **yield_expr);
             }
 
             Expr::ListReduce {
@@ -167,9 +172,9 @@ fn enqueue_exprs(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 yield_expr,
                 ..
             } => {
-                stack.push(&mut **iterable_expr as *mut Expr);
-                stack.push(&mut **init_value_expr as *mut Expr);
-                stack.push(&mut **yield_expr as *mut Expr);
+                stack.push_back(&mut **iterable_expr as *mut Expr);
+                stack.push_back(&mut **init_value_expr as *mut Expr);
+                stack.push_back(&mut **yield_expr as *mut Expr);
             }
 
             Expr::InvokeMethodLazy {
@@ -180,16 +185,16 @@ fn enqueue_exprs(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
             } => {
                 if let InferredType::Instance { instance_type } = inferred_type {
                     if let Some(worker_expr) = instance_type.worker_mut() {
-                        stack.push(&mut **worker_expr as *mut Expr);
+                        stack.push_back(&mut **worker_expr as *mut Expr);
                     }
                 }
 
-                stack.push(&mut **lhs as *mut Expr);
+                stack.push_back(&mut **lhs as *mut Expr);
                 stack.extend(args.iter_mut().map(|x| x as *mut Expr));
             }
 
             Expr::GetTag { expr, .. } => {
-                stack.push(&mut **expr as *mut Expr);
+                stack.push_back(&mut **expr as *mut Expr);
             }
 
             Expr::Literal { .. } => {}

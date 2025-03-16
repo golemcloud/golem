@@ -1397,12 +1397,12 @@ mod internal {
 }
 
 #[cfg(test)]
-mod interpreter_tests {
+mod tests {
     use std::collections::HashMap;
     use test_r::test;
 
     use super::*;
-    use crate::interpreter::rib_interpreter::interpreter_tests::test_utils::{
+    use crate::interpreter::rib_interpreter::tests::test_utils::{
         get_value_and_type, strip_spaces,
     };
     use crate::{
@@ -1413,6 +1413,7 @@ mod interpreter_tests {
         bool, case, f32, field, list, option, record, s32, s8, str, tuple, u32, u64, u8, variant,
     };
     use golem_wasm_rpc::{parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType};
+
 
     #[test]
     async fn test_interpreter_for_literal() {
@@ -1633,6 +1634,54 @@ mod interpreter_tests {
 
         let result = interpreter.run(instructions).await.unwrap();
         assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_variable_scope_0() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let x = x + 2u64;
+               x
+            "#;
+
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), 3u64.into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_variable_scope_1() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let z = {foo : x};
+               let x = x + 2u64;
+               { bar: x, baz: z }
+            "#;
+
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![
+            field("bar", u64()),
+            field("baz", record(vec![field("foo", u64())])),
+        ]);
+
+        let expected = get_value_and_type(&analysed_type, r#"{ bar: 3, baz: { foo: 1 } }"#);
+
+        assert_eq!(result.get_val().unwrap(), expected);
     }
 
     #[test]
