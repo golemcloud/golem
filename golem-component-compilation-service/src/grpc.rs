@@ -74,7 +74,7 @@ impl GrpcCompilationServer for CompileGrpcService {
         ) {
             (ComponentServiceConfig::Dynamic(config), Some(addr), Some(port)) => {
                 Some(StaticComponentServiceConfig {
-                    host: addr.to_string(),
+                    host: addr.ip().to_string(),
                     port: port as u16,
                     access_token: config.access_token.clone(),
                 })

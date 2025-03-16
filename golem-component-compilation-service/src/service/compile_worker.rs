@@ -34,7 +34,7 @@ use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tracing::{info, Instrument};
+use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -86,9 +86,14 @@ impl CompileWorker {
 
                     let result = worker.compile_component(&request.component).await;
                     match result {
-                        Err(_) => {}
+                        Err(error) => {
+                            warn!(
+                                "Failed to compile component {}: {}",
+                                request.component, error
+                            );
+                        }
                         Ok(component) => {
-                            tracing::info!("Compiled component {}", request.component);
+                            info!("Compiled component {}", request.component);
                             let send_result = sender
                                 .send(CompiledComponent {
                                     component_and_version: request.component,
@@ -156,10 +161,9 @@ impl CompileWorker {
             Ok(Some(component)) => return Ok(component),
             Ok(_) => (),
             Err(err) => {
-                tracing::warn!(
+                warn!(
                     "Failed to download compiled component {:?}: {}",
-                    component_with_version,
-                    err
+                    component_with_version, err
                 );
             }
         };

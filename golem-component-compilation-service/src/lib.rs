@@ -155,9 +155,12 @@ async fn start_grpc_server(
             tonic::transport::Server::builder()
                 .add_service(health_service)
                 .add_service(
-                    ComponentCompilationServiceServer::new(CompileGrpcService::new(service, component_service_config))
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip),
+                    ComponentCompilationServiceServer::new(CompileGrpcService::new(
+                        service,
+                        component_service_config,
+                    ))
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip),
                 )
                 .serve_with_incoming(TcpListenerStream::new(listener))
                 .await
