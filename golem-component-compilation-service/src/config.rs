@@ -56,13 +56,29 @@ impl ServerConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComponentServiceConfig {
+#[serde(tag = "type", content = "config")]
+pub enum ComponentServiceConfig {
+    Static(StaticComponentServiceConfig),
+    Dynamic(DynamicComponentServiceConfig),
+}
+
+impl ComponentServiceConfig {
+    pub fn static_config(&self) -> Option<StaticComponentServiceConfig> {
+        match self {
+            ComponentServiceConfig::Static(config) => Some(config.clone()),
+            ComponentServiceConfig::Dynamic(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StaticComponentServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: Uuid,
 }
 
-impl ComponentServiceConfig {
+impl StaticComponentServiceConfig {
     pub fn uri(&self) -> Uri {
         Uri::builder()
             .scheme("http")
@@ -71,6 +87,11 @@ impl ComponentServiceConfig {
             .build()
             .expect("Failed to build ComponentService URI")
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DynamicComponentServiceConfig {
+    pub access_token: Uuid,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,7 +130,7 @@ impl HasConfigExamples<ServerConfig> for ServerConfig {
     }
 }
 
-impl Default for ComponentServiceConfig {
+impl Default for StaticComponentServiceConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_owned(),
@@ -117,6 +138,21 @@ impl Default for ComponentServiceConfig {
             access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
                 .expect("invalid UUID"),
         }
+    }
+}
+
+impl Default for DynamicComponentServiceConfig {
+    fn default() -> Self {
+        Self {
+            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
+                .expect("invalid UUID"),
+        }
+    }
+}
+
+impl Default for ComponentServiceConfig {
+    fn default() -> Self {
+        Self::Static(Default::default())
     }
 }
 

@@ -21,6 +21,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{ComponentId, RetryConfig};
 use http::Uri;
 use std::fmt::{Debug, Formatter};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -28,10 +29,13 @@ use tonic::transport::Channel;
 #[async_trait]
 pub trait ComponentCompilationService: Debug + Send + Sync {
     async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64);
+
+    fn set_self_grpc_port(&self, grpc_port: u16);
 }
 
 pub struct ComponentCompilationServiceDefault {
     client: GrpcClient<ComponentCompilationServiceClient<Channel>>,
+    component_service_port: AtomicU16,
 }
 
 impl ComponentCompilationServiceDefault {
@@ -49,7 +53,10 @@ impl ComponentCompilationServiceDefault {
                 connect_timeout,
             },
         );
-        Self { client }
+        Self {
+            client,
+            component_service_port: AtomicU16::new(0),
+        }
     }
 }
 
@@ -64,6 +71,12 @@ impl Debug for ComponentCompilationServiceDefault {
 impl ComponentCompilationService for ComponentCompilationServiceDefault {
     async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64) {
         let component_id_clone = component_id.clone();
+
+        let component_service_port = match self.component_service_port.load(Ordering::Acquire) {
+            0 => None,
+            port => Some(port as u32),
+        };
+
         let result = self
             .client
             .call("enqueue-compilation", move |client| {
@@ -72,6 +85,7 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),
                         component_version,
+                        component_service_port,
                     };
 
                     client.enqueue_compilation(request).await
@@ -91,6 +105,11 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
             ),
         }
     }
+
+    fn set_self_grpc_port(&self, grpc_port: u16) {
+        self.component_service_port
+            .store(grpc_port, Ordering::Release);
+    }
 }
 
 pub struct ComponentCompilationServiceDisabled;
@@ -105,4 +124,6 @@ impl Debug for ComponentCompilationServiceDisabled {
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDisabled {
     async fn enqueue_compilation(&self, _: &ComponentId, _: u64) {}
+
+    fn set_self_grpc_port(&self, _grpc_port: u16) {}
 }
