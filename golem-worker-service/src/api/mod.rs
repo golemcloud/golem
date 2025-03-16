@@ -21,8 +21,7 @@ use crate::service::Services;
 use golem_worker_service_base::api::CustomHttpRequestApi;
 use golem_worker_service_base::api::HealthcheckApi;
 use poem::endpoint::PrometheusExporter;
-use poem::RouteMethod;
-use poem::{get, EndpointExt, Route};
+use poem::Route;
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 

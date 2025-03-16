@@ -29,7 +29,9 @@ use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::http_invocation_context::grpc_invocation_context_from_request;
-use golem_worker_service_base::service::worker::{proxy_worker_connection, InvocationParameters, WorkerStream};
+use golem_worker_service_base::service::worker::{
+    proxy_worker_connection, InvocationParameters, WorkerStream,
+};
 use payload::Binary;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::{Body, Request};
@@ -40,9 +42,6 @@ use std::str::FromStr;
 use std::time::Duration;
 use tap::TapFallible;
 use tracing::Instrument;
-use std::sync::Arc;
-use poem::Response;
-use poem_openapi::payload::EventStream;
 
 const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
@@ -971,9 +970,10 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        websocket: WebSocket
+        websocket: WebSocket,
     ) -> Result<BoxWebSocketUpgraded> {
-        let (worker_id, worker_stream) = connect_to_worker(&self.worker_service, component_id.0, worker_name.0).await?;
+        let (worker_id, worker_stream) =
+            connect_to_worker(&self.worker_service, component_id.0, worker_name.0).await?;
 
         let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
             Box::pin(async move {
