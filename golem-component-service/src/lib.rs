@@ -103,6 +103,9 @@ impl ComponentService {
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_standalone_http_server(join_set).await?;
+        self.services
+            .compilation_service
+            .set_self_grpc_port(grpc_port);
         Ok(RunDetails {
             http_port,
             grpc_port,
@@ -116,6 +119,9 @@ impl ComponentService {
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let endpoint = self.main_endpoint();
+        self.services
+            .compilation_service
+            .set_self_grpc_port(grpc_port);
         Ok(TrafficReadyEndpoints {
             grpc_port,
             endpoint,

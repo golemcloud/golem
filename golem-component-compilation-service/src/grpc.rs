@@ -18,6 +18,7 @@ use tracing::Instrument;
 
 use crate::service::CompilationService;
 
+use crate::config::{ComponentServiceConfig, StaticComponentServiceConfig};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component;
@@ -35,11 +36,18 @@ use tonic::{Request, Response, Status};
 #[derive(Clone)]
 pub struct CompileGrpcService {
     service: Arc<dyn CompilationService + Send + Sync>,
+    component_service_config: ComponentServiceConfig,
 }
 
 impl CompileGrpcService {
-    pub fn new(service: Arc<dyn CompilationService + Send + Sync>) -> Self {
-        Self { service }
+    pub fn new(
+        service: Arc<dyn CompilationService + Send + Sync>,
+        component_service_config: ComponentServiceConfig,
+    ) -> Self {
+        Self {
+            service,
+            component_service_config,
+        }
     }
 }
 
@@ -48,15 +56,34 @@ impl GrpcCompilationServer for CompileGrpcService {
     async fn enqueue_compilation(
         &self,
         request: Request<ComponentCompilationRequest>,
-    ) -> Result<tonic::Response<ComponentCompilationResponse>, Status> {
+    ) -> Result<Response<ComponentCompilationResponse>, Status> {
+        let remote_addr = request.remote_addr();
+
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "enqueue_compilation",
             component_id = proto_component_id_string(&request.component_id),
         );
 
+        let component_service_port = request.component_service_port;
+
+        let sender = match (
+            &self.component_service_config,
+            remote_addr,
+            component_service_port,
+        ) {
+            (ComponentServiceConfig::Dynamic(config), Some(addr), Some(port)) => {
+                Some(StaticComponentServiceConfig {
+                    host: addr.ip().to_string(),
+                    port: port as u16,
+                    access_token: config.access_token,
+                })
+            }
+            _ => None,
+        };
+
         let response = match self
-            .enqueue_compilation_impl(request)
+            .enqueue_compilation_impl(request, sender)
             .instrument(record.span.clone())
             .await
         {
@@ -77,11 +104,12 @@ impl CompileGrpcService {
     async fn enqueue_compilation_impl(
         &self,
         request: ComponentCompilationRequest,
+        sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
         let component_version = request.component_version;
         self.service
-            .enqueue_compilation(component_id, component_version)
+            .enqueue_compilation(component_id, component_version, sender)
             .await?;
         Ok(())
     }

@@ -30,6 +30,9 @@ type = "Enabled"
 [compiled_component_service.config]
 
 [component_service]
+type = "Static"
+
+[component_service.config]
 access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 host = "localhost"
 port = 9090
@@ -113,6 +116,9 @@ without_time = false
 # [compiled_component_service.config]
 # 
 # [component_service]
+# type = "Static"
+# 
+# [component_service.config]
 # access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 # host = "localhost"
 # port = 9090
