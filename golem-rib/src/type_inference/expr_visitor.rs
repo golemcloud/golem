@@ -3,13 +3,14 @@ use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
-// It's a visitor implemented with intentional unsafe code
-// to be able to iterate through mutable references to every node in a Expr
 pub struct ExprVisitor {
     queue: VecDeque<*mut Expr>,
 }
 
 impl ExprVisitor {
+    // Enqueue expressions in a bottom-up order,
+    // while processing the expressions in the natural order within the block (Expr::Block).
+    // Similar to Expr::Block order of the expressions whenever child is a vector is always in the natural order.
     pub fn new(expr: &mut Expr) -> Self {
         let mut queue: VecDeque<*mut Expr> = VecDeque::new();
 
@@ -22,7 +23,11 @@ impl ExprVisitor {
         self.queue.pop_front().map(|ptr| unsafe { &mut *ptr })
     }
 
-    pub fn pop_all(&mut self) -> Vec<&mut Expr> {
+    pub fn pop_back(&mut self) -> Option<&mut Expr> {
+        self.queue.pop_back().map(|ptr| unsafe { &mut *ptr })
+    }
+
+    pub fn collect_all(&mut self) -> Vec<&mut Expr> {
         self.queue
             .drain(..)
             .map(|ptr| unsafe { &mut *ptr })
