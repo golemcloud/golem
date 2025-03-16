@@ -26,7 +26,7 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::{
-    FileSystemPersistenceConfig, PersistenceConfig, ShardManagerConfig,
+    FileSystemPersistenceConfig, HealthCheckConfig, PersistenceConfig, ShardManagerConfig,
 };
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceGrpcConfig, DefaultAdditionalGolemConfig,
@@ -147,6 +147,10 @@ fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
         persistence: PersistenceConfig::FileSystem(FileSystemPersistenceConfig {
             path: args.data_dir.join("sharding.bin"),
         }),
+        health_check: HealthCheckConfig {
+            silent: true,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
