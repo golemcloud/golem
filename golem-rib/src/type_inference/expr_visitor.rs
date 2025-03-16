@@ -11,14 +11,12 @@ impl ExprVisitor {
     // Enqueue expressions in a bottom-up order,
     // but in the natural order of rib program
     // Given
-    //   `Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0), Expr::And(Expr::Num(3), Expr::Num(4), 0))`
+    //   `Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))`
     // Expr::Num(1)
-    // Expr::Num(2)
-    // Expr::And(Expr::Num(1), Expr::Num(2), 0)
-    // Expr::Num(3)
-    // Expr::Num(4)
-    // Expr::And(Expr::Num(3), Expr::Num(4), 0)
-    // Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0))
+    // Expr::Let(Variable(x), Expr::Num(1))
+    // Expr::Identifier(x)
+    // Expr::Call(func, Expr::Identifier(x))
+    // Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))
     pub fn bottom_up(expr: &mut Expr) -> Self {
         let mut queue: VecDeque<*mut Expr> = VecDeque::new();
 
@@ -30,16 +28,12 @@ impl ExprVisitor {
     // Enqueue expressions in a top-down order,
     // while processing the expressions in the natural order within the block (Expr::Block).
     // Given
-    //   `Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0), Expr::And(Expr::Num(3), Expr::Num(4), 0))`
-    // Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0))
-    // Expr::And(Expr::Num(1), Expr::Num(2), 0)
-    // Expr::Num(1)
-    // Expr::Num(2)
-    // Expr::Block(Expr::And(Expr::Num(3), Expr::Num(4), 0))
-    // Expr::And(Expr::Num(3), Expr::Num(4), 0)
-    // Expr::Num(3)
-    // Expr::Num(4)
-    // Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0))
+    //  `Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))`
+    // Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))
+    // Expr::Let(Variable(x), Expr::Num(1, U64))
+    // Expr::Num(1, U64)
+    // Expr::Call(func, Expr::Identifier(x))
+    // Expr::Identifier(x)
     pub fn top_down(expr: &mut Expr) -> Self {
         let mut queue: VecDeque<*mut Expr> = VecDeque::new();
 
@@ -63,7 +57,6 @@ impl ExprVisitor {
             .collect()
     }
 }
-
 
 // `Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0))`
 // Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0))
@@ -142,10 +135,12 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 stack.push_front(&mut **predicate as *mut Expr);
                 for arm in match_arms {
                     let arm_literal_expressions = arm.arm_pattern.get_expr_literals_mut();
-                    stack.extend(arm_literal_expressions.into_iter().map(|x| {
+
+                    for x in arm_literal_expressions {
                         let x = x.as_mut();
-                        x as *mut Expr
-                    }));
+                        stack.push_front(x as *mut Expr);
+                    }
+
                     stack.push_front(&mut *arm.arm_resolution_expr as *mut Expr);
                 }
             }
@@ -171,7 +166,9 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
             } => {
                 let (exprs, worker) = internal::get_expressions_in_call_type_mut(call_type);
                 if let Some(exprs) = exprs {
-                    stack.extend(exprs.iter_mut().map(|x| x as *mut Expr));
+                    for x in exprs {
+                        stack.push_front(x as *mut Expr);
+                    }
                 }
 
                 if let Some(worker) = worker {
@@ -185,7 +182,9 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                     }
                 }
 
-                stack.extend(args.iter_mut().map(|x| x as *mut Expr));
+                for x in args {
+                    stack.push_front(x as *mut Expr);
+                }
             }
             Expr::Unwrap { expr, .. } => stack.push_front(&mut **expr as *mut Expr), // not yet needed
             Expr::And { lhs, rhs, .. } => {
