@@ -1718,6 +1718,48 @@ mod tests {
     }
 
     #[test]
+    async fn test_interpreter_variable_scope_3() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let x = x;
+
+               let result1 = match some(x + 1:u64) {
+                  some(x) => match some(x + 1:u64) {
+                     some(x) => x,
+                     none => x
+                  },
+                  none => x
+               };
+
+               let z: option<u64> = none;
+
+               let result2 = match z {
+                  some(x) => x,
+                  none => match some(x + 1:u64) {
+                     some(x) => x,
+                     none => x
+                  }
+               };
+
+               { result1: result1, result2: result2 }
+            "#;
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![field("result1", u64()), field("result2", u64())]);
+
+        let expected = get_value_and_type(&analysed_type, r#"{ result1: 3, result2: 2 }"#);
+
+        assert_eq!(result.get_val().unwrap(), expected);
+    }
+
+    #[test]
     async fn test_interpreter_global_variable_with_type_spec() {
         // request.path.user-id and request.headers.* should be inferred as string,
         // since we configure the compiler with a type-spec (given below)
