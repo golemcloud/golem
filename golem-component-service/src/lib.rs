@@ -24,7 +24,6 @@ use include_dir::{include_dir, Dir};
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, IntoEndpoint};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
