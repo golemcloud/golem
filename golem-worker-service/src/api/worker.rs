@@ -962,7 +962,7 @@ impl WorkerApi {
 
     /// Connect to a worker using a websocket and stream events
     #[oai(
-        path = "/v1/components/:component_id/workers/:worker_name/connect",
+        path = "/:component_id/workers/:worker_name/connect",
         method = "get",
         operation_id = "worker_connect"
     )]

@@ -1612,7 +1612,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v1/components/v1/components/{component_id}/workers/{worker_name}/connect:
+  /v1/components/{component_id}/workers/{worker_name}/connect:
     get:
       tags:
       - Worker
