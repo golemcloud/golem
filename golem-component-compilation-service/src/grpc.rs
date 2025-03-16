@@ -76,7 +76,7 @@ impl GrpcCompilationServer for CompileGrpcService {
                 Some(StaticComponentServiceConfig {
                     host: addr.ip().to_string(),
                     port: port as u16,
-                    access_token: config.access_token.clone(),
+                    access_token: config.access_token,
                 })
             }
             _ => None,
