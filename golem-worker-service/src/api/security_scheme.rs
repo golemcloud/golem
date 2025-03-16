@@ -57,16 +57,18 @@ impl SecuritySchemeApi {
             "get",
             security_scheme_identifier = security_scheme_identifier.0
         );
-        let security_scheme = self
+        let response = self
             .security_scheme_service
             .get(
                 &SecuritySchemeIdentifier::new(security_scheme_identifier.0),
                 &DefaultNamespace::default(),
             )
             .instrument(record.span.clone())
-            .await?;
+            .await
+            .map_err(|err| err.into())
+            .map(|security_scheme| Json(SecuritySchemeData::from(security_scheme)));
 
-        Ok(Json(SecuritySchemeData::from(security_scheme)))
+        record.result(response)
     }
 
     /// Create a security scheme
@@ -83,14 +85,14 @@ impl SecuritySchemeApi {
             ApiEndpointError::bad_request(safe(format!("Invalid security scheme {}", err)))
         })?;
 
-        let security_scheme_with_metadata = self
+        let response = self
             .security_scheme_service
             .create(&DefaultNamespace::default(), &security_scheme)
             .instrument(record.span.clone())
-            .await?;
+            .await
+            .map_err(|err| err.into())
+            .map(|security_scheme| Json(SecuritySchemeData::from(security_scheme)));
 
-        Ok(Json(SecuritySchemeData::from(
-            security_scheme_with_metadata,
-        )))
+        record.result(response)
     }
 }
