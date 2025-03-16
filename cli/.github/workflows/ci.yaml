@@ -184,5 +184,5 @@ jobs:
         run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
       - run: gh release upload -R golemcloud/golem-cli --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
         if: matrix.cfg.os == 'windows-latest'
-      - run: gh release upload -R golemcloud/golem-cli--clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+      - run: gh release upload -R golemcloud/golem-cli --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.cfg.os != 'windows-latest'

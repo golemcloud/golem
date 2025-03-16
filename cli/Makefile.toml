@@ -212,6 +212,7 @@ foreach ($file in $cargoFiles)
 [tasks.publish]
 description = "Publishes packages to crates.io"
 dependencies = [
+    "build-release",
     "publish-golem-cli",
 ]
 
@@ -227,9 +228,24 @@ args = [
     "--no-verify",
 ]
 
+[tasks.publish-wasm-rpc-stubgen]
+description = "Publishes golem-wasm-rpc-stubgen package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-rpc-stubgen",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
 [tasks.publish-golem-cli]
 description = "Publishes golem-wasm-ast package to crates.io"
-dependencies = ["publish-golem-templates"]
+dependencies = [
+    "publish-golem-templates",
+    "publish-wasm-rpc-stubgen"
+]
 command = "cargo"
 args = [
     "publish",
