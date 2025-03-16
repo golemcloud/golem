@@ -99,6 +99,10 @@ jobs:
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: 'v0-rust'
