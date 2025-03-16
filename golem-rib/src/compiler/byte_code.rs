@@ -1850,7 +1850,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
             let compiled = compiler::compile(expr, &analysed_exports).unwrap();
             let expected_type_info =
-                internal::rib_input_type_info(vec![("request", request_value_type)]);
+                internal::rib_input_type_info(vec![("requet", request_value_type)]);
 
             assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }

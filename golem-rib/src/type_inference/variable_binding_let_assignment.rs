@@ -18,11 +18,10 @@ use crate::{Expr, ExprVisitor};
 // and propagate these ids to the usage sites (`Expr::Identifier` nodes).
 pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
     let mut identifier_id_state = internal::IdentifierVariableIdState::new();
-    let mut visitor = ExprVisitor::new(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
     // Start from the end
     while let Some(expr) = visitor.pop_front() {
-        dbg!(expr.clone());
         match expr {
             Expr::Let { variable_id, .. } => {
                 let field_name = variable_id.name();

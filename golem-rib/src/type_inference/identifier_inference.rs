@@ -25,15 +25,18 @@ pub fn infer_all_identifiers(expr: &mut Expr) {
 
 mod internal {
     use crate::type_inference::identifier_inference::internal;
-    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
     use std::collections::{HashMap, VecDeque};
 
     pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();
+        let visitor = ExprVisitor::bottom_up(expr);
+
         let mut queue = VecDeque::new();
         queue.push_back(expr);
 
         while let Some(expr) = queue.pop_back() {
+            dbg!(expr.clone());
             match expr {
                 Expr::Identifier {
                     variable_id,
