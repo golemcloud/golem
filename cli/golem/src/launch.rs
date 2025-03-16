@@ -18,9 +18,10 @@ use crate::StartedComponents;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::Empty;
+use golem_component_compilation_service::config::DynamicComponentServiceConfig;
 use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::ComponentService;
+use golem_component_service_base::config::ComponentCompilationEnabledConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
@@ -30,10 +31,12 @@ use golem_shard_manager::shard_manager_config::{
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceGrpcConfig, DefaultAdditionalGolemConfig,
 };
-use golem_worker_executor_base::services::golem_config::ShardManagerServiceConfig;
 use golem_worker_executor_base::services::golem_config::ShardManagerServiceGrpcConfig;
 use golem_worker_executor_base::services::golem_config::{
     CompiledComponentServiceConfig, IndexedStorageKVStoreSqliteConfig,
+};
+use golem_worker_executor_base::services::golem_config::{
+    CompiledComponentServiceEnabledConfig, ShardManagerServiceConfig,
 };
 use golem_worker_executor_base::services::golem_config::{
     GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
@@ -102,7 +105,15 @@ async fn start_components(
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
     let shard_manager = run_shard_manager(shard_manager_config(args), join_set).await?;
-    let component_service = run_component_service(component_service_config(args), join_set).await?;
+
+    let component_compilation_service =
+        run_component_compilation_service(component_compilation_service_config(args), join_set)
+            .await?;
+    let component_service = run_component_service(
+        component_service_config(args, &component_compilation_service),
+        join_set,
+    )
+    .await?;
     let worker_executor = {
         let (config, additional_config) =
             worker_executor_config(args, &shard_manager, &component_service);
@@ -140,7 +151,28 @@ fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
     }
 }
 
-fn component_service_config(args: &LaunchArgs) -> ComponentServiceConfig {
+fn component_compilation_service_config(
+    args: &LaunchArgs,
+) -> golem_component_compilation_service::config::ServerConfig {
+    golem_component_compilation_service::config::ServerConfig {
+        component_service:
+            golem_component_compilation_service::config::ComponentServiceConfig::Dynamic(
+                DynamicComponentServiceConfig::default(),
+            ),
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
+        ),
+        blob_storage: blob_storage_config(args),
+        grpc_port: 0,
+        http_port: 0,
+        ..Default::default()
+    }
+}
+
+fn component_service_config(
+    args: &LaunchArgs,
+    component_compilation_service: &golem_component_compilation_service::RunDetails,
+) -> ComponentServiceConfig {
     ComponentServiceConfig {
         http_port: 0,
         grpc_port: 0,
@@ -153,8 +185,13 @@ fn component_service_config(args: &LaunchArgs) -> ComponentServiceConfig {
             max_connections: 32,
         }),
         blob_storage: blob_storage_config(args),
-        compilation: golem_component_service_base::config::ComponentCompilationConfig::Disabled(
-            Empty {},
+        compilation: golem_component_service_base::config::ComponentCompilationConfig::Enabled(
+            ComponentCompilationEnabledConfig {
+                host: args.router_addr.clone(),
+                port: component_compilation_service.grpc_port,
+                retries: Default::default(),
+                connect_timeout: Default::default(),
+            },
         ),
         ..Default::default()
     }
@@ -178,7 +215,9 @@ fn worker_executor_config(
         }),
         indexed_storage: IndexedStorageConfig::KVStoreSqlite(IndexedStorageKVStoreSqliteConfig {}),
         blob_storage: blob_storage_config(args),
-        compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {}),
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
+        ),
         shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
             host: args.router_addr.clone(),
             port: shard_manager_run_details.grpc_port,
@@ -254,6 +293,17 @@ async fn run_shard_manager(
     let prometheus_registry = prometheus::default_registry().clone();
     let span = tracing::info_span!("shard-manager");
     golem_shard_manager::run(&config, prometheus_registry, join_set)
+        .instrument(span)
+        .await
+}
+
+async fn run_component_compilation_service(
+    config: golem_component_compilation_service::config::ServerConfig,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+) -> Result<golem_component_compilation_service::RunDetails, anyhow::Error> {
+    let prometheus_registry = golem_component_compilation_service::metrics::register_all();
+    let span = tracing::info_span!("component-compilation-service");
+    golem_component_compilation_service::run(config, prometheus_registry, join_set)
         .instrument(span)
         .await
 }
