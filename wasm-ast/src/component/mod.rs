@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "parser")]
 use crate::component::parser::parse_component;
 use crate::core::{
     Custom, Data, Export, FuncIdx, FuncType, Import, MemIdx, Module, RetainsCustomSection,
     RetainsInstructions, TryFromExprSource, TypeRef, ValType,
 };
+#[cfg(feature = "metadata")]
+use crate::metadata;
 use crate::{
-    metadata, new_component_section_cache, AstCustomization, IndexSpace, Section, SectionCache,
-    SectionIndex, SectionType, Sections,
+    new_component_section_cache, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex,
+    SectionType, Sections,
 };
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};

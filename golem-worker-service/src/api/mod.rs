@@ -1,15 +1,27 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 pub mod api_definition;
 pub mod api_deployment;
 mod security_scheme;
 pub mod worker;
-pub mod worker_connect;
-
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
 use golem_worker_service_base::api::CustomHttpRequestApi;
 use golem_worker_service_base::api::HealthcheckApi;
 use poem::endpoint::PrometheusExporter;
-use poem::{get, EndpointExt, Route};
+use poem::Route;
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 
@@ -28,17 +40,11 @@ pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Ro
     let spec = api_service.spec_endpoint_yaml();
     let metrics = PrometheusExporter::new(prometheus_registry.clone());
 
-    let connect_services = worker_connect::ConnectService::new(services.worker_service.clone());
-
     Route::new()
         .nest("/", api_service)
         .nest("/docs", ui)
         .nest("/specs", spec)
         .nest("/metrics", metrics)
-        .at(
-            "/v1/components/:component_id/workers/:worker_name/connect",
-            get(worker_connect::ws.data(connect_services)),
-        )
 }
 
 pub fn custom_request_route(services: &Services) -> Route {

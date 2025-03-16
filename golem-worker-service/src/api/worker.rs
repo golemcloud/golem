@@ -1,5 +1,21 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::service::{component::ComponentService, worker::WorkerService};
+use futures::StreamExt;
 use futures_util::TryStreamExt;
+use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
@@ -13,15 +29,22 @@ use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::http_invocation_context::grpc_invocation_context_from_request;
-use golem_worker_service_base::service::worker::InvocationParameters;
+use golem_worker_service_base::service::worker::{
+    proxy_worker_connection, InvocationParameters, WorkerStream,
+};
 use payload::Binary;
+use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::{Body, Request};
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
+use std::time::Duration;
 use tap::TapFallible;
 use tracing::Instrument;
+
+const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
+const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct WorkerApi {
     pub component_service: ComponentService,
@@ -1033,6 +1056,39 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// Connect to a worker using a websocket and stream events
+    #[oai(
+        path = "/:component_id/workers/:worker_name/connect",
+        method = "get",
+        operation_id = "worker_connect"
+    )]
+    pub async fn worker_connect(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        websocket: WebSocket,
+    ) -> Result<BoxWebSocketUpgraded> {
+        let (worker_id, worker_stream) =
+            connect_to_worker(&self.worker_service, component_id.0, worker_name.0).await?;
+
+        let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
+            Box::pin(async move {
+                let (sink, stream) = socket_stream.split();
+                let _ = proxy_worker_connection(
+                    worker_id,
+                    worker_stream,
+                    sink,
+                    stream,
+                    WORKER_CONNECT_PING_INTERVAL,
+                    WORKER_CONNECT_PING_TIMEOUT,
+                )
+                .await;
+            })
+        }));
+
+        Ok(upgraded)
+    }
 }
 
 fn make_worker_id(
@@ -1076,4 +1132,37 @@ fn make_component_file_path(
             errors: vec![format!("Invalid file name: {error}")],
         }))
     })
+}
+
+async fn connect_to_worker(
+    worker_service: &WorkerService,
+    component_id: ComponentId,
+    worker_name: String,
+) -> Result<(WorkerId, WorkerStream<LogEvent>)> {
+    validate_worker_name(&worker_name).map_err(|e| {
+        WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+            errors: vec![format!("Invalid worker name: {e}")],
+        }))
+    })?;
+    let worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: worker_name.clone(),
+    };
+
+    let record = recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
+
+    let result = worker_service
+        .connect(&worker_id, empty_worker_metadata())
+        .instrument(record.span.clone())
+        .await;
+
+    match result {
+        Ok(worker_stream) => record.succeed(Ok((worker_id, worker_stream))),
+        Err(error) => {
+            tracing::error!("Error connecting to worker: {error}");
+            let error = WorkerApiBaseError::from(error);
+            let error = record.fail(error.clone(), &error);
+            Err(error)
+        }
+    }
 }
