@@ -13,16 +13,15 @@
 // limitations under the License.
 
 use crate::type_inference::kind::TypeKind;
-use crate::{Expr, InferredType};
+use crate::{Expr, ExprVisitor, InferredType};
 use std::collections::VecDeque;
 
 // Check all exprs that cannot be the type it is tagged against
-pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+pub fn check_invalid_expr(expr: &mut Expr) -> Result<(), InvalidExpr> {
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = queue.pop_back() {
-        match expr {
+    while let Some(expr) = visitor.pop_back() {
+        match &expr {
             Expr::Number { inferred_type, .. } => match inferred_type.as_number() {
                 Ok(_) => {}
                 Err(message) => {
@@ -34,7 +33,7 @@ pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
                     });
                 }
             },
-            _ => expr.visit_children_bottom_up(&mut queue),
+            _ => {}
         }
     }
 
