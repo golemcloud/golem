@@ -24,9 +24,7 @@ pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
     while let Some(expr) = visitor.pop_front() {
         dbg!(expr.clone());
         match expr {
-            Expr::Let {
-                variable_id, ..
-            } => {
+            Expr::Let { variable_id, .. } => {
                 let field_name = variable_id.name();
                 identifier_id_state.update_variable_id(&field_name); // Increment the variable_id
                 if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
@@ -220,4 +218,3 @@ mod name_binding_tests {
         assert_eq!(expr, expected);
     }
 }
-

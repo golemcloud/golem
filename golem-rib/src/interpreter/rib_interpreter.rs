@@ -1414,7 +1414,6 @@ mod tests {
     };
     use golem_wasm_rpc::{parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType};
 
-
     #[test]
     async fn test_interpreter_for_literal() {
         let mut interpreter = Interpreter::default();
@@ -1644,7 +1643,6 @@ mod tests {
                x
             "#;
 
-
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let compiled = compiler::compile(expr, &vec![]).unwrap();
@@ -1665,7 +1663,6 @@ mod tests {
                { bar: x, baz: z }
             "#;
 
-
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let compiled = compiler::compile(expr, &vec![]).unwrap();
@@ -1680,6 +1677,42 @@ mod tests {
         ]);
 
         let expected = get_value_and_type(&analysed_type, r#"{ bar: 3, baz: { foo: 1 } }"#);
+
+        assert_eq!(result.get_val().unwrap(), expected);
+    }
+
+    #[test]
+    async fn test_interpreter_variable_scope_2() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let x = x;
+
+               let result1 = match some(x + 1:u64) {
+                  some(x) => x,
+                  none => x
+               };
+
+               let z: option<u64> = none;
+
+               let result2 = match z {
+                  some(x) => x,
+                  none => x
+               };
+
+               { result1: result1, result2: result2 }
+            "#;
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![field("result1", u64()), field("result2", u64())]);
+
+        let expected = get_value_and_type(&analysed_type, r#"{ result1: 2, result2: 1 }"#);
 
         assert_eq!(result.get_val().unwrap(), expected);
     }

@@ -23,7 +23,10 @@ impl ExprVisitor {
     }
 
     pub fn pop_all(&mut self) -> Vec<&mut Expr> {
-        self.queue.drain(..).map(|ptr| unsafe { &mut *ptr }).collect()
+        self.queue
+            .drain(..)
+            .map(|ptr| unsafe { &mut *ptr })
+            .collect()
     }
 }
 
