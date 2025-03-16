@@ -1581,6 +1581,8 @@ mod app_builder {
                 }
             }
 
+            // TODO: once app model is moved to golem-cli then make this generated from the app command
+            // TODO: update this list based on current commands
             let reserved_commands = BTreeSet::from(["build", "clean"]);
 
             for custom_command in properties.custom_commands.keys() {

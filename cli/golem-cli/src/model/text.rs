@@ -14,7 +14,7 @@
 
 pub mod fmt {
     use crate::fuzzy::Match;
-    use crate::model::Format;
+    use crate::model::{Format, WorkerNameMatch};
     use cli_table::{Row, Title, WithTitle};
     use colored::control::SHOULD_COLORIZE;
     use colored::Colorize;
@@ -381,6 +381,32 @@ pub mod fmt {
                 }
             }
         }
+    }
+
+    pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
+        format!(
+            "{}{}{}/{}",
+            match &worker_name_match.account_id {
+                Some(account_id) => {
+                    format!("{}/", account_id.0.blue().bold())
+                }
+                None => "".to_string(),
+            },
+            match &worker_name_match.project {
+                Some(project) => {
+                    format!("{}/", project.project_name.0.blue().bold())
+                }
+                None => "".to_string(),
+            },
+            worker_name_match.component_name.0.blue().bold(),
+            worker_name_match
+                .worker_name
+                .as_ref()
+                .map(|wn| wn.0.as_str())
+                .unwrap_or("-")
+                .green()
+                .bold(),
+        )
     }
 }
 
@@ -1077,21 +1103,7 @@ pub mod worker {
 
     impl TextView for TryUpdateAllWorkersResult {
         fn log(&self) {
-            if !self.triggered.is_empty() {
-                logln("Triggered update for the following workers:");
-                self.triggered.iter().for_each(|worker_name| {
-                    logln(format!("  - {}", worker_name));
-                });
-            }
-
-            if !self.failed.is_empty() {
-                logln(format_warn(
-                    "Failed to trigger update for the following workers:",
-                ));
-                self.failed.iter().for_each(|worker_name| {
-                    logln(format!("  - {}", worker_name));
-                });
-            }
+            // NOP
         }
     }
 
@@ -1104,32 +1116,29 @@ pub mod worker {
                 ))
             }
 
-            match self {
-                InvokeResultView::Wave(wave_values) => {
-                    if wave_values.is_empty() {
-                        logln("Empty result.")
-                    } else {
-                        log_results_format("WAVE");
-                        for wave in wave_values {
-                            logln(format!("  - {}", wave));
-                        }
+            if self.result_wave.is_none() && self.result_json.is_none() {
+                return;
+            }
+
+            if let Some(wave_values) = &self.result_wave {
+                if wave_values.is_empty() {
+                    logln("Empty result.")
+                } else {
+                    log_results_format("WAVE");
+                    for wave in wave_values {
+                        logln(format!("  - {}", wave));
                     }
                 }
-                InvokeResultView::Json(json) => {
-                    // TODO: do we have an issue or plan for this?
-                    logln(format_warn(indoc!(
-                        "
-                            Failed to convert invocation result to WAVE format.
-                            At the moment WAVE does not support Handle (aka Resource) data type.
+            } else if let Some(json) = &self.result_json {
+                logln(format_warn(indoc!(
+                    "
+                    Failed to convert invocation result to WAVE format.
+                    At the moment WAVE does not support Handle (aka Resource) data type.
 
-                            Use -vvv flags to get detailed logs.
-
-                            "
-                    )));
-
-                    log_results_format("JSON");
-                    logln(serde_json::to_string_pretty(json).unwrap());
-                }
+                    "
+                )));
+                log_results_format("JSON");
+                logln(serde_json::to_string_pretty(json).unwrap());
             }
         }
     }
@@ -1161,14 +1170,14 @@ pub mod worker {
                         "{pad}args:              {}",
                         format_id(&params.args.join(", ")),
                     ));
-                    logln("{pad}env:");
+                    logln(format!("{pad}env:"));
                     for (k, v) in &params.env {
                         logln(format!("{pad}  - {}: {}", k, format_id(&v)));
                     }
                     if let Some(parent) = params.parent.as_ref() {
                         logln(format!("{pad}parent:            {}", format_id(parent)));
                     }
-                    logln("{pad}initial active plugins:");
+                    logln(format!("{pad}initial active plugins:"));
                     for plugin in &params.initial_active_plugins {
                         logln(format!(
                             "{pad}  - installation id: {}",
@@ -1211,7 +1220,7 @@ pub mod worker {
                         "{pad}idempotency key:   {}",
                         format_id(&params.idempotency_key),
                     ));
-                    logln("{pad}input:");
+                    logln(format!("{pad}input:"));
                     for param in &params.request {
                         logln(format!("{pad}  - {}", value_to_string(param)));
                     }
@@ -1370,7 +1379,7 @@ pub mod worker {
                             format_id(&inner_params.idempotency_key),
                         ));
                         if let Some(input) = &inner_params.function_input {
-                            logln("{pad}input:");
+                            logln(format!("{pad}input:"));
                             for param in input {
                                 logln(format!("{pad}  - {}", value_to_string(param)));
                             }

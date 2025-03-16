@@ -20,7 +20,7 @@ use crate::config::{
 };
 use crate::error::HintError;
 use crate::model::app_ext::GolemComponentExtensions;
-use crate::model::Format;
+use crate::model::{Format, HasFormatConfig};
 use anyhow::anyhow;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientOss;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientOss;
@@ -58,6 +58,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use tracing::debug;
+use url::Url;
 use uuid::Uuid;
 
 // Context is responsible for storing the CLI state,
@@ -71,6 +72,7 @@ pub struct Context {
     profile: Profile,
     app_context_config: ApplicationContextConfig,
     http_batch_size: u64,
+    client_config: ClientConfig,
 
     // Lazy initialized
     clients: tokio::sync::OnceCell<Clients>,
@@ -84,14 +86,17 @@ pub struct Context {
 
 impl Context {
     pub fn new(global_flags: &GolemCliGlobalFlags, profile: NamedProfile) -> Self {
-        // TODO: handle format override from profile
-        let format = global_flags.format.unwrap_or(Format::Text);
+        let format = global_flags
+            .format
+            .unwrap_or(profile.profile.format().unwrap_or(Format::Text));
         let log_output = match format {
             Format::Json => Output::Stderr,
             Format::Yaml => Output::Stderr,
             Format::Text => Output::Stdout,
         };
         set_log_output(log_output);
+
+        let client_config = ClientConfig::from(&profile.profile);
 
         Self {
             config_dir: global_flags.config_dir(),
@@ -112,6 +117,7 @@ impl Context {
                 },
             },
             http_batch_size: global_flags.http_batch_size.unwrap_or(50),
+            client_config,
             clients: tokio::sync::OnceCell::new(),
             templates: std::sync::OnceLock::new(),
             app_context_state: tokio::sync::RwLock::default(),
@@ -147,7 +153,7 @@ impl Context {
         self.clients
             .get_or_try_init(|| async {
                 Clients::new(
-                    ClientConfig::from(&self.profile),
+                    self.client_config.clone(),
                     None, // TODO: token override
                     &self.profile_name,
                     match &self.profile {
@@ -165,10 +171,29 @@ impl Context {
         Ok(&self.clients().await?.golem)
     }
 
+    pub async fn file_download_client(&self) -> anyhow::Result<reqwest::Client> {
+        Ok(self.clients().await?.file_download.clone())
+    }
+
     pub async fn golem_clients_cloud(&self) -> anyhow::Result<&GolemClientsCloud> {
         match &self.clients().await?.golem {
             GolemClients::Oss(_) => Err(anyhow!(HintError::ExpectedCloudProfile)),
             GolemClients::Cloud(clients) => Ok(clients),
+        }
+    }
+
+    pub fn worker_service_url(&self) -> &Url {
+        &self.client_config.worker_url
+    }
+
+    pub fn allow_insecure(&self) -> bool {
+        self.client_config.service_http_client_config.allow_insecure
+    }
+
+    pub async fn auth_token(&self) -> anyhow::Result<Option<String>> {
+        match self.golem_clients().await? {
+            GolemClients::Oss(_) => Ok(None),
+            GolemClients::Cloud(clients) => Ok(Some(clients.auth_token())),
         }
     }
 
@@ -251,7 +276,7 @@ impl Context {
 // TODO: add healthcheck clients
 pub struct Clients {
     pub golem: GolemClients,
-    pub file_download_http_client: reqwest::Client,
+    pub file_download: reqwest::Client,
 }
 
 impl Clients {
@@ -268,15 +293,13 @@ impl Clients {
 
         match &config.cloud_url {
             Some(cloud_url) => {
-                let auth = Auth {
-                    login_client: LoginClientLive {
-                        context: ContextCloud {
-                            client: service_http_client.clone(),
-                            base_url: cloud_url.clone(),
-                            security_token: Security::Empty,
-                        },
+                let auth = Auth::new(LoginClientLive {
+                    context: ContextCloud {
+                        client: service_http_client.clone(),
+                        base_url: cloud_url.clone(),
+                        security_token: Security::Empty,
                     },
-                };
+                });
 
                 let authentication = auth
                     .authenticate(token_override, profile_name, auth_config, config_dir)
@@ -362,7 +385,7 @@ impl Clients {
                             context: worker_context(),
                         },
                     }),
-                    file_download_http_client,
+                    file_download: file_download_http_client,
                 })
             }
             None => {
@@ -397,7 +420,7 @@ impl Clients {
                             context: worker_context(),
                         },
                     }),
-                    file_download_http_client,
+                    file_download: file_download_http_client,
                 })
             }
         }
@@ -443,6 +466,10 @@ pub struct GolemClientsCloud {
 impl GolemClientsCloud {
     pub fn account_id(&self) -> AccountId {
         self.authentication.account_id()
+    }
+
+    pub fn auth_token(&self) -> String {
+        self.authentication.0.secret.value.to_string()
     }
 }
 

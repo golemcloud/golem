@@ -131,6 +131,17 @@ pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
     logln_internal(state.output, &message);
 }
 
+pub fn log_error_action<T: AsRef<str>>(action: &str, subject: T) {
+    let state = LOG_STATE.read().unwrap();
+    let message = format!(
+        "{}{} {}",
+        state.calculated_indent,
+        action.log_color_error(),
+        subject.as_ref(),
+    );
+    logln_internal(state.output, &message);
+}
+
 pub fn logln<T: AsRef<str>>(message: T) {
     let state = LOG_STATE.read().unwrap();
     let message = format!("{}{}", state.calculated_indent, message.as_ref());

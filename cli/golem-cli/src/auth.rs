@@ -57,10 +57,14 @@ pub fn unsafe_token_to_auth_config(value: &UnsafeToken) -> CloudAuthenticationCo
 }
 
 pub struct Auth {
-    pub login_client: LoginClientLive,
+    login_client: LoginClientLive,
 }
 
 impl Auth {
+    pub fn new(login_client: LoginClientLive) -> Self {
+        Self { login_client }
+    }
+
     pub async fn authenticate(
         &self,
         token_override: Option<Uuid>,

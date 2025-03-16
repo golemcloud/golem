@@ -58,7 +58,6 @@ fn app_help_in_empty_folder(_tracing: &Tracing) {
     check!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
 }
 
-#[ignore]
 #[test]
 fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) {
     let app_name = "test-app-name";
@@ -104,7 +103,6 @@ fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) 
     check!(outputs.stderr_contains("npm-install"));
 }
 
-// TODO: component and steps filter
 #[test]
 fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
@@ -160,13 +158,12 @@ fn app_build_with_rust_component(_tracing: &Tracing) {
 }
 
 // TODO: re-enable once every language has templates
-#[ignore]
 #[test]
 fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([cmd::APP, cmd::NEW, "dummy-app-name"]);
     assert!(!outputs.success());
-    check!(outputs.stderr_contains("Available languages and templates:"));
+    check!(outputs.stderr_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
         .filter(|language| !outputs.stderr_contains(format!("- {}", language)))

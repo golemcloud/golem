@@ -429,7 +429,7 @@ pub enum GolemCliSubcommand {
 }
 
 pub mod shared_args {
-    use crate::model::{ComponentName, WorkerName};
+    use crate::model::{ComponentName, WorkerName, WorkerUpdateMode};
     use clap::Args;
     use golem_templates::model::GuestLanguage;
     use golem_wasm_rpc_stubgen::model::app::AppBuildStep;
@@ -507,10 +507,33 @@ pub mod shared_args {
         #[arg(verbatim_doc_comment)]
         pub worker_name: WorkerName,
     }
+
+    #[derive(Debug, Args)]
+    pub struct StreamArgs {
+        /// Hide log levels in stream output
+        #[clap(long, short = 'L')]
+        pub stream_no_log_level: bool,
+        /// Hide timestamp in stream output
+        #[clap(long, short = 'T')]
+        pub stream_no_timestamp: bool,
+    }
+
+    #[derive(Debug, Args, Default)]
+    pub struct WorkerUpdateOrRedeployArgs {
+        /// Update existing workers with auto or manual update mode
+        #[clap(long, short, conflicts_with_all = ["redeploy"])]
+        pub update_workers: Option<WorkerUpdateMode>,
+        /// Delete and recreate existing workers
+        #[clap(long, short, conflicts_with_all = ["update"])]
+        pub redeploy_workers: bool,
+    }
 }
 
 pub mod app {
-    use crate::command::shared_args::{AppOptionalComponentNames, BuildArgs, ForceBuildArg};
+    use crate::command::shared_args::{
+        AppOptionalComponentNames, BuildArgs, ForceBuildArg, WorkerUpdateOrRedeployArgs,
+    };
+    use crate::model::WorkerUpdateMode;
     use clap::Subcommand;
     use golem_templates::model::GuestLanguage;
 
@@ -537,9 +560,24 @@ pub mod app {
             component_name: AppOptionalComponentNames,
             #[command(flatten)]
             force_build: ForceBuildArg,
+            #[command(flatten)]
+            update_or_redeploy: WorkerUpdateOrRedeployArgs,
         },
         /// Clean all components in the application or by selection
         Clean {
+            #[command(flatten)]
+            component_name: AppOptionalComponentNames,
+        },
+        /// Try to automatically update all existing workers of the application to the latest version
+        UpdateWorkers {
+            #[command(flatten)]
+            component_name: AppOptionalComponentNames,
+            /// Update mode - auto or manual, defaults to "auto"
+            #[arg(long, short, default_value = "auto")]
+            update_mode: WorkerUpdateMode,
+        },
+        /// Redeploy all workers of the application using the latest version
+        RedeployWorkers {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
         },
@@ -552,8 +590,9 @@ pub mod app {
 pub mod component {
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplatePositionalArg, ForceBuildArg,
+        ComponentTemplatePositionalArg, ForceBuildArg, WorkerUpdateOrRedeployArgs,
     };
+    use crate::model::WorkerUpdateMode;
     use clap::Subcommand;
     use golem_templates::model::PackageName;
 
@@ -566,6 +605,11 @@ pub mod component {
             /// Name of the new component package in 'package:name' form
             component_package_name: PackageName,
         },
+        /// List or search component templates
+        Templates {
+            /// Optional filter for language or template name
+            filter: Option<String>,
+        },
         /// Build component(s) based on the current directory or by selection
         Build {
             #[command(flatten)]
@@ -573,13 +617,14 @@ pub mod component {
             #[command(flatten)]
             build: BuildArgs,
         },
-        // TODO: update-mode, try-update, redeploy
         /// Deploy component(s) based on the current directory or by selection
         Deploy {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
             #[command(flatten)]
             force_build: ForceBuildArg,
+            #[command(flatten)]
+            update_or_redeploy: WorkerUpdateOrRedeployArgs,
         },
         /// Clean component(s) based on the current directory or by selection
         Clean {
@@ -598,6 +643,19 @@ pub mod component {
             /// Optional component version to get
             version: Option<u64>,
         },
+        /// Try to automatically update all existing workers of the selected component to the latest version
+        UpdateWorkers {
+            #[command(flatten)]
+            component_name: ComponentOptionalComponentName,
+            /// Update mode - auto or manual, defaults to "auto"
+            #[arg(long, short, default_value_t = WorkerUpdateMode::Automatic)]
+            update_mode: WorkerUpdateMode,
+        },
+        /// Redeploy all workers of the selected component using the latest version
+        RedeployWorkers {
+            #[command(flatten)]
+            component_name: ComponentOptionalComponentName,
+        },
     }
 }
 
@@ -605,7 +663,7 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        ComponentOptionalComponentName, NewWorkerArgument, WorkerFunctionArgument,
+        ComponentOptionalComponentName, NewWorkerArgument, StreamArgs, WorkerFunctionArgument,
         WorkerFunctionName, WorkerNameArg,
     };
     use crate::model::IdempotencyKey;
@@ -625,7 +683,6 @@ pub mod worker {
             env: Vec<(String, String)>,
         },
         // TODO: json args
-        // TODO: connect
         /// Invoke (or enqueue invocation for) worker
         Invoke {
             #[command(flatten)]
@@ -635,14 +692,25 @@ pub mod worker {
             /// Worker function arguments in WAVE format
             arguments: Vec<WorkerFunctionArgument>,
             /// Enqueue invocation, and do not wait for it
-            #[clap(long, short, default_value = "false")]
+            #[clap(long, short)]
             enqueue: bool,
             /// Set idempotency key for the call, use "-" for auto generated key
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
+            #[clap(long, short)]
+            /// Connect to the worker before invoke (the worker must already exist)
+            /// and live stream its standard output, error and log channels
+            stream: bool,
+            #[command(flatten)]
+            stream_args: StreamArgs,
         },
         /// Get worker metadata
         Get {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+        },
+        /// Deletes a worker
+        Delete {
             #[command(flatten)]
             worker_name: WorkerNameArg,
         },
@@ -650,14 +718,12 @@ pub mod worker {
         List {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
-
             /// Filter for worker metadata in form of `property op value`.
             ///
             /// Filter examples: `name = worker-name`, `version >= 0`, `status = Running`, `env.var1 = value`.
             /// Can be used multiple times (AND condition is applied between them)
             #[arg(long)]
             filter: Vec<String>,
-
             /// Cursor position, if not provided, starts from the beginning.
             ///
             /// Cursor can be used to get the next page of results, use the cursor returned
@@ -665,15 +731,66 @@ pub mod worker {
             /// The cursor has the format 'layer/position' where both layer and position are numbers.
             #[arg(long, short, value_parser = parse_cursor)]
             scan_cursor: Option<ScanCursor>,
-
             /// The maximum the number of returned workers, returns all values is not specified.
             /// When multiple component is selected, then the limit it is applied separately
             #[arg(long, short)]
             max_count: Option<u64>,
-
             /// When set to true it queries for most up-to-date status for each worker, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
+        },
+        /// Connect to a worker and live stream its standard output, error and log channels
+        Stream {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+            #[command(flatten)]
+            stream_args: StreamArgs,
+        },
+        /// Interrupts a running worker
+        Interrupt {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+        },
+        /// Resume an interrupted worker
+        Resume {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+        },
+        /// Simulates a crash on a worker for testing purposes.
+        ///
+        /// The worker starts recovering and resuming immediately.
+        SimulateCrash {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+        },
+        /// Queries and dumps a worker's full oplog
+        Oplog {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+            /// Index of the first oplog entry to get. If missing, the whole oplog is returned
+            #[arg(long, conflicts_with = "query")]
+            from: Option<u64>,
+            /// Lucene query to look for oplog entries. If missing, the whole oplog is returned
+            #[arg(long, conflicts_with = "from")]
+            query: Option<String>,
+        },
+        /// Reverts a worker by undoing its last recorded operations
+        Revert {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+            /// Revert by oplog index
+            #[arg(long, conflicts_with = "number_of_invocations")]
+            last_oplog_index: Option<u64>,
+            /// Revert by number of invocations
+            #[arg(long, conflicts_with = "last_oplog_index")]
+            number_of_invocations: Option<u64>,
+        },
+        /// Cancels an enqueued invocation if it has not started yet
+        CancelInvocation {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+            /// Idempotency key of the invocation to be cancelled
+            idempotency_key: IdempotencyKey,
         },
     }
 }

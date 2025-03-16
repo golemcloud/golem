@@ -30,7 +30,7 @@ use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::init_tracing;
 use crate::model::text::fmt::log_error;
-use clap_verbosity_flag::Verbosity;
+
 use golem_wasm_rpc_stubgen::log::{logln, set_log_output, Output};
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -39,6 +39,8 @@ use tracing::{debug, Level};
 
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
+#[cfg(feature = "server-commands")]
+use clap_verbosity_flag::Verbosity;
 
 mod app;
 mod cloud;
@@ -63,7 +65,7 @@ pub trait CommandHandlerHooks {
     fn override_verbosity(verbosity: Verbosity) -> Verbosity;
 }
 
-// CommandHandle is responsible for matching commands and producing CLI output using Context,
+// CommandHandler is responsible for matching commands and producing CLI output using Context,
 // but NOT responsible for storing state (apart from Context itself), those should be part of Context.
 pub struct CommandHandler<Hooks: CommandHandlerHooks> {
     ctx: Arc<Context>,

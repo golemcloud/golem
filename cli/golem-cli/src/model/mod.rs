@@ -27,6 +27,7 @@ pub mod to_oss;
 pub mod wave;
 
 use crate::cloud::{AccountId, ProjectId};
+use crate::command::shared_args::StreamArgs;
 use crate::config::{CloudProfile, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileName};
 use crate::model::to_oss::ToOss;
 use anyhow::anyhow;
@@ -35,6 +36,7 @@ use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error, ValueEnum};
 use clap_verbosity_flag::Verbosity;
+use colored::control::SHOULD_COLORIZE;
 use golem_client::model::{ApiDefinitionInfo, ApiSite, Provider};
 use golem_common::model::trim_date::TrimDateTime;
 use golem_templates::model::{GuestLanguage, GuestLanguageTier, Template, TemplateName};
@@ -49,7 +51,6 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
 use uuid::Uuid;
-
 // TODO: move arg thing into command
 // TODO: move non generic entities into mods
 
@@ -381,10 +382,23 @@ impl FromStr for PathBufOrStdin {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WorkerUpdateMode {
     Automatic,
     Manual,
+}
+
+impl Display for WorkerUpdateMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerUpdateMode::Automatic => {
+                write!(f, "auto")
+            }
+            WorkerUpdateMode::Manual => {
+                write!(f, "manual")
+            }
+        }
+    }
 }
 
 impl FromStr for WorkerUpdateMode {
@@ -395,7 +409,7 @@ impl FromStr for WorkerUpdateMode {
             "auto" => Ok(WorkerUpdateMode::Automatic),
             "manual" => Ok(WorkerUpdateMode::Manual),
             _ => Err(format!(
-                "Unknown mode: {s}. Expected one of \"auto\", \"manual\""
+                "Unknown worker update mode: {s}. Expected one of \"auto\", \"manual\""
             )),
         }
     }
@@ -626,6 +640,16 @@ pub struct WorkerConnectOptions {
     pub show_level: bool,
 }
 
+impl From<StreamArgs> for WorkerConnectOptions {
+    fn from(args: StreamArgs) -> Self {
+        WorkerConnectOptions {
+            colors: SHOULD_COLORIZE.should_colorize(),
+            show_timestamp: !args.stream_no_timestamp,
+            show_level: !args.stream_no_log_level,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ProfileView {
     pub is_active: bool,
@@ -706,6 +730,7 @@ pub enum ComponentNameMatchKind {
 }
 
 pub struct WorkerNameMatch {
+    pub account_id: Option<AccountId>,
     pub project: Option<ProjectNameAndId>,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,

@@ -194,7 +194,7 @@ impl CloudProjectCommandHandler {
 
 fn project_not_found(account_id: Option<&AccountId>, project_name: &ProjectName) -> anyhow::Error {
     let formatted_account = account_id
-        .map(|id| format!("{} / ", id.0.log_color_highlight()))
+        .map(|id| format!("{}/", id.0.log_color_highlight()))
         .unwrap_or_default();
     log_error(format!(
         "Project {}{} not found.",

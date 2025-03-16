@@ -92,13 +92,20 @@ args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "--no-deps",
 
 ## ** INSTALL **
 [tasks.install]
-dependencies = ["install-golem-cli"]
+dependencies = ["install-golem-cli", "install-golem"]
 
 [tasks.install-golem-cli]
 description = "Install golem-cli"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo install --path golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem]
+description = "Install golem"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path golem --bin golem --target-dir target --locked --offline
 '''
 
 ## ** TEST **

@@ -14,18 +14,24 @@
 
 use crate::cloud::AccountId;
 use crate::command::component::ComponentSubcommand;
-use crate::command::shared_args::{BuildArgs, ComponentTemplatePositionalArg, ForceBuildArg};
+use crate::command::shared_args::{
+    BuildArgs, ComponentTemplatePositionalArg, ForceBuildArg, WorkerUpdateOrRedeployArgs,
+};
+use crate::command_handler::component::ifs::IfsArchiveBuilder;
 use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::model::app_ext::GolemComponentExtensions;
+use crate::model::app_ext::{GolemComponentExtensions, InitialComponentFile};
 use crate::model::component::{Component, ComponentView};
+use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::text::component::{ComponentCreateView, ComponentGetView, ComponentUpdateView};
 use crate::model::text::fmt::{log_error, log_text_view, log_warn};
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::to_cloud::ToCloud;
-use crate::model::{ComponentName, ComponentNameMatchKind, ProjectNameAndId, SelectedComponents};
+use crate::model::{
+    ComponentName, ComponentNameMatchKind, ProjectNameAndId, SelectedComponents, WorkerUpdateMode,
+};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient as ComponentClientOss;
 use golem_client::model::DynamicLinkedInstance as DynamicLinkedInstanceOss;
@@ -35,7 +41,7 @@ use golem_cloud_client::api::ComponentClient as ComponentClientCloud;
 use golem_cloud_client::model::ComponentQuery;
 use golem_common::model::ComponentType;
 use golem_templates::add_component_by_template;
-use golem_templates::model::PackageName;
+use golem_templates::model::{GuestLanguage, PackageName};
 use golem_wasm_rpc_stubgen::commands::app::{
     ApplicationContext, ComponentSelectMode, DynamicHelpSections,
 };
@@ -64,6 +70,10 @@ impl ComponentCommandHandler {
                 template,
                 component_package_name,
             } => self.new_component(template, component_package_name).await,
+            ComponentSubcommand::Templates { filter } => {
+                self.list_templates(filter);
+                Ok(())
+            }
             ComponentSubcommand::Build {
                 component_name,
                 build: build_args,
@@ -80,6 +90,7 @@ impl ComponentCommandHandler {
             ComponentSubcommand::Deploy {
                 component_name,
                 force_build,
+                update_or_redeploy,
             } => {
                 self.deploy(
                     self.ctx
@@ -90,6 +101,7 @@ impl ComponentCommandHandler {
                     component_name.component_name,
                     Some(force_build),
                     &ComponentSelectMode::CurrentDir,
+                    update_or_redeploy,
                 )
                 .await
             }
@@ -109,6 +121,17 @@ impl ComponentCommandHandler {
                 component_name,
                 version,
             } => self.get(component_name.component_name, version).await,
+
+            ComponentSubcommand::UpdateWorkers {
+                component_name,
+                update_mode,
+            } => {
+                self.update_workers(component_name.component_name, update_mode)
+                    .await
+            }
+            ComponentSubcommand::RedeployWorkers { component_name } => {
+                self.redeploy_workers(component_name.component_name).await
+            }
         }
     }
 
@@ -184,12 +207,30 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
+    fn list_templates(&self, filter: Option<String>) {
+        match filter {
+            Some(filter) => {
+                if let Some(language) = GuestLanguage::from_string(filter.clone()) {
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(Some(language), None);
+                } else {
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(None, Some(&filter));
+                }
+            }
+            None => self.ctx.app_handler().log_templates_help(None, None),
+        }
+    }
+
     pub async fn deploy(
         &mut self,
         project: Option<&ProjectNameAndId>,
         component_names: Vec<ComponentName>,
         force_build: Option<ForceBuildArg>,
         default_component_select_mode: &ComponentSelectMode,
+        update_or_redeploy: WorkerUpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
         self.ctx
             .app_handler()
@@ -216,137 +257,189 @@ impl ComponentCommandHandler {
         };
         let build_profile = self.ctx.build_profile().cloned();
 
-        log_action("Deploying", "components");
-
-        for component_name in &selected_component_names {
+        let components = {
+            log_action("Deploying", "components");
             let _indent = LogIndent::new();
 
-            let component_id = self
-                .component_id_by_name(project, &component_name.as_str().into())
-                .await?;
-            let deploy_properties = {
-                let mut app_ctx = self.ctx.app_context_lock_mut().await;
-                let app_ctx = app_ctx.some_or_err_mut()?;
-                component_deploy_properties(app_ctx, component_name, build_profile.clone())?
-            };
-
-            let linked_wasm = File::open(&deploy_properties.linked_wasm_path)
-                .await
-                .with_context(|| {
-                    anyhow!(
-                        "Failed to open component linked WASM at {}",
-                        deploy_properties
-                            .linked_wasm_path
-                            .display()
-                            .to_string()
-                            .log_color_error_highlight()
-                    )
-                })?;
-
-            match &component_id {
-                Some(component_id) => {
-                    log_action(
-                        "Updating",
-                        format!(
-                            "component {}",
-                            component_name.as_str().log_color_highlight()
-                        ),
-                    );
-                    let _indent = LogIndent::new();
-                    let component = match self.ctx.golem_clients().await? {
-                        GolemClients::Oss(clients) => {
-                            let component = clients
-                                .component
-                                .update_component(
-                                    component_id,
-                                    Some(&deploy_properties.component_type),
-                                    linked_wasm,
-                                    None,         // TODO:
-                                    None::<File>, // TODO:
-                                    deploy_properties.dynamic_linking.as_ref(),
-                                )
-                                .await
-                                .map_service_error()?;
-                            Component::from(component)
-                        }
-                        GolemClients::Cloud(clients) => {
-                            let component = clients
-                                .component
-                                .update_component(
-                                    component_id,
-                                    Some(&deploy_properties.component_type),
-                                    linked_wasm,
-                                    None,         // TODO:
-                                    None::<File>, // TODO:
-                                    deploy_properties
-                                        .dynamic_linking
-                                        .map(|dl| dl.to_cloud())
-                                        .as_ref(),
-                                )
-                                .await
-                                .map_service_error()?;
-                            Component::from(component)
-                        }
-                    };
-                    self.ctx
-                        .log_handler()
-                        .log_view(&ComponentUpdateView(ComponentView::from(component)));
-                }
-                None => {
-                    log_action(
-                        "Creating",
-                        format!(
-                            "component {}",
-                            component_name.as_str().log_color_highlight()
-                        ),
-                    );
-                    let _indent = self.ctx.log_handler().nested_text_view_indent();
-                    let component = match self.ctx.golem_clients().await? {
-                        GolemClients::Oss(clients) => {
-                            let component = clients
-                                .component
-                                .create_component(
-                                    component_name.as_str(),
-                                    Some(&deploy_properties.component_type),
-                                    linked_wasm,
-                                    None,         // TODO:
-                                    None::<File>, // TODO:
-                                    deploy_properties.dynamic_linking.as_ref(),
-                                )
-                                .await
-                                .map_service_error()?;
-                            Component::from(component)
-                        }
-                        GolemClients::Cloud(clients) => {
-                            let component = clients
-                                .component
-                                .create_component(
-                                    &ComponentQuery {
-                                        project_id: project.map(|p| p.project_id.0),
-                                        component_name: component_name.to_string(),
-                                    },
-                                    linked_wasm,
-                                    Some(&deploy_properties.component_type),
-                                    None,         // TODO:
-                                    None::<File>, // TODO:
-                                    deploy_properties
-                                        .dynamic_linking
-                                        .map(|dl| dl.to_cloud())
-                                        .as_ref(),
-                                )
-                                .await
-                                .map_service_error()?;
-                            Component::from(component)
-                        }
-                    };
-                    self.ctx
-                        .log_handler()
-                        .log_view(&ComponentCreateView(ComponentView::from(component)));
-                }
+            let mut components = Vec::with_capacity(selected_component_names.len());
+            for component_name in &selected_component_names {
+                components.push(
+                    self.deploy_component(build_profile.as_ref(), project, component_name)
+                        .await?,
+                );
             }
+
+            components
+        };
+
+        if let Some(update) = update_or_redeploy.update_workers {
+            self.update_workers_by_components(components, update)
+                .await?;
+        } else if update_or_redeploy.redeploy_workers {
+            self.redeploy_workers_by_components(components).await?;
         }
 
         Ok(())
+    }
+
+    async fn deploy_component(
+        &mut self,
+        build_profile: Option<&BuildProfileName>,
+        project: Option<&ProjectNameAndId>,
+        component_name: &AppComponentName,
+    ) -> anyhow::Result<Component> {
+        let component_id = self
+            .component_id_by_name(project, &component_name.as_str().into())
+            .await?;
+        let deploy_properties = {
+            let mut app_ctx = self.ctx.app_context_lock_mut().await;
+            let app_ctx = app_ctx.some_or_err_mut()?;
+            component_deploy_properties(app_ctx, component_name, build_profile)?
+        };
+
+        let ifs_files = {
+            if !deploy_properties.files.is_empty() {
+                Some(
+                    IfsArchiveBuilder::new(self.ctx.file_download_client().await?)
+                        .build_files_archive(deploy_properties.files)
+                        .await?,
+                )
+            } else {
+                None
+            }
+        };
+        let ifs_properties = ifs_files.as_ref().map(|f| &f.properties);
+        let ifs_archive = {
+            if let Some(files) = ifs_files.as_ref() {
+                Some(File::open(&files.archive_path).await.with_context(|| {
+                    anyhow!(
+                        "Failed to open IFS archive: {}",
+                        files.archive_path.display()
+                    )
+                })?)
+            } else {
+                None
+            }
+        };
+
+        let linked_wasm = File::open(&deploy_properties.linked_wasm_path)
+            .await
+            .with_context(|| {
+                anyhow!(
+                    "Failed to open component linked WASM at {}",
+                    deploy_properties
+                        .linked_wasm_path
+                        .display()
+                        .to_string()
+                        .log_color_error_highlight()
+                )
+            })?;
+
+        let component = match &component_id {
+            Some(component_id) => {
+                // TODO: use hashes for checking if component files has to be updated?
+                log_action(
+                    "Updating",
+                    format!(
+                        "component {}",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
+                let component = match self.ctx.golem_clients().await? {
+                    GolemClients::Oss(clients) => {
+                        let component = clients
+                            .component
+                            .update_component(
+                                component_id,
+                                Some(&deploy_properties.component_type),
+                                linked_wasm,
+                                ifs_properties,
+                                ifs_archive,
+                                deploy_properties.dynamic_linking.as_ref(),
+                            )
+                            .await
+                            .map_service_error()?;
+                        Component::from(component)
+                    }
+                    GolemClients::Cloud(clients) => {
+                        let component = clients
+                            .component
+                            .update_component(
+                                component_id,
+                                Some(&deploy_properties.component_type),
+                                linked_wasm,
+                                ifs_properties,
+                                ifs_archive,
+                                deploy_properties
+                                    .dynamic_linking
+                                    .map(|dl| dl.to_cloud())
+                                    .as_ref(),
+                            )
+                            .await
+                            .map_service_error()?;
+                        Component::from(component)
+                    }
+                };
+                self.ctx
+                    .log_handler()
+                    .log_view(&ComponentUpdateView(ComponentView::from(component.clone())));
+                component
+            }
+            None => {
+                log_action(
+                    "Creating",
+                    format!(
+                        "component {}",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                let component = match self.ctx.golem_clients().await? {
+                    GolemClients::Oss(clients) => {
+                        let component = clients
+                            .component
+                            .create_component(
+                                component_name.as_str(),
+                                Some(&deploy_properties.component_type),
+                                linked_wasm,
+                                ifs_properties,
+                                ifs_archive,
+                                deploy_properties.dynamic_linking.as_ref(),
+                            )
+                            .await
+                            .map_service_error()?;
+                        Component::from(component)
+                    }
+                    GolemClients::Cloud(clients) => {
+                        let component = clients
+                            .component
+                            .create_component(
+                                &ComponentQuery {
+                                    project_id: project.map(|p| p.project_id.0),
+                                    component_name: component_name.to_string(),
+                                },
+                                linked_wasm,
+                                Some(&deploy_properties.component_type),
+                                ifs_properties,
+                                ifs_archive,
+                                deploy_properties
+                                    .dynamic_linking
+                                    .map(|dl| dl.to_cloud())
+                                    .as_ref(),
+                            )
+                            .await
+                            .map_service_error()?;
+                        Component::from(component)
+                    }
+                };
+                self.ctx
+                    .log_handler()
+                    .log_view(&ComponentCreateView(ComponentView::from(component.clone())));
+                component
+            }
+        };
+        Ok(component)
     }
 
     async fn list(&self, component_name: Option<ComponentName>) -> anyhow::Result<()> {
@@ -500,9 +593,24 @@ impl ComponentCommandHandler {
                             component_views.push(Component::from(result).into());
                         }
                     },
-                    GolemClients::Cloud(_) => {
-                        todo!()
-                    }
+                    GolemClients::Cloud(clients) => match version {
+                        Some(version) => {
+                            let result = clients
+                                .component
+                                .get_component_metadata(&component_id, &version.to_string())
+                                .await
+                                .map_service_error()?;
+                            component_views.push(Component::from(result).into());
+                        }
+                        None => {
+                            let result = clients
+                                .component
+                                .get_latest_component_metadata(&component_id)
+                                .await
+                                .map_service_error()?;
+                            component_views.push(Component::from(result).into());
+                        }
+                    },
                 },
                 None => {
                     log_warn(format!(
@@ -539,6 +647,118 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
+        Ok(())
+    }
+
+    async fn update_workers(
+        &self,
+        component_name: Option<ComponentName>,
+        update_mode: WorkerUpdateMode,
+    ) -> anyhow::Result<()> {
+        let components = self
+            .components_for_update_or_redeploy(component_name)
+            .await?;
+        self.update_workers_by_components(components, update_mode)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn redeploy_workers(&self, component_name: Option<ComponentName>) -> anyhow::Result<()> {
+        let components = self
+            .components_for_update_or_redeploy(component_name)
+            .await?;
+        self.redeploy_workers_by_components(components).await?;
+
+        Ok(())
+    }
+
+    async fn components_for_update_or_redeploy(
+        &self,
+        component_name: Option<ComponentName>,
+    ) -> anyhow::Result<Vec<Component>> {
+        let selected_component_names = self
+            .opt_select_components_by_app_or_name(component_name.as_ref())
+            .await?;
+
+        let mut components = Vec::with_capacity(selected_component_names.component_names.len());
+        for component_name in &selected_component_names.component_names {
+            match self
+                .component_by_name(selected_component_names.project.as_ref(), component_name)
+                .await?
+            {
+                Some(component) => {
+                    components.push(component);
+                }
+                None => {
+                    log_warn(format!(
+                        "Component {} is not deployed!",
+                        component_name.0.log_color_highlight()
+                    ));
+                }
+            }
+        }
+        Ok(components)
+    }
+
+    pub async fn update_workers_by_components(
+        &self,
+        components: Vec<Component>,
+        update: WorkerUpdateMode,
+    ) -> anyhow::Result<()> {
+        if components.is_empty() {
+            return Ok(());
+        }
+
+        log_action(
+            "Updating",
+            format!("existing workers using {} mode", update),
+        );
+        let _indent = LogIndent::new();
+
+        let mut update_results = TryUpdateAllWorkersResult::default();
+        for component in &components {
+            let result = self
+                .ctx
+                .worker_handler()
+                .update_component_workers(
+                    &component.component_name,
+                    component.versioned_component_id.component_id,
+                    update,
+                    component.versioned_component_id.version,
+                )
+                .await?;
+            update_results.extend(result);
+        }
+
+        self.ctx.log_handler().log_view(&update_results);
+        Ok(())
+    }
+
+    pub async fn redeploy_workers_by_components(
+        &self,
+        components: Vec<Component>,
+    ) -> anyhow::Result<()> {
+        if components.is_empty() {
+            return Ok(());
+        }
+
+        log_action("Redeploying", "existing workers");
+        let _indent = LogIndent::new();
+
+        for component in &components {
+            self.ctx
+                .worker_handler()
+                .redeploy_component_workers(
+                    &component.component_name,
+                    component.versioned_component_id.component_id,
+                )
+                .await?;
+        }
+
+        // TODO: json / yaml output?
+        // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        // TODO: should we expose "delete-workers" too for development?
         Ok(())
     }
 
@@ -712,13 +932,24 @@ impl ComponentCommandHandler {
                         "Component {} not found, and not part of the current application",
                         component_name.0.log_color_highlight()
                     ));
-                    // TODO: fuzzy match from service to list components
+                    // TODO: fuzzy match from service to list components?
+
+                    let app_ctx = self.ctx.app_context_lock().await;
+                    if let Some(app_ctx) = app_ctx.opt()? {
+                        logln("");
+                        app_ctx.log_dynamic_help(&DynamicHelpSections {
+                            components: true,
+                            custom_commands: false,
+                        })?
+                    }
+
                     bail!(NonSuccessfulExit)
                 }
 
                 // TODO: we will need hashes to reliably detect if "update" deploy is needed
                 //       and for now we should not blindly keep updating, so for now
-                //       only missing one are handled
+                //       only missing ones are handled
+                // TODO: add confirm
                 log_action(
                     "Auto deploying",
                     format!(
@@ -733,6 +964,7 @@ impl ComponentCommandHandler {
                         vec![component_name.clone()],
                         None,
                         &ComponentSelectMode::CurrentDir,
+                        WorkerUpdateOrRedeployArgs::default(),
                     )
                     .await?;
                 self.ctx
@@ -801,27 +1033,30 @@ impl ComponentCommandHandler {
 struct ComponentDeployProperties {
     component_type: ComponentType,
     linked_wasm_path: PathBuf,
+    files: Vec<InitialComponentFile>,
     dynamic_linking: Option<DynamicLinkingOss>,
 }
 
 fn component_deploy_properties(
     app_ctx: &mut ApplicationContext<GolemComponentExtensions>,
     component_name: &AppComponentName,
-    build_profile: Option<BuildProfileName>,
+    build_profile: Option<&BuildProfileName>,
 ) -> anyhow::Result<ComponentDeployProperties> {
     let linked_wasm_path = app_ctx
         .application
-        .component_linked_wasm(component_name, build_profile.as_ref());
+        .component_linked_wasm(component_name, build_profile);
     let component_properties = &app_ctx
         .application
-        .component_properties(component_name, build_profile.as_ref());
+        .component_properties(component_name, build_profile);
     let extensions = &component_properties.extensions;
     let component_type = extensions.component_type;
+    let files = extensions.files.clone();
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
         component_type,
         linked_wasm_path,
+        files,
         dynamic_linking,
     })
 }
@@ -859,5 +1094,209 @@ fn app_component_dynamic_linking(
                 )
             })),
         }))
+    }
+}
+
+mod ifs {
+    use crate::model::app_ext::InitialComponentFile;
+    use anyhow::{anyhow, bail, Context};
+    use async_zip::tokio::write::ZipFileWriter;
+    use async_zip::{Compression, ZipEntryBuilder};
+    use golem_common::model::{
+        ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePathWithPermissionsList,
+    };
+    use golem_wasm_rpc_stubgen::log::{log_action, LogColorize, LogIndent};
+    use std::collections::{HashSet, VecDeque};
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+    use tokio::fs::File;
+    use tokio_stream::wrappers::ReadDirStream;
+    use tokio_stream::StreamExt;
+
+    #[derive(Debug, Clone)]
+    pub struct LoadedFile {
+        content: Vec<u8>,
+        target: ComponentFilePathWithPermissions,
+    }
+
+    #[derive(Debug)]
+    pub struct ComponentFilesArchive {
+        pub archive_path: PathBuf,
+        pub properties: ComponentFilePathWithPermissionsList,
+        _temp_dir: TempDir, // archive_path is only valid as long as this is alive
+    }
+
+    pub struct IfsArchiveBuilder {
+        client: reqwest::Client,
+    }
+
+    impl IfsArchiveBuilder {
+        pub fn new(client: reqwest::Client) -> Self {
+            Self { client }
+        }
+
+        pub async fn build_files_archive(
+            &self,
+            component_files: Vec<InitialComponentFile>,
+        ) -> anyhow::Result<ComponentFilesArchive> {
+            log_action("Creating", "IFS archive");
+            let _indent = LogIndent::new();
+
+            let temp_dir = tempfile::Builder::new()
+                .prefix("golem-cli-zip")
+                .tempdir()
+                .with_context(|| "Error creating temporary dir for IFS archive")?;
+            let zip_file_path = temp_dir.path().join("data.zip");
+            let zip_file = File::create(&zip_file_path)
+                .await
+                .with_context(|| "Error creating zip file for IFS archive")?;
+
+            let mut zip_writer = ZipFileWriter::with_tokio(zip_file);
+
+            let mut seen_paths: HashSet<ComponentFilePath> = HashSet::new();
+            let mut successfully_added: Vec<ComponentFilePathWithPermissions> = vec![];
+
+            for component_file in component_files {
+                for LoadedFile { content, target } in self.load_file(component_file).await? {
+                    if !seen_paths.insert(target.path.clone()) {
+                        bail!("Conflicting paths in component files: {}", target.path);
+                    }
+
+                    // zip files do not like absolute paths. Convert the absolute component path to relative path from the root of the zip file
+                    let zip_entry_name = target.path.to_string();
+                    let builder =
+                        ZipEntryBuilder::new(zip_entry_name.clone().into(), Compression::Deflate);
+
+                    log_action(
+                        "Adding",
+                        format!(
+                            "entry {} to IFS archive",
+                            zip_entry_name.log_color_highlight()
+                        ),
+                    );
+
+                    zip_writer
+                        .write_entry_whole(builder, &content)
+                        .await
+                        .with_context(|| {
+                            anyhow!("Error writing zip entry for IFS archive {}", zip_entry_name)
+                        })?;
+
+                    successfully_added.push(target);
+                }
+            }
+            zip_writer.close().await.with_context(|| {
+                anyhow!(
+                    "Error closing zip file for IFS archive {}",
+                    zip_file_path.display()
+                )
+            })?;
+
+            let properties = ComponentFilePathWithPermissionsList {
+                values: successfully_added,
+            };
+
+            Ok(ComponentFilesArchive {
+                _temp_dir: temp_dir,
+                archive_path: zip_file_path,
+                properties,
+            })
+        }
+
+        async fn load_file(
+            &self,
+            component_file: InitialComponentFile,
+        ) -> anyhow::Result<Vec<LoadedFile>> {
+            let scheme = component_file.source_path.as_url().scheme();
+            match scheme {
+                "file" | "" => self.load_local_file(component_file).await,
+                "http" | "https" => self
+                    .download_remote_file(component_file)
+                    .await
+                    .map(|f| vec![f]),
+                _ => Err(anyhow!(
+                    "Unsupported scheme '{}' for IFS file: {}",
+                    scheme,
+                    component_file.source_path.as_url()
+                )),
+            }
+        }
+
+        async fn load_local_file(
+            &self,
+            component_file: InitialComponentFile,
+        ) -> anyhow::Result<Vec<LoadedFile>> {
+            // if it's a directory, we need to recursively load all files and combine them with their target paths and permissions.
+            let source_path = PathBuf::from(component_file.source_path.as_url().path());
+
+            let mut results: Vec<LoadedFile> = vec![];
+            let mut queue: VecDeque<(PathBuf, ComponentFilePathWithPermissions)> =
+                vec![(source_path, component_file.target)].into();
+
+            while let Some((path, target)) = queue.pop_front() {
+                if path.is_dir() {
+                    let read_dir = tokio::fs::read_dir(&path)
+                        .await
+                        .with_context(|| anyhow!("Error reading directory: {}", path.display()))?;
+                    let mut read_dir_stream = ReadDirStream::new(read_dir);
+
+                    while let Some(entry) = read_dir_stream.next().await {
+                        let entry = entry.context("Error reading directory entry")?;
+                        let next_path = entry.path();
+
+                        let file_name = entry.file_name().into_string().map_err(|_| {
+                            anyhow!(
+                                "Error converting file name to string: Contains non-unicode data"
+                                    .to_string(),
+                            )
+                        })?;
+
+                        let mut new_target = target.clone();
+                        new_target
+                            .extend_path(file_name.as_str())
+                            .map_err(|err| anyhow!("Error extending path: {err}"))?;
+
+                        queue.push_back((next_path, new_target));
+                    }
+                } else {
+                    log_action(
+                        "Loading",
+                        format!(
+                            "local file: {}",
+                            path.display().to_string().log_color_highlight()
+                        ),
+                    );
+                    let content = tokio::fs::read(&path).await.with_context(|| {
+                        anyhow!("Error reading component file: {}", path.display())
+                    })?;
+                    results.push(LoadedFile { content, target });
+                }
+            }
+            Ok(results)
+        }
+
+        async fn download_remote_file(
+            &self,
+            component_file: InitialComponentFile,
+        ) -> anyhow::Result<LoadedFile> {
+            let url = component_file.source_path.into_url();
+            log_action(
+                "Downloading",
+                format!("remote file: {}", url.as_str().log_color_highlight()),
+            );
+            let response = self
+                .client
+                .get(url.clone())
+                .send()
+                .await
+                .with_context(|| anyhow!("Failed to download IFS file: {}", url))?;
+            let bytes = response.bytes().await?;
+            let content = bytes.to_vec();
+
+            Ok(LoadedFile {
+                content,
+                target: component_file.target,
+            })
+        }
     }
 }

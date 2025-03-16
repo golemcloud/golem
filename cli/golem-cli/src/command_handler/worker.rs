@@ -14,17 +14,21 @@
 
 use crate::cloud::AccountId;
 use crate::command::shared_args::{
-    NewWorkerArgument, WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
+    NewWorkerArgument, StreamArgs, WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
 };
 use crate::command::worker::WorkerSubcommand;
 use crate::command_handler::Handlers;
+use crate::connect_output::ConnectOutput;
 use crate::context::{Context, GolemClients};
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::model::component::{function_params_types, show_exported_functions, Component};
+use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{format_export, log_error, log_fuzzy_match, log_text_view, log_warn};
+use crate::model::text::fmt::{
+    format_export, format_worker_name_match, log_error, log_fuzzy_match, log_text_view, log_warn,
+};
 use crate::model::text::help::{
     ArgumentError, AvailableComponentNamesHelp, AvailableFunctionNamesHelp, ComponentNameHelp,
     ParameterErrorTableView, WorkerNameHelp,
@@ -32,23 +36,49 @@ use crate::model::text::help::{
 use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
 use crate::model::to_oss::ToOss;
 use crate::model::{
-    ComponentName, ComponentNameMatchKind, IdempotencyKey, ProjectName, WorkerMetadata,
-    WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView,
+    ComponentName, ComponentNameMatchKind, Format, IdempotencyKey, ProjectName,
+    WorkerConnectOptions, WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch,
+    WorkerUpdateMode, WorkersMetadataResponseView,
 };
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context as AnyhowContext};
+use bytes::Bytes;
 use colored::Colorize;
+use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::api::WorkerClient as WorkerClientOss;
 use golem_client::model::{
-    InvokeParameters as InvokeParametersOss, ScanCursor,
+    InvokeParameters as InvokeParametersOss, PublicOplogEntry,
+    RevertLastInvocations as RevertLastInvocationsOss, RevertToOplogIndex as RevertToOplogIndexOss,
+    RevertWorkerTarget as RevertWorkerTargetOss, ScanCursor,
+    UpdateWorkerRequest as UpdateWorkerRequestOss,
     WorkerCreationRequest as WorkerCreationRequestOss,
 };
 use golem_cloud_client::api::WorkerClient as WorkerClientCloud;
+use golem_cloud_client::model::{
+    InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
+    RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
+    UpdateWorkerRequest as UpdateWorkerRequestCloud,
+    WorkerCreationRequest as WorkerCreationRequestCloud,
+};
+use golem_common::model::public_oplog::OplogCursor;
+use golem_common::model::{ComponentType, WorkerEvent};
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::parse_type_annotated_value;
 use golem_wasm_rpc_stubgen::commands::app::ComponentSelectMode;
-use golem_wasm_rpc_stubgen::log::{log_action, logln, LogColorize};
+use golem_wasm_rpc_stubgen::log::{
+    log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent,
+};
 use itertools::{EitherOrBoth, Itertools};
+use native_tls::TlsConnector;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::JoinHandle;
+use tokio::{task, time};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite, Connector};
+use tracing::{debug, error, info, trace};
+use url::Url;
 use uuid::Uuid;
 
 pub struct WorkerCommandHandler {
@@ -66,13 +96,15 @@ impl WorkerCommandHandler {
                 worker_name,
                 arguments,
                 env,
-            } => self.new_worker(worker_name, arguments, env).await,
+            } => self.create_new(worker_name, arguments, env).await,
             WorkerSubcommand::Invoke {
                 worker_name,
                 function_name,
                 arguments,
                 enqueue,
                 idempotency_key,
+                stream,
+                stream_args,
             } => {
                 self.invoke(
                     worker_name,
@@ -80,10 +112,13 @@ impl WorkerCommandHandler {
                     arguments,
                     enqueue,
                     idempotency_key,
+                    stream,
+                    stream_args,
                 )
                 .await
             }
             WorkerSubcommand::Get { worker_name } => self.get(worker_name).await,
+            WorkerSubcommand::Delete { worker_name } => self.delete(worker_name).await,
             WorkerSubcommand::List {
                 component_name,
                 filter: filters,
@@ -100,21 +135,45 @@ impl WorkerCommandHandler {
                 )
                 .await
             }
+            WorkerSubcommand::Stream {
+                worker_name,
+                stream_args,
+            } => self.stream(worker_name, stream_args).await,
+            WorkerSubcommand::Interrupt { worker_name } => self.interrupt(worker_name).await,
+            WorkerSubcommand::Resume { worker_name } => self.resume(worker_name).await,
+            WorkerSubcommand::SimulateCrash { worker_name } => {
+                self.simulate_crash(worker_name).await
+            }
+            WorkerSubcommand::Oplog {
+                worker_name,
+                from,
+                query,
+            } => self.oplog(worker_name, from, query).await,
+            WorkerSubcommand::Revert {
+                worker_name,
+                last_oplog_index,
+                number_of_invocations,
+            } => {
+                self.revert(worker_name, last_oplog_index, number_of_invocations)
+                    .await
+            }
+            WorkerSubcommand::CancelInvocation {
+                worker_name,
+                idempotency_key,
+            } => self.cancel_invocation(worker_name, idempotency_key).await,
         }
     }
 
-    async fn new_worker(
+    async fn create_new(
         &mut self,
         worker_name: WorkerNameArg,
         arguments: Vec<NewWorkerArgument>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
-        let worker_name = worker_name.worker_name;
-
         self.ctx.silence_app_context_init().await;
 
-        let worker_name_match = self.match_worker_name(worker_name).await?;
-
+        let worker_name = worker_name.worker_name;
+        let mut worker_name_match = self.match_worker_name(worker_name).await?;
         let component = self
             .ctx
             .component_handler()
@@ -125,47 +184,81 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        // TODO: should we fail on explicit names for ephemeral?
-        let worker_name = worker_name_match
-            .worker_name
-            .unwrap_or_else(|| Uuid::new_v4().to_string().into());
+        if component.component_type == ComponentType::Ephemeral
+            && worker_name_match.worker_name.is_some()
+        {
+            log_error("Cannot use explicit name for ephemeral worker!");
+            logln("");
+            logln("Use '-' as worker name for ephemeral workers");
+            logln("");
+            bail!(NonSuccessfulExit);
+        }
 
-        // TODO: log args / env?
+        if worker_name_match.worker_name.is_none() {
+            worker_name_match.worker_name = Some(Uuid::new_v4().to_string().into());
+        }
+        let worker_name = worker_name_match.worker_name.clone().unwrap().0;
+
         log_action(
             "Creating",
             format!(
-                "new worker {} / {}",
-                worker_name_match.component_name.0.blue().bold(),
-                worker_name.0.green().bold(),
+                "new worker {}",
+                format_worker_name_match(&worker_name_match)
             ),
         );
 
-        // TODO: should use the returned API response? (like component version)
-        let _ = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .worker
-                .launch_new_worker(
-                    &component.versioned_component_id.component_id,
-                    &WorkerCreationRequestOss {
-                        name: worker_name.0.clone(),
-                        args: arguments,
-                        env: env.into_iter().collect(),
-                    },
-                )
-                .await
-                .map_service_error()?,
-            GolemClients::Cloud(_) => {
-                todo!()
-            }
-        };
+        self.new_worker(
+            component.versioned_component_id.component_id,
+            worker_name.clone(),
+            arguments,
+            env.into_iter().collect(),
+        )
+        .await?;
 
         logln("");
         self.ctx.log_handler().log_view(&WorkerCreateView {
             component_name: worker_name_match.component_name,
-            worker_name: Some(worker_name),
+            worker_name: Some(worker_name.into()),
         });
 
         Ok(())
+    }
+
+    async fn new_worker(
+        &self,
+        component_id: Uuid,
+        worker_name: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .worker
+                .launch_new_worker(
+                    &component_id,
+                    &WorkerCreationRequestOss {
+                        name: worker_name,
+                        args,
+                        env,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .launch_new_worker(
+                    &component_id,
+                    &WorkerCreationRequestCloud {
+                        name: worker_name,
+                        args,
+                        env,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+        }
     }
 
     async fn invoke(
@@ -175,6 +268,8 @@ impl WorkerCommandHandler {
         arguments: Vec<WorkerFunctionArgument>,
         enqueue: bool,
         idempotency_key: Option<IdempotencyKey>,
+        stream: bool,
+        stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -182,10 +277,7 @@ impl WorkerCommandHandler {
             let key = IdempotencyKey::new();
             log_action(
                 "Using",
-                format!(
-                    "auto generated idempotency key: {}",
-                    key.0.log_color_highlight()
-                ),
+                format!("generated idempotency key: {}", key.0.log_color_highlight()),
             );
             key
         }
@@ -224,63 +316,53 @@ impl WorkerCommandHandler {
                 log_fuzzy_match(&match_);
                 match_.option
             }
-            Err(error) => {
-                // TODO: extract common ambiguous messages?
-                match error {
-                    Error::Ambiguous {
-                        highlighted_options,
-                        ..
-                    } => {
-                        logln("");
-                        log_error(format!(
-                            "The requested function name ({}) is ambiguous.",
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        logln("Did you mean one of");
-                        for option in highlighted_options {
-                            logln(format!(" - {}", option.bold()));
-                        }
-                        logln("?");
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp {
-                            component_name: worker_name_match.component_name.0,
-                            function_names: component_functions,
-                        });
-
-                        bail!(NonSuccessfulExit);
+            Err(error) => match error {
+                Error::Ambiguous {
+                    highlighted_options,
+                    ..
+                } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested function name ({}) is ambiguous.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    logln("Did you mean one of");
+                    for option in highlighted_options {
+                        logln(format!(" - {}", option.bold()));
                     }
-                    Error::NotFound { .. } => {
-                        logln("");
-                        log_error(format!(
-                            "The requested function name ({}) was not found.",
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp {
-                            component_name: worker_name_match.component_name.0,
-                            function_names: component_functions,
-                        });
+                    logln("?");
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp {
+                        component_name: worker_name_match.component_name.0,
+                        function_names: component_functions,
+                    });
 
-                        bail!(NonSuccessfulExit);
-                    }
+                    bail!(NonSuccessfulExit);
                 }
-            }
+                Error::NotFound { .. } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested function name ({}) was not found.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp {
+                        component_name: worker_name_match.component_name.0,
+                        function_names: component_functions,
+                    });
+
+                    bail!(NonSuccessfulExit);
+                }
+            },
         };
 
         if enqueue {
             log_action(
                 "Enqueueing",
                 format!(
-                    "invocation for worker {} / {} / {} ",
-                    worker_name_match.component_name.0.blue().bold(),
-                    worker_name_match
-                        .worker_name
-                        .as_ref()
-                        .map(|wn| wn.0.as_str())
-                        .unwrap_or("-")
-                        .green()
-                        .bold(),
+                    "invocation for worker {}/{}",
+                    format_worker_name_match(&worker_name_match),
                     format_export(&function_name)
                 ),
             );
@@ -288,15 +370,8 @@ impl WorkerCommandHandler {
             log_action(
                 "Invoking",
                 format!(
-                    "worker {} / {} / {} ",
-                    worker_name_match.component_name.0.blue().bold(),
-                    worker_name_match
-                        .worker_name
-                        .as_ref()
-                        .map(|wn| wn.0.as_str())
-                        .unwrap_or("-")
-                        .green()
-                        .bold(),
+                    "worker {}/{} ",
+                    format_worker_name_match(&worker_name_match),
                     format_export(&function_name)
                 ),
             );
@@ -304,131 +379,184 @@ impl WorkerCommandHandler {
 
         let arguments = wave_args_to_invoke_args(&component, &function_name, arguments)?;
 
-        let result_view = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => {
-                let result = match worker_name_match.worker_name {
-                    Some(worker_name) => {
-                        if enqueue {
-                            clients
-                                .worker
-                                .invoke_function(
-                                    &component.versioned_component_id.component_id,
-                                    worker_name.0.as_str(),
-                                    Some(&idempotency_key.0),
-                                    function_name.as_str(),
-                                    &InvokeParametersOss { params: arguments },
-                                )
-                                .await
-                                .map_service_error()?;
-                            None
-                        } else {
-                            Some(
-                                clients
-                                    .worker
-                                    .invoke_and_await_function(
-                                        &component.versioned_component_id.component_id,
-                                        worker_name.0.as_str(),
-                                        Some(&idempotency_key.0),
-                                        function_name.as_str(),
-                                        &InvokeParametersOss { params: arguments },
-                                    )
-                                    .await
-                                    .map_service_error()?,
-                            )
-                        }
-                    }
-                    None => {
-                        if enqueue {
-                            clients
-                                .worker
-                                .invoke_function_without_name(
-                                    &component.versioned_component_id.component_id,
-                                    Some(&idempotency_key.0),
-                                    function_name.as_str(),
-                                    &InvokeParametersOss { params: arguments },
-                                )
-                                .await
-                                .map_service_error()?;
-                            None
-                        } else {
-                            Some(
-                                clients
-                                    .worker
-                                    .invoke_and_await_function_without_name(
-                                        &component.versioned_component_id.component_id,
-                                        Some(&idempotency_key.0),
-                                        function_name.as_str(),
-                                        &InvokeParametersOss { params: arguments },
-                                    )
-                                    .await
-                                    .map_service_error()?,
-                            )
-                        }
-                    }
-                };
-                // TODO: handle json format and include idempotency key in it
-                result
-                    .map(|result| {
-                        InvokeResultView::try_parse_or_json(
-                            result,
-                            &component,
-                            function_name.as_str(),
-                        )
-                    })
-                    .transpose()?
+        let connect_handle = match worker_name_match.worker_name.clone() {
+            Some(worker_name) => {
+                if stream {
+                    let connection = connect_to_worker(
+                        self.ctx.worker_service_url().clone(),
+                        self.ctx.auth_token().await?,
+                        component.versioned_component_id.component_id,
+                        worker_name.0,
+                        stream_args.into(),
+                        self.ctx.allow_insecure(),
+                        self.ctx.format(),
+                    )
+                    .await?;
+                    Some(tokio::task::spawn(async move {
+                        connection.read_messages().await
+                    }))
+                } else {
+                    None
+                }
             }
-            GolemClients::Cloud(_) => {
-                todo!()
-            }
+            None => None,
         };
 
-        match result_view {
-            Some(view) => {
+        let result = match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => match &worker_name_match.worker_name {
+                Some(worker_name) => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function(
+                                &component.versioned_component_id.component_id,
+                                &worker_name.0,
+                                Some(&idempotency_key.0),
+                                function_name.as_str(),
+                                &InvokeParametersOss { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker
+                                .invoke_and_await_function(
+                                    &component.versioned_component_id.component_id,
+                                    &worker_name.0,
+                                    Some(&idempotency_key.0),
+                                    function_name.as_str(),
+                                    &InvokeParametersOss { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+                None => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function_without_name(
+                                &component.versioned_component_id.component_id,
+                                Some(&idempotency_key.0),
+                                function_name.as_str(),
+                                &InvokeParametersOss { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker
+                                .invoke_and_await_function_without_name(
+                                    &component.versioned_component_id.component_id,
+                                    Some(&idempotency_key.0),
+                                    function_name.as_str(),
+                                    &InvokeParametersOss { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+            },
+            GolemClients::Cloud(clients) => match worker_name_match.worker_name {
+                Some(worker_name) => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function(
+                                &component.versioned_component_id.component_id,
+                                &worker_name.0,
+                                Some(&idempotency_key.0),
+                                function_name.as_str(),
+                                &InvokeParametersCloud { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker
+                                .invoke_and_await_function(
+                                    &component.versioned_component_id.component_id,
+                                    &worker_name.0,
+                                    Some(&idempotency_key.0),
+                                    function_name.as_str(),
+                                    &InvokeParametersCloud { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+                None => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function_without_name(
+                                &component.versioned_component_id.component_id,
+                                Some(&idempotency_key.0),
+                                function_name.as_str(),
+                                &InvokeParametersCloud { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker
+                                .invoke_and_await_function_without_name(
+                                    &component.versioned_component_id.component_id,
+                                    Some(&idempotency_key.0),
+                                    function_name.as_str(),
+                                    &InvokeParametersCloud { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+            }
+            .to_oss(),
+        };
+
+        connect_handle.iter().for_each(|handle| handle.abort());
+
+        match result {
+            Some(result) => {
                 logln("");
-                self.ctx.log_handler().log_view(&view);
+                self.ctx
+                    .log_handler()
+                    .log_view(&InvokeResultView::new_invoke(
+                        idempotency_key,
+                        result,
+                        &component,
+                        function_name.as_str(),
+                    ));
             }
             None => {
                 log_action("Enqueued", "invocation");
+                self.ctx
+                    .log_handler()
+                    .log_view(&InvokeResultView::new_enqueue(idempotency_key));
             }
-        }
+        };
 
         Ok(())
     }
 
     async fn get(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
-
-        let component = self
-            .ctx
-            .component_handler()
-            .component_by_name(
-                worker_name_match.project.as_ref(),
-                &worker_name_match.component_name,
-            )
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
             .await?;
-
-        let Some(component) = component else {
-            log_error(format!(
-                "Component {} not found",
-                worker_name_match
-                    .component_name
-                    .0
-                    .log_color_error_highlight()
-            ));
-            logln("");
-            bail!(NonSuccessfulExit);
-        };
-
-        let Some(worker_name) = worker_name_match.worker_name else {
-            // TODO: do not allow ephemeral ones
-            log_error("Worker name is required");
-            logln("");
-            log_text_view(&WorkerNameHelp);
-            logln("");
-            bail!(NonSuccessfulExit);
-        };
 
         let result = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => {
@@ -464,6 +592,371 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
+    async fn delete(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_warn_action(
+            "Deleting",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.delete_worker(
+            component.versioned_component_id.component_id,
+            &worker_name.0,
+        )
+        .await?;
+
+        log_action(
+            "Deleted",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn delete_worker(&self, component_id: Uuid, worker_name: &str) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .worker
+                .delete_worker(&component_id, worker_name)
+                .await
+                .map(|_| ())
+                .map_service_error(),
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .get_worker_metadata(&component_id, worker_name)
+                .await
+                .map(|_| ())
+                .map_service_error(),
+        }
+    }
+
+    async fn stream(
+        &mut self,
+        worker_name: WorkerNameArg,
+        stream_args: StreamArgs,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Connecting",
+            format!("to worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        let connection = connect_to_worker(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            component.versioned_component_id.component_id,
+            worker_name.0.clone(),
+            stream_args.into(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+        )
+        .await?;
+
+        connection.read_messages().await;
+
+        Ok(())
+    }
+
+    async fn interrupt(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Interrupting",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.interrupt_worker(&component, &worker_name, false)
+            .await?;
+
+        log_action(
+            "Interrupted",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn resume(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Resuming",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.resume_worker(&component, &worker_name).await?;
+
+        log_action(
+            "Resumed",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn simulate_crash(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Simulating crash",
+            format!(
+                "for worker {}",
+                format_worker_name_match(&worker_name_match)
+            ),
+        );
+
+        self.interrupt_worker(&component, &worker_name, true)
+            .await?;
+
+        log_action(
+            "Simulated crash",
+            format!(
+                "for worker {}",
+                format_worker_name_match(&worker_name_match)
+            ),
+        );
+
+        Ok(())
+    }
+
+    async fn oplog(
+        &mut self,
+        worker_name: WorkerNameArg,
+        from: Option<u64>,
+        query: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        let batch_size = self.ctx.http_batch_size();
+        let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
+        let mut cursor = Option::<OplogCursor>::None;
+        loop {
+            cursor = match self.ctx.golem_clients().await? {
+                GolemClients::Oss(clients) => {
+                    let result = clients
+                        .worker
+                        .get_oplog(
+                            &component.versioned_component_id.component_id,
+                            &worker_name.0,
+                            from,
+                            batch_size,
+                            cursor.as_ref(),
+                            query.as_deref(),
+                        )
+                        .await
+                        .map_service_error()?;
+                    entries.extend(
+                        result
+                            .entries
+                            .into_iter()
+                            .map(|entry| (entry.oplog_index, entry.entry)),
+                    );
+                    result.next
+                }
+                GolemClients::Cloud(clients) => {
+                    let result = clients
+                        .worker
+                        .get_oplog(
+                            &component.versioned_component_id.component_id,
+                            &worker_name.0,
+                            from,
+                            batch_size,
+                            cursor.as_ref(),
+                            query.as_deref(),
+                        )
+                        .await
+                        .map_service_error()?;
+                    entries.extend(
+                        result
+                            .entries
+                            .into_iter()
+                            .map(|entry| (entry.oplog_index, entry.entry)),
+                    );
+                    result.next
+                }
+            };
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        if entries.is_empty() {
+            log_warn("No results.")
+        }
+
+        self.ctx.log_handler().log_view(&entries);
+
+        Ok(())
+    }
+
+    async fn revert(
+        &mut self,
+        worker_name: WorkerNameArg,
+        last_oplog_index: Option<u64>,
+        number_of_invocations: Option<u64>,
+    ) -> anyhow::Result<()> {
+        if last_oplog_index.is_none() && number_of_invocations.is_none() {
+            log_error(format!(
+                "One of [{}, {}] must be specified",
+                "last-oplog-index".log_color_highlight(),
+                "number of invocations".log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit)
+        }
+
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Reverting",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => {
+                let target = {
+                    if let Some(last_oplog_index) = last_oplog_index {
+                        RevertWorkerTargetOss::RevertToOplogIndex(RevertToOplogIndexOss {
+                            last_oplog_index,
+                        })
+                    } else if let Some(number_of_invocations) = number_of_invocations {
+                        RevertWorkerTargetOss::RevertLastInvocations(RevertLastInvocationsOss {
+                            number_of_invocations,
+                        })
+                    } else {
+                        bail!("Expected either last_oplog_index or number_of_invocations")
+                    }
+                };
+
+                clients
+                    .worker
+                    .revert_worker(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                        &target,
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?
+            }
+            GolemClients::Cloud(clients) => {
+                let target = {
+                    if let Some(last_oplog_index) = last_oplog_index {
+                        RevertWorkerTargetCloud::RevertToOplogIndex(RevertToOplogIndexCloud {
+                            last_oplog_index,
+                        })
+                    } else if let Some(number_of_invocations) = number_of_invocations {
+                        RevertWorkerTargetCloud::RevertLastInvocations(RevertLastInvocationsCloud {
+                            number_of_invocations,
+                        })
+                    } else {
+                        bail!("Expected either last_oplog_index or number_of_invocations")
+                    }
+                };
+
+                clients
+                    .worker
+                    .revert_worker(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                        &target,
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?
+            }
+        }
+
+        log_action(
+            "Reverted",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn cancel_invocation(
+        &mut self,
+        worker_name: WorkerNameArg,
+        idempotency_key: IdempotencyKey,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_warn_action(
+            "Canceling invocation",
+            format!(
+                "for worker {} using idempotency key: {}",
+                format_worker_name_match(&worker_name_match),
+                idempotency_key.0.log_color_highlight()
+            ),
+        );
+
+        let canceled = match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .worker
+                .cancel_invocation(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                    &idempotency_key.0,
+                )
+                .await
+                .map(|result| (result.canceled))
+                .map_service_error()?,
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .cancel_invocation(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                    &idempotency_key.0,
+                )
+                .await
+                .map(|result| (result.canceled))
+                .map_service_error()?,
+        };
+
+        // TODO: json / yaml response?
+        if canceled {
+            log_action("Canceled", "");
+        } else {
+            log_warn_action("Failed", "to cancel, invocation already started");
+        }
+
+        Ok(())
+    }
+
     async fn list(
         &self,
         component_name: Option<ComponentName>,
@@ -493,8 +986,6 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let scan_cursor = scan_cursor.as_ref().map(scan_cursor_to_string);
-
         let mut view = WorkersMetadataResponseView::default();
 
         for component_name in &selected_components.component_names {
@@ -505,72 +996,25 @@ impl WorkerCommandHandler {
                 .await?
             {
                 Some(component) => {
-                    let mut current_scan_cursor = scan_cursor.clone();
-                    loop {
-                        let result_cursor = match self.ctx.golem_clients().await? {
-                            GolemClients::Oss(clients) => {
-                                let results = clients
-                                    .worker
-                                    .get_workers_metadata(
-                                        &component.versioned_component_id.component_id,
-                                        Some(&filters),
-                                        current_scan_cursor.as_deref(),
-                                        max_count.or(Some(self.ctx.http_batch_size())),
-                                        Some(precise),
-                                    )
-                                    .await
-                                    .map_service_error()?;
+                    let (workers, scan_cursor) = self
+                        .list_component_workers(
+                            component_name,
+                            component.versioned_component_id.component_id,
+                            Some(filters.as_slice()),
+                            scan_cursor.as_ref(),
+                            max_count,
+                            precise,
+                        )
+                        .await?;
 
-                                view.workers.extend(results.workers.into_iter().map(|meta| {
-                                    WorkerMetadataView::from(WorkerMetadata::from_oss(
-                                        component_name.clone(),
-                                        meta,
-                                    ))
-                                }));
-
-                                results.cursor
-                            }
-                            GolemClients::Cloud(clients) => {
-                                let results = clients
-                                    .worker
-                                    .get_workers_metadata(
-                                        &component.versioned_component_id.component_id,
-                                        Some(&filters),
-                                        current_scan_cursor.as_deref(),
-                                        max_count.or(Some(self.ctx.http_batch_size())),
-                                        Some(precise),
-                                    )
-                                    .await
-                                    .map_service_error()?;
-
-                                view.workers.extend(results.workers.into_iter().map(|meta| {
-                                    WorkerMetadataView::from(WorkerMetadata::from_cloud(
-                                        component_name.clone(),
-                                        meta,
-                                    ))
-                                }));
-
-                                results.cursor.to_oss()
-                            }
-                        };
-
-                        match result_cursor {
-                            Some(next_cursor) => {
-                                if max_count.is_none() {
-                                    current_scan_cursor = Some(scan_cursor_to_string(&next_cursor));
-                                } else {
-                                    view.cursors.insert(
-                                        component_name.to_string().clone(),
-                                        scan_cursor_to_string(&next_cursor),
-                                    );
-                                    break;
-                                }
-                            }
-                            None => {
-                                break;
-                            }
-                        }
-                    }
+                    view.workers
+                        .extend(workers.into_iter().map(WorkerMetadataView::from));
+                    scan_cursor.into_iter().for_each(|scan_cursor| {
+                        view.cursors.insert(
+                            component_name.to_string(),
+                            scan_cursor_to_string(&scan_cursor),
+                        );
+                    });
                 }
                 None => {
                     log_warn(format!(
@@ -584,6 +1028,317 @@ impl WorkerCommandHandler {
         self.ctx.log_handler().log_view(&view);
 
         Ok(())
+    }
+
+    pub async fn update_component_workers(
+        &self,
+        component_name: &ComponentName,
+        component_id: Uuid,
+        update_mode: WorkerUpdateMode,
+        target_version: u64,
+    ) -> anyhow::Result<TryUpdateAllWorkersResult> {
+        let (workers, _) = self
+            .list_component_workers(component_name, component_id, None, None, None, false)
+            .await?;
+
+        if workers.is_empty() {
+            log_warn_action(
+                "Skipping",
+                format!(
+                    "updating workers for component {}, no workers found",
+                    component_name
+                ),
+            );
+            return Ok(TryUpdateAllWorkersResult::default());
+        }
+
+        log_action(
+            "Updating",
+            format!(
+                "all workers ({}) for component {} to version {}",
+                workers.len().to_string().log_color_highlight(),
+                component_name.0.blue().bold(),
+                target_version.to_string().log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        let mut update_results = TryUpdateAllWorkersResult::default();
+        for worker in workers {
+            let result = self
+                .update_worker(
+                    component_name,
+                    worker.worker_id.component_id.0,
+                    &worker.worker_id.worker_name,
+                    update_mode,
+                    target_version,
+                )
+                .await;
+
+            match result {
+                Ok(_) => {
+                    update_results.triggered.push(WorkerUpdateAttempt {
+                        component_name: component_name.clone(),
+                        target_version,
+                        worker_name: worker.worker_id.worker_name.as_str().into(),
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    update_results.triggered.push(WorkerUpdateAttempt {
+                        component_name: component_name.clone(),
+                        target_version,
+                        worker_name: worker.worker_id.worker_name.as_str().into(),
+                        error: Some(error.to_string()),
+                    });
+                }
+            }
+        }
+
+        Ok(update_results)
+    }
+
+    async fn update_worker(
+        &self,
+        component_name: &ComponentName,
+        component_id: Uuid,
+        worker_name: &str,
+        update_mode: WorkerUpdateMode,
+        target_version: u64,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Triggering update",
+            format!(
+                "for worker {}/{} to version {} using {} update mode",
+                component_name.0.bold().blue(),
+                worker_name.bold().green(),
+                target_version.to_string().log_color_highlight(),
+                update_mode.to_string().log_color_highlight()
+            ),
+        );
+
+        let result = match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .worker
+                .update_worker(
+                    &component_id,
+                    worker_name,
+                    &UpdateWorkerRequestOss {
+                        mode: match update_mode {
+                            WorkerUpdateMode::Automatic => {
+                                golem_client::model::WorkerUpdateMode::Automatic
+                            }
+                            WorkerUpdateMode::Manual => {
+                                golem_client::model::WorkerUpdateMode::Manual
+                            }
+                        },
+                        target_version,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .update_worker(
+                    &component_id,
+                    worker_name,
+                    &UpdateWorkerRequestCloud {
+                        mode: match update_mode {
+                            WorkerUpdateMode::Automatic => {
+                                golem_cloud_client::model::WorkerUpdateMode::Automatic
+                            }
+                            WorkerUpdateMode::Manual => {
+                                golem_cloud_client::model::WorkerUpdateMode::Manual
+                            }
+                        },
+                        target_version,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+        };
+
+        match result {
+            Ok(_) => {
+                log_action("Triggered update", "");
+                Ok(())
+            }
+            Err(error) => {
+                log_error_action("Failed", "to trigger update for worker, error:");
+                let _indent = LogIndent::new();
+                logln(format!("{}", error));
+                Err(anyhow!(error))
+            }
+        }
+    }
+
+    pub async fn redeploy_component_workers(
+        &self,
+        component_name: &ComponentName,
+        component_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let (workers, _) = self
+            .list_component_workers(component_name, component_id, None, None, None, false)
+            .await?;
+
+        if workers.is_empty() {
+            log_warn_action(
+                "Skipping",
+                format!(
+                    "redeploying workers for component {}, no workers found",
+                    component_name
+                ),
+            );
+            return Ok(());
+        }
+
+        log_action(
+            "Redeploying",
+            format!(
+                "all workers ({}) for component {}",
+                workers.len().to_string().log_color_highlight(),
+                component_name.0.blue().bold(),
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        for worker in workers {
+            self.redeploy_worker(component_name, worker).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn redeploy_worker(
+        &self,
+        component_name: &ComponentName,
+        worker_metadata: WorkerMetadata,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Redeploying",
+            format!(
+                "worker {}/{} to latest version",
+                component_name.0.bold().blue(),
+                worker_metadata.worker_id.worker_name.bold().green(),
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        log_warn_action(
+            "Deleting",
+            format!(
+                "worker {}/{}",
+                component_name.0.bold().blue(),
+                worker_metadata.worker_id.worker_name.bold().green(),
+            ),
+        );
+        self.delete_worker(
+            worker_metadata.worker_id.component_id.0,
+            &worker_metadata.worker_id.worker_name,
+        )
+        .await?;
+        log_action("Deleted", "worker");
+
+        log_action(
+            "Recreating",
+            format!(
+                "worker {}/{}",
+                component_name.0.bold().blue(),
+                worker_metadata.worker_id.worker_name.bold().green(),
+            ),
+        );
+        self.new_worker(
+            worker_metadata.worker_id.component_id.0,
+            worker_metadata.worker_id.worker_name,
+            worker_metadata.args,
+            worker_metadata.env,
+        )
+        .await?;
+        log_action("Recreated", "worker");
+
+        Ok(())
+    }
+
+    pub async fn list_component_workers(
+        &self,
+        component_name: &ComponentName,
+        component_id: Uuid,
+        filters: Option<&[String]>,
+        start_scan_cursor: Option<&ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
+    ) -> anyhow::Result<(Vec<WorkerMetadata>, Option<ScanCursor>)> {
+        let mut workers = Vec::<WorkerMetadata>::new();
+        let mut final_result_cursor = Option::<ScanCursor>::None;
+
+        let start_scan_cursor = start_scan_cursor.map(scan_cursor_to_string);
+        let mut current_scan_cursor = start_scan_cursor.clone();
+        loop {
+            let result_cursor = match self.ctx.golem_clients().await? {
+                GolemClients::Oss(clients) => {
+                    let results = clients
+                        .worker
+                        .get_workers_metadata(
+                            &component_id,
+                            filters,
+                            current_scan_cursor.as_deref(),
+                            max_count.or(Some(self.ctx.http_batch_size())),
+                            Some(precise),
+                        )
+                        .await
+                        .map_service_error()?;
+
+                    workers.extend(
+                        results
+                            .workers
+                            .into_iter()
+                            .map(|meta| WorkerMetadata::from_oss(component_name.clone(), meta)),
+                    );
+
+                    results.cursor
+                }
+                GolemClients::Cloud(clients) => {
+                    let results = clients
+                        .worker
+                        .get_workers_metadata(
+                            &component_id,
+                            filters,
+                            current_scan_cursor.as_deref(),
+                            max_count.or(Some(self.ctx.http_batch_size())),
+                            Some(precise),
+                        )
+                        .await
+                        .map_service_error()?;
+
+                    workers.extend(
+                        results
+                            .workers
+                            .into_iter()
+                            .map(|meta| WorkerMetadata::from_cloud(component_name.clone(), meta)),
+                    );
+
+                    results.cursor.to_oss()
+                }
+            };
+
+            match result_cursor {
+                Some(next_cursor) => {
+                    if max_count.is_none() {
+                        current_scan_cursor = Some(scan_cursor_to_string(&next_cursor));
+                    } else {
+                        final_result_cursor = Some(next_cursor);
+                        break;
+                    }
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+
+        Ok((workers, final_result_cursor))
     }
 
     pub async fn match_worker_name(
@@ -631,6 +1386,7 @@ impl WorkerCommandHandler {
                         }
 
                         Ok(WorkerNameMatch {
+                            account_id: None,
                             project: None,
                             component_name_match_kind: ComponentNameMatchKind::AppCurrentDir,
                             component_name: selected_component_names
@@ -644,13 +1400,9 @@ impl WorkerCommandHandler {
                     }
                     None => {
                         logln("");
-                        log_error(
-                            "Cannot infer the component name for the worker as the current directory is not part of an application."
-                        );
+                        log_error("Cannot infer the component name for the worker as the current directory is not part of an application.");
                         logln("");
-                        logln(
-                            "Switch to an application directory or specify the full component name as part of the worker name!",
-                        );
+                        logln("Switch to an application directory or specify the full component name as part of the worker name!");
                         logln("");
                         log_text_view(&WorkerNameHelp);
                         // TODO: hint for deployed component names?
@@ -718,7 +1470,6 @@ impl WorkerCommandHandler {
                     log_error("Missing component part in worker name!");
                     logln("");
                     log_text_view(&WorkerNameHelp);
-                    logln("");
                     bail!(NonSuccessfulExit);
                 }
 
@@ -744,6 +1495,7 @@ impl WorkerCommandHandler {
                             Ok(match_) => {
                                 log_fuzzy_match(&match_);
                                 Ok(WorkerNameMatch {
+                                    account_id,
                                     project,
                                     component_name_match_kind: ComponentNameMatchKind::App,
                                     component_name: match_.option.into(),
@@ -778,6 +1530,7 @@ impl WorkerCommandHandler {
                                 Error::NotFound { .. } => {
                                     // Assuming non-app component
                                     Ok(WorkerNameMatch {
+                                        account_id,
                                         project,
                                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                                         component_name,
@@ -788,6 +1541,7 @@ impl WorkerCommandHandler {
                         }
                     }
                     None => Ok(WorkerNameMatch {
+                        account_id,
                         project,
                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                         component_name,
@@ -806,6 +1560,105 @@ impl WorkerCommandHandler {
                 bail!(NonSuccessfulExit);
             }
         }
+    }
+
+    async fn component_by_worker_name_match(
+        &mut self,
+        worker_name_match: &WorkerNameMatch,
+    ) -> anyhow::Result<(Component, WorkerName)> {
+        let Some(worker_name) = &worker_name_match.worker_name else {
+            log_error("Worker name is required");
+            logln("");
+            log_text_view(&WorkerNameHelp);
+            logln("");
+            bail!(NonSuccessfulExit);
+        };
+
+        let component = self
+            .ctx
+            .component_handler()
+            .component_by_name(
+                worker_name_match.project.as_ref(),
+                &worker_name_match.component_name,
+            )
+            .await?;
+
+        let Some(component) = component else {
+            log_error(format!(
+                "Component {} not found",
+                worker_name_match
+                    .component_name
+                    .0
+                    .log_color_error_highlight()
+            ));
+            logln("");
+            bail!(NonSuccessfulExit);
+        };
+
+        Ok((component, worker_name.clone()))
+    }
+
+    async fn resume_worker(
+        &mut self,
+        component: &Component,
+        worker_name: &WorkerName,
+    ) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => {
+                clients
+                    .worker
+                    .resume_worker(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?;
+            }
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .resume_worker(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                )
+                .await
+                .map(|_| ())
+                .map_service_error()?,
+        }
+        Ok(())
+    }
+
+    async fn interrupt_worker(
+        &mut self,
+        component: &Component,
+        worker_name: &WorkerName,
+        recover_immediately: bool,
+    ) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => {
+                clients
+                    .worker
+                    .interrupt_worker(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                        Some(recover_immediately),
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?;
+            }
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .interrupt_worker(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                    Some(recover_immediately),
+                )
+                .await
+                .map(|_| ())
+                .map_service_error()?,
+        }
+        Ok(())
     }
 }
 
@@ -895,4 +1748,253 @@ fn wave_args_to_invoke_args(
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     format!("{}/{}", cursor.layer, cursor.cursor)
+}
+
+fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
+    let error: anyhow::Result<
+        Option<golem_client::Error<golem_client::api::WorkerError>>,
+        serde_json::Error,
+    > = match status {
+        400 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error400(body),
+            ))
+        }),
+        401 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error401(body),
+            ))
+        }),
+        403 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error403(body),
+            ))
+        }),
+        404 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error404(body),
+            ))
+        }),
+        409 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error409(body),
+            ))
+        }),
+        500 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error500(body),
+            ))
+        }),
+        _ => Ok(None),
+    };
+
+    match error.ok().flatten() {
+        Some(error) => error.into(),
+        None => {
+            golem_client::Error::<golem_client::api::WorkerError>::unexpected(status, body.into())
+                .into()
+        }
+    }
+}
+
+struct WorkerConnection {
+    pings: JoinHandle<anyhow::Error>,
+    read_messages: JoinHandle<()>,
+}
+
+impl WorkerConnection {
+    async fn read_messages(self) {
+        let pings = self.pings;
+        let read_res = self.read_messages;
+        pin_mut!(pings, read_res);
+        future::select(pings, read_res).await;
+    }
+}
+
+async fn connect_to_worker(
+    worker_service_url: Url,
+    auth_token: Option<String>,
+    component_id: Uuid,
+    worker_name: String,
+    connect_options: WorkerConnectOptions,
+    allow_insecure: bool,
+    format: Format,
+) -> anyhow::Result<WorkerConnection> {
+    let mut url = worker_service_url;
+
+    let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
+
+    url.set_scheme(ws_schema)
+        .map_err(|()| anyhow!("Failed to set ws url schema".to_string()))?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow!("Failed to get url path for ws url".to_string()))?
+        .push("v1")
+        .push("components")
+        .push(&component_id.to_string())
+        .push("workers")
+        .push(&worker_name)
+        .push("connect");
+
+    debug!(url = url.as_str(), "Worker connect");
+
+    let mut request = url
+        .to_string()
+        .into_client_request()
+        .context("Failed to create request")?;
+
+    if let Some(token) = auth_token {
+        let headers = request.headers_mut();
+        headers.insert("Authorization", format!("Bearer {}", token).parse()?);
+    }
+
+    let connector = if allow_insecure {
+        Some(Connector::NativeTls(
+            TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true)
+                .build()?,
+        ))
+    } else {
+        None
+    };
+
+    let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
+        .await
+        .map_err(|e| match e {
+            tungstenite::error::Error::Http(http_error_response) => {
+                let status = http_error_response.status().as_u16();
+                match http_error_response.body().clone() {
+                    Some(body) => anyhow!(parse_worker_error(status, body)),
+                    None => anyhow!("Websocket connect failed, HTTP error: {}", status),
+                }
+            }
+            _ => anyhow!("Websocket connect failed, error: {}", e),
+        })?;
+
+    let (mut write, read) = ws_stream.split();
+
+    let pings = task::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(1)); // TODO configure
+        let mut cnt: i64 = 1;
+
+        loop {
+            interval.tick().await;
+
+            let ping_result = write
+                .send(Message::Ping(Bytes::from(cnt.to_ne_bytes().to_vec())))
+                .await
+                .context("Failed to send ping");
+
+            if let Err(err) = ping_result {
+                error!("{}", err);
+                break err;
+            }
+
+            cnt += 1;
+        }
+    });
+
+    let output = ConnectOutput::new(connect_options, format);
+
+    let read_messages = task::spawn(async move {
+        read.for_each(move |message_or_error| {
+            let output = output.clone();
+            async move {
+                match message_or_error {
+                    Err(error) => {
+                        error!("Error reading message: {}", error);
+                    }
+                    Ok(message) => {
+                        let instance_connect_msg = match message {
+                            Message::Text(str) => {
+                                let parsed: serde_json::Result<WorkerEvent> =
+                                    serde_json::from_str(str.as_str());
+
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
+                            }
+                            Message::Binary(data) => {
+                                let parsed: serde_json::Result<WorkerEvent> =
+                                    serde_json::from_slice(data.as_ref());
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
+                            }
+                            Message::Ping(_) => {
+                                trace!("Ignore ping");
+                                None
+                            }
+                            Message::Pong(_) => {
+                                trace!("Ignore pong");
+                                None
+                            }
+                            Message::Close(details) => {
+                                match details {
+                                    Some(closed_frame) => {
+                                        info!("Connection Closed: {}", closed_frame);
+                                    }
+                                    None => {
+                                        info!("Connection Closed");
+                                    }
+                                }
+                                None
+                            }
+                            Message::Frame(f) => {
+                                debug!("Ignored unexpected frame {f:?}");
+                                None
+                            }
+                        };
+
+                        match instance_connect_msg {
+                            None => {}
+                            Some(msg) => match msg {
+                                WorkerEvent::StdOut { timestamp, bytes } => {
+                                    output
+                                        .emit_stdout(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
+                                }
+                                WorkerEvent::StdErr { timestamp, bytes } => {
+                                    output
+                                        .emit_stderr(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
+                                }
+                                WorkerEvent::Log {
+                                    timestamp,
+                                    level,
+                                    context,
+                                    message,
+                                } => {
+                                    output.emit_log(timestamp, level, context, message);
+                                }
+                                WorkerEvent::Close => {} // TODO:
+                                WorkerEvent::InvocationStart { .. } => {} // TODO:
+                                WorkerEvent::InvocationFinished { .. } => {} // TODO:
+                            },
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+    });
+
+    Ok(WorkerConnection {
+        pings,
+        read_messages,
+    })
 }

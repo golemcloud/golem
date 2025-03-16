@@ -13,42 +13,60 @@
 // limitations under the License.
 
 use crate::model::component::{function_result_types, Component};
+use crate::model::text::fmt::log_error;
 use crate::model::wave::type_wave_compatible;
+use crate::model::IdempotencyKey;
 use anyhow::{anyhow, bail};
-use golem_client::model::InvokeResult;
+use golem_client::model::{InvokeResult, TypeAnnotatedValue};
 use golem_wasm_rpc::{print_type_annotated_value, protobuf};
 use serde::{Deserialize, Serialize};
-use serde_json::value::Value;
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum InvokeResultView {
-    #[serde(rename = "wave")]
-    Wave(Vec<String>),
-    #[serde(rename = "json")]
-    Json(Value),
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvokeResultView {
+    pub idempotency_key: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub result_json: Option<TypeAnnotatedValue>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub result_wave: Option<Vec<String>>,
 }
 
 impl InvokeResultView {
-    pub fn try_parse_or_json(
-        res: InvokeResult,
+    pub fn new_invoke(
+        idempotency_key: IdempotencyKey,
+        result: InvokeResult,
         component: &Component,
         function: &str,
-    ) -> anyhow::Result<InvokeResultView> {
-        Ok(
-            Self::try_parse(&res.result, component, function).unwrap_or_else(|_| {
-                let json = serde_json::to_value(&res.result).unwrap();
-                InvokeResultView::Json(json)
-            }),
-        )
+    ) -> Self {
+        let wave = match Self::try_parse_wave(&result.result, component, function) {
+            Ok(wave) => Some(wave),
+            Err(err) => {
+                log_error(format!("{}", err));
+                None
+            }
+        };
+
+        Self {
+            idempotency_key: idempotency_key.0,
+            result_json: Some(result.result),
+            result_wave: wave,
+        }
     }
 
-    fn try_parse(
-        res: &protobuf::type_annotated_value::TypeAnnotatedValue,
+    pub fn new_enqueue(idempotency_key: IdempotencyKey) -> Self {
+        Self {
+            idempotency_key: idempotency_key.0,
+            result_json: None,
+            result_wave: None,
+        }
+    }
+
+    fn try_parse_wave(
+        result: &TypeAnnotatedValue,
         component: &Component,
         function: &str,
-    ) -> anyhow::Result<InvokeResultView> {
-        let results = match res {
-            protobuf::type_annotated_value::TypeAnnotatedValue::Tuple(tuple) => tuple
+    ) -> anyhow::Result<Vec<String>> {
+        let results = match result {
+            TypeAnnotatedValue::Tuple(tuple) => tuple
                 .value
                 .iter()
                 .map(|t| t.clone().type_annotated_value.unwrap())
@@ -75,7 +93,7 @@ impl InvokeResultView {
             .map(Self::try_wave_format)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(InvokeResultView::Wave(wave))
+        Ok(wave)
     }
 
     fn try_wave_format(
@@ -85,105 +103,5 @@ impl InvokeResultView {
             Ok(res) => Ok(res),
             Err(err) => Err(anyhow!("Failed to format parsed value as wave: {err}")),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::vec;
-
-    use test_r::test;
-
-    use chrono::Utc;
-    use golem_wasm_ast::analysis::analysed_type::{bool, handle};
-    use golem_wasm_ast::analysis::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedResourceId,
-        AnalysedResourceMode,
-    };
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::TypedTuple;
-    use golem_wasm_rpc::TypeAnnotatedValueConstructors;
-    use uuid::Uuid;
-
-    use golem_client::model::{
-        AnalysedType, ComponentMetadata, ComponentType, InvokeResult, VersionedComponentId,
-    };
-
-    use crate::model::component::Component;
-    use crate::model::invoke_result_view::InvokeResultView;
-
-    fn parse(results: Vec<golem_wasm_rpc::Value>, types: Vec<AnalysedType>) -> InvokeResultView {
-        let typed_results = results
-            .iter()
-            .zip(&types)
-            .map(|(val, typ)| TypeAnnotatedValue::create(val, typ).unwrap())
-            .map(|tv| RootTypeAnnotatedValue {
-                type_annotated_value: Some(tv),
-            })
-            .collect::<Vec<_>>();
-
-        let typed_result = TypeAnnotatedValue::Tuple(TypedTuple {
-            typ: types.iter().map(|t| t.into()).collect(),
-            value: typed_results,
-        });
-
-        let func_res = types
-            .into_iter()
-            .map(|typ| AnalysedFunctionResult { name: None, typ })
-            .collect::<Vec<_>>();
-
-        let component = Component {
-            versioned_component_id: VersionedComponentId {
-                component_id: Uuid::max(),
-                version: 0,
-            },
-            component_name: "".into(),
-            component_size: 0,
-            component_type: ComponentType::Durable,
-            metadata: ComponentMetadata {
-                producers: Vec::new(),
-                exports: vec![AnalysedExport::Function(AnalysedFunction {
-                    name: "func-name".to_string(),
-                    parameters: Vec::new(),
-                    results: func_res,
-                })],
-                memories: vec![],
-                dynamic_linking: HashMap::new(),
-            },
-            project_id: None,
-            created_at: Some(Utc::now()),
-            files: vec![],
-        };
-
-        InvokeResultView::try_parse_or_json(
-            InvokeResult {
-                result: typed_result,
-            },
-            &component,
-            "func-name",
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn represented_as_wave() {
-        let res = parse(vec![golem_wasm_rpc::Value::Bool(true)], vec![bool()]);
-
-        assert!(matches!(res, InvokeResultView::Wave(_)))
-    }
-
-    #[test]
-    fn fallback_to_json() {
-        let res = parse(
-            vec![golem_wasm_rpc::Value::Handle {
-                uri: "".to_string(),
-                resource_id: 1,
-            }],
-            vec![handle(AnalysedResourceId(1), AnalysedResourceMode::Owned)],
-        );
-
-        assert!(matches!(res, InvokeResultView::Json(_)))
     }
 }

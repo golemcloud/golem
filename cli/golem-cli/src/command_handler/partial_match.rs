@@ -44,7 +44,7 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::ComponentNewMissingTemplate => {
-                self.ctx.app_handler().log_templates_help();
+                self.ctx.app_handler().log_templates_help(None, None);
                 Ok(())
             }
             GolemCliCommandPartialMatch::AppMissingSubcommandHelp => {
@@ -117,7 +117,7 @@ impl ErrorHandler {
                     };
 
                     logln(format!(
-                        "[{}]{} component: {} / worker: {}, {}",
+                        "[{}]{} component: {}/worker: {}, {}",
                         project_formatted,
                         "ok".green(),
                         worker_name_match.component_name.0.log_color_highlight(),

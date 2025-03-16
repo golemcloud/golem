@@ -145,6 +145,15 @@ impl Profile {
     }
 }
 
+impl HasFormatConfig for Profile {
+    fn format(&self) -> Option<Format> {
+        match self {
+            Profile::Golem(profile) => profile.format(),
+            Profile::GolemCloud(profile) => profile.format(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CloudProfile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -353,6 +362,7 @@ impl Config {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub component_url: Url,
     pub worker_url: Url,
