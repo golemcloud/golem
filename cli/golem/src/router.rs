@@ -51,6 +51,20 @@ pub fn start_router(
     let component_service_api = Arc::new(started_components.component_service.endpoint);
 
     let app = Route::new()
+        .at("/v1/api/deployments", worker_service_api.clone())
+        .at("/v1/api/deployments/*", worker_service_api.clone())
+        .at("/v1/api/security", worker_service_api.clone())
+        .at("/v1/api/security/*", worker_service_api.clone())
+        .at("/v1/app-plugins", component_service_api.clone())
+        .at("/v1/components", component_service_api.clone())
+        .at(
+            "/v1/components/:component_id",
+            component_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/download",
+            component_service_api.clone(),
+        )
         .at(
             "/v1/components/:component_id/invoke",
             worker_service_api.clone(),
@@ -60,6 +74,30 @@ pub fn start_router(
             worker_service_api.clone(),
         )
         .at(
+            "/v1/components/:component_id/latest",
+            component_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/latest/*",
+            component_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/updates",
+            component_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/upload",
+            component_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/versions",
+            component_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/versions/*",
+            component_service_api.clone(),
+        )
+        .at(
             "/v1/components/:component_id/workers",
             worker_service_api.clone(),
         )
@@ -67,11 +105,15 @@ pub fn start_router(
             "/v1/components/:component_id/workers/*",
             worker_service_api.clone(),
         )
-        .nest_no_strip("/v1/api", worker_service_api)
-        .nest_no_strip("/v1/components", component_service_api.clone())
-        .nest_no_strip("/v1/plugins", component_service_api.clone())
-        .nest("/metrics", metrics)
-        .nest_no_strip("/health_check", component_service_api)
+        .at(
+            "/v1/components/:component_id/workers/:worker_id/connect",
+            worker_service_api.clone(),
+        )
+        .at("/v1/library-plugins", component_service_api.clone())
+        .at("/v1/plugins", component_service_api.clone())
+        .at("/v1/plugins/*", component_service_api.clone())
+        .at("/metrics", metrics)
+        .at("/health_check", component_service_api)
         .with(OpenTelemetryMetrics::new())
         .with(Tracing);
 
