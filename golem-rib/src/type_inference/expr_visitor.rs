@@ -8,6 +8,16 @@ pub struct ExprVisitor {
 }
 
 impl ExprVisitor {
+    pub fn new() -> Self {
+        ExprVisitor {
+            queue: VecDeque::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     // Enqueue expressions in a bottom-up order,
     // but in the natural order of rib program
     // Given
@@ -48,6 +58,14 @@ impl ExprVisitor {
 
     pub fn pop_back(&mut self) -> Option<&mut Expr> {
         self.queue.pop_back().map(|ptr| unsafe { &mut *ptr })
+    }
+
+    pub fn push_back(&mut self, expr: *mut Expr) {
+        self.queue.push_back(expr);
+    }
+
+    pub fn push_front(&mut self, expr: *mut Expr) {
+        self.queue.push_front(expr);
     }
 
     pub fn pop_all(&mut self) -> Vec<&mut Expr> {

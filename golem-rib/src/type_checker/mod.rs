@@ -78,15 +78,12 @@ mod type_check_tests {
             let error_message = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 32
-            `3`
-            found within:
+            error in the following rib found at line 2, column 28
             `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}}`
-            cause: cannot determine the type
-            unresolved type at path: `x`
-            invalid argument to `foo`. expected record{a: record{aa: s32, ab: s32, ac: list<s32>, ad: record{ada: s32}, ae: tuple<s32, string>}, b: u64, c: list<s32>, d: record{da: s32}}
-            help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-            help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+            found within:
+            `foo({x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}})`
+            cause: type mismatch at path: `b`. expected u64
+            invalid argument to the function `foo`
             "#;
 
             assert_eq!(error_message, strip_spaces(expected));
