@@ -158,10 +158,7 @@ impl CloudProjectCommandHandler {
                 logln("");
                 bail!(HintError::ExpectedCloudProfile);
             }
-            (ProfileKind::Oss, None) => {
-                // TODO: from global flags
-                Ok(None)
-            }
+            (ProfileKind::Oss, None) => Ok(None),
             (ProfileKind::Cloud, Some(project_name)) => {
                 let project = self.project_by_name(account_id, project_name).await?;
                 Ok(Some(ProjectNameAndId {
@@ -188,6 +185,27 @@ impl CloudProjectCommandHandler {
         {
             Some(project) => Ok(project),
             None => Err(project_not_found(account_id, project_name)),
+        }
+    }
+
+    pub async fn selected_project_or_default(
+        &self,
+        project: Option<ProjectNameAndId>,
+    ) -> anyhow::Result<ProjectNameAndId> {
+        match project {
+            Some(project_name) => Ok(project_name),
+            None => self
+                .ctx
+                .golem_clients_cloud()
+                .await?
+                .project
+                .get_default_project()
+                .await
+                .map_service_error()
+                .map(|project| ProjectNameAndId {
+                    project_name: project.project_data.name.into(),
+                    project_id: project.project_id.into(),
+                }),
         }
     }
 }

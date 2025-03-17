@@ -532,12 +532,12 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionAddView(pub HttpApiDefinitionResponseData);
+    pub struct ApiDefinitionNewView(pub HttpApiDefinitionResponseData);
 
-    impl MessageWithFields for ApiDefinitionAddView {
+    impl MessageWithFields for ApiDefinitionNewView {
         fn message(&self) -> String {
             format!(
-                "Added API definition {} with version {}",
+                "Created API definition {} with version {}",
                 format_message_highlight(&self.0.id),
                 format_message_highlight(&self.0.version),
             )

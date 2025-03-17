@@ -950,30 +950,39 @@ impl ComponentCommandHandler {
                 //       and for now we should not blindly keep updating, so for now
                 //       only missing ones are handled
                 // TODO: add confirm
-                log_action(
-                    "Auto deploying",
-                    format!(
-                        "missing component {}",
-                        component_name.0.log_color_highlight()
-                    ),
-                );
-                self.ctx
-                    .component_handler()
-                    .deploy(
-                        project,
-                        vec![component_name.clone()],
-                        None,
-                        &ComponentSelectMode::CurrentDir,
-                        WorkerUpdateOrRedeployArgs::default(),
-                    )
-                    .await?;
-                self.ctx
-                    .component_handler()
-                    .component_by_name(project, component_name)
-                    .await?
-                    .ok_or_else(|| {
-                        anyhow!("Component ({}) not found after deployment", component_name)
-                    })
+
+                if self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_auto_deploy_component(component_name)?
+                {
+                    log_action(
+                        "Auto deploying",
+                        format!(
+                            "missing component {}",
+                            component_name.0.log_color_highlight()
+                        ),
+                    );
+                    self.ctx
+                        .component_handler()
+                        .deploy(
+                            project,
+                            vec![component_name.clone()],
+                            None,
+                            &ComponentSelectMode::CurrentDir,
+                            WorkerUpdateOrRedeployArgs::default(),
+                        )
+                        .await?;
+                    self.ctx
+                        .component_handler()
+                        .component_by_name(project, component_name)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow!("Component ({}) not found after deployment", component_name)
+                        })
+                } else {
+                    bail!(NonSuccessfulExit)
+                }
             }
         }
     }

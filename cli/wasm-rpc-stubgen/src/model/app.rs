@@ -1600,3 +1600,8 @@ mod app_builder {
         }
     }
 }
+
+pub enum CustomCommandError {
+    CommandNotFound,
+    CommandError { error: anyhow::Error },
+}

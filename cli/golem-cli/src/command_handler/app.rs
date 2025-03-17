@@ -23,14 +23,16 @@ use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_w
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::{ComponentName, WorkerUpdateMode};
 use anyhow::{anyhow, bail};
+use clap::{Command, Subcommand};
 use colored::Colorize;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,
 };
-use golem_wasm_rpc_stubgen::commands::app::ComponentSelectMode;
+use golem_wasm_rpc_stubgen::commands::app::{ComponentSelectMode, DynamicHelpSections};
 use golem_wasm_rpc_stubgen::fs;
 use golem_wasm_rpc_stubgen::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
+use golem_wasm_rpc_stubgen::model::app::CustomCommandError;
 use itertools::Itertools;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -104,8 +106,48 @@ impl AppCommandHandler {
                     );
                 }
 
+                let command = &command[0];
+
                 let app_ctx = self.ctx.app_context_lock().await;
-                app_ctx.some_or_err()?.custom_command(&command[0])?;
+                let app_ctx = app_ctx.some_or_err()?;
+                if let Err(error) = app_ctx.custom_command(command) {
+                    match error {
+                        CustomCommandError::CommandNotFound => {
+                            logln("");
+                            log_error(format!(
+                                "Request command app command {} not found!",
+                                command.log_color_error_highlight()
+                            ));
+                            logln("");
+
+                            app_ctx.log_dynamic_help(&DynamicHelpSections {
+                                components: false,
+                                custom_commands: true,
+                            })?;
+
+                            logln(
+                                "Available builtin commands:"
+                                    .log_color_help_group()
+                                    .to_string(),
+                            );
+                            for subcommand in
+                                AppSubcommand::augment_subcommands(Command::new("dummy"))
+                                    .get_subcommands()
+                            {
+                                logln(format!("  {}", subcommand.get_name().bold()));
+                            }
+                            logln("");
+
+                            bail!(NonSuccessfulExit)
+                        }
+                        CustomCommandError::CommandError { error } => {
+                            bail!(
+                                "Command {} failed: {error}",
+                                command.log_color_error_highlight()
+                            )
+                        }
+                    }
+                }
 
                 Ok(())
             }

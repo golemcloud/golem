@@ -21,7 +21,6 @@ pub mod plugin_cloud;
 pub mod plugin_manifest;
 pub mod project;
 pub mod text;
-pub mod to_cli;
 pub mod to_cloud;
 pub mod to_oss;
 pub mod wave;
@@ -272,7 +271,8 @@ impl From<String> for ApiDefinitionId {
     }
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+// TODO: given YAML is a JSON superset, we might want to get rid of this altogether
+#[derive(ValueEnum, Clone, Copy, Debug)]
 pub enum ApiDefinitionFileFormat {
     Json,
     Yaml,
@@ -576,6 +576,17 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
     }
 }
 
+impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
+    fn from(value: golem_cloud_client::model::ApiDeployment) -> Self {
+        ApiDeployment {
+            api_definitions: value.api_definitions.to_oss(),
+            project_id: Some(value.project_id),
+            site: value.site.to_oss(),
+            created_at: value.created_at,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiSecurityScheme {
     #[serde(rename = "schemeIdentifier")]
@@ -591,6 +602,18 @@ pub struct ApiSecurityScheme {
 
 impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
     fn from(value: golem_client::model::SecuritySchemeData) -> Self {
+        ApiSecurityScheme {
+            scheme_identifier: value.scheme_identifier,
+            client_id: value.client_id,
+            client_secret: value.client_secret,
+            redirect_url: value.redirect_url,
+            scopes: value.scopes,
+        }
+    }
+}
+
+impl From<golem_cloud_client::model::SecuritySchemeData> for ApiSecurityScheme {
+    fn from(value: golem_cloud_client::model::SecuritySchemeData) -> Self {
         ApiSecurityScheme {
             scheme_identifier: value.scheme_identifier,
             client_id: value.client_id,

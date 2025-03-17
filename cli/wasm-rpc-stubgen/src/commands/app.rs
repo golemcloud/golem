@@ -6,7 +6,8 @@ use crate::log::{
 };
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, BuildProfileName, ComponentName,
-    ComponentPropertiesExtensions, DependencyType, DependentComponent, DEFAULT_CONFIG_FILE_NAME,
+    ComponentPropertiesExtensions, CustomCommandError, DependencyType, DependentComponent,
+    DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::stub::{StubConfig, StubDefinition, WasmRpcOverride};
@@ -891,73 +892,75 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
 
         let should_colorize = SHOULD_COLORIZE.should_colorize();
 
-        if config.components && self.application.has_any_component() {
-            logln(format!(
-                "{}",
-                "Application components:".log_color_help_group()
-            ));
-            for component_name in self.application.component_names() {
-                let selected = self.selected_component_names.contains(component_name);
-                let effective_property_source = self
-                    .application
-                    .component_effective_property_source(component_name, self.profile());
-                logln(format!("  {}", component_name.as_str().bold()));
-                print_field(
-                    LABEL_SELECTED,
-                    if selected {
-                        "yes".green().bold().to_string()
-                    } else {
-                        "no".red().bold().to_string()
-                    },
-                );
-                print_field(
-                    LABEL_SOURCE,
-                    self.application
-                        .component_source(component_name)
-                        .to_string_lossy()
-                        .underline()
-                        .to_string(),
-                );
-                if let Some(template_name) = effective_property_source.template_name {
-                    print_field(LABEL_TEMPLATE, template_name.as_str().bold().to_string());
-                }
-                if let Some(selected_profile) = effective_property_source.profile {
+        if config.components {
+            if self.application.has_any_component() {
+                logln(format!(
+                    "{}",
+                    "Application components:".log_color_help_group()
+                ));
+                for component_name in self.application.component_names() {
+                    let selected = self.selected_component_names.contains(component_name);
+                    let effective_property_source = self
+                        .application
+                        .component_effective_property_source(component_name, self.profile());
+                    logln(format!("  {}", component_name.as_str().bold()));
                     print_field(
-                        LABEL_PROFILES,
-                        self.application
-                            .component_profiles(component_name)
-                            .iter()
-                            .map(|profile| {
-                                if selected_profile == profile {
-                                    if should_colorize {
-                                        profile.as_str().bold().underline().to_string()
-                                    } else {
-                                        format!("*{}", profile.as_str())
-                                    }
-                                } else {
-                                    profile.to_string()
-                                }
-                            })
-                            .join(", "),
+                        LABEL_SELECTED,
+                        if selected {
+                            "yes".green().bold().to_string()
+                        } else {
+                            "no".red().bold().to_string()
+                        },
                     );
-                }
-                let dependencies = self
-                    .application
-                    .component_wasm_rpc_dependencies(component_name);
-                if !dependencies.is_empty() {
-                    logln(format!("    {}:", LABEL_DEPENDENCIES));
-                    for dependency in dependencies {
-                        logln(format!(
-                            "      - {} ({})",
-                            dependency.name.as_str().bold(),
-                            dependency.dep_type.as_str(),
-                        ))
+                    print_field(
+                        LABEL_SOURCE,
+                        self.application
+                            .component_source(component_name)
+                            .to_string_lossy()
+                            .underline()
+                            .to_string(),
+                    );
+                    if let Some(template_name) = effective_property_source.template_name {
+                        print_field(LABEL_TEMPLATE, template_name.as_str().bold().to_string());
+                    }
+                    if let Some(selected_profile) = effective_property_source.profile {
+                        print_field(
+                            LABEL_PROFILES,
+                            self.application
+                                .component_profiles(component_name)
+                                .iter()
+                                .map(|profile| {
+                                    if selected_profile == profile {
+                                        if should_colorize {
+                                            profile.as_str().bold().underline().to_string()
+                                        } else {
+                                            format!("*{}", profile.as_str())
+                                        }
+                                    } else {
+                                        profile.to_string()
+                                    }
+                                })
+                                .join(", "),
+                        );
+                    }
+                    let dependencies = self
+                        .application
+                        .component_wasm_rpc_dependencies(component_name);
+                    if !dependencies.is_empty() {
+                        logln(format!("    {}:", LABEL_DEPENDENCIES));
+                        for dependency in dependencies {
+                            logln(format!(
+                                "      - {} ({})",
+                                dependency.name.as_str().bold(),
+                                dependency.dep_type.as_str(),
+                            ))
+                        }
                     }
                 }
+                logln("\n")
+            } else {
+                logln("No components found\n");
             }
-            logln("\n")
-        } else {
-            logln("No components found\n");
         }
 
         if config.custom_commands {
@@ -981,7 +984,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                 for command in commands {
                     logln(format!("  {}", command.bold()))
                 }
-                logln("\n")
+                logln("")
             }
         }
 
@@ -990,24 +993,10 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
         Ok(())
     }
 
-    pub fn custom_command(&self, command_name: &str) -> anyhow::Result<()> {
+    pub fn custom_command(&self, command_name: &str) -> Result<(), CustomCommandError> {
         let all_custom_commands = self.application.all_custom_commands(self.profile());
         if !all_custom_commands.contains(command_name) {
-            if all_custom_commands.is_empty() {
-                bail!(
-                    "Custom command {} not found, no custom command is available",
-                    command_name.log_color_error_highlight(),
-                );
-            } else {
-                bail!(
-                    "Custom command {} not found, available custom commands: {}",
-                    command_name.log_color_error_highlight(),
-                    all_custom_commands
-                        .iter()
-                        .map(|s| s.log_color_highlight())
-                        .join(", ")
-                );
-            }
+            return Err(CustomCommandError::CommandNotFound);
         }
 
         log_action(
@@ -1028,7 +1017,9 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             let _indent = LogIndent::new();
 
             for step in &command.value {
-                execute_external_command(self, &command.source, step)?;
+                if let Err(error) = execute_external_command(self, &command.source, step) {
+                    return Err(CustomCommandError::CommandError { error });
+                }
             }
         }
 
@@ -1048,11 +1039,13 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                 let _indent = LogIndent::new();
 
                 for step in custom_command {
-                    execute_external_command(
+                    if let Err(error) = execute_external_command(
                         self,
                         self.application.component_source_dir(component_name),
                         step,
-                    )?;
+                    ) {
+                        return Err(CustomCommandError::CommandError { error });
+                    }
                 }
             }
         }

@@ -32,6 +32,7 @@ use lenient_bool::LenientBool;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
@@ -83,6 +84,10 @@ pub struct GolemCliGlobalFlags {
     #[command(flatten)]
     pub verbosity: Verbosity,
 
+    /// Automatically answer "yes" to any interactive confirm questions
+    #[arg(long, short, global = true)]
+    pub yes: bool,
+
     // The flags below can only be set through env vars, as they are mostly
     // useful for testing, so we do not want to pollute the flag space with them
     #[arg(skip)]
@@ -96,6 +101,9 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub http_batch_size: Option<u64>,
+
+    #[arg(skip)]
+    pub auth_token: Option<Uuid>,
 }
 
 impl GolemCliGlobalFlags {
@@ -155,6 +163,15 @@ impl GolemCliGlobalFlags {
                     })
                     .unwrap(),
             )
+        }
+
+        if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
+            self.auth_token = Some(
+                auth_token
+                    .parse()
+                    .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")
+                    .unwrap(),
+            );
         }
 
         self
@@ -429,7 +446,7 @@ pub enum GolemCliSubcommand {
 }
 
 pub mod shared_args {
-    use crate::model::{ComponentName, WorkerName, WorkerUpdateMode};
+    use crate::model::{ComponentName, ProjectName, WorkerName, WorkerUpdateMode};
     use clap::Args;
     use golem_templates::model::GuestLanguage;
     use golem_wasm_rpc_stubgen::model::app::AppBuildStep;
@@ -526,6 +543,13 @@ pub mod shared_args {
         /// Delete and recreate existing workers
         #[clap(long, short, conflicts_with_all = ["update"])]
         pub redeploy_workers: bool,
+    }
+
+    #[derive(Debug, Args)]
+    pub struct ProjectNameOptionalArg {
+        /// Project Name
+        #[arg(long)]
+        pub project: Option<ProjectName>,
     }
 }
 
@@ -827,29 +851,168 @@ pub mod api {
     }
 
     pub mod definition {
+        use crate::command::shared_args::ProjectNameOptionalArg;
+        use crate::model::{
+            ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin,
+        };
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
-        pub enum ApiDefinitionSubcommand {}
+        pub enum ApiDefinitionSubcommand {
+            /// Import OpenAPI file as api definition
+            Import {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// The OpenAPI json or yaml file to be used as the api definition
+                ///
+                /// Json format expected unless file name ends up in `.yaml`
+                #[arg(value_hint = clap::ValueHint::FilePath)]
+                definition: PathBufOrStdin,
+                /// Api Definition format
+                #[arg(short, long)]
+                def_format: Option<ApiDefinitionFileFormat>,
+            },
+            /// Creates an API definition
+            New {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// The Golem API definition file
+                #[arg(value_hint = clap::ValueHint::FilePath)]
+                definition: PathBufOrStdin,
+                /// Api Definition format
+                #[arg(short, long)]
+                def_format: Option<ApiDefinitionFileFormat>,
+            },
+            /// Updates an api definition
+            Update {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// The Golem API definition file
+                #[arg(value_hint = clap::ValueHint::FilePath)]
+                definition: PathBufOrStdin,
+                /// Api Definition format
+                #[arg(short, long)]
+                def_format: Option<ApiDefinitionFileFormat>,
+            },
+            /// Retrieves metadata about an existing API definition
+            Get {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// Api definition id
+                #[arg(short, long)]
+                id: ApiDefinitionId,
+                /// Version of the api definition
+                #[arg(long)]
+                version: ApiDefinitionVersion,
+            },
+            /// Lists all API definitions
+            List {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// Api definition id to get all versions. Optional.
+                #[arg(short, long)]
+                id: Option<ApiDefinitionId>,
+            },
+            /// Deletes an existing API definition
+            Delete {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// Api definition id
+                #[arg(short, long)]
+                id: ApiDefinitionId,
+                /// Version of the api definition
+                #[arg(long)]
+                version: ApiDefinitionVersion,
+            },
+        }
     }
 
     pub mod deployment {
+        use crate::command::shared_args::ProjectNameOptionalArg;
+        use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion};
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
-        pub enum ApiDeploymentSubcommand {}
+        pub enum ApiDeploymentSubcommand {
+            /// Create or update deployment
+            Deploy {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// API definition IDs with version
+                #[arg(required = true)]
+                definitions: Vec<ApiDefinitionIdWithVersion>,
+                #[arg(long)]
+                /// API definition host
+                host: String,
+                /// Optional API definition subdomain
+                #[arg(long)]
+                subdomain: Option<String>,
+            },
+            /// Get API deployment
+            Get {
+                /// Deployment site
+                #[arg(value_name = "subdomain.host")]
+                site: String,
+            },
+            /// List API deployment for API definition
+            List {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// API definition id
+                definition: Option<ApiDefinitionId>,
+            },
+            /// Delete api deployment
+            Delete {
+                /// Deployment site
+                #[arg(value_name = "subdomain.host")]
+                site: String,
+            },
+        }
     }
 
     pub mod security_scheme {
+        use crate::command::shared_args::ProjectNameOptionalArg;
+        use crate::model::IdentityProviderType;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
-        pub enum ApiSecuritySchemeSubcommand {}
+        pub enum ApiSecuritySchemeSubcommand {
+            /// Create API Security Scheme
+            Create {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// Security Scheme ID
+                security_scheme_id: String,
+                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
+                #[arg(long)]
+                provider_type: IdentityProviderType,
+                /// Security Scheme client ID
+                #[arg(long)]
+                client_id: String,
+                /// Security Scheme client secret
+                #[arg(long)]
+                client_secret: String,
+                #[arg(long)]
+                /// Security Scheme Scopes, can be defined multiple times
+                scope: Vec<String>,
+                #[arg(long)]
+                /// Security Scheme redirect URL
+                redirect_url: String,
+            },
+
+            /// Get API security
+            Get {
+                #[command(flatten)]
+                project: ProjectNameOptionalArg,
+                /// Security Scheme ID
+                security_scheme_id: String,
+            },
+        }
     }
 
     pub mod cloud {
-        use crate::command::api::cloud::certificate::ApiCertificateSubcommand;
-        use crate::command::api::cloud::domain::ApiDomainSubcommand;
+        use crate::command::api::cloud::certificate::ApiCloudCertificateSubcommand;
+        use crate::command::api::cloud::domain::ApiCloudDomainSubcommand;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
@@ -857,12 +1020,12 @@ pub mod api {
             /// Manage Cloud API Domains
             Domain {
                 #[clap(subcommand)]
-                subcommand: ApiDomainSubcommand,
+                subcommand: ApiCloudDomainSubcommand,
             },
             /// Manage Cloud API Certificates
             Certificate {
                 #[clap(subcommand)]
-                subcommand: ApiCertificateSubcommand,
+                subcommand: ApiCloudCertificateSubcommand,
             },
         }
 
@@ -870,14 +1033,14 @@ pub mod api {
             use clap::Subcommand;
 
             #[derive(Debug, Subcommand)]
-            pub enum ApiDomainSubcommand {}
+            pub enum ApiCloudDomainSubcommand {}
         }
 
         pub mod certificate {
             use clap::Subcommand;
 
             #[derive(Debug, Subcommand)]
-            pub enum ApiCertificateSubcommand {}
+            pub enum ApiCloudCertificateSubcommand {}
         }
     }
 }

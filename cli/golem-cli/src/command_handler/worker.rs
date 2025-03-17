@@ -1204,6 +1204,14 @@ impl WorkerCommandHandler {
         );
         let _indent = LogIndent::new();
 
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_redeploy_workers(workers.len())?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
         for worker in workers {
             self.redeploy_worker(component_name, worker).await?;
         }
