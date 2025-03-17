@@ -51,6 +51,8 @@ pub fn start_router(
     let component_service_api = Arc::new(started_components.component_service.endpoint);
 
     let app = Route::new()
+        .at("/v1/api/definitions", worker_service_api.clone())
+        .at("/v1/api/definitions/*", worker_service_api.clone())
         .at("/v1/api/deployments", worker_service_api.clone())
         .at("/v1/api/deployments/*", worker_service_api.clone())
         .at("/v1/api/security", worker_service_api.clone())
