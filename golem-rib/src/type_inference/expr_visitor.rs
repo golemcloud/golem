@@ -74,7 +74,7 @@ impl<'a> ExprVisitor<'a> {
     }
 }
 
-fn enqueue_expr_top_down<'a>(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
+fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
     let mut stack: VecDeque<*mut Expr> = VecDeque::new();
 
     stack.push_back(expr);
@@ -262,7 +262,7 @@ fn enqueue_expr_top_down<'a>(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
     }
 }
 
-fn enqueue_expr_bottom_up<'a>(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
+fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
     let mut stack: VecDeque<*mut Expr> = VecDeque::new();
 
     stack.push_back(expr);
