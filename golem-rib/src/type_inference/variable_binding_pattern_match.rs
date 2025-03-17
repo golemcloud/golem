@@ -24,7 +24,7 @@ pub fn bind_variables_of_pattern_match(expr: &mut Expr) {
 }
 
 mod internal {
-    use crate::{ArmPattern, Expr, MatchArm, MatchIdentifier, VariableId};
+    use crate::{ArmPattern, Expr, ExprVisitor, MatchArm, MatchIdentifier, VariableId};
     use std::collections::VecDeque;
 
     pub(crate) fn bind_variables(
@@ -33,19 +33,16 @@ mod internal {
         match_identifiers: &mut [MatchIdentifier],
     ) -> usize {
         let mut index = previous_index;
-        let mut queue = VecDeque::new();
+        let mut queue = ExprVisitor::top_down(expr);
         let mut shadowed_let_binding = vec![];
-        queue.push_front(expr);
 
         // Start from the end
         while let Some(expr) = queue.pop_front() {
             match expr {
                 Expr::PatternMatch {
-                    predicate,
                     match_arms,
                     ..
                 } => {
-                    queue.push_front(predicate);
                     for arm in match_arms {
                         // We increment the index for each arm regardless of whether there is an identifier exist or not
                         index += 1;
@@ -56,9 +53,8 @@ mod internal {
                     }
                 }
                 Expr::Let {
-                    variable_id, expr, ..
+                    variable_id, ..
                 } => {
-                    queue.push_front(expr);
                     shadowed_let_binding.push(variable_id.name());
                 }
                 Expr::Identifier { variable_id, .. } => {
@@ -70,9 +66,7 @@ mod internal {
                     }
                 }
 
-                _ => {
-                    expr.visit_children_mut_top_down(&mut queue);
-                }
+                _ => {}
             }
         }
 
@@ -374,7 +368,7 @@ mod pattern_match_bindings {
                                             Expr::identifier_with_variable_id(
                                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                                     "x".to_string(),
-                                                    2,
+                                                    5,
                                                 )),
                                                 None,
                                             ),
@@ -384,7 +378,7 @@ mod pattern_match_bindings {
                                         Expr::identifier_with_variable_id(
                                             VariableId::MatchIdentifier(MatchIdentifier::new(
                                                 "x".to_string(),
-                                                2,
+                                                5,
                                             )),
                                             None,
                                         ),
