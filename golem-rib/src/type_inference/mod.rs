@@ -68,11 +68,11 @@ mod variant_resolution;
 mod worker_function_invocation;
 
 #[cfg(test)]
-mod type_inference_tests {
+mod tests {
     use crate::call_type::CallType;
     use crate::type_checker::Path;
     use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
-    use crate::type_inference::type_inference_tests::test_utils::{
+    use crate::type_inference::tests::test_utils::{
         call, concat, cond, equal_to, expr_block, get_analysed_exports, get_analysed_type_enum,
         get_analysed_type_variant, greater_than, greater_than_or_equal_to, identifier, less_than,
         less_than_or_equal_to, let_binding, number, option, pattern_match, plus, record, result,

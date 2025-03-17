@@ -13,17 +13,15 @@
 // limitations under the License.
 
 use crate::call_type::{CallType, InstanceCreationType};
-use crate::{Expr, InvalidWorkerName};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, InvalidWorkerName};
 
 // Capture all worker name and see if they are resolved to a string type
-pub fn check_invalid_worker_name(expr: &Expr) -> Result<(), InvalidWorkerName> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerName> {
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = queue.pop_back() {
-        match expr {
-            Expr::Call { call_type, .. } => match call_type {
+    while let Some(expr) = visitor.pop_back() {
+        if let Expr::Call { call_type, .. } = expr {
+            match call_type {
                 CallType::InstanceCreation(InstanceCreationType::Worker { worker_name }) => {
                     internal::check_worker_name(worker_name)?;
                 }
@@ -37,8 +35,7 @@ pub fn check_invalid_worker_name(expr: &Expr) -> Result<(), InvalidWorkerName> {
                 }) => {
                     internal::check_worker_name(worker_name)?;
                 }
-            },
-            _ => expr.visit_children_bottom_up(&mut queue),
+            }
         }
     }
 

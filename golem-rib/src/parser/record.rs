@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::rib_source_span::{GetSourcePosition, SourceSpan};
+use combine::parser::char::digit;
 use combine::{
     between, many1, parser,
     parser::char::{char as char_, letter, spaces},
     position, sep_by1, ParseError, Parser, Stream,
 };
-
-use super::rib_expr::rib_expr;
-use crate::expr::Expr;
-use crate::parser::errors::RibParseError;
-use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -70,7 +70,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    many1(letter().or(char_('_').or(char_('-'))))
+    many1(letter().or(char_('_').or(char_('-')).or(digit())))
         .map(|s: Vec<char>| s.into_iter().collect())
         .message("Invalid identifier")
 }

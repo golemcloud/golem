@@ -12,52 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, VariableId};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, VariableId};
 
 pub fn bind_variables_of_list_comprehension(expr: &mut Expr) {
-    let mut queue = VecDeque::new();
-    queue.push_front(expr);
+    let mut visitor = ExprVisitor::top_down(expr);
 
-    // Start from the end
-    while let Some(expr) = queue.pop_front() {
-        match expr {
-            Expr::ListComprehension {
-                iterated_variable,
-                iterable_expr,
-                yield_expr,
-                ..
-            } => {
-                queue.push_front(iterable_expr);
-                *iterated_variable =
-                    VariableId::list_comprehension_identifier(iterated_variable.name());
+    while let Some(expr) = visitor.pop_front() {
+        if let Expr::ListComprehension {
+            iterated_variable,
+            yield_expr,
+            ..
+        } = expr
+        {
+            *iterated_variable =
+                VariableId::list_comprehension_identifier(iterated_variable.name());
 
-                internal::process_yield_expr(iterated_variable, yield_expr)
-            }
-            _ => {
-                expr.visit_children_mut_top_down(&mut queue);
-            }
+            process_yield_expr(iterated_variable, yield_expr)
         }
     }
 }
 
-mod internal {
-    use crate::{Expr, VariableId};
-    use std::collections::VecDeque;
+fn process_yield_expr(variable: &mut VariableId, yield_expr: &mut Expr) {
+    let mut visitor = ExprVisitor::top_down(yield_expr);
 
-    pub(crate) fn process_yield_expr(variable: &mut VariableId, yield_expr: &mut Expr) {
-        let mut queue = VecDeque::new();
-
-        queue.push_front(yield_expr);
-
-        while let Some(expr) = queue.pop_front() {
-            match expr {
-                Expr::Identifier { variable_id, .. } => {
-                    if variable.name() == variable_id.name() {
-                        *variable_id = variable.clone();
-                    }
-                }
-                _ => expr.visit_children_mut_top_down(&mut queue),
+    while let Some(expr) = visitor.pop_front() {
+        if let Expr::Identifier { variable_id, .. } = expr {
+            if variable.name() == variable_id.name() {
+                *variable_id = variable.clone();
             }
         }
     }

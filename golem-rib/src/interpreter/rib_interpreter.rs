@@ -1397,12 +1397,12 @@ mod internal {
 }
 
 #[cfg(test)]
-mod interpreter_tests {
+mod tests {
     use std::collections::HashMap;
     use test_r::test;
 
     use super::*;
-    use crate::interpreter::rib_interpreter::interpreter_tests::test_utils::{
+    use crate::interpreter::rib_interpreter::tests::test_utils::{
         get_value_and_type, strip_spaces,
     };
     use crate::{
@@ -1633,6 +1633,130 @@ mod interpreter_tests {
 
         let result = interpreter.run(instructions).await.unwrap();
         assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_variable_scope_0() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let y = x + 2u64;
+               y
+            "#;
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), 3u64.into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_variable_scope_1() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let z = {foo : x};
+               let x = x + 2u64;
+               { bar: x, baz: z }
+            "#;
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![
+            field("bar", u64()),
+            field("baz", record(vec![field("foo", u64())])),
+        ]);
+
+        let expected = get_value_and_type(&analysed_type, r#"{ bar: 3, baz: { foo: 1 } }"#);
+
+        assert_eq!(result.get_val().unwrap(), expected);
+    }
+
+    #[test]
+    async fn test_interpreter_variable_scope_2() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let x = x;
+
+               let result1 = match some(x + 1:u64) {
+                  some(x) => x,
+                  none => x
+               };
+
+               let z: option<u64> = none;
+
+               let result2 = match z {
+                  some(x) => x,
+                  none => x
+               };
+
+               { result1: result1, result2: result2 }
+            "#;
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![field("result1", u64()), field("result2", u64())]);
+
+        let expected = get_value_and_type(&analysed_type, r#"{ result1: 2, result2: 1 }"#);
+
+        assert_eq!(result.get_val().unwrap(), expected);
+    }
+
+    #[test]
+    async fn test_interpreter_variable_scope_3() {
+        let rib_expr = r#"
+               let x: u64 = 1;
+               let x = x;
+
+               let result1 = match some(x + 1:u64) {
+                  some(x) => match some(x + 1:u64) {
+                     some(x) => x,
+                     none => x
+                  },
+                  none => x
+               };
+
+               let z: option<u64> = none;
+
+               let result2 = match z {
+                  some(x) => x,
+                  none => match some(x + 1:u64) {
+                     some(x) => x,
+                     none => x
+                  }
+               };
+
+               { result1: result1, result2: result2 }
+            "#;
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+
+        let mut interpreter = Interpreter::default();
+
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![field("result1", u64()), field("result2", u64())]);
+
+        let expected = get_value_and_type(&analysed_type, r#"{ result1: 3, result2: 2 }"#);
+
+        assert_eq!(result.get_val().unwrap(), expected);
     }
 
     #[test]
@@ -3993,6 +4117,118 @@ mod interpreter_tests {
         ]);
 
         assert_eq!(result_val, expected);
+    }
+
+    #[test]
+    async fn test_interpreter_durable_worker_with_resource_18() {
+        let expr = r#"
+
+            let initial = 1: u64;
+            let final = 5: u64;
+            let range = initial..final;
+            let worker = instance("my-worker");
+            let cart = worker.cart[golem:it]("bar");
+
+            for i in range {
+                yield cart.add-item(request.body);
+            };
+
+            "success"
+        "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+
+        let mut input = HashMap::new();
+
+        let rib_input_key = "request";
+        let rib_input_value = ValueAndType::new(
+            Value::Record(vec![Value::Record(vec![
+                Value::String("mac-book".to_string()),
+                Value::String("mac".to_string()),
+                Value::U32(1),
+                Value::F32(1.0),
+            ])]),
+            record(vec![field(
+                "body",
+                record(vec![
+                    field("name", str()),
+                    field("product-id", str()),
+                    field("quantity", u32()),
+                    field("price", f32()),
+                ]),
+            )]),
+        );
+
+        input.insert(rib_input_key.to_string(), rib_input_value);
+
+        let rib_input = RibInput::new(input);
+
+        let mut rib_interpreter = test_utils::interpreter_static_response(
+            &"success".into_value_and_type(),
+            Some(rib_input),
+        );
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_durable_worker_with_resource_19() {
+        let expr = r#"
+
+            let initial = 1: u64;
+            let final = 5: u64;
+            let range = initial..final;
+
+            for i in range {
+                let worker = instance("my-worker");
+                let cart = worker.cart[golem:it]("bar");
+                yield cart.add-item(request.body);
+            };
+
+            "success"
+        "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+
+        let mut input = HashMap::new();
+
+        let rib_input_key = "request";
+        let rib_input_value = ValueAndType::new(
+            Value::Record(vec![Value::Record(vec![
+                Value::String("mac-book".to_string()),
+                Value::String("mac".to_string()),
+                Value::U32(1),
+                Value::F32(1.0),
+            ])]),
+            record(vec![field(
+                "body",
+                record(vec![
+                    field("name", str()),
+                    field("product-id", str()),
+                    field("quantity", u32()),
+                    field("price", f32()),
+                ]),
+            )]),
+        );
+
+        input.insert(rib_input_key.to_string(), rib_input_value);
+
+        let rib_input = RibInput::new(input);
+
+        let mut rib_interpreter = test_utils::interpreter_static_response(
+            &"success".into_value_and_type(),
+            Some(rib_input),
+        );
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
     }
 
     mod test_utils {

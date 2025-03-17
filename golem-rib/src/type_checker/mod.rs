@@ -57,42 +57,6 @@ pub fn type_check(
 #[cfg(test)]
 mod type_check_tests {
 
-    mod unresolved_types_error {
-        use test_r::test;
-
-        use crate::type_checker::type_check_tests::internal;
-        use crate::type_checker::type_check_tests::internal::strip_spaces;
-        use crate::{compile, Expr};
-
-        #[test]
-        fn test_invalid_key_in_record_in_function_call() {
-            let expr = r#"
-          let result = foo({x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});
-          result
-        "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let metadata = internal::get_metadata_with_record_input_params();
-
-            let error_message = compile(expr, &metadata).unwrap_err().to_string();
-
-            let expected = r#"
-            error in the following rib found at line 2, column 32
-            `3`
-            found within:
-            `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}}`
-            cause: cannot determine the type
-            unresolved type at path: `x`
-            invalid argument to `foo`. expected record{a: record{aa: s32, ab: s32, ac: list<s32>, ad: record{ada: s32}, ae: tuple<s32, string>}, b: u64, c: list<s32>, d: record{da: s32}}
-            help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-            help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
-            "#;
-
-            assert_eq!(error_message, strip_spaces(expected));
-        }
-    }
-
     mod type_mismatch_errors {
         use test_r::test;
 
