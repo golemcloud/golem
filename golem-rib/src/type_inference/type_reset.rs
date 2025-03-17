@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredType};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, InferredType};
 
 pub fn reset_type_info(expr: &mut Expr) {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
     // Start from the end
-    while let Some(expr) = queue.pop_back() {
+    while let Some(expr) = visitor.pop_back() {
         expr.with_inferred_type_mut(InferredType::Unknown);
-        expr.visit_children_mut_bottom_up(&mut queue);
     }
 }

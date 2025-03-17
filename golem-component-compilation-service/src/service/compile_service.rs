@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::config::{CompileWorkerConfig, ComponentServiceConfig};
+use crate::config::{CompileWorkerConfig, ComponentServiceConfig, StaticComponentServiceConfig};
 use crate::model::*;
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
@@ -28,6 +28,7 @@ pub trait CompilationService {
         &self,
         component_id: ComponentId,
         component_version: u64,
+        sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), CompilationError>;
 }
 
@@ -37,7 +38,7 @@ pub struct ComponentCompilationServiceImpl {
 }
 
 impl ComponentCompilationServiceImpl {
-    pub fn new(
+    pub async fn new(
         compile_worker: CompileWorkerConfig,
         component_service: ComponentServiceConfig,
 
@@ -49,14 +50,14 @@ impl ComponentCompilationServiceImpl {
         let (upload_tx, upload_rx) = mpsc::channel(100);
 
         CompileWorker::start(
-            component_service.uri(),
-            component_service.access_token,
+            component_service.static_config(),
             compile_worker,
             engine.clone(),
             compiled_component_service.clone(),
             upload_tx,
             compile_rx,
-        );
+        )
+        .await;
 
         UploadWorker::start(compiled_component_service.clone(), upload_rx);
 
@@ -70,6 +71,7 @@ impl CompilationService for ComponentCompilationServiceImpl {
         &self,
         component_id: ComponentId,
         component_version: u64,
+        sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
             "Enqueueing compilation for component {}@{}",
@@ -81,6 +83,7 @@ impl CompilationService for ComponentCompilationServiceImpl {
                 id: component_id,
                 version: component_version,
             },
+            sender,
         };
         self.queue.send(request).await?;
         crate::metrics::increment_queue_length();

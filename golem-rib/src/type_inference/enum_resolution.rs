@@ -22,7 +22,7 @@ pub fn infer_enums(expr: &mut Expr, function_type_registry: &FunctionTypeRegistr
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
+    use crate::{Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
 
@@ -32,29 +32,26 @@ mod internal {
     ) {
         let enum_cases = enum_info.clone();
 
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    source_span,
-                    type_annotation,
-                } => {
-                    if enum_cases.cases.contains(&variable_id.name()) {
-                        *expr = Expr::Call {
-                            call_type: CallType::EnumConstructor(variable_id.name()),
-                            generic_type_parameter: None,
-                            args: vec![],
-                            inferred_type: inferred_type.clone(),
-                            source_span: source_span.clone(),
-                            type_annotation: type_annotation.clone(),
-                        };
-                    }
+        while let Some(expr) = visitor.pop_back() {
+            if let Expr::Identifier {
+                variable_id,
+                inferred_type,
+                source_span,
+                type_annotation,
+            } = expr
+            {
+                if enum_cases.cases.contains(&variable_id.name()) {
+                    *expr = Expr::Call {
+                        call_type: CallType::EnumConstructor(variable_id.name()),
+                        generic_type_parameter: None,
+                        args: vec![],
+                        inferred_type: inferred_type.clone(),
+                        source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
+                    };
                 }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
             }
         }
     }

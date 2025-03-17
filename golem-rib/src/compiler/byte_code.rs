@@ -99,7 +99,7 @@ mod internal {
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
-    use golem_wasm_ast::analysis::analysed_type::bool;
+    use golem_wasm_ast::analysis::analysed_type::{bool, tuple};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -362,6 +362,8 @@ mod internal {
                 inferred_type,
                 ..
             } => {
+                // If the call type is an instance creation (worker creation),
+                // this will push worker name expression.
                 for expr in args.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
@@ -382,8 +384,8 @@ mod internal {
 
                         // To be pushed to interpreter stack later
                         let worker_name = match worker {
-                            Some(_) => WorkerNamePresence::Absent,
-                            None => WorkerNamePresence::Present,
+                            Some(_) => WorkerNamePresence::Present,
+                            None => WorkerNamePresence::Absent,
                         };
 
                         instructions.push(RibIR::InvokeFunction(
@@ -511,16 +513,26 @@ mod internal {
                         }
                     }
 
-                    // There is nothing to do as such for instance creation
-                    CallType::InstanceCreation(instance_creation) => {
-                        instructions.push(RibIR::PushLit(match instance_creation {
-                            InstanceCreationType::Worker { .. } => {
-                                "create_worker".into_value_and_type()
+                    // if there are no arguments to instance that would typically mean
+                    // it's an ephemeral worker or a resource with no arguments
+                    // This would imply there is nothing in the stack of instructions related
+                    // to these cases. So to make sure expressions such as the following work,
+                    // we need to push a place holder in the stack that does nothing
+                    CallType::InstanceCreation(instance_creation_type) => {
+                        match instance_creation_type {
+                            InstanceCreationType::Worker { worker_name } => {
+                                if worker_name.is_none() {
+                                    // This would imply returning a instance representing ephemeral
+                                    // worker it simply returns an empty tuple. This is a corner case
+                                    // that a rib script hardly achieves anything from it,
+                                    // but we need to handle it
+                                    stack.push(ExprState::Instruction(RibIR::PushLit(
+                                        ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])),
+                                    )));
+                                }
                             }
-                            InstanceCreationType::Resource { .. } => {
-                                "create_resource".into_value_and_type()
-                            }
-                        }));
+                            InstanceCreationType::Resource { .. } => {}
+                        }
                     }
 
                     CallType::VariantConstructor(variant_name) => {

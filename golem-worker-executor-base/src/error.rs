@@ -360,6 +360,36 @@ impl TraceErrorKind for GolemError {
             GolemError::FileSystemError { .. } => "FileSystemError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match self {
+            GolemError::WorkerAlreadyExists { .. }
+            | GolemError::WorkerNotFound { .. }
+            | GolemError::PromiseNotFound { .. }
+            | GolemError::PromiseDropped { .. }
+            | GolemError::PromiseAlreadyCompleted { .. }
+            | GolemError::Interrupted { .. }
+            | GolemError::InvalidShardId { .. } => true,
+            GolemError::InvalidRequest { .. }
+            | GolemError::WorkerCreationFailed { .. }
+            | GolemError::FailedToResumeWorker { .. }
+            | GolemError::ComponentDownloadFailed { .. }
+            | GolemError::ComponentParseFailed { .. }
+            | GolemError::GetLatestVersionOfComponentFailed { .. }
+            | GolemError::InitialComponentFileDownloadFailed { .. }
+            | GolemError::ParamTypeMismatch { .. }
+            | GolemError::NoValueInMessage
+            | GolemError::ValueMismatch { .. }
+            | GolemError::UnexpectedOplogEntry { .. }
+            | GolemError::InvalidAccount
+            | GolemError::Runtime { .. }
+            | GolemError::PreviousInvocationFailed { .. }
+            | GolemError::PreviousInvocationExited
+            | GolemError::Unknown { .. }
+            | GolemError::ShardingNotReady
+            | GolemError::FileSystemError { .. } => false,
+        }
+    }
 }
 
 impl From<InterruptKind> for GolemError {

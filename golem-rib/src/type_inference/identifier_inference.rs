@@ -24,17 +24,29 @@ pub fn infer_all_identifiers(expr: &mut Expr) {
 }
 
 mod internal {
-    use crate::type_inference::identifier_inference::internal;
-    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+
+    use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
     use std::collections::{HashMap, VecDeque};
 
     pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
 
-        while let Some(expr) = queue.pop_back() {
+        // Given
+        //   `Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))`
+        // Expr::Num(1)
+        // Expr::Let(Variable(x), Expr::Num(1))
+        // Expr::Identifier(x)
+        // Expr::Call(func, Expr::Identifier(x))
+        // Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))
+        let mut visitor = ExprVisitor::bottom_up(expr);
+
+        // Popping it from the back results in `Expr::Identifier(x)` to be processed first
+        // in the above example.
+        while let Some(expr) = visitor.pop_back() {
             match expr {
+                // If identifier is inferred (probably because it was part of a function call befre),
+                // make sure to update the identifier inference lookup table.
+                // If lookup table is already updated, merge the inferred type
                 Expr::Identifier {
                     variable_id,
                     inferred_type,
@@ -46,6 +58,10 @@ mod internal {
 
                     identifier_lookup.update(variable_id.clone(), inferred_type.clone());
                 }
+
+                // In the above example `let x = 1`,
+                // since `x` is already inferred before, we propagate the type to the expression to `1`.
+                // Also if `1` is already inferred we update the identifier lookup table with x's type as 1's type
                 Expr::Let {
                     variable_id, expr, ..
                 } => {
@@ -53,20 +69,19 @@ mod internal {
                         expr.add_infer_type_mut(inferred_type);
                     }
                     identifier_lookup.update(variable_id.clone(), expr.inferred_type());
-                    queue.push_back(expr)
                 }
 
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => {}
             }
         }
     }
 
+    // This is more of an optional stage, as bottom-up type propagation would be enough
+    // but helps with reaching early fix point later down the line of compilation phases
     pub(crate) fn infer_all_identifiers_top_down(expr: &mut Expr) {
-        let mut identifier_lookup = internal::IdentifierTypeState::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
-
-        while let Some(expr) = queue.pop_front() {
+        let mut identifier_lookup = IdentifierTypeState::new();
+        let mut visitor = ExprVisitor::top_down(expr);
+        while let Some(expr) = visitor.pop_front() {
             match expr {
                 Expr::Let {
                     variable_id, expr, ..
@@ -76,7 +91,6 @@ mod internal {
                     }
 
                     identifier_lookup.update(variable_id.clone(), expr.inferred_type());
-                    queue.push_front(expr)
                 }
                 Expr::Identifier {
                     variable_id,
@@ -90,23 +104,19 @@ mod internal {
                     identifier_lookup.update(variable_id.clone(), inferred_type.clone());
                 }
 
-                _ => expr.visit_children_mut_top_down(&mut queue),
+                _ => {}
             }
         }
     }
 
     pub(crate) fn infer_match_binding_variables(expr: &mut Expr) {
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::PatternMatch { match_arms, .. } => {
-                    for arm in match_arms {
-                        process_arm(arm)
-                    }
+        while let Some(expr) = visitor.pop_back() {
+            if let Expr::PatternMatch { match_arms, .. } = expr {
+                for arm in match_arms {
+                    process_arm(arm)
                 }
-                _ => expr.visit_children_mut_top_down(&mut queue),
             }
         }
     }

@@ -1,4 +1,16 @@
-use std::sync::Arc;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
@@ -13,6 +25,7 @@ use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentSe
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ApiDeploymentApi {
@@ -38,42 +51,48 @@ impl ApiDeploymentApi {
         payload: Json<ApiDeploymentRequest>,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let record = recorded_http_api_request!("deploy", site = payload.0.site.to_string());
+
+        let response = self
+            .create_or_update_internal(payload.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn create_or_update_internal(
+        &self,
+        payload: ApiDeploymentRequest,
+    ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let namespace = DefaultNamespace::default();
-        let response = {
-            let api_definition_infos = payload
-                .api_definitions
-                .iter()
-                .map(|k| ApiDefinitionIdWithVersion {
-                    id: k.id.clone(),
-                    version: k.version.clone(),
-                })
-                .collect::<Vec<ApiDefinitionIdWithVersion>>();
+        let api_definition_infos = payload
+            .api_definitions
+            .iter()
+            .map(|k| ApiDefinitionIdWithVersion {
+                id: k.id.clone(),
+                version: k.version.clone(),
+            })
+            .collect::<Vec<ApiDefinitionIdWithVersion>>();
 
-            let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
-                namespace: namespace.clone(),
-                api_definition_keys: api_definition_infos,
-                site: payload.site.clone(),
-            };
-
-            self.deployment_service
-                .deploy(&api_deployment, &EmptyAuthCtx::default())
-                .instrument(record.span.clone())
-                .await?;
-
-            let data = self
-                .deployment_service
-                .get_by_site(&ApiSiteString::from(&payload.site))
-                .instrument(record.span.clone())
-                .await?;
-
-            let deployment = data.ok_or(ApiEndpointError::internal(safe(
-                "Failed to verify the deployment".to_string(),
-            )))?;
-
-            Ok(Json(deployment.into()))
+        let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
+            namespace: namespace.clone(),
+            api_definition_keys: api_definition_infos,
+            site: payload.site.clone(),
         };
 
-        record.result(response)
+        self.deployment_service
+            .deploy(&api_deployment, &EmptyAuthCtx::default())
+            .await?;
+
+        let data = self
+            .deployment_service
+            .get_by_site(&ApiSiteString::from(&payload.site))
+            .await?;
+
+        let deployment = data.ok_or(ApiEndpointError::internal(safe(
+            "Failed to verify the deployment".to_string(),
+        )))?;
+
+        Ok(Json(deployment.into()))
     }
 
     /// Get one or more API deployments
@@ -93,18 +112,23 @@ impl ApiDeploymentApi {
                 .unwrap_or(ApiDefinitionId("".to_string()))
                 .to_string(),
         );
-        let response = {
-            let api_definition_id = api_definition_id_query.0;
-
-            let values = self
-                .deployment_service
-                .get_by_id(&DefaultNamespace::default(), api_definition_id)
-                .await?;
-
-            Ok(Json(values.iter().map(|v| v.clone().into()).collect()))
-        };
-
+        let response = self
+            .list_internal(api_definition_id_query.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn list_internal(
+        &self,
+        api_definition_id: Option<ApiDefinitionId>,
+    ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
+        let values = self
+            .deployment_service
+            .get_by_id(&DefaultNamespace::default(), api_definition_id)
+            .await?;
+
+        Ok(Json(values.iter().map(|v| v.clone().into()).collect()))
     }
 
     /// Get API deployment by site
@@ -113,21 +137,24 @@ impl ApiDeploymentApi {
     #[oai(path = "/:site", method = "get", operation_id = "get_deployment")]
     async fn get(&self, site: Path<String>) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let record = recorded_http_api_request!("get_deployment", site = site.0);
-        let response = {
-            let site = site.0;
 
-            let value = self
-                .deployment_service
-                .get_by_site(&ApiSiteString(site))
-                .await?
-                .ok_or(ApiEndpointError::not_found(safe(
-                    "Api deployment not found".to_string(),
-                )))?;
-
-            Ok(Json(value.into()))
-        };
-
+        let response = self
+            .get_internal(site.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn get_internal(&self, site: String) -> Result<Json<ApiDeployment>, ApiEndpointError> {
+        let value = self
+            .deployment_service
+            .get_by_site(&ApiSiteString(site))
+            .await?
+            .ok_or(ApiEndpointError::not_found(safe(
+                "Api deployment not found".to_string(),
+            )))?;
+
+        Ok(Json(value.into()))
     }
 
     /// Delete API deployment by site
@@ -136,16 +163,19 @@ impl ApiDeploymentApi {
     #[oai(path = "/:site", method = "delete", operation_id = "delete_deployment")]
     async fn delete(&self, site: Path<String>) -> Result<Json<String>, ApiEndpointError> {
         let record = recorded_http_api_request!("delete_deployment", site = site.0);
-        let response = {
-            let site = site.0;
 
-            self.deployment_service
-                .delete(&DefaultNamespace::default(), &ApiSiteString(site))
-                .await?;
-
-            Ok(Json("API deployment deleted".to_string()))
-        };
-
+        let response = self
+            .delete_internal(site.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn delete_internal(&self, site: String) -> Result<Json<String>, ApiEndpointError> {
+        self.deployment_service
+            .delete(&DefaultNamespace::default(), &ApiSiteString(site))
+            .await?;
+
+        Ok(Json("API deployment deleted".to_string()))
     }
 }

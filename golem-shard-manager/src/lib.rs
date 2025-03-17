@@ -270,12 +270,14 @@ pub async fn run(
             HealthCheckMode::Grpc(_) => Arc::new(GrpcHealthCheck::new(
                 worker_executors.clone(),
                 shard_manager_config.worker_executors.retries.clone(),
+                shard_manager_config.health_check.silent,
             )),
             #[cfg(feature = "kubernetes")]
             HealthCheckMode::K8s(HealthCheckK8sConfig { namespace }) => Arc::new(
                 healthcheck::kubernetes::KubernetesHealthCheck::new(
                     namespace.clone(),
                     shard_manager_config.worker_executors.retries.clone(),
+                    shard_manager_config.health_check.silent,
                 )
                 .await
                 .expect("Failed to initialize K8s health checker"),

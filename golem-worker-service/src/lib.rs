@@ -146,9 +146,7 @@ impl WorkerService {
     ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
 
-        let app = api::combined_routes(prometheus_registry, &self.services)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+        let app = api::combined_routes(prometheus_registry, &self.services);
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.port));
