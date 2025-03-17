@@ -70,41 +70,50 @@ impl ComponentApi {
             component_name = payload.name.0,
             component_id = component_id.to_string()
         );
-        let response = {
-            let data = payload.component.into_vec().await?;
-            let files_file = payload.files.map(|f| f.into_file());
-
-            let files = files_file
-                .zip(payload.files_permissions)
-                .map(
-                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
-                        archive,
-                        files: permissions.values,
-                    },
-                );
-
-            let component_name = payload.name;
-            self.component_service
-                .create(
-                    &component_id,
-                    &component_name,
-                    payload.component_type.unwrap_or(ComponentType::Durable),
-                    data,
-                    files,
-                    vec![],
-                    payload
-                        .dynamic_linking
-                        .unwrap_or_default()
-                        .0
-                        .dynamic_linking,
-                    &DefaultComponentOwner,
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(|response| Json(response.into()))
-        };
+        let response = self
+            .create_component_internal(payload, &component_id)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn create_component_internal(
+        &self,
+        payload: UploadPayload,
+        component_id: &ComponentId,
+    ) -> Result<Json<Component>> {
+        let data = payload.component.into_vec().await?;
+        let files_file = payload.files.map(|f| f.into_file());
+
+        let files = files_file
+            .zip(payload.files_permissions)
+            .map(
+                |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                    archive,
+                    files: permissions.values,
+                },
+            );
+
+        let component_name = payload.name;
+        let response = self
+            .component_service
+            .create(
+                component_id,
+                &component_name,
+                payload.component_type.unwrap_or(ComponentType::Durable),
+                data,
+                files,
+                vec![],
+                payload
+                    .dynamic_linking
+                    .unwrap_or_default()
+                    .0
+                    .dynamic_linking,
+                &DefaultComponentOwner,
+            )
+            .await?;
+
+        Ok(Json(response.into()))
     }
 
     /// Update a component
@@ -126,23 +135,33 @@ impl ComponentApi {
             component_id = component_id.0.to_string()
         );
 
-        let response = {
-            let data = wasm.0.into_vec().await?;
-            self.component_service
-                .update(
-                    &component_id.0,
-                    data,
-                    component_type.0,
-                    None,
-                    HashMap::new(),
-                    &DefaultComponentOwner,
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(|response| Json(response.into()))
-        };
+        let response = self
+            .upload_component_internal(component_id.0, wasm.0, component_type.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn upload_component_internal(
+        &self,
+        component_id: ComponentId,
+        wasm: Body,
+        component_type: Option<ComponentType>,
+    ) -> Result<Json<Component>> {
+        let data = wasm.into_vec().await?;
+        let response = self
+            .component_service
+            .update(
+                &component_id,
+                data,
+                component_type,
+                None,
+                HashMap::new(),
+                &DefaultComponentOwner,
+            )
+            .await?;
+
+        Ok(Json(response.into()))
     }
 
     /// Update a component
@@ -160,38 +179,47 @@ impl ComponentApi {
             "update_component",
             component_id = component_id.0.to_string()
         );
-        let response = {
-            let data = payload.component.into_vec().await?;
-            let files_file = payload.files.map(|f| f.into_file());
-
-            let files = files_file
-                .zip(payload.files_permissions)
-                .map(
-                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
-                        archive,
-                        files: permissions.values,
-                    },
-                );
-
-            self.component_service
-                .update(
-                    &component_id.0,
-                    data,
-                    payload.component_type,
-                    files,
-                    payload
-                        .dynamic_linking
-                        .unwrap_or_default()
-                        .0
-                        .dynamic_linking,
-                    &DefaultComponentOwner,
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(|response| Json(response.into()))
-        };
+        let response = self
+            .update_component_internal(component_id.0, payload)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn update_component_internal(
+        &self,
+        component_id: ComponentId,
+        payload: UpdatePayload,
+    ) -> Result<Json<Component>> {
+        let data = payload.component.into_vec().await?;
+        let files_file = payload.files.map(|f| f.into_file());
+
+        let files = files_file
+            .zip(payload.files_permissions)
+            .map(
+                |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                    archive,
+                    files: permissions.values,
+                },
+            );
+
+        let response = self
+            .component_service
+            .update(
+                &component_id,
+                data,
+                payload.component_type,
+                files,
+                payload
+                    .dynamic_linking
+                    .unwrap_or_default()
+                    .0
+                    .dynamic_linking,
+                &DefaultComponentOwner,
+            )
+            .await?;
+
+        Ok(Json(response.into()))
     }
 
     /// Download a component
@@ -212,18 +240,27 @@ impl ComponentApi {
             component_id = component_id.0.to_string(),
             version = version.0.map(|v| v.to_string())
         );
+
         let response = self
-            .component_service
-            .download_stream(&component_id.0, version.0, &DefaultComponentOwner)
+            .download_component_internal(component_id.0, version.0)
             .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|bytes| {
-                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                })))
-            });
+            .await;
         record.result(response)
+    }
+
+    async fn download_component_internal(
+        &self,
+        component_id: ComponentId,
+        version: Option<u64>,
+    ) -> Result<Binary<Body>> {
+        let bytes = self
+            .component_service
+            .download_stream(&component_id, version, &DefaultComponentOwner)
+            .await?;
+
+        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        }))))
     }
 
     /// Get the metadata for all component versions
@@ -252,14 +289,22 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
-            .get(&component_id.0, &DefaultComponentOwner)
+            .get_component_metadata_all_versions_internal(component_id.0)
             .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|response| Json(response.into_iter().map(|c| c.into()).collect()));
-
+            .await;
         record.result(response)
+    }
+
+    async fn get_component_metadata_all_versions_internal(
+        &self,
+        component_id: ComponentId,
+    ) -> Result<Json<Vec<Component>>> {
+        let response = self
+            .component_service
+            .get(&component_id, &DefaultComponentOwner)
+            .await?;
+
+        Ok(Json(response.into_iter().map(|c| c.into()).collect()))
     }
 
     /// Get the version of a given component
@@ -281,28 +326,37 @@ impl ComponentApi {
             version = version.0,
         );
 
-        let response = {
-            let version_int = Self::parse_version_path_segment(&version.0)?;
-
-            let versioned_component_id = VersionedComponentId {
-                component_id: component_id.0,
-                version: version_int,
-            };
-
-            self.component_service
-                .get_by_version(&versioned_component_id, &DefaultComponentOwner)
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .and_then(|response| match response {
-                    Some(component) => Ok(Json(component.into())),
-                    None => Err(ComponentError::NotFound(Json(ErrorBody {
-                        error: "Component not found".to_string(),
-                    }))),
-                })
-        };
+        let response = self
+            .get_component_metadata_internal(component_id.0, version.0)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_component_metadata_internal(
+        &self,
+        component_id: ComponentId,
+        version: String,
+    ) -> Result<Json<Component>> {
+        let version_int = Self::parse_version_path_segment(&version)?;
+
+        let versioned_component_id = VersionedComponentId {
+            component_id,
+            version: version_int,
+        };
+
+        let response = self
+            .component_service
+            .get_by_version(&versioned_component_id, &DefaultComponentOwner)
+            .await?;
+
+        match response {
+            Some(component) => Ok(Json(component.into())),
+            None => Err(ComponentError::NotFound(Json(ErrorBody {
+                error: "Component not found".to_string(),
+            }))),
+        }
     }
 
     /// Get the latest version of a given component
@@ -323,19 +377,27 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
-            .get_latest_version(&component_id.0, &DefaultComponentOwner)
+            .get_latest_component_metadata_internal(component_id.0)
             .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .and_then(|response| match response {
-                Some(component) => Ok(Json(component.into())),
-                None => Err(ComponentError::NotFound(Json(ErrorBody {
-                    error: "Component not found".to_string(),
-                }))),
-            });
-
+            .await;
         record.result(response)
+    }
+
+    async fn get_latest_component_metadata_internal(
+        &self,
+        component_id: ComponentId,
+    ) -> Result<Json<Component>> {
+        let response = self
+            .component_service
+            .get_latest_version(&component_id, &DefaultComponentOwner)
+            .await?;
+
+        match response {
+            Some(component) => Ok(Json(component.into())),
+            None => Err(ComponentError::NotFound(Json(ErrorBody {
+                error: "Component not found".to_string(),
+            }))),
+        }
     }
 
     /// Get all components
@@ -352,14 +414,21 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
-            .find_by_name(component_name.0, &DefaultComponentOwner)
+            .get_components_internal(component_name.0)
             .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|components| Json(components.into_iter().map(|c| c.into()).collect()));
-
+            .await;
         record.result(response)
+    }
+
+    async fn get_components_internal(
+        &self,
+        component_name: Option<ComponentName>,
+    ) -> Result<Json<Vec<Component>>> {
+        let components = self
+            .component_service
+            .find_by_name(component_name, &DefaultComponentOwner)
+            .await?;
+        Ok(Json(components.into_iter().map(|c| c.into()).collect()))
     }
 
     /// Gets the list of plugins installed for the given component version
@@ -379,20 +448,30 @@ impl ComponentApi {
             version = version.0,
         );
 
-        let version_int = Self::parse_version_path_segment(&version.0)?;
+        let response = self
+            .get_installed_plugins_internal(component_id.0, version.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_installed_plugins_internal(
+        &self,
+        component_id: ComponentId,
+        version: String,
+    ) -> Result<Json<Vec<PluginInstallation>>> {
+        let version_int = Self::parse_version_path_segment(&version)?;
 
         let response = self
             .component_service
             .get_plugin_installations_for_component(
                 &DefaultComponentOwner,
-                &component_id.0,
+                &component_id,
                 version_int,
             )
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .await?;
 
-        record.result(response)
+        Ok(Json(response))
     }
 
     /// Installs a new plugin for this component
@@ -413,35 +492,48 @@ impl ComponentApi {
             plugin_version = plugin.version.clone()
         );
 
+        let response = self
+            .install_plugin_internal(component_id.0, plugin.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn install_plugin_internal(
+        &self,
+        component_id: ComponentId,
+        plugin: PluginInstallationCreation,
+    ) -> Result<Json<PluginInstallation>> {
         let plugin_definition = self
             .plugin_service
             .get(&DefaultPluginOwner, &plugin.name, &plugin.version)
             .await?;
 
-        let response = if let Some(plugin_definition) = plugin_definition {
-            if plugin_definition.scope.valid_in_component(&component_id.0) {
-                self.component_service
+        if let Some(plugin_definition) = plugin_definition {
+            if plugin_definition.scope.valid_in_component(&component_id) {
+                let response = self
+                    .component_service
                     .create_plugin_installation_for_component(
                         &DefaultComponentOwner,
-                        &component_id.0,
-                        plugin.0,
+                        &component_id,
+                        plugin,
                     )
-                    .await
+                    .await?;
+
+                Ok(Json(response))
             } else {
                 Err(PluginError::InvalidScope {
                     plugin_name: plugin.name.clone(),
                     plugin_version: plugin.version.clone(),
-                    details: format!("not available for component {}", component_id.0),
-                })
+                    details: format!("not available for component {}", component_id),
+                })?
             }
         } else {
             Err(PluginError::PluginNotFound {
                 plugin_name: plugin.name.clone(),
                 plugin_version: plugin.version.clone(),
-            })
-        };
-
-        record.result(response.map_err(|e| e.into()).map(Json))
+            })?
+        }
     }
 
     /// Updates the priority or parameters of a plugin installation
@@ -463,18 +555,27 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
+            .update_installed_plugin_internal(component_id.0, installation_id.0, update.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn update_installed_plugin_internal(
+        &self,
+        component_id: ComponentId,
+        installation_id: PluginInstallationId,
+        update: PluginInstallationUpdate,
+    ) -> Result<Json<Empty>> {
+        self.component_service
             .update_plugin_installation_for_component(
                 &DefaultComponentOwner,
-                &installation_id.0,
-                &component_id.0,
-                update.0,
+                &installation_id,
+                &component_id,
+                update,
             )
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(Empty {}));
-
-        record.result(response)
+            .await?;
+        Ok(Json(Empty {}))
     }
 
     /// Uninstalls a plugin from this component
@@ -495,17 +596,26 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
+            .uninstall_plugin_internal(component_id.0, installation_id.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn uninstall_plugin_internal(
+        &self,
+        component_id: ComponentId,
+        installation_id: PluginInstallationId,
+    ) -> Result<Json<Empty>> {
+        self.component_service
             .delete_plugin_installation_for_component(
                 &DefaultComponentOwner,
-                &installation_id.0,
-                &component_id.0,
+                &installation_id,
+                &component_id,
             )
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(Empty {}));
+            .await?;
 
-        record.result(response)
+        Ok(Json(Empty {}))
     }
 
     /// Download file in a Component
@@ -525,26 +635,35 @@ impl ComponentApi {
             component_id = component_id.0.to_string()
         );
 
-        let version_int = Self::parse_version_path_segment(&version.0)?;
-
         let response = self
-            .component_service
-            .get_file_contents(
-                &component_id.0,
-                version_int,
-                file_key.0.as_str(),
-                &DefaultComponentOwner,
-            )
-            .await
-            .map_err(|e| e.into())
-            .map(|bytes| {
-                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                })))
-            });
-
+            .download_component_file_internal(component_id.0, version.0, file_key.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
     }
+
+    async fn download_component_file_internal(
+        &self,
+        component_id: ComponentId,
+        version: String,
+        file_key: String,
+    ) -> Result<Binary<Body>> {
+        let version_int = Self::parse_version_path_segment(&version)?;
+
+        let bytes = self
+            .component_service
+            .get_file_contents(
+                &component_id,
+                version_int,
+                file_key.as_str(),
+                &DefaultComponentOwner,
+            )
+            .await?;
+        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        }))))
+    }
+
     fn parse_version_path_segment(version: &str) -> Result<u64> {
         version.parse::<u64>().map_err(|_| {
             ComponentError::BadRequest(Json(ErrorsBody {

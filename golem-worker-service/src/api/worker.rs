@@ -1,5 +1,21 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::service::{component::ComponentService, worker::WorkerService};
+use futures::StreamExt;
 use futures_util::TryStreamExt;
+use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
@@ -13,15 +29,22 @@ use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::http_invocation_context::grpc_invocation_context_from_request;
-use golem_worker_service_base::service::worker::InvocationParameters;
+use golem_worker_service_base::service::worker::{
+    proxy_worker_connection, InvocationParameters, WorkerStream,
+};
 use payload::Binary;
+use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::{Body, Request};
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
+use std::time::Duration;
 use tap::TapFallible;
 use tracing::Instrument;
+
+const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
+const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct WorkerApi {
     pub component_service: ComponentService,
@@ -56,44 +79,49 @@ impl WorkerApi {
             name = request.name
         );
 
-        let response = {
-            let component_id = component_id.0;
-            let latest_component = self
-                .component_service
-                .get_latest(&component_id, &EmptyAuthCtx::default())
-                .instrument(record.span.clone())
-                .await
-                .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-                .map_err(|error| {
-                    WorkerApiBaseError::NotFound(Json(ErrorBody {
-                        error: format!(
-                            "Couldn't retrieve the component: {}. error: {}",
-                            &component_id, error
-                        ),
-                    }))
-                })?;
-
-            let WorkerCreationRequest { name, args, env } = request.0;
-
-            let worker_id = make_worker_id(component_id, name)?;
-            let worker_id = self
-                .worker_service
-                .create(
-                    &worker_id,
-                    latest_component.versioned_component_id.version,
-                    args,
-                    env,
-                    empty_worker_metadata(),
-                )
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(WorkerCreationResponse {
-                worker_id,
-                component_version: latest_component.versioned_component_id.version,
-            }))
-        };
-
+        let response = self
+            .launch_new_worker_internal(component_id.0, request.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn launch_new_worker_internal(
+        &self,
+        component_id: ComponentId,
+        request: WorkerCreationRequest,
+    ) -> Result<Json<WorkerCreationResponse>> {
+        let latest_component = self
+            .component_service
+            .get_latest(&component_id, &EmptyAuthCtx::default())
+            .await
+            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+            .map_err(|error| {
+                WorkerApiBaseError::NotFound(Json(ErrorBody {
+                    error: format!(
+                        "Couldn't retrieve the component: {}. error: {}",
+                        &component_id, error
+                    ),
+                }))
+            })?;
+
+        let WorkerCreationRequest { name, args, env } = request;
+
+        let worker_id = make_worker_id(component_id, name)?;
+        let worker_id = self
+            .worker_service
+            .create(
+                &worker_id,
+                latest_component.versioned_component_id.version,
+                args,
+                env,
+                empty_worker_metadata(),
+            )
+            .await?;
+        Ok(Json(WorkerCreationResponse {
+            worker_id,
+            component_version: latest_component.versioned_component_id.version,
+        }))
     }
 
     /// Delete a worker
@@ -110,8 +138,10 @@ impl WorkerApi {
         worker_name: Path<String>,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
         let record =
             recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
+
         let response = self
             .worker_service
             .delete(&worker_id, empty_worker_metadata())
@@ -149,40 +179,59 @@ impl WorkerApi {
             function = function.0
         );
 
-        let invocation_context = grpc_invocation_context_from_request(request);
+        let response = self
+            .invoke_and_await_function_without_name_internal(
+                request,
+                worker_id,
+                idempotency_key.0,
+                function.0,
+                params.0,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
 
+    async fn invoke_and_await_function_without_name_internal(
+        &self,
+        request: &Request,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        params: InvokeParameters,
+    ) -> Result<Json<InvokeResult>> {
+        let invocation_context = grpc_invocation_context_from_request(request);
         let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
 
-        let response = match params {
+        let result = match params {
             InvocationParameters::TypedProtoVals(vals) => {
-                self.worker_service.validate_and_invoke_and_await_typed(
-                    &worker_id,
-                    idempotency_key.0,
-                    function.0,
-                    vals,
-                    Some(invocation_context),
-                    empty_worker_metadata(),
-                )
+                self.worker_service
+                    .validate_and_invoke_and_await_typed(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        vals,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
             }
             InvocationParameters::RawJsonStrings(jsons) => {
-                self.worker_service.invoke_and_await_json(
-                    &worker_id,
-                    idempotency_key.0,
-                    function.0,
-                    jsons,
-                    Some(invocation_context),
-                    empty_worker_metadata(),
-                )
+                self.worker_service
+                    .invoke_and_await_json(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        jsons,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
             }
-        }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|result| Json(InvokeResult { result }));
-
-        record.result(response)
+        };
+        Ok(Json(InvokeResult { result }))
     }
 
     /// Invoke a function and await its resolution
@@ -211,39 +260,61 @@ impl WorkerApi {
             function = function.0
         );
 
+        let response = self
+            .invoke_and_await_function_internal(
+                request,
+                worker_id,
+                idempotency_key.0,
+                function.0,
+                params.0,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn invoke_and_await_function_internal(
+        &self,
+        request: &Request,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        params: InvokeParameters,
+    ) -> Result<Json<InvokeResult>> {
         let invocation_context = grpc_invocation_context_from_request(request);
 
         let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
 
-        let response = match params {
+        let result = match params {
             InvocationParameters::TypedProtoVals(vals) => {
-                self.worker_service.validate_and_invoke_and_await_typed(
-                    &worker_id,
-                    idempotency_key.0,
-                    function.0,
-                    vals,
-                    Some(invocation_context),
-                    empty_worker_metadata(),
-                )
+                self.worker_service
+                    .validate_and_invoke_and_await_typed(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        vals,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
             }
             InvocationParameters::RawJsonStrings(jsons) => {
-                self.worker_service.invoke_and_await_json(
-                    &worker_id,
-                    idempotency_key.0,
-                    function.0,
-                    jsons,
-                    Some(invocation_context),
-                    empty_worker_metadata(),
-                )
+                self.worker_service
+                    .invoke_and_await_json(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        jsons,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
             }
-        }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|result| Json(InvokeResult { result }));
-        record.result(response)
+        };
+
+        Ok(Json(InvokeResult { result }))
     }
 
     /// Invoke a function
@@ -272,36 +343,61 @@ impl WorkerApi {
             function = function.0
         );
 
+        let response = self
+            .invoke_function_without_name_internal(
+                request,
+                worker_id,
+                idempotency_key.0,
+                function.0,
+                params.0,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn invoke_function_without_name_internal(
+        &self,
+        request: &Request,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        params: InvokeParameters,
+    ) -> Result<Json<InvokeResponse>> {
         let invocation_context = grpc_invocation_context_from_request(request);
 
         let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
 
-        let response = match params {
-            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
-                &worker_id,
-                idempotency_key.0,
-                function.0,
-                vals,
-                Some(invocation_context),
-                empty_worker_metadata(),
-            ),
-            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
-                &worker_id,
-                idempotency_key.0,
-                function.0,
-                jsons,
-                Some(invocation_context),
-                empty_worker_metadata(),
-            ),
-        }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|_| Json(InvokeResponse {}));
+        match params {
+            InvocationParameters::TypedProtoVals(vals) => {
+                self.worker_service
+                    .validate_and_invoke(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        vals,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service
+                    .invoke_json(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        jsons,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
+        };
 
-        record.result(response)
+        Ok(Json(InvokeResponse {}))
     }
 
     /// Invoke a function
@@ -330,36 +426,55 @@ impl WorkerApi {
             function = function.0
         );
 
+        let response = self
+            .invoke_function_internal(request, worker_id, idempotency_key.0, function.0, params.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn invoke_function_internal(
+        &self,
+        request: &Request,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        params: InvokeParameters,
+    ) -> Result<Json<InvokeResponse>> {
         let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
 
         let invocation_context = grpc_invocation_context_from_request(request);
 
-        let response = match params {
-            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
-                &worker_id,
-                idempotency_key.0,
-                function.0,
-                vals,
-                Some(invocation_context),
-                empty_worker_metadata(),
-            ),
-            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
-                &worker_id,
-                idempotency_key.0,
-                function.0,
-                jsons,
-                Some(invocation_context),
-                empty_worker_metadata(),
-            ),
+        match params {
+            InvocationParameters::TypedProtoVals(vals) => {
+                self.worker_service
+                    .validate_and_invoke(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        vals,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service
+                    .invoke_json(
+                        &worker_id,
+                        idempotency_key,
+                        function,
+                        jsons,
+                        Some(invocation_context),
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
         }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|_| Json(InvokeResponse {}));
 
-        record.result(response)
+        Ok(Json(InvokeResponse {}))
     }
 
     /// Complete a promise
@@ -514,39 +629,51 @@ impl WorkerApi {
             "get_workers_metadata",
             component_id = component_id.0.to_string()
         );
-        let response = {
-            let filter = match filter.0 {
-                Some(filters) if !filters.is_empty() => {
-                    Some(WorkerFilter::from(filters).map_err(|e| {
-                        WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                    })?)
-                }
-                _ => None,
-            };
 
-            let cursor = match cursor.0 {
-                Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
+        let response = self
+            .get_workers_metadata_internal(component_id.0, filter.0, cursor.0, count.0, precise.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_workers_metadata_internal(
+        &self,
+        component_id: ComponentId,
+        filter: Option<Vec<String>>,
+        cursor: Option<String>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<Json<WorkersMetadataResponse>> {
+        let filter = match filter {
+            Some(filters) if !filters.is_empty() => {
+                Some(WorkerFilter::from(filters).map_err(|e| {
                     WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                })?),
-                None => None,
-            };
-
-            self.worker_service
-                .find_metadata(
-                    &component_id.0,
-                    filter,
-                    cursor.unwrap_or_default(),
-                    count.0.unwrap_or(50),
-                    precise.0.unwrap_or(false),
-                    empty_worker_metadata(),
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(|(cursor, workers)| Json(WorkersMetadataResponse { workers, cursor }))
+                })?)
+            }
+            _ => None,
         };
 
-        record.result(response)
+        let cursor = match cursor {
+            Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
+                WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+            })?),
+            None => None,
+        };
+
+        let (cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &component_id,
+                filter,
+                cursor.unwrap_or_default(),
+                count.unwrap_or(50),
+                precise.unwrap_or(false),
+                empty_worker_metadata(),
+            )
+            .await?;
+
+        Ok(Json(WorkersMetadataResponse { workers, cursor }))
     }
 
     /// Advanced search for workers
@@ -678,64 +805,57 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
         let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
 
-        match (from.0, query.0) {
+        let response = self
+            .get_oplog_internal(worker_id, from.0, count.0, cursor.0, query.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_oplog_internal(
+        &self,
+        worker_id: WorkerId,
+        from: Option<u64>,
+        count: u64,
+        cursor: Option<OplogCursor>,
+        query: Option<String>,
+    ) -> Result<Json<GetOplogResponse>> {
+        let response = match (from, query) {
             (Some(_), Some(_)) => Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
                 errors: vec![
                     "Cannot specify both the 'from' and the 'query' parameters".to_string()
                 ],
-            }))),
+            })))?,
             (Some(from), None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(
                         &worker_id,
                         OplogIndex::from_u64(from),
-                        cursor.0,
-                        count.0,
+                        cursor,
+                        count,
                         empty_worker_metadata(),
                     )
-                    .instrument(record.span.clone())
-                    .await
-                    .map_err(|e| e.into())
-                    .map(Json);
-
-                record.result(response)
+                    .await?
             }
             (None, Some(query)) => {
-                let response = self
-                    .worker_service
-                    .search_oplog(
-                        &worker_id,
-                        cursor.0,
-                        count.0,
-                        query,
-                        empty_worker_metadata(),
-                    )
-                    .instrument(record.span.clone())
-                    .await
-                    .map_err(|e| e.into())
-                    .map(Json);
-
-                record.result(response)
+                self.worker_service
+                    .search_oplog(&worker_id, cursor, count, query, empty_worker_metadata())
+                    .await?
             }
             (None, None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(
                         &worker_id,
                         OplogIndex::INITIAL,
-                        cursor.0,
-                        count.0,
+                        cursor,
+                        count,
                         empty_worker_metadata(),
                     )
-                    .instrument(record.span.clone())
-                    .await
-                    .map_err(|e| e.into())
-                    .map(Json);
-
-                record.result(response)
+                    .await?
             }
-        }
+        };
+
+        Ok(Json(response))
     }
 
     /// List files in a worker
@@ -936,6 +1056,39 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// Connect to a worker using a websocket and stream events
+    #[oai(
+        path = "/:component_id/workers/:worker_name/connect",
+        method = "get",
+        operation_id = "worker_connect"
+    )]
+    pub async fn worker_connect(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        websocket: WebSocket,
+    ) -> Result<BoxWebSocketUpgraded> {
+        let (worker_id, worker_stream) =
+            connect_to_worker(&self.worker_service, component_id.0, worker_name.0).await?;
+
+        let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
+            Box::pin(async move {
+                let (sink, stream) = socket_stream.split();
+                let _ = proxy_worker_connection(
+                    worker_id,
+                    worker_stream,
+                    sink,
+                    stream,
+                    WORKER_CONNECT_PING_INTERVAL,
+                    WORKER_CONNECT_PING_TIMEOUT,
+                )
+                .await;
+            })
+        }));
+
+        Ok(upgraded)
+    }
 }
 
 fn make_worker_id(
@@ -979,4 +1132,37 @@ fn make_component_file_path(
             errors: vec![format!("Invalid file name: {error}")],
         }))
     })
+}
+
+async fn connect_to_worker(
+    worker_service: &WorkerService,
+    component_id: ComponentId,
+    worker_name: String,
+) -> Result<(WorkerId, WorkerStream<LogEvent>)> {
+    validate_worker_name(&worker_name).map_err(|e| {
+        WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+            errors: vec![format!("Invalid worker name: {e}")],
+        }))
+    })?;
+    let worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: worker_name.clone(),
+    };
+
+    let record = recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
+
+    let result = worker_service
+        .connect(&worker_id, empty_worker_metadata())
+        .instrument(record.span.clone())
+        .await;
+
+    match result {
+        Ok(worker_stream) => record.succeed(Ok((worker_id, worker_stream))),
+        Err(error) => {
+            tracing::error!("Error connecting to worker: {error}");
+            let error = WorkerApiBaseError::from(error);
+            let error = record.fail(error.clone(), &error);
+            Err(error)
+        }
+    }
 }
