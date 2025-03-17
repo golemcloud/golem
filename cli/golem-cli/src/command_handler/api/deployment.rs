@@ -50,17 +50,17 @@ impl ApiDeploymentCommandHandler {
                 definitions,
                 host,
                 subdomain,
-            } => self.deploy(project, definitions, host, subdomain).await,
-            ApiDeploymentSubcommand::Get { site } => self.get(site).await,
+            } => self.cmd_deploy(project, definitions, host, subdomain).await,
+            ApiDeploymentSubcommand::Get { site } => self.cmd_get(site).await,
             ApiDeploymentSubcommand::List {
                 project,
                 definition,
-            } => self.list(project, definition).await,
-            ApiDeploymentSubcommand::Delete { site } => self.delete(site).await,
+            } => self.cmd_list(project, definition).await,
+            ApiDeploymentSubcommand::Delete { site } => self.cmd_delete(site).await,
         }
     }
 
-    async fn deploy(
+    async fn cmd_deploy(
         &self,
         project: ProjectNameOptionalArg,
         api_defs: Vec<ApiDefinitionIdWithVersion>,
@@ -119,7 +119,7 @@ impl ApiDeploymentCommandHandler {
         Ok(())
     }
 
-    async fn get(&self, site: String) -> anyhow::Result<()> {
+    async fn cmd_get(&self, site: String) -> anyhow::Result<()> {
         let result: ApiDeployment = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_deployment
@@ -140,7 +140,7 @@ impl ApiDeploymentCommandHandler {
         Ok(())
     }
 
-    async fn list(
+    async fn cmd_list(
         &self,
         project: ProjectNameOptionalArg,
         definition: Option<ApiDefinitionId>,
@@ -192,7 +192,7 @@ impl ApiDeploymentCommandHandler {
         Ok(())
     }
 
-    async fn delete(&self, site: String) -> anyhow::Result<()> {
+    async fn cmd_delete(&self, site: String) -> anyhow::Result<()> {
         match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_deployment

@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::command::app::AppSubcommand;
-use crate::command::shared_args::BuildArgs;
+use crate::command::shared_args::{
+    AppOptionalComponentNames, BuildArgs, ForceBuildArg, WorkerUpdateOrRedeployArgs,
+};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit};
@@ -52,109 +54,36 @@ impl AppCommandHandler {
             AppSubcommand::New {
                 application_name,
                 language,
-            } => self.new_app(&application_name, language).await,
+            } => self.cmd_new(&application_name, language).await,
             AppSubcommand::Build {
                 component_name,
                 build: build_args,
-            } => {
-                self.build(
-                    component_name.component_name,
-                    Some(build_args),
-                    &ComponentSelectMode::All,
-                )
-                .await
-            }
+            } => self.cmd_build(component_name, build_args).await,
             AppSubcommand::Deploy {
                 component_name,
                 force_build,
                 update_or_redeploy,
             } => {
-                self.ctx
-                    .component_handler()
-                    .deploy(
-                        self.ctx
-                            .cloud_project_handler()
-                            .opt_select_project(None, None)
-                            .await?
-                            .as_ref(),
-                        component_name.component_name,
-                        Some(force_build),
-                        &ComponentSelectMode::All,
-                        update_or_redeploy,
-                    )
+                self.cmd_deploy(component_name, force_build, update_or_redeploy)
                     .await
             }
-            AppSubcommand::Clean { component_name } => {
-                self.clean(component_name.component_name, &ComponentSelectMode::All)
-                    .await
-            }
+            AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             AppSubcommand::UpdateWorkers {
                 component_name,
                 update_mode,
             } => {
-                self.update_workers(component_name.component_name, update_mode)
+                self.cmd_update_workers(component_name.component_name, update_mode)
                     .await
             }
             AppSubcommand::RedeployWorkers { component_name } => {
-                self.redeploy_workers(component_name.component_name).await
+                self.cmd_redeploy_workers(component_name.component_name)
+                    .await
             }
-            AppSubcommand::CustomCommand(command) => {
-                if command.len() != 1 {
-                    bail!(
-                        "Expected exactly one custom subcommand, got: {}",
-                        command.join(" ").log_color_error_highlight()
-                    );
-                }
-
-                let command = &command[0];
-
-                let app_ctx = self.ctx.app_context_lock().await;
-                let app_ctx = app_ctx.some_or_err()?;
-                if let Err(error) = app_ctx.custom_command(command) {
-                    match error {
-                        CustomCommandError::CommandNotFound => {
-                            logln("");
-                            log_error(format!(
-                                "Request command app command {} not found!",
-                                command.log_color_error_highlight()
-                            ));
-                            logln("");
-
-                            app_ctx.log_dynamic_help(&DynamicHelpSections {
-                                components: false,
-                                custom_commands: true,
-                            })?;
-
-                            logln(
-                                "Available builtin commands:"
-                                    .log_color_help_group()
-                                    .to_string(),
-                            );
-                            for subcommand in
-                                AppSubcommand::augment_subcommands(Command::new("dummy"))
-                                    .get_subcommands()
-                            {
-                                logln(format!("  {}", subcommand.get_name().bold()));
-                            }
-                            logln("");
-
-                            bail!(NonSuccessfulExit)
-                        }
-                        CustomCommandError::CommandError { error } => {
-                            bail!(
-                                "Command {} failed: {error}",
-                                command.log_color_error_highlight()
-                            )
-                        }
-                    }
-                }
-
-                Ok(())
-            }
+            AppSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
         }
     }
 
-    async fn new_app(
+    async fn cmd_new(
         &mut self,
         application_name: &str,
         languages: Vec<GuestLanguage>,
@@ -252,6 +181,132 @@ impl AppCommandHandler {
         Ok(())
     }
 
+    async fn cmd_build(
+        &mut self,
+        component_name: AppOptionalComponentNames,
+        build_args: BuildArgs,
+    ) -> anyhow::Result<()> {
+        self.build(
+            component_name.component_name,
+            Some(build_args),
+            &ComponentSelectMode::All,
+        )
+        .await
+    }
+
+    async fn cmd_clean(&mut self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
+        self.clean(component_name.component_name, &ComponentSelectMode::All)
+            .await
+    }
+
+    async fn cmd_deploy(
+        &mut self,
+        component_name: AppOptionalComponentNames,
+        force_build: ForceBuildArg,
+        update_or_redeploy: WorkerUpdateOrRedeployArgs,
+    ) -> anyhow::Result<()> {
+        self.ctx
+            .component_handler()
+            .deploy(
+                self.ctx
+                    .cloud_project_handler()
+                    .opt_select_project(None, None)
+                    .await?
+                    .as_ref(),
+                component_name.component_name,
+                Some(force_build),
+                &ComponentSelectMode::All,
+                update_or_redeploy,
+            )
+            .await
+    }
+
+    async fn cmd_custom_command(&mut self, command: Vec<String>) -> anyhow::Result<()> {
+        if command.len() != 1 {
+            bail!(
+                "Expected exactly one custom subcommand, got: {}",
+                command.join(" ").log_color_error_highlight()
+            );
+        }
+
+        let command = &command[0];
+
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        if let Err(error) = app_ctx.custom_command(command) {
+            match error {
+                CustomCommandError::CommandNotFound => {
+                    logln("");
+                    log_error(format!(
+                        "Request command app command {} not found!",
+                        command.log_color_error_highlight()
+                    ));
+                    logln("");
+
+                    app_ctx.log_dynamic_help(&DynamicHelpSections {
+                        components: false,
+                        custom_commands: true,
+                    })?;
+
+                    logln(
+                        "Available builtin commands:"
+                            .log_color_help_group()
+                            .to_string(),
+                    );
+                    for subcommand in
+                        AppSubcommand::augment_subcommands(Command::new("dummy")).get_subcommands()
+                    {
+                        logln(format!("  {}", subcommand.get_name().bold()));
+                    }
+                    logln("");
+
+                    bail!(NonSuccessfulExit)
+                }
+                CustomCommandError::CommandError { error } => {
+                    bail!(
+                        "Command {} failed: {error}",
+                        command.log_color_error_highlight()
+                    )
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn cmd_update_workers(
+        &mut self,
+        component_names: Vec<ComponentName>,
+        update_mode: WorkerUpdateMode,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, &ComponentSelectMode::All)
+            .await?;
+
+        let components = self.components_for_update_or_redeploy().await?;
+        self.ctx
+            .component_handler()
+            .update_workers_by_components(components, update_mode)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn cmd_redeploy_workers(
+        &mut self,
+        component_names: Vec<ComponentName>,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, &ComponentSelectMode::All)
+            .await?;
+
+        let components = self.components_for_update_or_redeploy().await?;
+        self.ctx
+            .component_handler()
+            .redeploy_workers_by_components(components)
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn build(
         &mut self,
         component_names: Vec<ComponentName>,
@@ -281,39 +336,6 @@ impl AppCommandHandler {
             .await?;
         let app_ctx = self.ctx.app_context_lock().await;
         app_ctx.some_or_err()?.clean()
-    }
-
-    async fn update_workers(
-        &mut self,
-        component_names: Vec<ComponentName>,
-        update_mode: WorkerUpdateMode,
-    ) -> anyhow::Result<()> {
-        self.must_select_components(component_names, &ComponentSelectMode::All)
-            .await?;
-
-        let components = self.components_for_update_or_redeploy().await?;
-        self.ctx
-            .component_handler()
-            .update_workers_by_components(components, update_mode)
-            .await?;
-
-        Ok(())
-    }
-
-    async fn redeploy_workers(
-        &mut self,
-        component_names: Vec<ComponentName>,
-    ) -> anyhow::Result<()> {
-        self.must_select_components(component_names, &ComponentSelectMode::All)
-            .await?;
-
-        let components = self.components_for_update_or_redeploy().await?;
-        self.ctx
-            .component_handler()
-            .redeploy_workers_by_components(components)
-            .await?;
-
-        Ok(())
     }
 
     async fn components_for_update_or_redeploy(&self) -> anyhow::Result<Vec<Component>> {

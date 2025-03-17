@@ -49,7 +49,7 @@ impl ApiSecuritySchemeCommandHandler {
                 scope,
                 redirect_url,
             } => {
-                self.create(
+                self.cmd_create(
                     project,
                     security_scheme_id,
                     provider_type,
@@ -63,11 +63,11 @@ impl ApiSecuritySchemeCommandHandler {
             ApiSecuritySchemeSubcommand::Get {
                 project,
                 security_scheme_id,
-            } => self.get(project, security_scheme_id).await,
+            } => self.cmd_get(project, security_scheme_id).await,
         }
     }
 
-    async fn create(
+    async fn cmd_create(
         &self,
         project: ProjectNameOptionalArg,
         scheme_identifier: String,
@@ -138,7 +138,7 @@ impl ApiSecuritySchemeCommandHandler {
         Ok(())
     }
 
-    async fn get(
+    async fn cmd_get(
         &self,
         project: ProjectNameOptionalArg,
         security_scheme_id: String,

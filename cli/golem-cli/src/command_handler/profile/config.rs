@@ -17,6 +17,7 @@ use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::model::text::fmt::log_error;
+use crate::model::Format;
 use anyhow::bail;
 use golem_wasm_rpc_stubgen::log::log_action;
 use std::sync::Arc;
@@ -37,28 +38,32 @@ impl ProfileConfigCommandHandler {
     ) -> anyhow::Result<()> {
         match subcommand {
             ProfileConfigSubcommand::SetFormat { format } => {
-                match Config::get_profile(&profile_name, self.ctx.config_dir())? {
-                    Some(mut profile) => {
-                        profile.get_config_mut().default_format = format;
+                self.cmd_set_format(profile_name, format)
+            }
+        }
+    }
 
-                        log_action(
-                            "Updating",
-                            format!(
-                                "profile's default format for {} to {}",
-                                &profile_name, format
-                            ),
-                        );
-                        Config::set_profile(profile_name, profile, self.ctx.config_dir())?;
-                        log_action("Updated", "");
+    fn cmd_set_format(&mut self, profile_name: ProfileName, format: Format) -> anyhow::Result<()> {
+        match Config::get_profile(&profile_name, self.ctx.config_dir())? {
+            Some(mut profile) => {
+                profile.get_config_mut().default_format = format;
 
-                        Ok(())
-                    }
-                    None => {
-                        log_error(format!("Profile {} not found", profile_name));
-                        // TODO: show available profiles
-                        bail!(NonSuccessfulExit);
-                    }
-                }
+                log_action(
+                    "Updating",
+                    format!(
+                        "profile's default format for {} to {}",
+                        &profile_name, format
+                    ),
+                );
+                Config::set_profile(profile_name, profile, self.ctx.config_dir())?;
+                log_action("Updated", "");
+
+                Ok(())
+            }
+            None => {
+                log_error(format!("Profile {} not found", profile_name));
+                // TODO: show available profiles
+                bail!(NonSuccessfulExit);
             }
         }
     }

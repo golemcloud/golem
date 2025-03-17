@@ -45,51 +45,61 @@ impl CloudProjectCommandHandler {
             ProjectSubcommand::New {
                 project_name,
                 description,
-            } => {
-                let clients = self.ctx.golem_clients_cloud().await?;
-                let project = clients
-                    .project
-                    .create_project(&ProjectDataRequest {
-                        name: project_name.0,
-                        owner_account_id: clients.account_id().0.to_string(),
-                        description: description.unwrap_or_default(),
-                    })
-                    .await
-                    .map_service_error()?;
-                self.ctx
-                    .log_handler()
-                    .log_view(&ProjectCreatedView(ProjectView::from(project)));
-                Ok(())
-            }
-            ProjectSubcommand::List { project_name } => {
-                let projects = self
-                    .ctx
-                    .golem_clients_cloud()
-                    .await?
-                    .project
-                    .get_projects(project_name.as_ref().map(|name| name.0.as_str()))
-                    .await
-                    .map_service_error()?;
-                self.ctx
-                    .log_handler()
-                    .log_view(&ProjectListView::from(projects));
-                Ok(())
-            }
-            ProjectSubcommand::GetDefault => {
-                let project = self
-                    .ctx
-                    .golem_clients_cloud()
-                    .await?
-                    .project
-                    .get_default_project()
-                    .await
-                    .map_service_error()?;
-                self.ctx
-                    .log_handler()
-                    .log_view(&ProjectGetView::from(project));
-                Ok(())
-            }
+            } => self.cmd_new(project_name, description).await,
+            ProjectSubcommand::List { project_name } => self.cmd_list(project_name).await,
+            ProjectSubcommand::GetDefault => self.cmd_get_default().await,
         }
+    }
+
+    async fn cmd_new(
+        &mut self,
+        project_name: ProjectName,
+        description: Option<String>,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients_cloud().await?;
+        let project = clients
+            .project
+            .create_project(&ProjectDataRequest {
+                name: project_name.0,
+                owner_account_id: clients.account_id().0.to_string(),
+                description: description.unwrap_or_default(),
+            })
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_view(&ProjectCreatedView(ProjectView::from(project)));
+        Ok(())
+    }
+
+    async fn cmd_list(&mut self, project_name: Option<ProjectName>) -> anyhow::Result<()> {
+        let projects = self
+            .ctx
+            .golem_clients_cloud()
+            .await?
+            .project
+            .get_projects(project_name.as_ref().map(|name| name.0.as_str()))
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_view(&ProjectListView::from(projects));
+        Ok(())
+    }
+
+    async fn cmd_get_default(&mut self) -> anyhow::Result<()> {
+        let project = self
+            .ctx
+            .golem_clients_cloud()
+            .await?
+            .project
+            .get_default_project()
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_view(&ProjectGetView::from(project));
+        Ok(())
     }
 
     async fn opt_project_by_name(

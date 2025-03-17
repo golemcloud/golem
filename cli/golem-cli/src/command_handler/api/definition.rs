@@ -17,13 +17,18 @@ use crate::command::shared_args::ProjectNameOptionalArg;
 use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
-use crate::model::text::api_definition::{ApiDefinitionNewView, ApiDefinitionUpdateView};
-use crate::model::{ApiDefinitionFileFormat, ApiDefinitionId, PathBufOrStdin};
+use crate::model::text::api_definition::{
+    ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
+};
+use crate::model::{
+    ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin,
+};
 use anyhow::{anyhow, Context as AnyhowContext};
 use golem_client::api::ApiDefinitionClient as ApiDefinitionClientOss;
 use golem_client::model::HttpApiDefinitionRequest as HttpApiDefinitionRequestOss;
 use golem_cloud_client::api::ApiDefinitionClient as ApiDefinitionClientCloud;
 use golem_cloud_client::model::HttpApiDefinitionRequest as HttpApiDefinitionRequestCloud;
+use golem_wasm_rpc_stubgen::log::{log_warn_action, LogColorize};
 use serde::de::DeserializeOwned;
 use std::io::Read;
 use std::sync::Arc;
@@ -44,31 +49,32 @@ impl ApiDefinitionCommandHandler {
                 project,
                 definition,
                 def_format,
-            } => {
-                self.new_api_definition(project, definition, def_format)
-                    .await
-            }
+            } => self.cmd_new(project, definition, def_format).await,
             ApiDefinitionSubcommand::Update {
                 project,
                 definition,
                 def_format,
-            } => self.update(project, definition, def_format).await,
+            } => self.cmd_update(project, definition, def_format).await,
             ApiDefinitionSubcommand::Import {
                 project,
                 definition,
                 def_format,
-            } => self.import(project, definition, def_format).await,
-            ApiDefinitionSubcommand::Get { .. } => {
-                todo!()
-            }
-            ApiDefinitionSubcommand::Delete { .. } => {
-                todo!()
-            }
+            } => self.cmd_import(project, definition, def_format).await,
+            ApiDefinitionSubcommand::Get {
+                project,
+                id,
+                version,
+            } => self.cmd_get(project, id, version).await,
+            ApiDefinitionSubcommand::Delete {
+                project,
+                id,
+                version,
+            } => self.cmd_delete(project, id, version).await,
             ApiDefinitionSubcommand::List { project, id } => self.list(project, id).await,
         }
     }
 
-    async fn new_api_definition(
+    async fn cmd_new(
         &self,
         project: ProjectNameOptionalArg,
         definition: PathBufOrStdin,
@@ -110,7 +116,46 @@ impl ApiDefinitionCommandHandler {
         Ok(())
     }
 
-    async fn update(
+    async fn cmd_get(
+        &self,
+        project: ProjectNameOptionalArg,
+        api_def_id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+    ) -> anyhow::Result<()> {
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .await?;
+
+        let result = match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .api_definition
+                .get_definition(&api_def_id.0, &version.0)
+                .await
+                .map_service_error()?,
+            GolemClients::Cloud(clients) => {
+                let project = self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_or_default(project)
+                    .await?;
+                clients
+                    .api_definition
+                    .get_definition(&project.project_id.0, &api_def_id.0, &version.0)
+                    .await
+                    .map_service_error()?
+            }
+        };
+
+        self.ctx
+            .log_handler()
+            .log_view(&ApiDefinitionGetView(result));
+
+        Ok(())
+    }
+
+    async fn cmd_update(
         &self,
         project: ProjectNameOptionalArg,
         definition: PathBufOrStdin,
@@ -160,7 +205,7 @@ impl ApiDefinitionCommandHandler {
         Ok(())
     }
 
-    async fn import(
+    async fn cmd_import(
         &self,
         project: ProjectNameOptionalArg,
         definition: PathBufOrStdin,
@@ -237,6 +282,50 @@ impl ApiDefinitionCommandHandler {
         };
 
         self.ctx.log_handler().log_view(&definitions);
+
+        Ok(())
+    }
+
+    async fn cmd_delete(
+        &self,
+        project: ProjectNameOptionalArg,
+        api_def_id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+    ) -> anyhow::Result<()> {
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .await?;
+
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .api_definition
+                .delete_definition(&api_def_id.0, &version.0)
+                .await
+                .map_service_error()?,
+            GolemClients::Cloud(clients) => {
+                let project = self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_or_default(project)
+                    .await?;
+                clients
+                    .api_definition
+                    .delete_definition(&project.project_id.0, &api_def_id.0, &version.0)
+                    .await
+                    .map_service_error()?
+            }
+        };
+
+        log_warn_action(
+            "Deleted",
+            format!(
+                "API definition: {}/{}",
+                api_def_id.0.log_color_highlight(),
+                version.0.log_color_highlight()
+            ),
+        );
 
         Ok(())
     }

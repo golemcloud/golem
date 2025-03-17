@@ -538,10 +538,10 @@ pub mod shared_args {
     #[derive(Debug, Args, Default)]
     pub struct WorkerUpdateOrRedeployArgs {
         /// Update existing workers with auto or manual update mode
-        #[clap(long, short, conflicts_with_all = ["redeploy"])]
+        #[clap(long, short, conflicts_with_all = ["redeploy_workers"])]
         pub update_workers: Option<WorkerUpdateMode>,
         /// Delete and recreate existing workers
-        #[clap(long, short, conflicts_with_all = ["update"])]
+        #[clap(long, short, conflicts_with_all = ["update_workers"])]
         pub redeploy_workers: bool,
     }
 

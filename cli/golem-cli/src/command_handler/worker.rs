@@ -96,7 +96,7 @@ impl WorkerCommandHandler {
                 worker_name,
                 arguments,
                 env,
-            } => self.create_new(worker_name, arguments, env).await,
+            } => self.cmd_new(worker_name, arguments, env).await,
             WorkerSubcommand::Invoke {
                 worker_name,
                 function_name,
@@ -106,7 +106,7 @@ impl WorkerCommandHandler {
                 stream,
                 stream_args,
             } => {
-                self.invoke(
+                self.cmd_invoke(
                     worker_name,
                     &function_name,
                     arguments,
@@ -118,7 +118,7 @@ impl WorkerCommandHandler {
                 .await
             }
             WorkerSubcommand::Get { worker_name } => self.get(worker_name).await,
-            WorkerSubcommand::Delete { worker_name } => self.delete(worker_name).await,
+            WorkerSubcommand::Delete { worker_name } => self.delete_by_name_arg(worker_name).await,
             WorkerSubcommand::List {
                 component_name,
                 filter: filters,
@@ -126,7 +126,7 @@ impl WorkerCommandHandler {
                 max_count,
                 precise,
             } => {
-                self.list(
+                self.cmd_list(
                     component_name.component_name,
                     filters,
                     scan_cursor,
@@ -138,33 +138,36 @@ impl WorkerCommandHandler {
             WorkerSubcommand::Stream {
                 worker_name,
                 stream_args,
-            } => self.stream(worker_name, stream_args).await,
+            } => self.cmd_stream(worker_name, stream_args).await,
             WorkerSubcommand::Interrupt { worker_name } => self.interrupt(worker_name).await,
             WorkerSubcommand::Resume { worker_name } => self.resume(worker_name).await,
             WorkerSubcommand::SimulateCrash { worker_name } => {
-                self.simulate_crash(worker_name).await
+                self.cmd_simulate_crash(worker_name).await
             }
             WorkerSubcommand::Oplog {
                 worker_name,
                 from,
                 query,
-            } => self.oplog(worker_name, from, query).await,
+            } => self.cmd_oplog(worker_name, from, query).await,
             WorkerSubcommand::Revert {
                 worker_name,
                 last_oplog_index,
                 number_of_invocations,
             } => {
-                self.revert(worker_name, last_oplog_index, number_of_invocations)
+                self.cmd_revert(worker_name, last_oplog_index, number_of_invocations)
                     .await
             }
             WorkerSubcommand::CancelInvocation {
                 worker_name,
                 idempotency_key,
-            } => self.cancel_invocation(worker_name, idempotency_key).await,
+            } => {
+                self.cmd_cancel_invocation(worker_name, idempotency_key)
+                    .await
+            }
         }
     }
 
-    async fn create_new(
+    async fn cmd_new(
         &mut self,
         worker_name: WorkerNameArg,
         arguments: Vec<NewWorkerArgument>,
@@ -224,44 +227,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn new_worker(
-        &self,
-        component_id: Uuid,
-        worker_name: String,
-        args: Vec<String>,
-        env: HashMap<String, String>,
-    ) -> anyhow::Result<()> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .worker
-                .launch_new_worker(
-                    &component_id,
-                    &WorkerCreationRequestOss {
-                        name: worker_name,
-                        args,
-                        env,
-                    },
-                )
-                .await
-                .map(|_| ())
-                .map_service_error(),
-            GolemClients::Cloud(clients) => clients
-                .worker
-                .launch_new_worker(
-                    &component_id,
-                    &WorkerCreationRequestCloud {
-                        name: worker_name,
-                        args,
-                        env,
-                    },
-                )
-                .await
-                .map(|_| ())
-                .map_service_error(),
-        }
-    }
-
-    async fn invoke(
+    async fn cmd_invoke(
         &mut self,
         worker_name: WorkerNameArg,
         function_name: &WorkerFunctionName,
@@ -551,91 +517,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn get(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
-        let result = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => {
-                let result = clients
-                    .worker
-                    .get_worker_metadata(
-                        &component.versioned_component_id.component_id,
-                        &worker_name.0,
-                    )
-                    .await
-                    .map_service_error()?;
-
-                WorkerMetadata::from_oss(worker_name_match.component_name, result)
-            }
-            GolemClients::Cloud(clients) => {
-                let result = clients
-                    .worker
-                    .get_worker_metadata(
-                        &component.versioned_component_id.component_id,
-                        &worker_name.0,
-                    )
-                    .await
-                    .map_service_error()?;
-
-                WorkerMetadata::from_cloud(worker_name_match.component_name, result)
-            }
-        };
-
-        self.ctx
-            .log_handler()
-            .log_view(&WorkerGetView::from(result));
-
-        Ok(())
-    }
-
-    async fn delete(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
-        log_warn_action(
-            "Deleting",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        self.delete_worker(
-            component.versioned_component_id.component_id,
-            &worker_name.0,
-        )
-        .await?;
-
-        log_action(
-            "Deleted",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        Ok(())
-    }
-
-    async fn delete_worker(&self, component_id: Uuid, worker_name: &str) -> anyhow::Result<()> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .worker
-                .delete_worker(&component_id, worker_name)
-                .await
-                .map(|_| ())
-                .map_service_error(),
-            GolemClients::Cloud(clients) => clients
-                .worker
-                .get_worker_metadata(&component_id, worker_name)
-                .await
-                .map(|_| ())
-                .map_service_error(),
-        }
-    }
-
-    async fn stream(
+    async fn cmd_stream(
         &mut self,
         worker_name: WorkerNameArg,
         stream_args: StreamArgs,
@@ -667,52 +549,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn interrupt(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
-        log_action(
-            "Interrupting",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        self.interrupt_worker(&component, &worker_name, false)
-            .await?;
-
-        log_action(
-            "Interrupted",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        Ok(())
-    }
-
-    async fn resume(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
-        log_action(
-            "Resuming",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        self.resume_worker(&component, &worker_name).await?;
-
-        log_action(
-            "Resumed",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        Ok(())
-    }
-
-    async fn simulate_crash(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_simulate_crash(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -741,7 +578,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn oplog(
+    async fn cmd_oplog(
         &mut self,
         worker_name: WorkerNameArg,
         from: Option<u64>,
@@ -815,7 +652,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn revert(
+    async fn cmd_revert(
         &mut self,
         worker_name: WorkerNameArg,
         last_oplog_index: Option<u64>,
@@ -904,7 +741,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cancel_invocation(
+    async fn cmd_cancel_invocation(
         &mut self,
         worker_name: WorkerNameArg,
         idempotency_key: IdempotencyKey,
@@ -957,7 +794,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn list(
+    async fn cmd_list(
         &self,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
@@ -1026,6 +863,172 @@ impl WorkerCommandHandler {
         }
 
         self.ctx.log_handler().log_view(&view);
+
+        Ok(())
+    }
+
+    async fn new_worker(
+        &self,
+        component_id: Uuid,
+        worker_name: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .worker
+                .launch_new_worker(
+                    &component_id,
+                    &WorkerCreationRequestOss {
+                        name: worker_name,
+                        args,
+                        env,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .launch_new_worker(
+                    &component_id,
+                    &WorkerCreationRequestCloud {
+                        name: worker_name,
+                        args,
+                        env,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+        }
+    }
+
+    async fn get(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        let result = match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => {
+                let result = clients
+                    .worker
+                    .get_worker_metadata(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                    )
+                    .await
+                    .map_service_error()?;
+
+                WorkerMetadata::from_oss(worker_name_match.component_name, result)
+            }
+            GolemClients::Cloud(clients) => {
+                let result = clients
+                    .worker
+                    .get_worker_metadata(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                    )
+                    .await
+                    .map_service_error()?;
+
+                WorkerMetadata::from_cloud(worker_name_match.component_name, result)
+            }
+        };
+
+        self.ctx
+            .log_handler()
+            .log_view(&WorkerGetView::from(result));
+
+        Ok(())
+    }
+
+    async fn delete_by_name_arg(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_warn_action(
+            "Deleting",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.delete(
+            component.versioned_component_id.component_id,
+            &worker_name.0,
+        )
+        .await?;
+
+        log_action(
+            "Deleted",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn delete(&self, component_id: Uuid, worker_name: &str) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .worker
+                .delete_worker(&component_id, worker_name)
+                .await
+                .map(|_| ())
+                .map_service_error(),
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .get_worker_metadata(&component_id, worker_name)
+                .await
+                .map(|_| ())
+                .map_service_error(),
+        }
+    }
+
+    async fn interrupt(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Interrupting",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.interrupt_worker(&component, &worker_name, false)
+            .await?;
+
+        log_action(
+            "Interrupted",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn resume(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Resuming",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.resume_worker(&component, &worker_name).await?;
+
+        log_action(
+            "Resumed",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
 
         Ok(())
     }
@@ -1242,7 +1245,7 @@ impl WorkerCommandHandler {
                 worker_metadata.worker_id.worker_name.bold().green(),
             ),
         );
-        self.delete_worker(
+        self.delete(
             worker_metadata.worker_id.component_id.0,
             &worker_metadata.worker_id.worker_name,
         )
@@ -1347,6 +1350,105 @@ impl WorkerCommandHandler {
         }
 
         Ok((workers, final_result_cursor))
+    }
+
+    async fn component_by_worker_name_match(
+        &mut self,
+        worker_name_match: &WorkerNameMatch,
+    ) -> anyhow::Result<(Component, WorkerName)> {
+        let Some(worker_name) = &worker_name_match.worker_name else {
+            log_error("Worker name is required");
+            logln("");
+            log_text_view(&WorkerNameHelp);
+            logln("");
+            bail!(NonSuccessfulExit);
+        };
+
+        let component = self
+            .ctx
+            .component_handler()
+            .component_by_name(
+                worker_name_match.project.as_ref(),
+                &worker_name_match.component_name,
+            )
+            .await?;
+
+        let Some(component) = component else {
+            log_error(format!(
+                "Component {} not found",
+                worker_name_match
+                    .component_name
+                    .0
+                    .log_color_error_highlight()
+            ));
+            logln("");
+            bail!(NonSuccessfulExit);
+        };
+
+        Ok((component, worker_name.clone()))
+    }
+
+    async fn resume_worker(
+        &mut self,
+        component: &Component,
+        worker_name: &WorkerName,
+    ) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => {
+                clients
+                    .worker
+                    .resume_worker(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?;
+            }
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .resume_worker(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                )
+                .await
+                .map(|_| ())
+                .map_service_error()?,
+        }
+        Ok(())
+    }
+
+    async fn interrupt_worker(
+        &mut self,
+        component: &Component,
+        worker_name: &WorkerName,
+        recover_immediately: bool,
+    ) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => {
+                clients
+                    .worker
+                    .interrupt_worker(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                        Some(recover_immediately),
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?;
+            }
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .interrupt_worker(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                    Some(recover_immediately),
+                )
+                .await
+                .map(|_| ())
+                .map_service_error()?,
+        }
+        Ok(())
     }
 
     pub async fn match_worker_name(
@@ -1568,105 +1670,6 @@ impl WorkerCommandHandler {
                 bail!(NonSuccessfulExit);
             }
         }
-    }
-
-    async fn component_by_worker_name_match(
-        &mut self,
-        worker_name_match: &WorkerNameMatch,
-    ) -> anyhow::Result<(Component, WorkerName)> {
-        let Some(worker_name) = &worker_name_match.worker_name else {
-            log_error("Worker name is required");
-            logln("");
-            log_text_view(&WorkerNameHelp);
-            logln("");
-            bail!(NonSuccessfulExit);
-        };
-
-        let component = self
-            .ctx
-            .component_handler()
-            .component_by_name(
-                worker_name_match.project.as_ref(),
-                &worker_name_match.component_name,
-            )
-            .await?;
-
-        let Some(component) = component else {
-            log_error(format!(
-                "Component {} not found",
-                worker_name_match
-                    .component_name
-                    .0
-                    .log_color_error_highlight()
-            ));
-            logln("");
-            bail!(NonSuccessfulExit);
-        };
-
-        Ok((component, worker_name.clone()))
-    }
-
-    async fn resume_worker(
-        &mut self,
-        component: &Component,
-        worker_name: &WorkerName,
-    ) -> anyhow::Result<()> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => {
-                clients
-                    .worker
-                    .resume_worker(
-                        &component.versioned_component_id.component_id,
-                        &worker_name.0,
-                    )
-                    .await
-                    .map(|_| ())
-                    .map_service_error()?;
-            }
-            GolemClients::Cloud(clients) => clients
-                .worker
-                .resume_worker(
-                    &component.versioned_component_id.component_id,
-                    &worker_name.0,
-                )
-                .await
-                .map(|_| ())
-                .map_service_error()?,
-        }
-        Ok(())
-    }
-
-    async fn interrupt_worker(
-        &mut self,
-        component: &Component,
-        worker_name: &WorkerName,
-        recover_immediately: bool,
-    ) -> anyhow::Result<()> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => {
-                clients
-                    .worker
-                    .interrupt_worker(
-                        &component.versioned_component_id.component_id,
-                        &worker_name.0,
-                        Some(recover_immediately),
-                    )
-                    .await
-                    .map(|_| ())
-                    .map_service_error()?;
-            }
-            GolemClients::Cloud(clients) => clients
-                .worker
-                .interrupt_worker(
-                    &component.versioned_component_id.component_id,
-                    &worker_name.0,
-                    Some(recover_immediately),
-                )
-                .await
-                .map(|_| ())
-                .map_service_error()?,
-        }
-        Ok(())
     }
 }
 
