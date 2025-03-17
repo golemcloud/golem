@@ -79,7 +79,7 @@ mod internal {
     // This is more of an optional stage, as bottom-up type propagation would be enough
     // but helps with reaching early fix point later down the line of compilation phases
     pub(crate) fn infer_all_identifiers_top_down(expr: &mut Expr) {
-        let mut identifier_lookup = internal::IdentifierTypeState::new();
+        let mut identifier_lookup = IdentifierTypeState::new();
         let mut visitor = ExprVisitor::top_down(expr);
         while let Some(expr) = visitor.pop_front() {
             match expr {

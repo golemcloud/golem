@@ -3,11 +3,14 @@ use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
-pub struct ExprVisitor {
-    queue: VecDeque<*mut Expr>,
+// A structure that allows to visit expressions in a bottom-up or top-down order.
+// All other functionalities are to be replaced with the usage of `ExprVisitor`
+// https://github.com/golemcloud/golem/issues/1428
+pub struct ExprVisitor<'a> {
+    queue: VecDeque<&'a mut Expr>,
 }
 
-impl ExprVisitor {
+impl<'a> ExprVisitor<'a> {
     pub fn new() -> Self {
         ExprVisitor {
             queue: VecDeque::new(),
@@ -27,8 +30,8 @@ impl ExprVisitor {
     // Expr::Identifier(x)
     // Expr::Call(func, Expr::Identifier(x))
     // Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))
-    pub fn bottom_up(expr: &mut Expr) -> Self {
-        let mut queue: VecDeque<*mut Expr> = VecDeque::new();
+    pub fn bottom_up(expr: &'a mut Expr) -> Self {
+        let mut queue: VecDeque<&'a mut Expr> = VecDeque::new();
 
         enqueue_expr_bottom_up(expr, &mut queue);
 
@@ -44,8 +47,8 @@ impl ExprVisitor {
     // Expr::Num(1, U64)
     // Expr::Call(func, Expr::Identifier(x))
     // Expr::Identifier(x)
-    pub fn top_down(expr: &mut Expr) -> Self {
-        let mut queue: VecDeque<*mut Expr> = VecDeque::new();
+    pub fn top_down(expr: &'a mut Expr) -> Self {
+        let mut queue: VecDeque<&'a mut Expr> = VecDeque::new();
 
         enqueue_expr_top_down(expr, &mut queue);
 
@@ -53,38 +56,25 @@ impl ExprVisitor {
     }
 
     pub fn pop_front(&mut self) -> Option<&mut Expr> {
-        self.queue.pop_front().map(|ptr| unsafe { &mut *ptr })
+        self.queue.pop_front()
     }
 
     pub fn pop_back(&mut self) -> Option<&mut Expr> {
-        self.queue.pop_back().map(|ptr| unsafe { &mut *ptr })
-    }
-
-    pub fn push_back(&mut self, expr: *mut Expr) {
-        self.queue.push_back(expr);
-    }
-
-    pub fn push_front(&mut self, expr: *mut Expr) {
-        self.queue.push_front(expr);
+        self.queue.pop_back()
     }
 
     pub fn pop_all(&mut self) -> Vec<&mut Expr> {
-        self.queue
-            .drain(..)
-            .map(|ptr| unsafe { &mut *ptr })
-            .collect()
+        self.queue.drain(..).collect()
     }
 }
 
-// `Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0))`
-// Expr::Block(Expr::And(Expr::Num(1), Expr::Num(2), 0))
-//
-fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
-    let mut stack = VecDeque::new();
-    stack.push_front(expr);
+fn enqueue_expr_top_down<'a>(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
+    let mut stack: VecDeque<*mut Expr> = VecDeque::new();
+
+    stack.push_back(expr);
 
     while let Some(current_ptr) = stack.pop_front() {
-        queue.push_back(current_ptr);
+        queue.push_back(unsafe { &mut *current_ptr });
 
         let current = unsafe { &mut *current_ptr };
 
@@ -95,13 +85,13 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 stack.push_front(&mut **expr);
                 stack.push_front(&mut **index);
             }
-            Expr::Sequence { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x)),
+            Expr::Sequence { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
             Expr::Record { exprs, .. } => {
-                stack.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr))
+                stack.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr as *mut Expr))
             }
-            Expr::Tuple { exprs, .. } => stack.extend(exprs.iter_mut()),
-            Expr::Concat { exprs, .. } => stack.extend(exprs.iter_mut()),
-            Expr::ExprBlock { exprs, .. } => stack.extend(exprs.iter_mut()),
+            Expr::Tuple { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::Concat { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::ExprBlock { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
             Expr::Not { expr, .. } => stack.push_front(&mut **expr),
             Expr::Length { expr, .. } => stack.push_front(&mut **expr),
             Expr::GreaterThan { lhs, rhs, .. } => {
@@ -248,7 +238,7 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 }
 
                 stack.push_front(&mut **lhs);
-                stack.extend(args.iter_mut());
+                stack.extend(args.iter_mut().map(|x| x as *mut Expr));
             }
 
             Expr::GetTag { expr, .. } => {
@@ -266,14 +256,15 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
     }
 }
 
-fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
-    let mut stack = VecDeque::new();
+fn enqueue_expr_bottom_up<'a>(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
+    let mut stack: VecDeque<*mut Expr> = VecDeque::new();
+
     stack.push_back(expr);
 
-    while let Some(current_ptr) = stack.pop_back() {
-        queue.push_front(current_ptr);
+    while let Some(current) = stack.pop_back() {
+        queue.push_front(unsafe { &mut *current });
 
-        let current = unsafe { &mut *current_ptr };
+        let current = unsafe { &mut *current };
 
         match current {
             Expr::Let { expr, .. } => stack.push_back(&mut **expr),
@@ -282,13 +273,13 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 stack.push_back(&mut **expr);
                 stack.push_back(&mut **index);
             }
-            Expr::Sequence { exprs, .. } => stack.extend(exprs.iter_mut()),
+            Expr::Sequence { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
             Expr::Record { exprs, .. } => {
-                stack.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr))
+                stack.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr as *mut Expr))
             }
-            Expr::Tuple { exprs, .. } => stack.extend(exprs.iter_mut()),
-            Expr::Concat { exprs, .. } => stack.extend(exprs.iter_mut()),
-            Expr::ExprBlock { exprs, .. } => stack.extend(exprs.iter_mut()),
+            Expr::Tuple { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::Concat { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
+            Expr::ExprBlock { exprs, .. } => stack.extend(exprs.iter_mut().map(|x| x as *mut Expr)),
             Expr::Not { expr, .. } => stack.push_back(&mut **expr),
             Expr::Length { expr, .. } => stack.push_back(&mut **expr),
             Expr::GreaterThan { lhs, rhs, .. } => {
@@ -342,7 +333,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                     let arm_literal_expressions = arm.arm_pattern.get_expr_literals_mut();
                     stack.extend(arm_literal_expressions.into_iter().map(|x| {
                         let x = x.as_mut();
-                        x
+                        x as *mut Expr
                     }));
                     stack.push_back(&mut *arm.arm_resolution_expr);
                 }
@@ -369,7 +360,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
             } => {
                 let (exprs, worker) = internal::get_expressions_in_call_type_mut(call_type);
                 if let Some(exprs) = exprs {
-                    stack.extend(exprs.iter_mut());
+                    stack.extend(exprs.iter_mut().map(|x| x as *mut Expr))
                 }
 
                 if let Some(worker) = worker {
@@ -383,7 +374,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                     }
                 }
 
-                stack.extend(args.iter_mut());
+                stack.extend(args.iter_mut().map(|x| x as *mut Expr))
             }
             Expr::Unwrap { expr, .. } => stack.push_back(&mut **expr),
             Expr::And { lhs, rhs, .. } => {
@@ -429,7 +420,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
                 }
 
                 stack.push_back(&mut **lhs);
-                stack.extend(args.iter_mut());
+                stack.extend(args.iter_mut().map(|x| x as *mut Expr));
             }
 
             Expr::GetTag { expr, .. } => {
@@ -447,6 +438,8 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<*mut Expr>) {
     }
 }
 
+// This is to be replaced with the usage of `ExprVisitor`
+// https://github.com/golemcloud/golem/issues/1428
 pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let { expr, .. } => queue.push_back(&mut *expr),
@@ -614,6 +607,8 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
     }
 }
 
+// This is to be replaced with the usage of `ExprVisitor`
+// https://github.com/golemcloud/golem/issues/1428
 pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Expr>) {
     match expr {
         Expr::Let { expr, .. } => queue.push_back(expr),
@@ -799,6 +794,8 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
     }
 }
 
+// This is to be replaced with the usage of `ExprVisitor`
+// https://github.com/golemcloud/golem/issues/1428
 pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let { expr, .. } => queue.push_front(&mut *expr),

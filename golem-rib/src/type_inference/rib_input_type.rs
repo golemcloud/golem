@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredExpr, RibError};
+use crate::{Expr, ExprVisitor, InferredExpr, RibError};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
@@ -33,15 +33,13 @@ impl RibInputTypeInfo {
     }
 
     pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibInputTypeInfo, RibError> {
-        let expr: &Expr = inferred_expr.get_expr();
-        let mut queue = VecDeque::new();
+        let mut expr = inferred_expr.get_expr().clone();
+        let mut queue = ExprVisitor::bottom_up(&mut expr);
 
         let mut global_variables = HashMap::new();
 
-        queue.push_back(expr);
-
         while let Some(expr) = queue.pop_back() {
-            match expr {
+            match &expr {
                 Expr::Identifier {
                     variable_id,
                     inferred_type,
@@ -58,7 +56,7 @@ impl RibInputTypeInfo {
                         global_variables.insert(variable_id.name(), analysed_type);
                     }
                 }
-                _ => expr.visit_children_bottom_up(&mut queue),
+                _ => {}
             }
         }
 

@@ -15,7 +15,8 @@
 use crate::call_type::CallType;
 use crate::rib_compilation_error::RibCompilationError;
 use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, RegistryKey,
+    DynamicParsedFunctionName, Expr, ExprVisitor, FunctionTypeRegistry, GlobalVariableTypeSpec,
+    RegistryKey,
 };
 use std::collections::{HashSet, VecDeque};
 
@@ -42,26 +43,19 @@ impl InferredExpr {
     // Only a fully inferred Rib can reliably tell us what are the exact
     // function calls.
     pub fn worker_invoke_calls(&self) -> Vec<DynamicParsedFunctionName> {
+        let mut expr = self.0.clone();
         let mut worker_calls = vec![];
-        let mut queue = VecDeque::new();
-        queue.push_back(&self.0);
-        while let Some(expr) = queue.pop_back() {
+        let mut visitor = ExprVisitor::bottom_up(&mut expr);
+
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::Call {
-                    call_type:
-                        CallType::Function {
-                            function_name,
-                            worker,
-                        },
+                    call_type: CallType::Function { function_name, .. },
                     ..
                 } => {
                     worker_calls.push(function_name.clone());
-
-                    if let Some(worker) = worker {
-                        queue.push_back(worker);
-                    }
                 }
-                _ => expr.visit_children_bottom_up(&mut queue),
+                _ => {}
             }
         }
 

@@ -1,7 +1,6 @@
 use crate::rib_compilation_error::RibCompilationError;
-use crate::{Expr, ExprVisitor, InferredType};
+use crate::{Expr, InferredType};
 use std::collections::VecDeque;
-
 // This is more of an optional stage to help with a better
 // DX for Rib users, while not affecting the type inference reliability.
 // A standalone expression is something that doesn't influence push down or pull up phases, or
@@ -13,14 +12,7 @@ use std::collections::VecDeque;
 // or unification phase will capture it.
 // However, this phase may not be perfectly assigning a reasonable type to all types of literals in the program
 pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibCompilationError> {
-    let mut visitor = ExprVisitor::bottom_up(expr);
-
-    let mut remaining: ExprVisitor = infer_number_literals(&mut visitor);
-
-    while !remaining.is_empty() {
-        let result = infer_number_literals(&mut remaining);
-        remaining = result;
-    }
+    infer_number_literals(expr);
 
     match expr {
         Expr::ExprBlock { exprs, .. } => {
@@ -116,10 +108,12 @@ fn pull_types_up_for_standalone_expr(expr: &mut Expr) -> Result<(), RibCompilati
     Ok(())
 }
 
-fn infer_number_literals(visitor: &mut ExprVisitor) -> ExprVisitor {
-    let mut remaining = ExprVisitor::new();
+fn infer_number_literals(expr: &mut Expr) {
+    // The result of an entire rib script is probably the last value
+    let mut queue = VecDeque::new();
+    queue.push_back(expr);
 
-    while let Some(expr) = visitor.pop_back() {
+    while let Some(expr) = queue.pop_back() {
         match expr {
             Expr::Let { .. } => {}
             Expr::Call { .. } => {}
@@ -129,7 +123,7 @@ fn infer_number_literals(visitor: &mut ExprVisitor) -> ExprVisitor {
             Expr::Identifier { .. } => {}
             Expr::PatternMatch { match_arms, .. } => {
                 for arm in match_arms {
-                    remaining.push_back(&mut *arm.arm_resolution_expr as *mut Expr);
+                    queue.push_back(&mut arm.arm_resolution_expr)
                 }
             }
             Expr::Number {
@@ -143,9 +137,7 @@ fn infer_number_literals(visitor: &mut ExprVisitor) -> ExprVisitor {
                 }
             }
 
-            _ => {}
+            _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
-
-    remaining
 }

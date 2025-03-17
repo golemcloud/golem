@@ -35,8 +35,6 @@ pub fn bind_variables_of_list_comprehension(expr: &mut Expr) {
 fn process_yield_expr(variable: &mut VariableId, yield_expr: &mut Expr) {
     let mut visitor = ExprVisitor::top_down(yield_expr);
 
-    visitor.push_front(yield_expr);
-
     while let Some(expr) = visitor.pop_front() {
         if let Expr::Identifier { variable_id, .. } = expr {
             if variable.name() == variable_id.name() {

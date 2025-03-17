@@ -39,10 +39,7 @@ mod internal {
         // Start from the end
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::PatternMatch {
-                    match_arms,
-                    ..
-                } => {
+                Expr::PatternMatch { match_arms, .. } => {
                     for arm in match_arms {
                         // We increment the index for each arm regardless of whether there is an identifier exist or not
                         index += 1;
@@ -52,9 +49,7 @@ mod internal {
                         index = latest
                     }
                 }
-                Expr::Let {
-                    variable_id, ..
-                } => {
+                Expr::Let { variable_id, .. } => {
                     shadowed_let_binding.push(variable_id.name());
                 }
                 Expr::Identifier { variable_id, .. } => {

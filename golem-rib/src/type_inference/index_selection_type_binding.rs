@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType};
+use crate::{Expr, InferredType};
+use std::collections::VecDeque;
 use std::ops::DerefMut;
 
 // All select indices with literal numbers don't need to explicit
 // type annotation to get better developer experience,
 // and all literal numbers will be automatically inferred as u64
 pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
-    let mut visitor = ExprVisitor::bottom_up(expr);
+    let mut queue = VecDeque::new();
+    queue.push_back(expr);
 
-    while let Some(expr) = visitor.pop_back() {
+    while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::SelectIndex { index, .. } => {
+            Expr::SelectIndex { expr, index, .. } => {
                 if let Expr::Number { inferred_type, .. } = index.deref_mut() {
                     if inferred_type.is_unknown() || inferred_type.is_one_of() {
                         *inferred_type = InferredType::U64
@@ -41,6 +43,8 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
                         }
                     }
                 }
+
+                queue.push_back(expr);
             }
 
             Expr::Range { range, .. } => {
@@ -55,7 +59,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
                 }
             }
 
-            _ => {}
+            _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
 }
