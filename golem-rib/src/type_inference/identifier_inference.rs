@@ -24,7 +24,7 @@ pub fn infer_all_identifiers(expr: &mut Expr) {
 }
 
 mod internal {
-    use crate::type_inference::identifier_inference::internal;
+
     use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
     use std::collections::{HashMap, VecDeque};
 
@@ -113,13 +113,10 @@ mod internal {
         let mut visitor = ExprVisitor::bottom_up(expr);
 
         while let Some(expr) = visitor.pop_back() {
-            match expr {
-                Expr::PatternMatch { match_arms, .. } => {
-                    for arm in match_arms {
-                        process_arm(arm)
-                    }
+            if let Expr::PatternMatch { match_arms, .. } = expr {
+                for arm in match_arms {
+                    process_arm(arm)
                 }
-                _ => {}
             }
         }
     }

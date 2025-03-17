@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor, VariableId};
-use std::collections::VecDeque;
 pub fn bind_variables_of_list_reduce(expr: &mut Expr) {
     let mut visitor = ExprVisitor::top_down(expr);
 
@@ -40,7 +39,6 @@ pub fn bind_variables_of_list_reduce(expr: &mut Expr) {
 
 mod internal {
     use crate::{Expr, ExprVisitor, VariableId};
-    use std::collections::VecDeque;
 
     pub(crate) fn process_yield_expr(
         reduce_variable: &mut VariableId,

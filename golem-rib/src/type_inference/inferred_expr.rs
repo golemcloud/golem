@@ -18,7 +18,7 @@ use crate::{
     DynamicParsedFunctionName, Expr, ExprVisitor, FunctionTypeRegistry, GlobalVariableTypeSpec,
     RegistryKey,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct InferredExpr(Expr);
@@ -48,14 +48,12 @@ impl InferredExpr {
         let mut visitor = ExprVisitor::bottom_up(&mut expr);
 
         while let Some(expr) = visitor.pop_back() {
-            match expr {
-                Expr::Call {
-                    call_type: CallType::Function { function_name, .. },
-                    ..
-                } => {
-                    worker_calls.push(function_name.clone());
-                }
-                _ => {}
+            if let Expr::Call {
+                call_type: CallType::Function { function_name, .. },
+                ..
+            } = expr
+            {
+                worker_calls.push(function_name.clone());
             }
         }
 

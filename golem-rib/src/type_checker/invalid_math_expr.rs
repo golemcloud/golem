@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor};
-use std::collections::VecDeque;
 pub enum InvalidMathExprError {
     Both {
         math_expr: Expr,
@@ -40,7 +39,7 @@ pub fn check_invalid_math_expr(expr: &mut Expr) -> Result<(), InvalidMathExprErr
         | Expr::Multiply { lhs, rhs, .. }
         | Expr::Divide { lhs, rhs, .. } = &expr
         {
-            check_math_expression_types(&expr, lhs, rhs)?;
+            check_math_expression_types(expr, lhs, rhs)?;
         }
     }
 

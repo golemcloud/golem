@@ -14,7 +14,6 @@
 
 use crate::call_type::CallType;
 use crate::{Expr, ExprVisitor, FunctionCallError, FunctionTypeRegistry, RegistryKey};
-use std::collections::VecDeque;
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,
 // we have this special phase to grab errors in the context function calls.
@@ -28,10 +27,11 @@ pub fn check_type_error_in_function_calls(
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_front() {
-        match &expr {
-            Expr::Call {
-                call_type, args, ..
-            } => match call_type {
+        if let Expr::Call {
+            call_type, args, ..
+        } = &expr
+        {
+            match call_type {
                 CallType::InstanceCreation(_) => {}
                 call_type => internal::check_type_mismatch_in_function_call(
                     call_type,
@@ -39,8 +39,7 @@ pub fn check_type_error_in_function_calls(
                     type_registry,
                     expr,
                 )?,
-            },
-            _ => {}
+            }
         }
     }
 
@@ -116,7 +115,7 @@ mod internal {
 
             type_checker::check_type_mismatch(
                 actual_arg,
-                Some(&function_call_expr),
+                Some(function_call_expr),
                 &expected_arg_type,
                 actual_arg_type,
             )

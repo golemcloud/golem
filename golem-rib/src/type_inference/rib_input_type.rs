@@ -16,7 +16,7 @@ use crate::{Expr, ExprVisitor, InferredExpr, RibError};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 // RibInputTypeInfo refers to the required global inputs to a RibScript
 // with its type information. Example: `request` variable which should be of the type `Record`.
@@ -39,24 +39,22 @@ impl RibInputTypeInfo {
         let mut global_variables = HashMap::new();
 
         while let Some(expr) = queue.pop_back() {
-            match &expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    ..
-                } => {
-                    if variable_id.is_global() {
-                        let analysed_type = AnalysedType::try_from(inferred_type).map_err(|e| {
-                            RibError::InternalError(format!(
-                                "failed to convert inferred type to analysed type: {}",
-                                e
-                            ))
-                        })?;
+            if let Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } = &expr
+            {
+                if variable_id.is_global() {
+                    let analysed_type = AnalysedType::try_from(inferred_type).map_err(|e| {
+                        RibError::InternalError(format!(
+                            "failed to convert inferred type to analysed type: {}",
+                            e
+                        ))
+                    })?;
 
-                        global_variables.insert(variable_id.name(), analysed_type);
-                    }
+                    global_variables.insert(variable_id.name(), analysed_type);
                 }
-                _ => {}
             }
         }
 

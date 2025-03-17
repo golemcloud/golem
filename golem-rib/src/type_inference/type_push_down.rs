@@ -17,7 +17,6 @@ use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
 use crate::{Expr, ExprVisitor, InferredType, MatchArm};
-use std::collections::VecDeque;
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
     let mut visitor = ExprVisitor::bottom_up(expr);

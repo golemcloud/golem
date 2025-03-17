@@ -10,6 +10,12 @@ pub struct ExprVisitor<'a> {
     queue: VecDeque<&'a mut Expr>,
 }
 
+impl Default for ExprVisitor<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> ExprVisitor<'a> {
     pub fn new() -> Self {
         ExprVisitor {
