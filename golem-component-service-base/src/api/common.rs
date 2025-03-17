@@ -38,4 +38,18 @@ impl TraceErrorKind for ComponentTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                component_error::Error::BadRequest(_) => true,
+                component_error::Error::NotFound(_) => true,
+                component_error::Error::AlreadyExists(_) => true,
+                component_error::Error::LimitExceeded(_) => true,
+                component_error::Error::Unauthorized(_) => true,
+                component_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }

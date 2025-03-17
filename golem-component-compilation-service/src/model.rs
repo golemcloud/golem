@@ -14,6 +14,7 @@
 
 use std::fmt::Display;
 
+use crate::config::StaticComponentServiceConfig;
 use golem_common::model::ComponentId;
 use tokio::sync::mpsc;
 use wasmtime::component::Component;
@@ -33,6 +34,7 @@ impl Display for ComponentWithVersion {
 #[derive(Debug)]
 pub struct CompilationRequest {
     pub component: ComponentWithVersion,
+    pub sender: Option<StaticComponentServiceConfig>,
 }
 
 pub struct CompiledComponent {
