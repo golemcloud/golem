@@ -62,7 +62,7 @@ async fn execute(
     // Compile the API definition
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
-        &internal::get_component_metadata(),
+        &internal::get_vigoo_component_metadata(),
         &DefaultNamespace::default(),
     )
     .expect("Failed to compile API definition");
@@ -124,6 +124,58 @@ async fn test_legacy_api_def_for_valid_input() {
 
     assert_eq!(result, expected);
 }
+
+#[test]
+async fn test_vigoo_hackathon_bug_def_for_valid_input() {
+    let api_request =
+        get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
+
+    let response_mapping = r#"
+        let email = "user@test.com";
+        let temp_worker = instance("accounts_proxy");
+        let user = temp_worker.get-user-name(email);
+        let store_name = request.path.store;
+        let store_worker_name = "${user}_${store_name}";
+        let worker = instance(store_worker_name);
+        let store = worker.store(user);
+        let result = store.get-currency();
+
+        match result {
+          ok(currency) => { status: 200u64, body: currency },
+          err(error) => { status: 404u64, body: "Failed to get currency: ${error}" }
+        }
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{store}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+        .await;
+
+    dbg!(response);
+
+    // let test_response = internal::get_details_from_response(response).await;
+    //
+    // let result = (test_response.function_name, test_response.function_params);
+    //
+    // let expected = (
+    //     "golem:it/api.{get-cart-contents}".to_string(),
+    //     Value::Array(vec![
+    //         Value::String("a".to_string()),
+    //         Value::String("b".to_string()),
+    //     ]),
+    // );
+
+    assert!(false)
+}
+
 
 #[test]
 async fn test_first_class_worker_api_def_for_valid_input() {
@@ -1757,11 +1809,8 @@ mod internal {
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
-    use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
-    use golem_wasm_ast::analysis::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance,
-    };
+    use golem_wasm_ast::analysis::analysed_type::{case, f32, field, handle, list, record, result, str, tuple, u32, variant};
+    use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use golem_worker_service_base::gateway_api_definition::http::{
@@ -1799,6 +1848,7 @@ mod internal {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use golem_wasm_rpc::ValueAndType;
 
     pub struct TestApiDefinitionLookup {
         pub api_definition: CompiledHttpApiDefinition<DefaultNamespace>,
@@ -1832,6 +1882,21 @@ mod internal {
             &self,
             resolved_worker_request: GatewayResolvedWorkerRequest<DefaultNamespace>,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+
+            if resolved_worker_request.function_name == "amazon:shopping-cart/api1.{foo1}" {
+                let x = ValueAndType::new(
+                    golem_wasm_rpc::Value::Tuple(vec![golem_wasm_rpc::Value::Result(Ok(Some(Box::new(golem_wasm_rpc::Value::String("success".to_string())))))]),
+                    tuple(vec![result(str(), str())]),
+                );
+
+                let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
+
+                let worker_response = create_tuple(vec![type_annotated_value]);
+
+                return Ok(WorkerResponse::new(worker_response));
+            }
+
+
             let type_annotated_value = convert_to_worker_response(&resolved_worker_request);
             let worker_response = create_tuple(vec![type_annotated_value]);
 
@@ -1962,6 +2027,96 @@ mod internal {
         };
 
         create_record(record_elems).unwrap()
+    }
+
+    pub(crate) fn get_vigoo_component_metadata1() -> Vec<AnalysedExport> {
+        // Exist in only amazon:shopping-cart/api1
+        let analysed_function_in_api1 = AnalysedFunction {
+            name: "get-user-name".to_string(),
+            parameters: vec![AnalysedFunctionParameter {
+                name: "arg1".to_string(),
+                typ: str(),
+            }],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: str(),
+            }],
+        };
+
+        let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+            name: "vigoo:hackathon/api".to_string(),
+            functions: vec![
+                analysed_function_in_api1,
+            ],
+        });
+
+
+        vec![analysed_export1]
+    }
+
+    pub(crate) fn get_vigoo_component_metadata(
+    ) -> ComponentMetadataDictionary {
+
+        let versioned_component_id = VersionedComponentId {
+            component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
+            version: 0,
+        };
+
+        let mut metadata_dict = HashMap::new();
+
+        let mut exports = get_vigoo_component_metadata2();
+        let with_out = get_vigoo_component_metadata1();
+        exports.extend(with_out);
+
+        metadata_dict.insert(versioned_component_id, exports);
+
+        ComponentMetadataDictionary {
+            metadata: metadata_dict,
+        }
+    }
+
+    fn get_vigoo_component_metadata2(
+    ) -> Vec<AnalysedExport> {
+        let instance = AnalysedExport::Instance(AnalysedInstance {
+            name: "vigoo:hackathon/api".to_string(),
+            functions: vec![
+                AnalysedFunction {
+                    name: "[constructor]store".to_string(),
+                    parameters: vec![AnalysedFunctionParameter{
+                        name: "initial".to_string(),
+                        typ: str(),
+                    }],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    }],
+                },
+                AnalysedFunction {
+                    name: "[method]store.get-currency".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "self".to_string(),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: result(str(), str()),
+                    }],
+                },
+
+                AnalysedFunction {
+                    name: "[drop]store".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "self".to_string(),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    }],
+                    results: vec![],
+                },
+            ],
+        });
+
+        vec![instance]
     }
 
     pub fn get_component_metadata() -> ComponentMetadataDictionary {

@@ -63,10 +63,14 @@ pub fn compile_with_restricted_global_variables(
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
 
+    dbg!("inferred_expr", &inferred_expr);
+
     let function_calls_identified =
         WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 
     let global_input_type_info = RibInputTypeInfo::from_expr(&inferred_expr)?;
+
+    dbg!("global_input_type_info", &global_input_type_info);
 
     let output_type_info = RibOutputTypeInfo::from_expr(&inferred_expr)?;
 
@@ -81,7 +85,7 @@ pub fn compile_with_restricted_global_variables(
 
         if !un_allowed_variables.is_empty() {
             return Err(RibError::InternalError(format!(
-                "Global variables not allowed: {}. Allowed: {}",
+                "following global variables not allowed: {}. Allowed: {}",
                 un_allowed_variables.join(", "),
                 allowed_global_variables.join(", ")
             )));
