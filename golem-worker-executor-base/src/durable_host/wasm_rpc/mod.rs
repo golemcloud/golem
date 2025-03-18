@@ -39,7 +39,6 @@ use golem_common::model::{
     WorkerId,
 };
 use golem_common::serialization::try_deserialize;
-use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem_rpc_0_1_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
     Uri,
@@ -51,7 +50,6 @@ use golem_wasm_rpc::{
 };
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, warn, Instrument};
 use uuid::Uuid;
@@ -65,8 +63,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
-        match location.parse_as_golem_urn() {
-            Some((remote_worker_id, None)) => {
+        match TargetWorkerId::parse_worker_urn(&location.value) {
+            Some(remote_worker_id) => {
                 let remote_worker_id = self
                     .generate_unique_local_worker_id(remote_worker_id)
                     .await?;
@@ -85,8 +83,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 })?;
                 Ok(entry)
             }
-            _ => Err(anyhow!(
-                "Invalid URI: {}. Must be urn:worker:component-id/worker-name",
+            None => Err(anyhow!(
+                "Invalid URI: {}. Must be urn:worker:component-id/worker-name (for durable workers) or urn:worker:component-id (for ephemeral workers)",
                 location.value
             )),
         }
@@ -1139,38 +1137,6 @@ impl WasmRpcEntryPayload {
         match self {
             Self::Interface { demand, .. } => demand,
             Self::Resource { demand, .. } => demand,
-        }
-    }
-}
-
-pub trait UrnExtensions {
-    fn parse_as_golem_urn(&self) -> Option<(TargetWorkerId, Option<String>)>;
-
-    fn golem_urn(worker_id: &WorkerId, function_name: Option<&str>) -> Self;
-}
-
-impl UrnExtensions for Uri {
-    fn parse_as_golem_urn(&self) -> Option<(TargetWorkerId, Option<String>)> {
-        let urn = WorkerOrFunctionUrn::from_str(&self.value).ok()?;
-
-        match urn {
-            WorkerOrFunctionUrn::Worker(w) => Some((w.id, None)),
-            WorkerOrFunctionUrn::Function(f) => {
-                Some((f.id.into_target_worker_id(), Some(f.function)))
-            }
-        }
-    }
-
-    fn golem_urn(worker_id: &WorkerId, function_name: Option<&str>) -> Self {
-        Self {
-            value: match function_name {
-                Some(function_name) => WorkerFunctionUrn {
-                    id: worker_id.clone(),
-                    function: function_name.to_string(),
-                }
-                .to_string(),
-                None => worker_id.uri(),
-            },
         }
     }
 }

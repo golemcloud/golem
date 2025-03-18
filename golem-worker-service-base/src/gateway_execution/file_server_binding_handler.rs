@@ -21,9 +21,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use futures_util::TryStreamExt;
-use golem_common::model::{ComponentFilePath, HasAccountId, TargetWorkerId};
+use golem_common::model::{ComponentFilePath, HasAccountId, TargetWorkerId, WorkerId};
 use golem_service_base::auth::EmptyAuthCtx;
-use golem_service_base::model::validate_worker_name;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -235,7 +234,7 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
             let worker_name_opt_validated = worker_detail
                 .worker_name
                 .as_ref()
-                .map(|w| validate_worker_name(w).map(|_| w.clone()))
+                .map(|w| WorkerId::validate_worker_name(w).map(|_| w.clone()))
                 .transpose()
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!("Invalid worker name: {}", e))

@@ -25,7 +25,6 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::model::InterruptKind;
@@ -225,10 +224,14 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
         function_name: String,
     ) -> Result<crate::preview2::golem::rpc::types::Uri, anyhow::Error> {
         self.observe_function_call("golem::api", "get_self_uri");
-        let uri = golem_wasm_rpc::golem_rpc_0_1_x::types::Uri::golem_urn(
-            &self.owned_worker_id.worker_id,
-            Some(&function_name),
-        );
+        let uri = golem_wasm_rpc::golem_rpc_0_1_x::types::Uri {
+            value: format!(
+                "{}/{}",
+                self.owned_worker_id.worker_id.to_worker_urn(),
+                function_name
+            ),
+        };
+
         Ok(crate::preview2::golem::rpc::types::Uri { value: uri.value })
     }
 
