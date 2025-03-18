@@ -39,7 +39,9 @@ impl ResolvedResponseHeaders {
                     let value_str = value
                         .get_literal()
                         .map(|primitive| primitive.to_string())
-                        .unwrap_or_else(|| "unable to infer header".to_string());
+                        .unwrap_or_else(|| {
+                            "header values in the http response should be a literal".to_string()
+                        });
 
                     resolved_headers.insert(field_def.name, value_str);
                 }

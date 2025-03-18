@@ -80,8 +80,8 @@ pub fn compile_with_restricted_global_variables(
         }
 
         if !un_allowed_variables.is_empty() {
-            return Err(RibError::InternalError(format!(
-                "following global variables not allowed: {}. Allowed: {}",
+            return Err(RibError::InvalidRibScript(format!(
+                "unexpected global variables: {}. make sure only these variables are used as global input: {}",
                 un_allowed_variables.join(", "),
                 allowed_global_variables.join(", ")
             )));
@@ -107,6 +107,7 @@ pub fn compile_with_restricted_global_variables(
 pub enum RibError {
     InternalError(String),
     RibCompilationError(RibCompilationError),
+    InvalidRibScript(String),
 }
 
 impl From<RibCompilationError> for RibError {
@@ -120,6 +121,7 @@ impl Display for RibError {
         match self {
             RibError::InternalError(msg) => write!(f, "rib internal error: {}", msg),
             RibError::RibCompilationError(err) => write!(f, "{}", err),
+            RibError::InvalidRibScript(msg) => write!(f, "invalid rib script: {}", msg),
         }
     }
 }

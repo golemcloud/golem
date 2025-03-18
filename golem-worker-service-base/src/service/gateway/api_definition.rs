@@ -58,6 +58,8 @@ pub enum ApiDefinitionError {
     RibCompilationErrors(String),
     #[error("Rib internal error: {0}")]
     RibInternal(String),
+    #[error("Invalid rib script: {0}")]
+    InvalidRibScript(String),
     #[error("Security Scheme Error: {0}")]
     SecuritySchemeError(SecuritySchemeServiceError),
     #[error("Identity Provider Error: {0}")]
@@ -99,6 +101,7 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::Internal(_) => self.to_string(),
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
             ApiDefinitionError::RibInternal(_) => self.to_string(),
+            ApiDefinitionError::InvalidRibScript(_) => self.to_string(),
         }
     }
 }
@@ -111,6 +114,7 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
                 RibError::InternalError(e) => ApiDefinitionError::RibInternal(e),
+                RibError::InvalidRibScript(e) => ApiDefinitionError::InvalidRibScript(e),
             },
             RouteCompilationErrors::MetadataNotFoundError(e) => {
                 ApiDefinitionError::RibCompilationErrors(format!(
