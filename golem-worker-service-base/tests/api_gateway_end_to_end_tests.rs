@@ -171,8 +171,7 @@ async fn test_first_class_worker_api_with_resource() {
         .get("user")
         .unwrap()
         .to_str()
-        .unwrap()
-        .clone();
+        .unwrap();
     assert_eq!(user_name, "test-user-generated");
 
     let message = response.into_body().into_string().await.unwrap();
@@ -1813,7 +1812,7 @@ mod internal {
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{
-        case, f32, field, handle, list, record, result, str, tuple, u32, variant,
+        field, handle, record, result, str, tuple,
     };
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -1891,8 +1890,6 @@ mod internal {
             resolved_worker_request: GatewayResolvedWorkerRequest<DefaultNamespace>,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
             let function_name = resolved_worker_request.function_name.clone();
-
-            dbg!(function_name.clone());
 
             if function_name.clone() == "bigw:shopping/api.{get-user-name}" {
                 let x = ValueAndType::new(

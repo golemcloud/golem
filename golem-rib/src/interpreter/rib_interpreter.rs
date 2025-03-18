@@ -1381,7 +1381,6 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         arg_size: usize,
     ) -> Result<(), String> {
-        dbg!(arg_size);
         let literals = interpreter_stack.try_pop_n_literals(arg_size)?;
 
         let str = literals
