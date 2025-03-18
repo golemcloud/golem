@@ -6,7 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use golem_common::model::RetryConfig;
-use golem_common::retries::with_retriable_errors;
+use golem_common::retriable_error::IsRetriableError;
+use golem_common::retries::with_retries_customized;
 
 use crate::error::HealthCheckError;
 use crate::model::Pod;
@@ -46,19 +47,23 @@ async fn health_check_with_retries<F>(
     implementation: F,
     retry_config: &RetryConfig,
     pod: &Pod,
+    silent: bool,
 ) -> bool
 where
     F: for<'a> Fn(
         &'a Pod,
     ) -> Pin<Box<dyn Future<Output = Result<(), HealthCheckError>> + 'a + Send>>,
 {
-    with_retriable_errors(
+    with_retries_customized(
         target,
         "healtcheck",
         Some(format!("{pod}")),
         retry_config,
         pod,
         implementation,
+        IsRetriableError::is_retriable,
+        IsRetriableError::as_loggable,
+        silent,
     )
     .await
     .is_ok()
@@ -68,16 +73,19 @@ where
 pub struct GrpcHealthCheck {
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     retry_config: RetryConfig,
+    silent: bool,
 }
 
 impl GrpcHealthCheck {
     pub fn new(
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         retry_config: RetryConfig,
+        silent: bool,
     ) -> Self {
         GrpcHealthCheck {
             worker_executors,
             retry_config,
+            silent,
         }
     }
 }
@@ -93,6 +101,7 @@ impl HealthCheck for GrpcHealthCheck {
             },
             &self.retry_config,
             pod,
+            self.silent,
         )
         .await
     }
@@ -113,18 +122,21 @@ pub mod kubernetes {
         client: Client,
         namespace: String,
         retry_config: RetryConfig,
+        silent: bool,
     }
 
     impl KubernetesHealthCheck {
         pub async fn new(
             namespace: String,
             retry_config: RetryConfig,
+            silent: bool,
         ) -> Result<Self, kube::Error> {
             let client = Client::try_default().await?;
             Ok(KubernetesHealthCheck {
                 client,
                 namespace,
                 retry_config,
+                silent,
             })
         }
 
@@ -166,6 +178,7 @@ pub mod kubernetes {
                 },
                 &self.retry_config,
                 pod,
+                self.silent,
             )
             .await
         }

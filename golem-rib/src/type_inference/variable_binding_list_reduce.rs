@@ -12,65 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, VariableId};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, VariableId};
 pub fn bind_variables_of_list_reduce(expr: &mut Expr) {
-    let mut queue = VecDeque::new();
-    queue.push_front(expr);
+    let mut visitor = ExprVisitor::top_down(expr);
 
     // Start from the end
-    while let Some(expr) = queue.pop_front() {
-        match expr {
-            Expr::ListReduce {
-                reduce_variable,
-                iterated_variable,
-                iterable_expr,
-                init_value_expr,
-                yield_expr,
-                ..
-            } => {
-                queue.push_front(iterable_expr);
-                queue.push_front(init_value_expr);
+    while let Some(expr) = visitor.pop_front() {
+        if let Expr::ListReduce {
+            reduce_variable,
+            iterated_variable,
+            yield_expr,
+            ..
+        } = expr
+        {
+            // While parser may update this directly, type inference phase
+            // still ensures that these variables are tagged to its appropriately
+            *iterated_variable =
+                VariableId::list_comprehension_identifier(iterated_variable.name());
 
-                // While parser may update this directly, type inference phase
-                // still ensures that these variables are tagged to its appropriately
-                *iterated_variable =
-                    VariableId::list_comprehension_identifier(iterated_variable.name());
+            *reduce_variable = VariableId::list_reduce_identifier(reduce_variable.name());
 
-                *reduce_variable = VariableId::list_reduce_identifier(reduce_variable.name());
-
-                internal::process_yield_expr(reduce_variable, iterated_variable, yield_expr)
-            }
-            _ => {
-                expr.visit_children_mut_top_down(&mut queue);
-            }
+            internal::process_yield_expr(reduce_variable, iterated_variable, yield_expr)
         }
     }
 }
 
 mod internal {
-    use crate::{Expr, VariableId};
-    use std::collections::VecDeque;
+    use crate::{Expr, ExprVisitor, VariableId};
 
     pub(crate) fn process_yield_expr(
         reduce_variable: &mut VariableId,
         iterated_variable_id: &mut VariableId,
         yield_expr: &mut Expr,
     ) {
-        let mut queue = VecDeque::new();
+        let mut visitor = ExprVisitor::top_down(yield_expr);
 
-        queue.push_front(yield_expr);
-
-        while let Some(expr) = queue.pop_front() {
-            match expr {
-                Expr::Identifier { variable_id, .. } => {
-                    if iterated_variable_id.name() == variable_id.name() {
-                        *variable_id = iterated_variable_id.clone();
-                    } else if reduce_variable.name() == variable_id.name() {
-                        *variable_id = reduce_variable.clone()
-                    }
+        while let Some(expr) = visitor.pop_front() {
+            if let Expr::Identifier { variable_id, .. } = expr {
+                if iterated_variable_id.name() == variable_id.name() {
+                    *variable_id = iterated_variable_id.clone();
+                } else if reduce_variable.name() == variable_id.name() {
+                    *variable_id = reduce_variable.clone()
                 }
-                _ => expr.visit_children_mut_top_down(&mut queue),
             }
         }
     }

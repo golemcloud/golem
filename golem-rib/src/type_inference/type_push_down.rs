@@ -16,15 +16,14 @@ use crate::rib_compilation_error::RibCompilationError;
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
-use crate::{Expr, InferredType, MatchArm};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, InferredType, MatchArm};
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(outer_expr) = queue.pop_back() {
+    while let Some(outer_expr) = visitor.pop_back() {
         let copied = outer_expr.clone();
+
         match outer_expr {
             Expr::SelectField {
                 expr,
@@ -37,7 +36,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 let inferred_record_type = InferredType::Record(record_type);
 
                 expr.add_infer_type_mut(inferred_record_type);
-                queue.push_back(expr);
             }
 
             Expr::SelectIndex {
@@ -64,9 +62,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                         expr.add_infer_type_mut(new_inferred_type);
                     }
                 }
-
-                queue.push_back(expr);
-                queue.push_back(index)
             }
 
             Expr::Cond {
@@ -80,9 +75,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 rhs.add_infer_type_mut(inferred_type.clone());
 
                 cond.add_infer_type_mut(InferredType::Bool);
-                queue.push_back(cond);
-                queue.push_back(lhs);
-                queue.push_back(rhs);
             }
             Expr::Not {
                 expr,
@@ -90,7 +82,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 ..
             } => {
                 expr.add_infer_type_mut(inferred_type.clone());
-                queue.push_back(expr);
             }
             Expr::Option {
                 expr: Some(inner_expr),
@@ -98,7 +89,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 ..
             } => {
                 internal::handle_option(inner_expr, copied, inferred_type)?;
-                queue.push_back(inner_expr);
             }
 
             Expr::Result {
@@ -107,7 +97,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 ..
             } => {
                 internal::handle_ok(expr, copied, inferred_type)?;
-                queue.push_back(expr);
             }
 
             Expr::Result {
@@ -116,7 +105,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 ..
             } => {
                 internal::handle_err(expr, copied, inferred_type)?;
-                queue.push_back(expr);
             }
 
             Expr::PatternMatch {
@@ -138,7 +126,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                         predicate,
                     )?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
-                    queue.push_back(arm_resolution_expr);
                 }
             }
 
@@ -147,14 +134,14 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_tuple(exprs, copied, inferred_type, &mut queue)?;
+                internal::handle_tuple(exprs, copied, inferred_type)?;
             }
             Expr::Sequence {
                 exprs,
                 inferred_type,
                 ..
             } => {
-                internal::handle_sequence(exprs, copied, inferred_type, &mut queue)?;
+                internal::handle_sequence(exprs, copied, inferred_type)?;
             }
 
             Expr::Record {
@@ -162,7 +149,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_record(exprs, copied, inferred_type, &mut queue)?;
+                internal::handle_record(exprs, copied, inferred_type)?;
             }
 
             Expr::Call {
@@ -171,7 +158,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_call(call_type, args, inferred_type, &mut queue);
+                internal::handle_call(call_type, args, inferred_type);
             }
 
             Expr::ListComprehension {
@@ -187,8 +174,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                     yield_expr,
                     inferred_type,
                 )?;
-                queue.push_back(iterable_expr);
-                queue.push_back(yield_expr);
             }
 
             Expr::ListReduce {
@@ -208,9 +193,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
                     yield_expr,
                     inferred_type,
                 )?;
-                queue.push_back(iterable_expr);
-                queue.push_back(init_value_expr);
-                queue.push_back(yield_expr);
             }
 
             Expr::Plus {
@@ -221,8 +203,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
             } => {
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
-                queue.push_back(lhs);
-                queue.push_back(rhs);
             }
 
             Expr::Divide {
@@ -233,8 +213,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
             } => {
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
-                queue.push_back(lhs);
-                queue.push_back(rhs);
             }
 
             Expr::Minus {
@@ -245,8 +223,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
             } => {
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
-                queue.push_back(lhs);
-                queue.push_back(rhs);
             }
 
             Expr::Multiply {
@@ -257,13 +233,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
             } => {
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
-                queue.push_back(lhs);
-                queue.push_back(rhs);
             }
 
-            // Note that binary math operations cannot be pushed down. There is no way to properly
-            // determine what should be the individual expressions just by looking at the result type
-            _ => outer_expr.visit_children_mut_bottom_up(&mut queue),
+            _ => {}
         }
     }
 
@@ -488,11 +460,10 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn handle_sequence<'a>(
-        inner_expressions: &'a mut [Expr],
+    pub(crate) fn handle_sequence(
+        inner_expressions: &mut [Expr],
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-        push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), RibCompilationError> {
         let refined_list_type = ListType::refine(outer_inferred_type).ok_or(
             get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::List),
@@ -501,17 +472,15 @@ mod internal {
 
         for expr in inner_expressions.iter_mut() {
             expr.add_infer_type_mut(inner_type.clone());
-            push_down_queue.push_back(expr);
         }
 
         Ok(())
     }
 
-    pub(crate) fn handle_tuple<'a>(
-        inner_expressions: &'a mut [Expr],
+    pub(crate) fn handle_tuple(
+        inner_expressions: &mut [Expr],
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-        push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), RibCompilationError> {
         let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or(
             get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Tuple),
@@ -520,17 +489,15 @@ mod internal {
 
         for (expr, typ) in inner_expressions.iter_mut().zip(inner_types) {
             expr.add_infer_type_mut(typ.clone());
-            push_down_queue.push_back(expr);
         }
 
         Ok(())
     }
 
-    pub(crate) fn handle_record<'a>(
-        inner_expressions: &'a mut [(String, Box<Expr>)],
+    pub(crate) fn handle_record(
+        inner_expressions: &mut [(String, Box<Expr>)],
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-        push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), RibCompilationError> {
         let refined_record_type =
             RecordType::refine(outer_inferred_type).ok_or(get_compilation_error_for_ambiguity(
@@ -542,7 +509,6 @@ mod internal {
         for (field, expr) in inner_expressions {
             let inner_type = refined_record_type.inner_type_by_name(field);
             expr.add_infer_type_mut(inner_type.clone());
-            push_down_queue.push_back(expr);
         }
 
         Ok(())
@@ -552,7 +518,6 @@ mod internal {
         call_type: &'a mut CallType,
         expressions: &'a mut Vec<Expr>,
         inferred_type: &'a mut InferredType,
-        queue: &mut VecDeque<&'a mut Expr>,
     ) {
         match call_type {
             // For CallType::Enum, there are no argument expressions
@@ -568,33 +533,12 @@ mod internal {
                     if let Some((_name, Some(inner_type))) = identified_variant {
                         for expr in expressions {
                             expr.add_infer_type_mut(inner_type.clone());
-                            queue.push_back(expr);
                         }
                     }
                 }
             }
-            CallType::Function {
-                worker,
-                function_name,
-            } => {
-                if let Some(worker) = worker {
-                    queue.push_back(worker);
-                }
 
-                if let Some(expr) = function_name.raw_resource_params_mut() {
-                    queue.extend(expr);
-                }
-
-                if let InferredType::Instance { instance_type } = inferred_type {
-                    if let Some(function) = instance_type.worker_mut() {
-                        queue.push_back(function);
-                    }
-                }
-
-                queue.extend(expressions);
-            }
-
-            _ => queue.extend(expressions),
+            _ => {}
         }
     }
 

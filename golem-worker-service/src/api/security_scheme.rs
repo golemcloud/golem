@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::DefaultNamespace;
@@ -43,16 +57,18 @@ impl SecuritySchemeApi {
             "get",
             security_scheme_identifier = security_scheme_identifier.0
         );
-        let security_scheme = self
+        let response = self
             .security_scheme_service
             .get(
                 &SecuritySchemeIdentifier::new(security_scheme_identifier.0),
                 &DefaultNamespace::default(),
             )
             .instrument(record.span.clone())
-            .await?;
+            .await
+            .map_err(|err| err.into())
+            .map(|security_scheme| Json(SecuritySchemeData::from(security_scheme)));
 
-        Ok(Json(SecuritySchemeData::from(security_scheme)))
+        record.result(response)
     }
 
     /// Create a security scheme
@@ -69,14 +85,14 @@ impl SecuritySchemeApi {
             ApiEndpointError::bad_request(safe(format!("Invalid security scheme {}", err)))
         })?;
 
-        let security_scheme_with_metadata = self
+        let response = self
             .security_scheme_service
             .create(&DefaultNamespace::default(), &security_scheme)
             .instrument(record.span.clone())
-            .await?;
+            .await
+            .map_err(|err| err.into())
+            .map(|security_scheme| Json(SecuritySchemeData::from(security_scheme)));
 
-        Ok(Json(SecuritySchemeData::from(
-            security_scheme_with_metadata,
-        )))
+        record.result(response)
     }
 }

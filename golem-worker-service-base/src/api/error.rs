@@ -54,6 +54,17 @@ impl TraceErrorKind for WorkerApiBaseError {
             WorkerApiBaseError::InternalError(_) => "InternalError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            WorkerApiBaseError::BadRequest(_) => true,
+            WorkerApiBaseError::NotFound(_) => true,
+            WorkerApiBaseError::AlreadyExists(_) => true,
+            WorkerApiBaseError::Forbidden(_) => true,
+            WorkerApiBaseError::Unauthorized(_) => true,
+            WorkerApiBaseError::InternalError(_) => false,
+        }
+    }
 }
 
 impl From<tonic::transport::Error> for WorkerApiBaseError {

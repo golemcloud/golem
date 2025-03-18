@@ -61,6 +61,7 @@ impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
                     mode: K8s(HealthCheckK8sConfig {
                         namespace: "namespace".to_string(),
                     }),
+                    silent: false,
                 },
                 ..Self::default()
             },
@@ -98,6 +99,7 @@ pub struct HealthCheckConfig {
     #[serde(with = "humantime_serde")]
     pub delay: Duration,
     pub mode: HealthCheckMode,
+    pub silent: bool,
 }
 
 impl Default for HealthCheckConfig {
@@ -105,6 +107,7 @@ impl Default for HealthCheckConfig {
         Self {
             delay: Duration::from_secs(10),
             mode: HealthCheckMode::default(),
+            silent: false,
         }
     }
 }

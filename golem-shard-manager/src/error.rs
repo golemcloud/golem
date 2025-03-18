@@ -156,4 +156,15 @@ impl TraceErrorKind for ShardManagerTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                shard_manager_error::Error::InvalidRequest(_) => true,
+                shard_manager_error::Error::Timeout(_) => true,
+                shard_manager_error::Error::Unknown(_) => false,
+            },
+        }
+    }
 }

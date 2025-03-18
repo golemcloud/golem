@@ -12,28 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Expr;
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor};
 
 // This function will assign ids to variables declared with `let` expressions,
 // and propagate these ids to the usage sites (`Expr::Identifier` nodes).
 pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
     let mut identifier_id_state = internal::IdentifierVariableIdState::new();
-    let mut queue = VecDeque::new();
-    queue.push_front(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
     // Start from the end
-    while let Some(expr) = queue.pop_front() {
+    while let Some(expr) = visitor.pop_front() {
         match expr {
-            Expr::Let {
-                variable_id, expr, ..
-            } => {
+            Expr::Let { variable_id, .. } => {
                 let field_name = variable_id.name();
                 identifier_id_state.update_variable_id(&field_name); // Increment the variable_id
                 if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
                     *variable_id = latest_variable_id.clone();
                 }
-                queue.push_front(expr);
             }
 
             Expr::Identifier { variable_id, .. } if !variable_id.is_match_binding() => {
@@ -42,10 +37,7 @@ pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
                     *variable_id = latest_variable_id.clone();
                 }
             }
-
-            _ => {
-                expr.visit_children_mut_top_down(&mut queue);
-            }
+            _ => {}
         }
     }
 }
