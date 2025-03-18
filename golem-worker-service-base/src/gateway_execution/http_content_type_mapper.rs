@@ -55,13 +55,13 @@ impl ContentTypeHeaderExt for AcceptHeaders {
     fn has_application_json(&self) -> bool {
         self.0.iter().any(|v| {
             if let Ok(mime) = Mime::from_str(v) {
-                match (mime.type_(), mime.subtype()) {
-                    (mime::APPLICATION, mime::JSON) => true,
-                    (mime::APPLICATION, mime::STAR) => true,
-                    (mime::STAR, mime::STAR) => true,
-                    (mime::STAR, mime::JSON) => true,
-                    _ => false,
-                }
+                matches!(
+                    (mime.type_(), mime.subtype()),
+                    (mime::APPLICATION, mime::JSON)
+                        | (mime::APPLICATION, mime::STAR)
+                        | (mime::STAR, mime::STAR)
+                        | (mime::STAR, mime::JSON)
+                )
             } else {
                 false
             }

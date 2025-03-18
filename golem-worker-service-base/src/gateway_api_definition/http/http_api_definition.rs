@@ -32,6 +32,7 @@ use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use rib::RibError;
+use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -41,7 +42,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
-use serde::de::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -420,8 +420,7 @@ impl<'de> Deserialize<'de> for MethodPattern {
     where
         D: Deserializer<'de>,
     {
-        MethodPattern::from_str(&String::deserialize(deserializer)?)
-            .map_err(|err| D::Error::custom(err))
+        MethodPattern::from_str(&String::deserialize(deserializer)?).map_err(D::Error::custom)
     }
 }
 

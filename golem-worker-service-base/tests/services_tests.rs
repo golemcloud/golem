@@ -1096,7 +1096,6 @@ fn get_api_definition(
     api.try_into().unwrap()
 }
 
-
 fn contains_definitions(
     result: Vec<HttpApiDefinition>,
     expected: Vec<HttpApiDefinitionRequest>,
