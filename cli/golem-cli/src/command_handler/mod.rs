@@ -189,7 +189,7 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
             if error.downcast_ref::<NonSuccessfulExit>().is_none() {
                 // TODO: check if this should be display or debug
                 logln("");
-                log_error(format!("{}", error));
+                log_error(format!("{:#}", error));
             }
             ExitCode::FAILURE
         })
