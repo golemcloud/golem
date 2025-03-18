@@ -166,12 +166,7 @@ async fn test_first_class_worker_api_with_resource() {
     .await;
 
     let status = response.status();
-    let user_name = response
-        .headers()
-        .get("user")
-        .unwrap()
-        .to_str()
-        .unwrap();
+    let user_name = response.headers().get("user").unwrap().to_str().unwrap();
     assert_eq!(user_name, "test-user-generated");
 
     let message = response.into_body().into_string().await.unwrap();
@@ -1811,9 +1806,7 @@ mod internal {
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
-    use golem_wasm_ast::analysis::analysed_type::{
-        field, handle, record, result, str, tuple,
-    };
+    use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,

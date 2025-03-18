@@ -1,7 +1,10 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::rib_compilation_error::RibCompilationError;
 use crate::type_parameter::InterfaceName;
-use crate::{DynamicParsedFunctionName, Expr, FunctionCallError, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+use crate::{
+    DynamicParsedFunctionName, Expr, FunctionCallError, FunctionTypeRegistry, InferredType,
+    RegistryKey, RegistryValue,
+};
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
     function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
@@ -682,7 +685,6 @@ impl FullyQualifiedResourceMethod {
         &self,
         resource_args: Vec<Expr>,
     ) -> Result<DynamicParsedFunctionName, String> {
-
         let mut dynamic_parsed_str = String::new();
 
         // Construct the package/interface prefix
