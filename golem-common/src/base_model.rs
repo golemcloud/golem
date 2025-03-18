@@ -112,12 +112,8 @@ impl WorkerId {
         format!("{}:{}", self.component_id.0, self.worker_name)
     }
 
-    #[cfg(feature = "model")]
-    pub fn uri(&self) -> String {
-        crate::uri::oss::urn::WorkerUrn {
-            id: self.clone().into_target_worker_id(),
-        }
-        .to_string()
+    pub fn to_worker_urn(&self) -> String {
+        format!("urn:worker:{}/{}", self.component_id, self.worker_name)
     }
 
     /// The dual of `TargetWorkerId::into_worker_id`
@@ -125,6 +121,21 @@ impl WorkerId {
         TargetWorkerId {
             component_id: self.component_id,
             worker_name: Some(self.worker_name),
+        }
+    }
+
+    pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
+        let length = name.len();
+        if !(1..=512).contains(&length) {
+            Err("Worker name must be between 1 and 512 characters")
+        } else if name.chars().any(|c| c.is_whitespace()) {
+            Err("Worker name must not contain whitespaces")
+        } else if name.contains('/') {
+            Err("Worker name must not contain '/'")
+        } else if name.starts_with('-') {
+            Err("Worker name must not start with '-'")
+        } else {
+            Ok(())
         }
     }
 }
@@ -189,11 +200,6 @@ pub struct TargetWorkerId {
 }
 
 impl TargetWorkerId {
-    #[cfg(feature = "model")]
-    pub fn uri(&self) -> String {
-        crate::uri::oss::urn::WorkerUrn { id: self.clone() }.to_string()
-    }
-
     /// Converts a `TargetWorkerId` to a `WorkerId` if the worker name is specified
     pub fn try_into_worker_id(self) -> Option<WorkerId> {
         self.worker_name.map(|worker_name| WorkerId {
@@ -244,6 +250,34 @@ impl TargetWorkerId {
                         current += 1;
                     }
                 }
+            }
+        }
+    }
+
+    // NOTE: Deprecated, to be removed once the wasm-rpc constructor is changed to accept worker-id
+    pub fn parse_worker_urn(urn: &str) -> Option<TargetWorkerId> {
+        if !urn.starts_with("urn:worker:") {
+            None
+        } else {
+            let remaining = &urn[11..];
+            let parts: Vec<&str> = remaining.split('/').collect();
+            match parts.len() {
+                2 => {
+                    let component_id = ComponentId::from_str(parts[0]).ok()?;
+                    let worker_name = parts[1];
+                    Some(TargetWorkerId {
+                        component_id,
+                        worker_name: Some(worker_name.to_string()),
+                    })
+                }
+                1 => {
+                    let component_id = ComponentId::from_str(parts[0]).ok()?;
+                    Some(TargetWorkerId {
+                        component_id,
+                        worker_name: None,
+                    })
+                }
+                _ => None,
             }
         }
     }
@@ -360,5 +394,37 @@ impl golem_wasm_rpc::IntoValue for OplogIndex {
 
     fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
         golem_wasm_ast::analysis::analysed_type::u64()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ComponentId, TargetWorkerId};
+    use test_r::test;
+
+    #[test]
+    fn test_parse_worker_urn() {
+        let component_id = ComponentId::new_v4();
+
+        fn check(urn: String, expected: Option<TargetWorkerId>) {
+            assert_eq!(TargetWorkerId::parse_worker_urn(&urn), expected, "{urn}");
+        }
+
+        check(
+            format!("urn:worker:{}", component_id),
+            Some(TargetWorkerId {
+                component_id: component_id.clone(),
+                worker_name: None,
+            }),
+        );
+        check(
+            format!("urn:worker:{}/worker1", component_id),
+            Some(TargetWorkerId {
+                component_id: component_id.clone(),
+                worker_name: Some("worker1".to_string()),
+            }),
+        );
+        check(format!("urn:worker:{}/worker1/worker2", component_id), None);
+        check(format!("urn:component:{}", component_id), None);
     }
 }

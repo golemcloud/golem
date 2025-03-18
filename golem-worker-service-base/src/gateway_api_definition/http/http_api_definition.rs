@@ -32,10 +32,11 @@ use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use rib::RibError;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -283,19 +284,7 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    derive_more::Display,
-    Encode,
-    Decode,
-    Enum,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Enum)]
 pub enum MethodPattern {
     Get,
     Connect,
@@ -345,8 +334,26 @@ impl MethodPattern {
     }
 }
 
+impl Display for MethodPattern {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MethodPattern::Get => write!(f, "GET"),
+            MethodPattern::Connect => write!(f, "CONNECT"),
+            MethodPattern::Post => write!(f, "POST"),
+            MethodPattern::Delete => {
+                write!(f, "DELETE")
+            }
+            MethodPattern::Put => write!(f, "PUT"),
+            MethodPattern::Patch => write!(f, "PATCH"),
+            MethodPattern::Options => write!(f, "OPTIONS"),
+            MethodPattern::Trace => write!(f, "TRACE"),
+            MethodPattern::Head => write!(f, "HEAD"),
+        }
+    }
+}
+
 impl FromStr for MethodPattern {
-    type Err = &'static str;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
@@ -359,13 +366,13 @@ impl FromStr for MethodPattern {
             "options" => Ok(MethodPattern::Options),
             "trace" => Ok(MethodPattern::Trace),
             "head" => Ok(MethodPattern::Head),
-            _ => Err("Failed to parse method"),
+            _ => Err(format!("Failed to parse method '{s}'")),
         }
     }
 }
 
 impl TryFrom<i32> for MethodPattern {
-    type Error = &'static str;
+    type Error = String;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
@@ -378,7 +385,7 @@ impl TryFrom<i32> for MethodPattern {
             6 => Ok(MethodPattern::Options),
             7 => Ok(MethodPattern::Trace),
             8 => Ok(MethodPattern::Head),
-            _ => Err("Failed to parse MethodPattern"),
+            _ => Err(format!("Failed to parse numeric MethodPattern '{value}'")),
         }
     }
 }
@@ -396,6 +403,24 @@ impl From<MethodPattern> for hyper::http::Method {
             MethodPattern::Trace => hyper::http::Method::TRACE,
             MethodPattern::Head => hyper::http::Method::HEAD,
         }
+    }
+}
+
+impl Serialize for MethodPattern {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MethodPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        MethodPattern::from_str(&String::deserialize(deserializer)?).map_err(D::Error::custom)
     }
 }
 

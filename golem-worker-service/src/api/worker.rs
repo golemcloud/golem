@@ -1095,7 +1095,7 @@ fn make_worker_id(
     component_id: ComponentId,
     worker_name: String,
 ) -> std::result::Result<WorkerId, WorkerApiBaseError> {
-    validate_worker_name(&worker_name).map_err(|error| {
+    WorkerId::validate_worker_name(&worker_name).map_err(|error| {
         WorkerApiBaseError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid worker name: {error}")],
         }))
@@ -1111,7 +1111,7 @@ fn make_target_worker_id(
     worker_name: Option<String>,
 ) -> std::result::Result<TargetWorkerId, WorkerApiBaseError> {
     if let Some(worker_name) = &worker_name {
-        validate_worker_name(worker_name).map_err(|error| {
+        WorkerId::validate_worker_name(worker_name).map_err(|error| {
             WorkerApiBaseError::BadRequest(Json(ErrorsBody {
                 errors: vec![format!("Invalid worker name: {error}")],
             }))
@@ -1139,7 +1139,7 @@ async fn connect_to_worker(
     component_id: ComponentId,
     worker_name: String,
 ) -> Result<(WorkerId, WorkerStream<LogEvent>)> {
-    validate_worker_name(&worker_name).map_err(|e| {
+    WorkerId::validate_worker_name(&worker_name).map_err(|e| {
         WorkerApiBaseError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid worker name: {e}")],
         }))
