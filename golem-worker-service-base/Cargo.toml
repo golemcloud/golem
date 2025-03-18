@@ -78,6 +78,7 @@ urlencoding = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+assert2 = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 fastrand = "2.3.0"
 testcontainers = { workspace = true }
