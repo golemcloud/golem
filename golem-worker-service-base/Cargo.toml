@@ -41,6 +41,7 @@ futures-util = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
+mime = "0.3.17"
 mime_guess = "2.0.5"
 nom = { workspace = true }
 openapiv3 = { workspace = true }

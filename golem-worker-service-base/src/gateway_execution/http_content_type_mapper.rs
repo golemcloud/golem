@@ -14,10 +14,12 @@
 
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use mime::Mime;
 use poem::web::headers::ContentType;
 use poem::web::WithContentType;
 use poem::Body;
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
 pub trait HttpContentTypeResponseMapper {
     fn to_http_resp_with_content_type(
@@ -51,9 +53,19 @@ impl ContentTypeHeaderExt for ContentType {
 }
 impl ContentTypeHeaderExt for AcceptHeaders {
     fn has_application_json(&self) -> bool {
-        self.0
-            .iter()
-            .any(|v| v.contains(ContentType::json().to_string().as_str()))
+        self.0.iter().any(|v| {
+            if let Ok(mime) = Mime::from_str(v) {
+                match (mime.type_(), mime.subtype()) {
+                    (mime::APPLICATION, mime::JSON) => true,
+                    (mime::APPLICATION, mime::STAR) => true,
+                    (mime::STAR, mime::STAR) => true,
+                    (mime::STAR, mime::JSON) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        })
     }
 
     fn response_content_type(&self) -> Result<ContentType, ContentTypeMapError> {
