@@ -159,8 +159,6 @@ async fn test_vigoo_hackathon_bug_def_for_valid_input() {
     )
         .await;
 
-    dbg!(response);
-
     // let test_response = internal::get_details_from_response(response).await;
     //
     // let result = (test_response.function_name, test_response.function_params);

@@ -122,7 +122,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                     resource_constructor,
                                     ..
                                 } => {
-                                    dbg!(resource_args.clone());
                                     let resource_method = resource_method_dict
                                         .map
                                         .iter()
