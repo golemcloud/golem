@@ -269,6 +269,9 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
                 ApiDefinitionServiceError::RibInternal(_) => ApiEndpointError::internal(error),
+                ApiDefinitionServiceError::InvalidRibScript(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
             }
         }
     }
@@ -341,6 +344,12 @@ mod conversion {
                 ApiDefinitionServiceError::RibInternal(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
+                    })),
+                },
+
+                ApiDefinitionServiceError::InvalidRibScript(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
                     })),
                 },
 

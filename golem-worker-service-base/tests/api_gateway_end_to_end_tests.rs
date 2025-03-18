@@ -126,9 +126,58 @@ async fn test_legacy_api_def_for_valid_input() {
 }
 
 #[test]
+async fn test_first_class_worker_api_with_resource() {
+    let api_request = get_gateway_request(
+        "/foo/mystore",
+        None,
+        &HeaderMap::new(),
+        serde_json::Value::Null,
+    );
+
+    // These functions get-user-name and get-currency produce the same result
+    let response_mapping = r#"
+        let email = "user@test.com";
+        let temp_worker = instance("accounts_proxy");
+        let user = temp_worker.get-user-name(email);
+        let store_name = request.path.store;
+        let store_worker_name = "${user}_${store_name}";
+        let worker = instance(store_worker_name);
+        let store = worker.store(user);
+        let generated_user_name = store.add-user(user);
+        let result = store.get-currency();
+
+        match result {
+          ok(currency) => { status: 200, body: currency, headers: { user: generated_user_name } },
+          err(error) => { status: 400, body: "Failed to get currency: ${error}" }
+        }
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{store}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let status = response.status();
+    let user_name = response.headers().get("user").unwrap().to_str().unwrap();
+    assert_eq!(user_name, "test-user-generated");
+
+    let message = response.into_body().into_string().await.unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(message, "USD");
+}
+
+#[test]
 async fn test_first_class_worker_api_def_for_valid_input() {
-    let api_request =
-        get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
        let id: u64 = request.path.user-id;
@@ -1757,13 +1806,14 @@ mod internal {
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
-    use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
+    use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance,
+        AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
+    use golem_wasm_rpc::ValueAndType;
     use golem_worker_service_base::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary,
     };
@@ -1832,6 +1882,45 @@ mod internal {
             &self,
             resolved_worker_request: GatewayResolvedWorkerRequest<DefaultNamespace>,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+            let function_name = resolved_worker_request.function_name.clone();
+
+            if function_name.clone() == "bigw:shopping/api.{get-user-name}" {
+                let x = ValueAndType::new(
+                    golem_wasm_rpc::Value::String("test-user".to_string()),
+                    str(),
+                );
+
+                let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
+
+                let worker_response = create_tuple(vec![type_annotated_value]);
+
+                return Ok(WorkerResponse::new(worker_response));
+            } else if function_name == "bigw:shopping/api.{store(\"test-user\").get-currency}" {
+                let x = ValueAndType::new(
+                    golem_wasm_rpc::Value::Result(Ok(Some(Box::new(
+                        golem_wasm_rpc::Value::String("USD".to_string()),
+                    )))),
+                    result(str(), str()),
+                );
+
+                let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
+
+                let worker_response = create_tuple(vec![type_annotated_value]);
+
+                return Ok(WorkerResponse::new(worker_response));
+            } else if function_name == "bigw:shopping/api.{store(\"test-user\").add-user}" {
+                let x = ValueAndType::new(
+                    golem_wasm_rpc::Value::String("test-user-generated".to_string()),
+                    str(),
+                );
+
+                let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
+
+                let worker_response = create_tuple(vec![type_annotated_value]);
+
+                return Ok(WorkerResponse::new(worker_response));
+            }
+
             let type_annotated_value = convert_to_worker_response(&resolved_worker_request);
             let worker_response = create_tuple(vec![type_annotated_value]);
 
@@ -1964,14 +2053,104 @@ mod internal {
         create_record(record_elems).unwrap()
     }
 
-    pub fn get_component_metadata() -> ComponentMetadataDictionary {
+    pub(crate) fn get_bigw_shopping_metadata() -> Vec<AnalysedExport> {
+        // Exist in only amazon:shopping-cart/api1
+        let analysed_function_in_api1 = AnalysedFunction {
+            name: "get-user-name".to_string(),
+            parameters: vec![AnalysedFunctionParameter {
+                name: "arg1".to_string(),
+                typ: str(),
+            }],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: str(),
+            }],
+        };
+
+        let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+            name: "bigw:shopping/api".to_string(),
+            functions: vec![analysed_function_in_api1],
+        });
+
+        vec![analysed_export1]
+    }
+
+    pub(crate) fn get_component_metadata() -> ComponentMetadataDictionary {
         let versioned_component_id = VersionedComponentId {
             component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
             version: 0,
         };
 
         let mut metadata_dict = HashMap::new();
+        let mut exports = get_bigw_shopping_metadata();
+        exports.extend(get_bigw_shopping_metadata_with_resource());
+        exports.extend(get_golem_shopping_cart_metadata());
 
+        metadata_dict.insert(versioned_component_id, exports);
+
+        ComponentMetadataDictionary {
+            metadata: metadata_dict,
+        }
+    }
+
+    fn get_bigw_shopping_metadata_with_resource() -> Vec<AnalysedExport> {
+        let instance = AnalysedExport::Instance(AnalysedInstance {
+            name: "bigw:shopping/api".to_string(),
+            functions: vec![
+                AnalysedFunction {
+                    name: "[constructor]store".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "initial".to_string(),
+                        typ: str(),
+                    }],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    }],
+                },
+                AnalysedFunction {
+                    name: "[method]store.get-currency".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "self".to_string(),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    }],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: result(str(), str()),
+                    }],
+                },
+                AnalysedFunction {
+                    name: "[method]store.add-user".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "self".to_string(),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "user".to_string(),
+                            typ: str(),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: result(str(), str()),
+                    }],
+                },
+                AnalysedFunction {
+                    name: "[drop]store".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "self".to_string(),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    }],
+                    results: vec![],
+                },
+            ],
+        });
+
+        vec![instance]
+    }
+
+    pub fn get_golem_shopping_cart_metadata() -> Vec<AnalysedExport> {
         let analysed_export = AnalysedExport::Instance(AnalysedInstance {
             name: "golem:it/api".to_string(),
             functions: vec![AnalysedFunction {
@@ -1998,13 +2177,7 @@ mod internal {
             }],
         });
 
-        let metadata = vec![analysed_export];
-
-        metadata_dict.insert(versioned_component_id, metadata);
-
-        ComponentMetadataDictionary {
-            metadata: metadata_dict,
-        }
+        vec![analysed_export]
     }
 
     pub fn get_test_rib_interpreter(
