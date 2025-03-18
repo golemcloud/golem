@@ -1,10 +1,7 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::rib_compilation_error::RibCompilationError;
 use crate::type_parameter::InterfaceName;
-use crate::{
-    DynamicParsedFunctionName, Expr, FunctionCallError, FunctionTypeRegistry, InferredType,
-    RegistryKey, RegistryValue,
-};
+use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError, FunctionTypeRegistry, InferredType, ParsedFunctionSite, RegistryKey, RegistryValue, SemVer};
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
     function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
@@ -20,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
+use std::str::FromStr;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
@@ -685,6 +683,7 @@ impl FullyQualifiedResourceMethod {
         &self,
         resource_args: Vec<Expr>,
     ) -> Result<DynamicParsedFunctionName, String> {
+
         let mut dynamic_parsed_str = String::new();
 
         // Construct the package/interface prefix

@@ -98,7 +98,6 @@ impl InterpreterStack {
         values
             .iter()
             .map(|type_value| {
-                dbg!(type_value.clone());
                 type_value.get_literal().ok_or(format!(
                     "internal error: failed to convert last {} in the stack to literals {type_value:?}",
                     n
