@@ -1830,7 +1830,7 @@ mod internal {
     use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
         HttpHandlerBindingHandler, HttpHandlerBindingResult,
     };
-    use golem_worker_service_base::gateway_execution::WorkerDetail;
+    use golem_worker_service_base::gateway_execution::WorkerDetails;
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
@@ -1934,7 +1934,7 @@ mod internal {
         async fn handle_file_server_binding_result(
             &self,
             _namespace: &Namespace,
-            _worker_detail: &WorkerDetail,
+            _worker_detail: &WorkerDetails,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
             unimplemented!()
@@ -1947,7 +1947,7 @@ mod internal {
         async fn handle_http_handler_binding(
             &self,
             _namespace: &Namespace,
-            _worker_detail: &WorkerDetail,
+            _worker_detail: &WorkerDetails,
             _request_details: IncomingHttpRequest,
         ) -> HttpHandlerBindingResult {
             unimplemented!()
