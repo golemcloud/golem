@@ -135,7 +135,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn poll_promise(&mut self, promise_id: golem_api_1_x::host::PromiseId) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn poll_promise(
+        &mut self,
+        promise_id: golem_api_1_x::host::PromiseId,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
         let durability = Durability::<Option<Vec<u8>>, SerializableError>::new(
             self,
             "golem::api",
@@ -187,7 +190,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(result)
     }
 
-    async fn delete_promise(&mut self, promise_id: golem_api_1_x::host::PromiseId) -> anyhow::Result<()> {
+    async fn delete_promise(
+        &mut self,
+        promise_id: golem_api_1_x::host::PromiseId,
+    ) -> anyhow::Result<()> {
         let durability = Durability::<(), SerializableError>::new(
             self,
             "", // TODO: fix in 2.0
@@ -627,10 +633,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         worker_name: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::WorkerId>> {
         let component_id = self.resolve_component_id(component_slug).await?;
-        Ok(component_id.map(|component_id| golem_api_1_x::host::WorkerId {
-            component_id,
-            worker_name,
-        }))
+        Ok(
+            component_id.map(|component_id| golem_api_1_x::host::WorkerId {
+                component_id,
+                worker_name,
+            }),
+        )
     }
 
     async fn resolve_worker_id_strict(
@@ -817,7 +825,14 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     async fn get_next(
         &mut self,
         self_: Resource<SearchOplog>,
-    ) -> anyhow::Result<Option<Vec<(golem_api_1_x::oplog::OplogIndex, golem_api_1_x::oplog::OplogEntry)>>> {
+    ) -> anyhow::Result<
+        Option<
+            Vec<(
+                golem_api_1_x::oplog::OplogIndex,
+                golem_api_1_x::oplog::OplogEntry,
+            )>,
+        >,
+    > {
         self.observe_function_call("golem::api::search-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
