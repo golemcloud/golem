@@ -169,8 +169,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<bool> {
         let durability = Durability::<bool, SerializableError>::new(
             self,
-            "", // TODO: fix in 2.0
-            "golem_complete_promise",
+            "golem:api",
+            "complete_promise",
             DurableFunctionType::WriteLocal,
         )
         .await?;
@@ -196,8 +196,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<()> {
         let durability = Durability::<(), SerializableError>::new(
             self,
-            "", // TODO: fix in 2.0
-            "golem_delete_promise",
+            "golem:api",
+            "delete_promise",
             DurableFunctionType::WriteLocal,
         )
         .await?;
@@ -430,30 +430,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem_api_1_x::host::Uuid> {
-        let durability = Durability::<(u64, u64), SerializableError>::new(
-            self,
-            "golem api",
-            "generate_idempotency_key",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
-
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
             .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.current_oplog_index().await;
 
-        // TODO: Fix in 2.0 - Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let (hi, lo) = if durability.is_live() {
-            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
-            let result: Result<(u64, u64), anyhow::Error> = Ok(uuid.as_u64_pair());
-            durability.persist(self, (), result).await
-        } else {
-            durability.replay(self).await
-        }?;
-        let uuid = Uuid::from_u64_pair(hi, lo);
+        let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+        let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
         Ok(uuid.into())
     }
 
