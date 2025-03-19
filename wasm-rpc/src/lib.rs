@@ -83,11 +83,11 @@ pub use bindings::wasi;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_1_3 as golem_rpc_0_1_x;
+pub use bindings::golem::rpc0_2_0 as golem_rpc_0_2_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use golem_rpc_0_1_x::types::{
+pub use golem_rpc_0_2_x::types::{
     FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, WasmRpc, WitNode, WitType,
     WitTypeNode, WitValue,
 };
@@ -114,7 +114,7 @@ mod generated {
             "golem:rpc/types/cancellation-token": super::CancellationTokenEntry,
             "wasi:io/poll/pollable": super::Pollable,
         },
-        wasmtime_crate: ::wasmtime
+        wasmtime_crate: ::wasmtime,
     });
 }
 
@@ -122,18 +122,34 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc0_1_3 as golem_rpc_0_1_x;
+pub use generated::golem::rpc0_2_0 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host-bindings")]
-pub use golem_rpc_0_1_x::types::{
-    Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, WitNode, WitType, WitTypeNode,
-    WitValue,
+pub use golem_rpc_0_2_x::types::{
+    ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode, WitType,
+    WitTypeNode, WitValue, WorkerId,
 };
 
 impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
     fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
         DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
             .expect("Received invalid datetime from wasi")
+    }
+}
+
+impl From<Uuid> for uuid::Uuid {
+    fn from(value: Uuid) -> Self {
+        uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
+    }
+}
+
+impl From<uuid::Uuid> for Uuid {
+    fn from(uuid: uuid::Uuid) -> Self {
+        let (high_bits, low_bits) = uuid.as_u64_pair();
+        Uuid {
+            high_bits,
+            low_bits,
+        }
     }
 }
 

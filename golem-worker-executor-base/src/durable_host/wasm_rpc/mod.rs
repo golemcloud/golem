@@ -39,7 +39,7 @@ use golem_common::model::{
     WorkerId,
 };
 use golem_common::serialization::try_deserialize;
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
     Uri,
 };
@@ -60,34 +60,31 @@ use wasmtime_wasi::subscribe;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
-    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpcEntry>> {
+    async fn new(
+        &mut self,
+        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::WorkerId,
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
-        match TargetWorkerId::parse_worker_urn(&location.value) {
-            Some(remote_worker_id) => {
-                let remote_worker_id = self
-                    .generate_unique_local_worker_id(remote_worker_id)
-                    .await?;
+        let worker_id: WorkerId = worker_id.into();
+        let remote_worker_id = worker_id.into_target_worker_id();
 
-                let span = create_rpc_connection_span(self, &remote_worker_id).await?;
+        construct_wasm_rpc_resource(self, remote_worker_id).await
+    }
 
-                let remote_worker_id =
-                    OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
-                let demand = self.rpc().create_demand(&remote_worker_id).await;
-                let entry = self.table().push(WasmRpcEntry {
-                    payload: Box::new(WasmRpcEntryPayload::Interface {
-                        demand,
-                        remote_worker_id,
-                        span_id: span.span_id().clone(),
-                    }),
-                })?;
-                Ok(entry)
-            }
-            None => Err(anyhow!(
-                "Invalid URI: {}. Must be urn:worker:component-id/worker-name (for durable workers) or urn:worker:component-id (for ephemeral workers)",
-                location.value
-            )),
-        }
+    async fn ephemeral(
+        &mut self,
+        component_id: golem_wasm_rpc::golem_rpc_0_2_x::types::ComponentId,
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
+        self.observe_function_call("golem::rpc::wasm-rpc", "ephemeral");
+
+        let component_id: ComponentId = component_id.into();
+        let remote_worker_id = TargetWorkerId {
+            component_id,
+            worker_name: None,
+        };
+
+        construct_wasm_rpc_resource(self, remote_worker_id).await
     }
 
     async fn invoke_and_await(
@@ -475,7 +472,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         full_function_name: String,
-        function_input: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
+        function_input: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<()> {
         self.schedule_cancelable_invocation(this, datetime, full_function_name, function_input)
             .await?;
@@ -488,7 +485,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
-        mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
+        mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         let durability = Durability::<SerializableScheduleId, GolemError>::new(
             self,
@@ -1028,17 +1025,39 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
     // generator does not include types that are not used in any exported _functions_
     async fn extract_value(
         &mut self,
-        vnt: golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType,
     ) -> anyhow::Result<WitValue> {
         Ok(vnt.value)
     }
 
     async fn extract_type(
         &mut self,
-        vnt: golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType,
     ) -> anyhow::Result<WitType> {
         Ok(vnt.typ)
     }
+}
+
+async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_worker_id: TargetWorkerId,
+) -> anyhow::Result<Resource<WasmRpcEntry>> {
+    let remote_worker_id = ctx
+        .generate_unique_local_worker_id(remote_worker_id)
+        .await?;
+
+    let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+
+    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.account_id, &remote_worker_id);
+    let demand = ctx.rpc().create_demand(&remote_worker_id).await;
+    let entry = ctx.table().push(WasmRpcEntry {
+        payload: Box::new(WasmRpcEntryPayload::Interface {
+            demand,
+            remote_worker_id,
+            span_id: span.span_id().clone(),
+        }),
+    })?;
+    Ok(entry)
 }
 
 /// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the

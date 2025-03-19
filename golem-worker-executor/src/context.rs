@@ -24,12 +24,12 @@ use golem_common::model::{
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::model::{ComponentFilePath, PluginInstallationId};
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
+use golem_wasm_rpc::{ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -492,8 +492,15 @@ impl FileSystemReading for Context {
 
 #[async_trait]
 impl HostWasmRpc for Context {
-    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(location).await
+    async fn new(
+        &mut self,
+        worker_id: golem_wasm_rpc::WorkerId,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.new(worker_id).await
+    }
+
+    async fn ephemeral(&mut self, component_id: ComponentId) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
@@ -547,7 +554,7 @@ impl HostWasmRpc for Context {
         datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_1_x::types::CancellationToken>> {
+    ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_2_x::types::CancellationToken>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, datetime, function_name, function_params)
             .await
