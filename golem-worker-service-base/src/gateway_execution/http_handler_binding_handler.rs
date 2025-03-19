@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
-use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetail};
+use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetails};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::HasAccountId;
@@ -32,7 +32,7 @@ pub trait HttpHandlerBindingHandler<Namespace> {
     async fn handle_http_handler_binding(
         &self,
         namespace: &Namespace,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
         incoming_http_request: IncomingHttpRequest,
     ) -> HttpHandlerBindingResult;
 }
@@ -70,10 +70,10 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
     async fn handle_http_handler_binding(
         &self,
         namespace: &Namespace,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
         incoming_http_request: IncomingHttpRequest,
     ) -> HttpHandlerBindingResult {
-        let component_id = worker_detail.component_id.component_id.clone();
+        let component_id = worker_detail.component_id.clone();
 
         let typ: golem_wasm_ast::analysis::protobuf::Type = (&golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest::analysed_type()).into();
 

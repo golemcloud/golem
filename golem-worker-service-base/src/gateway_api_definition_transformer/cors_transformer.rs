@@ -246,7 +246,7 @@ mod tests {
             ApiDefTransformationError::Custom(custom) => custom.to_string(),
         });
 
-        assert_eq!(result.err(), Some("Invalid binding for resource '/test' with method 'Get'. CORS binding is only supported for the OPTIONS method.".to_string()));
+        assert_eq!(result.err(), Some("Invalid binding for resource '/test' with method 'GET'. CORS binding is only supported for the OPTIONS method.".to_string()));
     }
 
     #[test]
