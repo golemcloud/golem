@@ -361,6 +361,80 @@ pub mod service {
         }
     }
 
+    impl HasServiceName for golem_client::api::PluginError {
+        fn service_name() -> &'static str {
+            "Plugin"
+        }
+    }
+
+    impl From<golem_client::api::PluginError> for ServiceErrorResponse {
+        fn from(value: golem_client::api::PluginError) -> Self {
+            match value {
+                golem_client::api::PluginError::Error400(errors) => ServiceErrorResponse {
+                    status_code: 400,
+                    message: errors.errors.join("\n"),
+                },
+                golem_client::api::PluginError::Error401(error) => ServiceErrorResponse {
+                    status_code: 401,
+                    message: error.error,
+                },
+                golem_client::api::PluginError::Error403(error) => ServiceErrorResponse {
+                    status_code: 403,
+                    message: error.error,
+                },
+                golem_client::api::PluginError::Error404(error) => ServiceErrorResponse {
+                    status_code: 404,
+                    message: error.error,
+                },
+                golem_client::api::PluginError::Error409(error) => ServiceErrorResponse {
+                    status_code: 409,
+                    message: error.error,
+                },
+                golem_client::api::PluginError::Error500(error) => ServiceErrorResponse {
+                    status_code: 500,
+                    message: error.error,
+                },
+            }
+        }
+    }
+
+    impl HasServiceName for golem_cloud_client::api::PluginError {
+        fn service_name() -> &'static str {
+            "Cloud Plugin"
+        }
+    }
+
+    impl From<golem_cloud_client::api::PluginError> for ServiceErrorResponse {
+        fn from(value: golem_cloud_client::api::PluginError) -> Self {
+            match value {
+                golem_cloud_client::api::PluginError::Error400(errors) => ServiceErrorResponse {
+                    status_code: 400,
+                    message: errors.errors.join("\n"),
+                },
+                golem_cloud_client::api::PluginError::Error401(error) => ServiceErrorResponse {
+                    status_code: 401,
+                    message: error.error,
+                },
+                golem_cloud_client::api::PluginError::Error403(error) => ServiceErrorResponse {
+                    status_code: 403,
+                    message: error.error,
+                },
+                golem_cloud_client::api::PluginError::Error404(error) => ServiceErrorResponse {
+                    status_code: 404,
+                    message: error.error,
+                },
+                golem_cloud_client::api::PluginError::Error409(error) => ServiceErrorResponse {
+                    status_code: 409,
+                    message: error.error,
+                },
+                golem_cloud_client::api::PluginError::Error500(error) => ServiceErrorResponse {
+                    status_code: 500,
+                    message: error.error,
+                },
+            }
+        }
+    }
+
     impl HasServiceName for golem_cloud_client::api::ProjectError {
         fn service_name() -> &'static str {
             "Cloud Project"

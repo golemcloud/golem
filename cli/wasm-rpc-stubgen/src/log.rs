@@ -149,7 +149,7 @@ pub fn logln_internal(message: &str) {
     let state = LOG_STATE.read().unwrap();
 
     let lines = match state.max_width {
-        Some(width) if width > message.len() && !message.contains("\n") => {
+        Some(width) if width <= message.len() && !message.contains("\n") => {
             textwrap::wrap(
                 message,
                 textwrap::Options::new(width)

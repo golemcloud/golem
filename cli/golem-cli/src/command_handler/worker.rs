@@ -139,8 +139,13 @@ impl WorkerCommandHandler {
                 worker_name,
                 stream_args,
             } => self.cmd_stream(worker_name, stream_args).await,
-            WorkerSubcommand::Interrupt { worker_name } => self.interrupt(worker_name).await,
-            WorkerSubcommand::Resume { worker_name } => self.resume(worker_name).await,
+            WorkerSubcommand::Interrupt { worker_name } => self.cmd_interrupt(worker_name).await,
+            WorkerSubcommand::Update {
+                worker_name,
+                mode,
+                target_version,
+            } => self.cmd_update(worker_name, mode, target_version).await,
+            WorkerSubcommand::Resume { worker_name } => self.cmd_resume(worker_name).await,
             WorkerSubcommand::SimulateCrash { worker_name } => {
                 self.cmd_simulate_crash(worker_name).await
             }
@@ -867,6 +872,75 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
+    async fn cmd_interrupt(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Interrupting",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.interrupt_worker(&component, &worker_name, false)
+            .await?;
+
+        log_action(
+            "Interrupted",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn cmd_resume(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Resuming",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        self.resume_worker(&component, &worker_name).await?;
+
+        log_action(
+            "Resumed",
+            format!("worker {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        Ok(())
+    }
+
+    async fn cmd_update(
+        &mut self,
+        worker_name: WorkerNameArg,
+        mode: WorkerUpdateMode,
+        target_version: u64,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        self.update_worker(
+            &component.component_name,
+            component.versioned_component_id.component_id,
+            &worker_name.0,
+            mode,
+            target_version,
+        )
+        .await?;
+
+        Ok(())
+    }
+
     async fn new_worker(
         &self,
         component_id: Uuid,
@@ -986,51 +1060,6 @@ impl WorkerCommandHandler {
                 .map(|_| ())
                 .map_service_error(),
         }
-    }
-
-    async fn interrupt(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
-        log_action(
-            "Interrupting",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        self.interrupt_worker(&component, &worker_name, false)
-            .await?;
-
-        log_action(
-            "Interrupted",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        Ok(())
-    }
-
-    async fn resume(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
-        log_action(
-            "Resuming",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        self.resume_worker(&component, &worker_name).await?;
-
-        log_action(
-            "Resumed",
-            format!("worker {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        Ok(())
     }
 
     pub async fn update_component_workers(
