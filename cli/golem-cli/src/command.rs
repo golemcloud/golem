@@ -461,18 +461,6 @@ pub mod shared_args {
     pub type WorkerFunctionName = String;
 
     #[derive(Debug, Args)]
-    pub struct ComponentMandatoryComponentName {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Optional component name, if not specified component is selected based on the current directory.
-        /// Accepted formats:
-        ///   - <COMPONENT>
-        ///   - <PROJECT>/<COMPONENT>
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>
-        #[arg(verbatim_doc_comment)]
-        pub component_name: ComponentName,
-    }
-
-    #[derive(Debug, Args)]
     pub struct ComponentOptionalComponentName {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Optional component name, if not specified component is selected based on the current directory.
@@ -574,29 +562,6 @@ pub mod shared_args {
         #[arg(long)]
         pub account_id: Option<AccountId>,
     }
-
-    #[derive(clap::Args, Debug, Clone)]
-    pub struct PluginScopeArgs {
-        /// Global scope (plugin available for all components)
-        #[arg(long, conflicts_with_all=["account_id", "project_name", "component_name"])]
-        global: bool,
-        /// Account id, optionally specifies the account id for the project name
-        #[arg(long, conflicts_with_all = ["global"])]
-        account: Option<AccountId>,
-        /// Project name; Required when component name is used. Without a given component, it defines a project scope.
-        #[arg(long, conflicts_with_all = ["global"])]
-        project: Option<ProjectName>,
-        /// Component scope given by the component's name (plugin only available for this component)
-        #[arg(long, conflicts_with_all=["global"])]
-        component: Option<ComponentName>,
-    }
-
-    impl PluginScopeArgs {
-        pub fn is_global(&self) -> bool {
-            self.global
-                || (self.account.is_none() && self.project.is_none() && self.component.is_none())
-        }
-    }
 }
 
 pub mod app {
@@ -663,7 +628,6 @@ pub mod app {
 }
 
 pub mod component {
-    use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
         ComponentTemplatePositionalArg, ForceBuildArg, WorkerUpdateOrRedeployArgs,
@@ -732,56 +696,11 @@ pub mod component {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
         },
-        /// Manage component plugin installations
-        PluginInstallation {
-            #[command(subcommand)]
-            subcommand: ComponentPluginSubcommand,
-        },
         /// Diagnose possible tooling problems
         Diagnose {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
         },
-    }
-
-    pub mod plugin {
-        use crate::command::parse_key_val;
-        use crate::command::shared_args::ComponentOptionalComponentName;
-        use clap::Subcommand;
-        use golem_common::base_model::PluginInstallationId;
-
-        #[derive(Debug, Subcommand)]
-        pub enum ComponentPluginSubcommand {
-            /// Install a plugin for this component
-            New {
-                #[command(flatten)]
-                component_name: ComponentOptionalComponentName,
-                /// The plugin to install
-                plugin_name: String,
-                /// The version of the plugin to install
-                plugin_version: String,
-                /// Priority of the plugin - largest priority is applied first
-                priority: i32,
-                /// List of parameters (key-value pairs) passed to the plugin
-                #[arg(short, long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                parameter: Vec<(String, String)>,
-            },
-            /// Get the installed plugins of the component
-            Get {
-                #[command(flatten)]
-                component_name: ComponentOptionalComponentName,
-                /// The version of the component
-                version: Option<u64>,
-            },
-            /// Uninstall a plugin for this component
-            Delete {
-                /// The component to install the plugin for
-                #[command(flatten)]
-                component_name: ComponentOptionalComponentName,
-                /// The plugin to uninstall
-                installation_id: PluginInstallationId,
-            },
-        }
     }
 }
 
@@ -1201,42 +1120,10 @@ pub mod api {
 }
 
 pub mod plugin {
-    use crate::command::shared_args::PluginScopeArgs;
     use clap::Subcommand;
-    use std::path::PathBuf;
 
     #[derive(Debug, Subcommand)]
-    pub enum PluginSubcommand {
-        /// Creates a new component with a given name by uploading the component WASM
-        List {
-            /// The scope to list components from
-            #[command(flatten)]
-            scope: PluginScopeArgs,
-        },
-        /// Get information about a registered plugin
-        Get {
-            /// Plugin name
-            plugin_name: String,
-            /// Plugin version
-            version: String,
-        },
-        /// Register a new plugin
-        Register {
-            #[command(flatten)]
-            scope: PluginScopeArgs,
-            /// Path to the plugin manifest JSON
-            manifest: PathBuf,
-        },
-        /// Unregister a plugin
-        Unregister {
-            /// Plugin name
-            #[arg(long)]
-            plugin_name: String,
-            /// Plugin version
-            #[arg(long)]
-            version: String,
-        },
-    }
+    pub enum PluginSubcommand {}
 }
 
 pub mod profile {

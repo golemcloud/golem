@@ -1794,7 +1794,6 @@ pub mod plugin_oss {
         }
     }
 
-    // TODO: add component name to help with "multi-install"
     #[derive(Table)]
     struct PluginInstallationTableView {
         #[table(title = "Installation ID")]

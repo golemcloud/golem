@@ -32,12 +32,10 @@ use crate::command_handler::cloud::policy::CloudProjectPolicyCommandHandler;
 use crate::command_handler::cloud::project::CloudProjectCommandHandler;
 use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::cloud::CloudCommandHandler;
-use crate::command_handler::component::plugin::ComponentPluginCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::partial_match::ErrorHandler;
-use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
@@ -63,7 +61,6 @@ mod component;
 mod interactive;
 mod log;
 mod partial_match;
-mod plugin;
 mod profile;
 mod worker;
 
@@ -219,8 +216,8 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
             GolemCliSubcommand::Api { subcommand } => {
                 self.ctx.api_handler().handle_command(subcommand).await
             }
-            GolemCliSubcommand::Plugin { subcommand } => {
-                self.ctx.plugin_handler().handle_command(subcommand).await
+            GolemCliSubcommand::Plugin { .. } => {
+                todo!()
             }
             GolemCliSubcommand::Profile { subcommand } => {
                 self.ctx.profile_handler().handle_command(subcommand).await
@@ -272,11 +269,9 @@ trait Handlers {
     fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler;
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
-    fn component_plugin_handler(&self) -> ComponentPluginCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
-    fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn worker_handler(&self) -> WorkerCommandHandler;
@@ -315,12 +310,12 @@ impl Handlers for Arc<Context> {
         AppCommandHandler::new(self.clone())
     }
 
-    fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler {
-        CloudAccountGrantCommandHandler::new(self.clone())
-    }
-
     fn cloud_account_handler(&self) -> CloudAccountCommandHandler {
         CloudAccountCommandHandler::new(self.clone())
+    }
+
+    fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler {
+        CloudAccountGrantCommandHandler::new(self.clone())
     }
 
     fn cloud_handler(&self) -> CloudCommandHandler {
@@ -331,20 +326,12 @@ impl Handlers for Arc<Context> {
         CloudProjectCommandHandler::new(self.clone())
     }
 
-    fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler {
-        CloudProjectPolicyCommandHandler::new(self.clone())
-    }
-
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler {
         CloudTokenCommandHandler::new(self.clone())
     }
 
     fn component_handler(&self) -> ComponentCommandHandler {
         ComponentCommandHandler::new(self.clone())
-    }
-
-    fn component_plugin_handler(&self) -> ComponentPluginCommandHandler {
-        ComponentPluginCommandHandler::new(self.clone())
     }
 
     fn error_handler(&self) -> ErrorHandler {
@@ -359,10 +346,6 @@ impl Handlers for Arc<Context> {
         LogHandler::new(self.clone())
     }
 
-    fn plugin_handler(&self) -> PluginCommandHandler {
-        PluginCommandHandler::new(self.clone())
-    }
-
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler {
         ProfileConfigCommandHandler::new(self.clone())
     }
@@ -373,6 +356,10 @@ impl Handlers for Arc<Context> {
 
     fn worker_handler(&self) -> WorkerCommandHandler {
         WorkerCommandHandler::new(self.clone())
+    }
+
+    fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler {
+        CloudProjectPolicyCommandHandler::new(self.clone())
     }
 }
 
