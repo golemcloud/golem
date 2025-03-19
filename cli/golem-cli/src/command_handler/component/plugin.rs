@@ -173,7 +173,7 @@ impl ComponentPluginCommandHandler {
                         .get_installed_plugins(
                             &component.versioned_component_id.component_id,
                             &version
-                                .unwrap_or(component.versioned_component_id.version)
+                                .unwrap_or_else(|| component.versioned_component_id.version)
                                 .to_string(),
                         )
                         .await
@@ -183,7 +183,7 @@ impl ComponentPluginCommandHandler {
                         .get_installed_plugins(
                             &component.versioned_component_id.component_id,
                             &version
-                                .unwrap_or(component.versioned_component_id.version)
+                                .unwrap_or_else(|| component.versioned_component_id.version)
                                 .to_string(),
                         )
                         .await
@@ -218,7 +218,7 @@ impl ComponentPluginCommandHandler {
             let component = self
                 .ctx
                 .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name)
+                .component_by_name(selected_components.project.as_ref(), &component_name)
                 .await?;
 
             log_warn_action(
