@@ -720,6 +720,7 @@ pub mod component {
 
         fields
             .fmt_field("Component name", &view.component_name, format_id)
+            .fmt_field("Component ID", &view.component_id, format_id)
             .fmt_field("Component version", &view.component_version, format_id)
             .fmt_field_option("Project ID", &view.project_id, format_id)
             .fmt_field("Component size", &view.component_size, format_binary_size)
@@ -831,40 +832,40 @@ pub mod template {
 }
 
 pub mod profile {
-    use crate::config::ProfileConfig;
+    use crate::config::{ProfileConfig, ProfileKind};
     use crate::model::text::fmt::*;
-    use crate::model::{ProfileType, ProfileView};
+    use crate::model::ProfileView;
     use colored::Colorize;
-    use golem_wasm_rpc_stubgen::log::logln;
-    use itertools::Itertools;
+    use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
 
     impl TextView for Vec<ProfileView> {
         fn log(&self) {
-            let res = self
-                .iter()
-                .map(|p| {
-                    if p.is_active {
-                        format!(" * {}", format_id(&p.name))
+            logln("Available profiles:".log_color_help_group().to_string());
+            for profile in self {
+                logln(format!(
+                    " {} {}, {}{}",
+                    if profile.is_active { "*" } else { " " },
+                    format_id(&profile.name),
+                    profile.kind,
+                    if profile.name.is_builtin() {
+                        ", builtin"
                     } else {
-                        format!("   {}", p.name)
-                    }
-                })
-                .join("\n");
-
-            logln(res)
+                        ""
+                    },
+                ));
+            }
         }
     }
 
     impl MessageWithFields for ProfileView {
         fn message(&self) -> String {
-            match self.typ {
-                ProfileType::Golem => {
-                    format!("Golem profile {}", format_message_highlight(&self.name))
+            match self.kind {
+                ProfileKind::Oss => {
+                    format!("OSS profile {}", format_message_highlight(&self.name))
                 }
-                ProfileType::GolemCloud => format!(
-                    "Golem Cloud profile {}'",
-                    format_message_highlight(&self.name)
-                ),
+                ProfileKind::Cloud => {
+                    format!("Cloud profile {}'", format_message_highlight(&self.name))
+                }
             }
         }
 
@@ -1842,6 +1843,7 @@ pub mod help {
     use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
     use golem_wasm_rpc_stubgen::model::app::ComponentName as AppComponentName;
     use indoc::indoc;
+    use textwrap::WordSplitter;
 
     pub struct WorkerNameHelp;
 
@@ -2054,7 +2056,11 @@ pub mod help {
     impl From<&ArgumentError> for ParameterErrorTable {
         fn from(value: &ArgumentError) -> Self {
             Self {
-                parameter_type_: value.type_.as_ref().map(render_type).unwrap_or_default(),
+                parameter_type_: textwrap::wrap(
+                    &value.type_.as_ref().map(render_type).unwrap_or_default(),
+                    textwrap::Options::new(30).word_splitter(WordSplitter::NoHyphenation),
+                )
+                .join("\n"),
                 argument_value: value.value.clone().unwrap_or_default(),
                 error: value.error.clone().unwrap_or_default(),
             }
@@ -2103,11 +2109,14 @@ pub mod account {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct AccountAddView(pub Account);
+    pub struct AccountNewView(pub Account);
 
-    impl MessageWithFields for AccountAddView {
+    impl MessageWithFields for AccountNewView {
         fn message(&self) -> String {
-            format!("Added account {}", format_message_highlight(&self.0.id))
+            format!(
+                "Created new account {}",
+                format_message_highlight(&self.0.id)
+            )
         }
 
         fn fields(&self) -> Vec<(String, String)> {
@@ -2153,12 +2162,12 @@ pub mod api_domain {
     use uuid::Uuid;
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct ApiDomainAddView(pub ApiDomain);
+    pub struct ApiDomainNewView(pub ApiDomain);
 
-    impl MessageWithFields for ApiDomainAddView {
+    impl MessageWithFields for ApiDomainNewView {
         fn message(&self) -> String {
             format!(
-                "Added API domain {}",
+                "Created new API domain {}",
                 format_message_highlight(&self.0.domain_name)
             )
         }
@@ -2231,12 +2240,12 @@ pub mod certificate {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct CertificateAddView(pub Certificate);
+    pub struct CertificateNewView(pub Certificate);
 
-    impl MessageWithFields for CertificateAddView {
+    impl MessageWithFields for CertificateNewView {
         fn message(&self) -> String {
             format!(
-                "Added certificate {}",
+                "Created new certificate {}",
                 format_message_highlight(&self.0.domain_name)
             )
         }
@@ -2383,11 +2392,11 @@ pub mod project {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct ProjectShareView(pub ProjectGrant);
+    pub struct ProjectGrantView(pub ProjectGrant);
 
-    impl MessageWithFields for ProjectShareView {
+    impl MessageWithFields for ProjectGrantView {
         fn message(&self) -> String {
-            "Shared project".to_string()
+            "Granted project".to_string()
         }
 
         fn fields(&self) -> Vec<(String, String)> {
@@ -2426,12 +2435,12 @@ pub mod project {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct ProjectPolicyAddView(pub ProjectPolicy);
+    pub struct ProjectPolicyNewView(pub ProjectPolicy);
 
-    impl MessageWithFields for ProjectPolicyAddView {
+    impl MessageWithFields for ProjectPolicyNewView {
         fn message(&self) -> String {
             format!(
-                "Added project policy {}",
+                "Created new project policy {}",
                 format_message_highlight(&self.0.name)
             )
         }
@@ -2468,9 +2477,9 @@ pub mod token {
     use uuid::Uuid;
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct UnsafeTokenView(pub UnsafeToken);
+    pub struct TokenNewView(pub UnsafeToken);
 
-    impl MessageWithFields for UnsafeTokenView {
+    impl MessageWithFields for TokenNewView {
         fn message(&self) -> String {
             format!(
                 "Created new token\n{}",

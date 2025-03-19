@@ -22,6 +22,7 @@ use crate::command::worker::WorkerSubcommand;
 use crate::config::{BuildProfileName, ProfileName};
 use crate::model::{Format, WorkerName};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
+use chrono::{DateTime, Utc};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{self, CommandFactory, Subcommand};
 use clap::{Args, Parser};
@@ -372,6 +373,7 @@ struct InvalidArgMatcher {
     pub to_partial_match: fn(Vec<String>) -> GolemCliCommandPartialMatch,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum GolemCliCommandParseResult {
     FullMatch(GolemCliCommand),
     ErrorWithPartialMatch {
@@ -439,13 +441,15 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
-    /// Diagnose possible problems
-    Diagnose,
     /// Generate shell completion
-    Completion,
+    Completion {
+        /// Selects shell
+        shell: clap_complete::Shell,
+    },
 }
 
 pub mod shared_args {
+    use crate::cloud::AccountId;
     use crate::model::{ComponentName, ProjectName, WorkerName, WorkerUpdateMode};
     use clap::Args;
     use golem_templates::model::GuestLanguage;
@@ -551,6 +555,13 @@ pub mod shared_args {
         #[arg(long)]
         pub project: Option<ProjectName>,
     }
+
+    #[derive(Debug, Args)]
+    pub struct AccountIdOptionalArg {
+        /// Account ID
+        #[arg(long)]
+        pub account_id: Option<AccountId>,
+    }
 }
 
 pub mod app {
@@ -602,6 +613,11 @@ pub mod app {
         },
         /// Redeploy all workers of the application using the latest version
         RedeployWorkers {
+            #[command(flatten)]
+            component_name: AppOptionalComponentNames,
+        },
+        /// Diagnose possible tooling problems
+        Diagnose {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
         },
@@ -679,6 +695,11 @@ pub mod component {
         RedeployWorkers {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
+        },
+        /// Diagnose possible tooling problems
+        Diagnose {
+            #[command(flatten)]
+            component_name: ComponentOptionalComponentNames,
         },
     }
 }
@@ -1011,8 +1032,8 @@ pub mod api {
     }
 
     pub mod cloud {
-        use crate::command::api::cloud::certificate::ApiCloudCertificateSubcommand;
-        use crate::command::api::cloud::domain::ApiCloudDomainSubcommand;
+        use crate::command::api::cloud::certificate::ApiCertificateSubcommand;
+        use crate::command::api::cloud::domain::ApiDomainSubcommand;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
@@ -1020,27 +1041,80 @@ pub mod api {
             /// Manage Cloud API Domains
             Domain {
                 #[clap(subcommand)]
-                subcommand: ApiCloudDomainSubcommand,
+                subcommand: ApiDomainSubcommand,
             },
             /// Manage Cloud API Certificates
             Certificate {
                 #[clap(subcommand)]
-                subcommand: ApiCloudCertificateSubcommand,
+                subcommand: ApiCertificateSubcommand,
             },
         }
 
         pub mod domain {
+            use crate::model::ProjectName;
             use clap::Subcommand;
 
             #[derive(Debug, Subcommand)]
-            pub enum ApiCloudDomainSubcommand {}
+            pub enum ApiDomainSubcommand {
+                /// Retrieves metadata about an existing domain
+                Get {
+                    /// Project name
+                    project_name: ProjectName,
+                },
+                /// Add new domain
+                New {
+                    /// Project name
+                    project_name: ProjectName,
+                    /// Domain name
+                    domain_name: String,
+                },
+                /// Delete an existing domain
+                Delete {
+                    /// Project name
+                    project_name: ProjectName,
+                    /// Domain name
+                    domain_name: String,
+                },
+            }
         }
 
         pub mod certificate {
+            use crate::model::{PathBufOrStdin, ProjectName};
             use clap::Subcommand;
+            use uuid::Uuid;
 
             #[derive(Debug, Subcommand)]
-            pub enum ApiCloudCertificateSubcommand {}
+            pub enum ApiCertificateSubcommand {
+                /// Retrieves metadata about an existing certificate
+                Get {
+                    /// Project name
+                    project_name: ProjectName,
+                    /// Certificate ID
+                    certificate_id: Option<Uuid>,
+                },
+                /// Create new certificate
+                New {
+                    /// Project name
+                    project_name: ProjectName,
+                    /// Domain name
+                    #[arg(short, long)]
+                    domain_name: String,
+                    /// Certificate
+                    #[arg(long, value_hint = clap::ValueHint::FilePath)]
+                    certificate_body: PathBufOrStdin,
+                    /// Certificate private key
+                    #[arg(long, value_hint = clap::ValueHint::FilePath)]
+                    certificate_private_key: PathBufOrStdin,
+                },
+                /// Delete an existing certificate
+                #[command()]
+                Delete {
+                    /// Project name
+                    project_name: ProjectName,
+                    /// Certificate ID
+                    certificate_id: Uuid,
+                },
+            }
         }
     }
 }
@@ -1054,55 +1128,65 @@ pub mod plugin {
 
 pub mod profile {
     use crate::command::profile::config::ProfileConfigSubcommand;
-    use crate::config::ProfileName;
+    use crate::config::{ProfileKind, ProfileName};
+    use crate::model::Format;
     use clap::Subcommand;
+    use url::Url;
 
+    #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Creates new profile
-        #[command()]
+        /// Create new profile, call without <PROFILE_NAME> for interactive setup
         New {
-            /// Create the new profile interactively
-            #[arg(short, long)]
-            interactive: bool,
-
+            /// Profile kind
+            profile_kind: ProfileKind,
+            /// Name of the newly created profile
+            name: Option<ProfileName>,
             /// Switch to the profile after creation
-            #[arg(short, long)]
+            #[arg(long)]
             set_active: bool,
-            // TODO: add args
+            /// URL of Golem Component service
+            #[arg(long)]
+            component_url: Option<Url>,
+            /// URL of Golem Worker service, if not provided defaults to component-url
+            #[arg(long)]
+            worker_url: Option<Url>,
+            /// URL of Golem Cloud service, if not provided defaults to component-url
+            #[arg(long)]
+            cloud_url: Option<Url>,
+            /// Default output format
+            #[arg(long, default_value_t = Format::Text)]
+            default_format: Format,
+            /// Accept invalid certificates.
+            ///
+            /// Disables certificate validation.
+            /// Warning! Any certificate will be trusted for use.
+            /// This includes expired certificates.
+            /// This introduces significant vulnerabilities, and should only be used as a last resort.
+            #[arg(long, hide = true)]
+            allow_insecure: bool,
         },
-
         /// List profiles
-        #[command()]
-        List {},
-
+        List,
         /// Set the active default profile
-        #[command()]
         Switch {
             /// Profile name to switch to
             profile_name: ProfileName,
         },
-
         /// Show profile details
-        #[command()]
         Get {
             /// Name of profile to show, shows active profile if not specified.
-            name: Option<ProfileName>,
+            profile_name: Option<ProfileName>,
         },
-
         /// Remove profile
-        #[command()]
         Delete {
             /// Profile name to delete
             profile_name: ProfileName,
         },
-
         /// Profile config
-        #[command()]
         Config {
-            /// Profile name. Default value - active profile.
+            /// Profile name
             profile_name: ProfileName,
-
             #[command(subcommand)]
             subcommand: ProfileConfigSubcommand,
         },
@@ -1125,46 +1209,139 @@ pub mod profile {
 
 pub mod cloud {
     use crate::command::cloud::account::AccountSubcommand;
-    use crate::command::cloud::auth_token::AuthTokenSubcommand;
     use crate::command::cloud::project::ProjectSubcommand;
+    use crate::command::cloud::token::TokenSubcommand;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
     pub enum CloudSubcommand {
-        /// Manage Cloud Auth Tokens
-        AuthToken {
+        /// Manage Cloud Projects
+        Project {
             #[clap(subcommand)]
-            subcommand: AuthTokenSubcommand,
+            subcommand: ProjectSubcommand,
         },
         /// Manage Cloud Account
         Account {
             #[clap(subcommand)]
             subcommand: AccountSubcommand,
         },
-        /// Manage Cloud Projects
-        Project {
+        /// Manage Cloud Tokens
+        Token {
             #[clap(subcommand)]
-            subcommand: ProjectSubcommand,
+            subcommand: TokenSubcommand,
         },
     }
 
-    pub mod auth_token {
+    pub mod token {
+        use crate::command::parse_instant;
+        use crate::model::TokenId;
+        use chrono::{DateTime, Utc};
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
-        pub enum AuthTokenSubcommand {}
+        pub enum TokenSubcommand {
+            /// List tokens
+            List,
+            /// Create new token
+            New {
+                /// Expiration date of the generated token
+                #[arg(long, value_parser = parse_instant, default_value = "2100-01-01T00:00:00Z")]
+                expires_at: DateTime<Utc>,
+            },
+            /// Delete an existing token
+            Delete {
+                /// Token ID
+                token_id: TokenId,
+            },
+        }
     }
 
     pub mod account {
+        use crate::command::cloud::account::grant::GrantSubcommand;
+        use crate::command::shared_args::AccountIdOptionalArg;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
-        pub enum AccountSubcommand {}
+        pub enum AccountSubcommand {
+            /// Get information about the account
+            Get {
+                #[command(flatten)]
+                account_id: AccountIdOptionalArg,
+            },
+            /// Update some information about the account
+            Update {
+                #[command(flatten)]
+                account_id: AccountIdOptionalArg,
+                /// Set the account's name
+                account_name: Option<String>,
+                /// Set the account's email address
+                account_email: Option<String>,
+            },
+            /// Add a new account
+            New {
+                /// The new account's name
+                account_name: String,
+                /// The new account's email address
+                account_email: String,
+            },
+            /// Delete the account
+            Delete {
+                #[command(flatten)]
+                account_id: AccountIdOptionalArg,
+            },
+            /// Manage the account roles
+            Grant {
+                #[command(subcommand)]
+                subcommand: GrantSubcommand,
+            },
+        }
+
+        pub mod grant {
+            use crate::command::shared_args::AccountIdOptionalArg;
+            use crate::model::Role;
+            use clap::Subcommand;
+
+            #[derive(Subcommand, Debug)]
+            pub enum GrantSubcommand {
+                /// Get the roles granted to the account
+                Get {
+                    #[command(flatten)]
+                    account_id: AccountIdOptionalArg,
+                },
+                /// Grant a new role to the account
+                New {
+                    #[command(flatten)]
+                    account_id: AccountIdOptionalArg,
+                    /// The role to be granted
+                    role: Role,
+                },
+                /// Remove a role from the account
+                Delete {
+                    #[command(flatten)]
+                    account_id: AccountIdOptionalArg,
+                    /// The role to be deleted
+                    role: Role,
+                },
+            }
+        }
     }
 
     pub mod project {
-        use crate::model::ProjectName;
+        use crate::cloud::AccountId;
+        use crate::command::cloud::project::policy::PolicySubcommand;
+        use crate::model::{ProjectAction, ProjectName, ProjectPolicyId};
         use clap::Subcommand;
+
+        #[derive(clap::Args, Debug)]
+        #[group(required = true, multiple = false)]
+        pub struct ProjectActionsOrPolicyId {
+            /// The sharing policy's identifier. If not provided, use `--action` instead
+            #[arg(long, required = true, group = "project_actions_or_policy")]
+            pub policy_id: Option<ProjectPolicyId>,
+            /// A list of actions to be granted to the recipient account. If not provided, use `--policy-id` instead
+            #[arg(long, required = true, group = "project_actions_or_policy")]
+            pub action: Option<Vec<ProjectAction>>,
+        }
 
         #[derive(Debug, Subcommand)]
         pub enum ProjectSubcommand {
@@ -1172,20 +1349,53 @@ pub mod cloud {
             New {
                 /// The new project's name
                 project_name: ProjectName,
-
                 /// The new project's description
                 #[arg(short, long)]
                 description: Option<String>,
             },
-
             /// Lists existing projects
             List {
                 /// Optionally filter projects by name
                 project_name: Option<ProjectName>,
             },
-
             /// Gets the default project which is used when no explicit project is specified
             GetDefault,
+            /// Share a project with another account
+            Grant {
+                /// The project to be shared
+                project_name: ProjectName,
+                /// User account the project will be shared with
+                recipient_account_id: AccountId,
+                #[command(flatten)]
+                project_actions_or_policy_id: ProjectActionsOrPolicyId,
+            },
+            /// Manage project policies
+            Policy {
+                #[command(subcommand)]
+                subcommand: PolicySubcommand,
+            },
+        }
+
+        pub mod policy {
+            use crate::model::{ProjectAction, ProjectPolicyId};
+            use clap::Subcommand;
+
+            #[derive(Subcommand, Debug)]
+            pub enum PolicySubcommand {
+                /// Creates a new project sharing policy
+                New {
+                    /// Name of the policy
+                    policy_name: String,
+                    /// List of actions allowed by the policy
+                    actions: Vec<ProjectAction>,
+                },
+                /// Gets the existing project sharing policies
+                #[command()]
+                Get {
+                    /// Project policy ID
+                    policy_id: ProjectPolicyId,
+                },
+            }
         }
     }
 }
@@ -1248,6 +1458,15 @@ fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
         layer: parts[0].parse()?,
         cursor: parts[1].parse()?,
     })
+}
+
+fn parse_instant(
+    s: &str,
+) -> Result<DateTime<Utc>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    match s.parse::<DateTime<Utc>>() {
+        Ok(dt) => Ok(dt),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[cfg(test)]

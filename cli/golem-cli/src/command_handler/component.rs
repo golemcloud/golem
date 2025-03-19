@@ -107,6 +107,10 @@ impl ComponentCommandHandler {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
+
+            ComponentSubcommand::Diagnose { component_name } => {
+                self.cmd_diagnose(component_name).await
+            }
         }
     }
 
@@ -479,6 +483,19 @@ impl ComponentCommandHandler {
         self.redeploy_workers_by_components(components).await?;
 
         Ok(())
+    }
+
+    async fn cmd_diagnose(
+        &self,
+        component_names: ComponentOptionalComponentNames,
+    ) -> anyhow::Result<()> {
+        self.ctx
+            .app_handler()
+            .diagnose(
+                component_names.component_name,
+                &ComponentSelectMode::CurrentDir,
+            )
+            .await
     }
 
     pub async fn deploy(

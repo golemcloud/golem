@@ -1,10 +1,19 @@
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, PathExtra};
 use colored::{ColoredString, Colorize};
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{LazyLock, OnceLock, RwLock};
+use terminal_size::terminal_size;
+use textwrap::WordSplitter;
 use tracing::debug;
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
+static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
+static WRAP_PADDING: usize = 2;
+
+fn terminal_width() -> Option<usize> {
+    *TERMINAL_WIDTH.get_or_init(|| terminal_size().map(|(width, _)| width.0 as usize))
+}
 
 // TODO: let's add another output for tracing debug and use that for silent mode in cli
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +27,7 @@ pub enum Output {
 struct LogState {
     indents: Vec<Option<String>>,
     calculated_indent: String,
+    max_width: Option<usize>,
     output: Output,
 }
 
@@ -26,6 +36,7 @@ impl LogState {
         Self {
             indents: Vec::new(),
             calculated_indent: String::new(),
+            max_width: terminal_width().map(|w| w - WRAP_PADDING),
             output: Output::Stdout,
         }
     }
@@ -46,6 +57,7 @@ impl LogState {
             self.calculated_indent
                 .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or("  "))
         }
+        self.max_width = terminal_width().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
     }
 
     fn set_output(&mut self, output: Output) {
@@ -110,55 +122,59 @@ pub fn set_log_output(output: Output) {
 }
 
 pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
-    let state = LOG_STATE.read().unwrap();
-    let message = format!(
-        "{}{} {}",
-        state.calculated_indent,
+    logln_internal(&format!(
+        "{} {}",
         action.log_color_action(),
         subject.as_ref()
-    );
-    logln_internal(state.output, &message);
+    ));
 }
 
 pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
-    let state = LOG_STATE.read().unwrap();
-    let message = format!(
-        "{}{} {}",
-        state.calculated_indent,
-        action.log_color_warn(),
-        subject.as_ref(),
-    );
-    logln_internal(state.output, &message);
+    logln_internal(&format!("{} {}", action.log_color_warn(), subject.as_ref(),));
 }
 
 pub fn log_error_action<T: AsRef<str>>(action: &str, subject: T) {
-    let state = LOG_STATE.read().unwrap();
-    let message = format!(
-        "{}{} {}",
-        state.calculated_indent,
+    logln_internal(&format!(
+        "{} {}",
         action.log_color_error(),
         subject.as_ref(),
-    );
-    logln_internal(state.output, &message);
+    ));
 }
 
 pub fn logln<T: AsRef<str>>(message: T) {
-    let state = LOG_STATE.read().unwrap();
-    let message = format!("{}{}", state.calculated_indent, message.as_ref());
-    logln_internal(state.output, &message);
+    logln_internal(message.as_ref());
 }
 
-pub fn logln_internal(output: Output, message: &str) {
-    match output {
-        Output::Stdout => {
-            println!("{}", message)
+pub fn logln_internal(message: &str) {
+    let state = LOG_STATE.read().unwrap();
+
+    let lines = match state.max_width {
+        Some(width) if width > message.len() && !message.contains("\n") => {
+            textwrap::wrap(
+                message,
+                textwrap::Options::new(width)
+                    // deliberately 5 spaces, to makes this indent different from normal ones
+                    .subsequent_indent("     ")
+                    .word_splitter(WordSplitter::NoHyphenation),
+            )
         }
-        Output::Stderr => {
-            eprintln!("{}", message)
+        _ => {
+            vec![Cow::from(message)]
         }
-        Output::None => {}
-        Output::TracingDebug => {
-            debug!("{}", message);
+    };
+
+    for line in lines {
+        match state.output {
+            Output::Stdout => {
+                println!("{}{}", state.calculated_indent, line)
+            }
+            Output::Stderr => {
+                eprintln!("{}{}", state.calculated_indent, line)
+            }
+            Output::None => {}
+            Output::TracingDebug => {
+                debug!("{}{}", state.calculated_indent, line);
+            }
         }
     }
 }

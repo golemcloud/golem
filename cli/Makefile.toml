@@ -146,20 +146,6 @@ script = '''
 exec --fail-on-error cargo test --package golem-templates --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
-## ** Single executable **
-[tasks.build-se]
-private = true
-description = """Build the single executable in debug mode"""
-dependencies = ["set-version"]
-command = "cargo"
-args = ["build", "-p", "golem"]
-
-[tasks.run-se]
-description = """Build the single executable in debug mode"""
-dependencies = ["build-se"]
-command = "./target/debug/golem"
-args = [  "server", "run", "--clean", "--data-dir", ".golem/se-data" ]
-
 ## ** DESKTOP APP **
 [tasks.desktop]
 description = "Builds the desktop application"

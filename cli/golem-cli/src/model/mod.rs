@@ -27,9 +27,11 @@ pub mod wave;
 
 use crate::cloud::{AccountId, ProjectId};
 use crate::command::shared_args::StreamArgs;
-use crate::config::{CloudProfile, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileName};
+use crate::config::{
+    CloudProfile, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileKind, ProfileName,
+};
 use crate::model::to_oss::ToOss;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -44,12 +46,14 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
+use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
 use uuid::Uuid;
+
 // TODO: move arg thing into command
 // TODO: move non generic entities into mods
 
@@ -370,6 +374,29 @@ pub enum PathBufOrStdin {
     Stdin,
 }
 
+impl PathBufOrStdin {
+    pub fn read_to_string(&self) -> anyhow::Result<String> {
+        match self {
+            PathBufOrStdin::Path(path) => std::fs::read_to_string(path)
+                .with_context(|| anyhow!("Failed to read file: {}", path.display())),
+            PathBufOrStdin::Stdin => {
+                let mut content = String::new();
+                let _ = std::io::stdin()
+                    .read_to_string(&mut content)
+                    .with_context(|| anyhow!("Failed to read from STDIN"))?;
+                Ok(content)
+            }
+        }
+    }
+
+    pub fn is_stdin(&self) -> bool {
+        match self {
+            PathBufOrStdin::Path(_) => false,
+            PathBufOrStdin::Stdin => true,
+        }
+    }
+}
+
 impl FromStr for PathBufOrStdin {
     type Err = core::convert::Infallible;
 
@@ -677,7 +704,7 @@ impl From<StreamArgs> for WorkerConnectOptions {
 pub struct ProfileView {
     pub is_active: bool,
     pub name: ProfileName,
-    pub typ: ProfileType,
+    pub kind: ProfileKind,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -689,12 +716,6 @@ pub struct ProfileView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub authenticated: Option<bool>,
     pub config: ProfileConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub enum ProfileType {
-    Golem,
-    GolemCloud,
 }
 
 impl ProfileView {
@@ -710,7 +731,7 @@ impl ProfileView {
             }) => ProfileView {
                 is_active: &name == active,
                 name,
-                typ: ProfileType::Golem,
+                kind: ProfileKind::Oss,
                 url: Some(url),
                 cloud_url: None,
                 worker_url,
@@ -728,7 +749,7 @@ impl ProfileView {
             }) => ProfileView {
                 is_active: &name == active,
                 name,
-                typ: ProfileType::GolemCloud,
+                kind: ProfileKind::Cloud,
                 url: custom_url,
                 cloud_url: custom_cloud_url,
                 worker_url: custom_worker_url,
@@ -764,4 +785,210 @@ pub struct SelectedComponents {
     pub account_id: Option<AccountId>,
     pub project: Option<ProjectNameAndId>,
     pub component_names: Vec<ComponentName>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TokenId(pub Uuid);
+
+impl FromStr for TokenId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(TokenId(Uuid::parse_str(s)?))
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProjectPolicyId(pub Uuid);
+
+impl FromStr for ProjectPolicyId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(ProjectPolicyId(Uuid::parse_str(s)?))
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize)]
+pub enum Role {
+    Admin,
+    MarketingAdmin,
+    ViewProject,
+    DeleteProject,
+    CreateProject,
+    InstanceServer,
+    UpdateProject,
+    ViewPlugin,
+    CreatePlugin,
+    DeletePlugin,
+}
+
+impl Display for Role {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Role::Admin => "Admin",
+            Role::MarketingAdmin => "MarketingAdmin",
+            Role::ViewProject => "ViewProject",
+            Role::DeleteProject => "DeleteProject",
+            Role::CreateProject => "CreateProject",
+            Role::InstanceServer => "InstanceServer",
+            Role::UpdateProject => "UpdateProject",
+            Role::ViewPlugin => "ViewPlugin",
+            Role::CreatePlugin => "CreatePlugin",
+            Role::DeletePlugin => "DeletePlugin",
+        };
+
+        Display::fmt(s, f)
+    }
+}
+
+impl FromStr for Role {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Admin" => Ok(Role::Admin),
+            "MarketingAdmin" => Ok(Role::MarketingAdmin),
+            "ViewProject" => Ok(Role::ViewProject),
+            "DeleteProject" => Ok(Role::DeleteProject),
+            "CreateProject" => Ok(Role::CreateProject),
+            "InstanceServer" => Ok(Role::InstanceServer),
+            "UpdateProject" => Ok(Role::UpdateProject),
+            "ViewPlugin" => Ok(Role::ViewPlugin),
+            "CreatePlugin" => Ok(Role::CreatePlugin),
+            _ => {
+                let all = Role::iter()
+                    .map(|x| format!("\"{x}\""))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Err(format!("Unknown role: {s}. Expected one of {all}"))
+            }
+        }
+    }
+}
+
+impl From<Role> for golem_cloud_client::model::Role {
+    fn from(value: Role) -> Self {
+        match value {
+            Role::Admin => golem_cloud_client::model::Role::Admin,
+            Role::MarketingAdmin => golem_cloud_client::model::Role::MarketingAdmin,
+            Role::ViewProject => golem_cloud_client::model::Role::ViewProject,
+            Role::DeleteProject => golem_cloud_client::model::Role::DeleteProject,
+            Role::CreateProject => golem_cloud_client::model::Role::CreateProject,
+            Role::InstanceServer => golem_cloud_client::model::Role::InstanceServer,
+            Role::UpdateProject => golem_cloud_client::model::Role::UpdateProject,
+            Role::ViewPlugin => golem_cloud_client::model::Role::ViewPlugin,
+            Role::CreatePlugin => golem_cloud_client::model::Role::CreatePlugin,
+            Role::DeletePlugin => golem_cloud_client::model::Role::DeletePlugin,
+        }
+    }
+}
+
+impl From<golem_cloud_client::model::Role> for Role {
+    fn from(value: golem_cloud_client::model::Role) -> Self {
+        match value {
+            golem_cloud_client::model::Role::Admin => Role::Admin,
+            golem_cloud_client::model::Role::MarketingAdmin => Role::MarketingAdmin,
+            golem_cloud_client::model::Role::ViewProject => Role::ViewProject,
+            golem_cloud_client::model::Role::DeleteProject => Role::DeleteProject,
+            golem_cloud_client::model::Role::CreateProject => Role::CreateProject,
+            golem_cloud_client::model::Role::InstanceServer => Role::InstanceServer,
+            golem_cloud_client::model::Role::UpdateProject => Role::UpdateProject,
+            golem_cloud_client::model::Role::ViewPlugin => Role::ViewPlugin,
+            golem_cloud_client::model::Role::CreatePlugin => Role::CreatePlugin,
+            golem_cloud_client::model::Role::DeletePlugin => Role::DeletePlugin,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
+pub enum ProjectAction {
+    ViewComponent,
+    CreateComponent,
+    UpdateComponent,
+    DeleteComponent,
+    ViewWorker,
+    CreateWorker,
+    UpdateWorker,
+    DeleteWorker,
+    ViewProjectGrants,
+    CreateProjectGrants,
+    DeleteProjectGrants,
+}
+
+impl Display for ProjectAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ProjectAction::ViewComponent => "ViewComponent",
+            ProjectAction::CreateComponent => "CreateComponent",
+            ProjectAction::UpdateComponent => "UpdateComponent",
+            ProjectAction::DeleteComponent => "DeleteComponent",
+            ProjectAction::ViewWorker => "ViewWorker",
+            ProjectAction::CreateWorker => "CreateWorker",
+            ProjectAction::UpdateWorker => "UpdateWorker",
+            ProjectAction::DeleteWorker => "DeleteWorker",
+            ProjectAction::ViewProjectGrants => "ViewProjectGrants",
+            ProjectAction::CreateProjectGrants => "CreateProjectGrants",
+            ProjectAction::DeleteProjectGrants => "DeleteProjectGrants",
+        };
+
+        Display::fmt(s, f)
+    }
+}
+
+impl FromStr for ProjectAction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ViewComponent" => Ok(ProjectAction::ViewComponent),
+            "CreateComponent" => Ok(ProjectAction::CreateComponent),
+            "UpdateComponent" => Ok(ProjectAction::UpdateComponent),
+            "DeleteComponent" => Ok(ProjectAction::DeleteComponent),
+            "ViewWorker" => Ok(ProjectAction::ViewWorker),
+            "CreateWorker" => Ok(ProjectAction::CreateWorker),
+            "UpdateWorker" => Ok(ProjectAction::UpdateWorker),
+            "DeleteWorker" => Ok(ProjectAction::DeleteWorker),
+            "ViewProjectGrants" => Ok(ProjectAction::ViewProjectGrants),
+            "CreateProjectGrants" => Ok(ProjectAction::CreateProjectGrants),
+            "DeleteProjectGrants" => Ok(ProjectAction::DeleteProjectGrants),
+            _ => {
+                let all = ProjectAction::iter()
+                    .map(|x| format!("\"{x}\""))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Err(format!("Unknown action: {s}. Expected one of {all}"))
+            }
+        }
+    }
+}
+
+impl From<ProjectAction> for golem_cloud_client::model::ProjectAction {
+    fn from(value: ProjectAction) -> Self {
+        match value {
+            ProjectAction::ViewComponent => golem_cloud_client::model::ProjectAction::ViewComponent,
+            ProjectAction::CreateComponent => {
+                golem_cloud_client::model::ProjectAction::CreateComponent
+            }
+            ProjectAction::UpdateComponent => {
+                golem_cloud_client::model::ProjectAction::UpdateComponent
+            }
+            ProjectAction::DeleteComponent => {
+                golem_cloud_client::model::ProjectAction::DeleteComponent
+            }
+            ProjectAction::ViewWorker => golem_cloud_client::model::ProjectAction::ViewWorker,
+            ProjectAction::CreateWorker => golem_cloud_client::model::ProjectAction::CreateWorker,
+            ProjectAction::UpdateWorker => golem_cloud_client::model::ProjectAction::UpdateWorker,
+            ProjectAction::DeleteWorker => golem_cloud_client::model::ProjectAction::DeleteWorker,
+            ProjectAction::ViewProjectGrants => {
+                golem_cloud_client::model::ProjectAction::ViewProjectGrants
+            }
+            ProjectAction::CreateProjectGrants => {
+                golem_cloud_client::model::ProjectAction::CreateProjectGrants
+            }
+            ProjectAction::DeleteProjectGrants => {
+                golem_cloud_client::model::ProjectAction::DeleteProjectGrants
+            }
+        }
+    }
 }

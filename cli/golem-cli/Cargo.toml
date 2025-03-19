@@ -83,6 +83,7 @@ uuid = { workspace = true }
 version-compare = { workspace = true }
 walkdir = { workspace = true }
 wasm-wave = { workspace = true }
+wax = { workspace = true }
 
 [dev-dependencies]
 # Golem deps

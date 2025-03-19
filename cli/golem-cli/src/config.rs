@@ -23,11 +23,13 @@ use std::fmt::{Display, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
+use strum_macros::EnumIter;
 use url::Url;
 
-const CLOUD_URL: &str = "https://release.api.golem.cloud";
-const DEFAULT_OSS_URL: &str = "http://localhost:9881";
+pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
+pub const DEFAULT_OSS_URL: &str = "http://localhost:9881";
 
 // TODO: review and separate model, config and serialization parts
 // TODO: when doing the serialization we can do a legacy migration
@@ -44,15 +46,23 @@ pub struct Config {
     pub active_cloud_profile: Option<ProfileName>,
 }
 
+const PROFILE_NAME_LOCAL: &str = "local";
+const PROFILE_NAME_CLOUD: &str = "cloud";
+
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct ProfileName(pub String);
 
 impl ProfileName {
     pub fn local() -> Self {
-        ProfileName("local".to_owned())
+        ProfileName(PROFILE_NAME_LOCAL.to_string())
     }
+
     pub fn cloud() -> Self {
-        ProfileName("cloud".to_owned())
+        ProfileName(PROFILE_NAME_CLOUD.to_string())
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        matches!(self.0.as_str(), PROFILE_NAME_LOCAL | PROFILE_NAME_CLOUD)
     }
 }
 
@@ -101,10 +111,34 @@ pub struct NamedProfile {
     pub profile: Profile,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone, EnumIter, Serialize, Deserialize)]
 pub enum ProfileKind {
     Oss,
     Cloud,
+}
+
+impl Display for ProfileKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProfileKind::Oss => write!(f, "OSS"),
+            ProfileKind::Cloud => write!(f, "Cloud"),
+        }
+    }
+}
+
+impl FromStr for ProfileKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "oss" => Ok(Self::Oss),
+            "cloud" => Ok(Self::Cloud),
+            _ => Err(format!(
+                "unknown profile kind: {}, available profile kinds: cloud, oss",
+                s
+            )),
+        }
+    }
 }
 
 // TODO: cannot rename enum cases without migration, as that breaks the format,
@@ -204,7 +238,13 @@ impl Config {
         config_dir.join("config.json")
     }
 
-    fn from_file(config_dir: &Path) -> anyhow::Result<Config> {
+    pub fn default_profile_name(&self) -> ProfileName {
+        self.default_profile
+            .clone()
+            .unwrap_or_else(ProfileName::local)
+    }
+
+    pub fn from_file(config_dir: &Path) -> anyhow::Result<Config> {
         let config_path = Self::config_path(config_dir);
 
         if !config_path

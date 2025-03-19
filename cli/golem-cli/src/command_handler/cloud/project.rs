@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::cloud::AccountId;
-use crate::command::cloud::project::ProjectSubcommand;
+use crate::command::cloud::project::{ProjectActionsOrPolicyId, ProjectSubcommand};
 use crate::command_handler::Handlers;
 use crate::config::ProfileKind;
 use crate::context::Context;
@@ -23,11 +23,13 @@ use crate::error::NonSuccessfulExit;
 use crate::model::project::ProjectView;
 use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::help::ComponentNameHelp;
-use crate::model::text::project::{ProjectCreatedView, ProjectGetView, ProjectListView};
+use crate::model::text::project::{
+    ProjectCreatedView, ProjectGetView, ProjectGrantView, ProjectListView,
+};
 use crate::model::{ProjectName, ProjectNameAndId};
 use anyhow::{anyhow, bail};
-use golem_cloud_client::api::ProjectClient;
-use golem_cloud_client::model::{Project, ProjectDataRequest};
+use golem_cloud_client::api::{ProjectClient, ProjectGrantClient};
+use golem_cloud_client::model::{Project, ProjectDataRequest, ProjectGrantDataRequest};
 use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
 use std::sync::Arc;
 
@@ -48,6 +50,24 @@ impl CloudProjectCommandHandler {
             } => self.cmd_new(project_name, description).await,
             ProjectSubcommand::List { project_name } => self.cmd_list(project_name).await,
             ProjectSubcommand::GetDefault => self.cmd_get_default().await,
+            ProjectSubcommand::Grant {
+                project_name,
+                recipient_account_id,
+                project_actions_or_policy_id,
+            } => {
+                self.cmd_grant(
+                    project_name,
+                    recipient_account_id,
+                    project_actions_or_policy_id,
+                )
+                .await
+            }
+            ProjectSubcommand::Policy { subcommand } => {
+                self.ctx
+                    .cloud_project_policy_handler()
+                    .handler_command(subcommand)
+                    .await
+            }
         }
     }
 
@@ -176,11 +196,7 @@ impl CloudProjectCommandHandler {
                     project_id: project.project_id.into(),
                 }))
             }
-            (ProfileKind::Cloud, None) => {
-                // TODO: from global flags
-                // TODO: should we query the default here?
-                Ok(None)
-            }
+            (ProfileKind::Cloud, None) => Ok(None),
         }
     }
 
@@ -217,6 +233,39 @@ impl CloudProjectCommandHandler {
                     project_id: project.project_id.into(),
                 }),
         }
+    }
+
+    async fn cmd_grant(
+        &self,
+        project_name: ProjectName,
+        account_id: AccountId,
+        actions_or_policy_id: ProjectActionsOrPolicyId,
+    ) -> anyhow::Result<()> {
+        let grant = self
+            .ctx
+            .golem_clients_cloud()
+            .await?
+            .project_grant
+            .create_project_grant(
+                &self.select_project(None, &project_name).await?.project_id.0,
+                &ProjectGrantDataRequest {
+                    grantee_account_id: account_id.0,
+                    project_policy_id: actions_or_policy_id.policy_id.map(|id| id.0),
+                    project_actions: actions_or_policy_id
+                        .action
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|a| a.into())
+                        .collect(),
+                    project_policy_name: None,
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        self.ctx.log_handler().log_view(&ProjectGrantView(grant));
+
+        Ok(())
     }
 }
 

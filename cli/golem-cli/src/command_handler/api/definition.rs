@@ -23,16 +23,14 @@ use crate::model::text::api_definition::{
 use crate::model::{
     ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin,
 };
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::Context as AnyhowContext;
 use golem_client::api::ApiDefinitionClient as ApiDefinitionClientOss;
 use golem_client::model::HttpApiDefinitionRequest as HttpApiDefinitionRequestOss;
 use golem_cloud_client::api::ApiDefinitionClient as ApiDefinitionClientCloud;
 use golem_cloud_client::model::HttpApiDefinitionRequest as HttpApiDefinitionRequestCloud;
 use golem_wasm_rpc_stubgen::log::{log_warn_action, LogColorize};
 use serde::de::DeserializeOwned;
-use std::io::Read;
 use std::sync::Arc;
-use tokio::fs::read_to_string;
 
 pub struct ApiDefinitionCommandHandler {
     ctx: Arc<Context>,
@@ -89,7 +87,7 @@ impl ApiDefinitionCommandHandler {
         let result = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_definition
-                .create_definition_json(&read_and_parse_api_definition(definition, format).await?)
+                .create_definition_json(&read_and_parse_api_definition(definition, format)?)
                 .await
                 .map_service_error()?,
             GolemClients::Cloud(clients) => {
@@ -102,7 +100,7 @@ impl ApiDefinitionCommandHandler {
                     .api_definition
                     .create_definition_json(
                         &project.project_id.0,
-                        &read_and_parse_api_definition(definition, format).await?,
+                        &read_and_parse_api_definition(definition, format)?,
                     )
                     .await
                     .map_service_error()?
@@ -170,7 +168,7 @@ impl ApiDefinitionCommandHandler {
         let result = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => {
                 let api_def: HttpApiDefinitionRequestOss =
-                    read_and_parse_api_definition(definition, format).await?;
+                    read_and_parse_api_definition(definition, format)?;
                 clients
                     .api_definition
                     .update_definition_json(&api_def.id, &api_def.version, &api_def)
@@ -179,7 +177,7 @@ impl ApiDefinitionCommandHandler {
             }
             GolemClients::Cloud(clients) => {
                 let api_def: HttpApiDefinitionRequestCloud =
-                    read_and_parse_api_definition(definition, format).await?;
+                    read_and_parse_api_definition(definition, format)?;
                 let project = self
                     .ctx
                     .cloud_project_handler()
@@ -220,7 +218,7 @@ impl ApiDefinitionCommandHandler {
         let result = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_definition
-                .import_open_api_json(&read_and_parse_api_definition(definition, format).await?)
+                .import_open_api_json(&read_and_parse_api_definition(definition, format)?)
                 .await
                 .map_service_error()?,
             GolemClients::Cloud(clients) => {
@@ -233,7 +231,7 @@ impl ApiDefinitionCommandHandler {
                     .api_definition
                     .import_open_api_json(
                         &project.project_id.0,
-                        &read_and_parse_api_definition(definition, format).await?,
+                        &read_and_parse_api_definition(definition, format)?,
                     )
                     .await
                     .map_service_error()?
@@ -331,21 +329,6 @@ impl ApiDefinitionCommandHandler {
     }
 }
 
-async fn read_definition(source: PathBufOrStdin) -> anyhow::Result<String> {
-    match source {
-        PathBufOrStdin::Path(path) => read_to_string(&path)
-            .await
-            .with_context(|| anyhow!("Failed to read definition file: {}", path.display())),
-        PathBufOrStdin::Stdin => {
-            let mut content = String::new();
-            let _ = std::io::stdin()
-                .read_to_string(&mut content)
-                .with_context(|| anyhow!("Failed to read definition from STDIN"))?;
-            Ok(content)
-        }
-    }
-}
-
 fn parse_api_definition<T: DeserializeOwned>(
     input: &str,
     format: Option<ApiDefinitionFileFormat>,
@@ -360,9 +343,9 @@ fn parse_api_definition<T: DeserializeOwned>(
     }
 }
 
-async fn read_and_parse_api_definition<T: DeserializeOwned>(
+fn read_and_parse_api_definition<T: DeserializeOwned>(
     source: PathBufOrStdin,
     format: Option<ApiDefinitionFileFormat>,
 ) -> anyhow::Result<T> {
-    parse_api_definition(&read_definition(source).await?, format)
+    parse_api_definition(&source.read_to_string()?, format)
 }

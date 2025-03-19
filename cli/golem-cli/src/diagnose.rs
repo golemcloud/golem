@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
-
+use anyhow::{anyhow, Context};
 use colored::Colorize;
 use golem_templates::model::GuestLanguage;
+use golem_wasm_rpc_stubgen::log::logln;
 use indoc::indoc;
 use regex::Regex;
 use std::cmp::max;
@@ -26,18 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use version_compare::{Cmp, Version};
 use walkdir::DirEntry;
-
-pub mod cli {
-    use clap::Parser;
-    use golem_templates::model::GuestLanguage;
-
-    #[derive(Parser, Debug)]
-    #[command()]
-    pub struct Command {
-        #[arg(short, long, alias = "lang")]
-        pub language: Option<GuestLanguage>,
-    }
-}
+use wax::{Glob, LinkBehavior, WalkBehavior};
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
 enum Language {
@@ -58,7 +48,7 @@ struct SelectedLanguage {
 }
 
 impl SelectedLanguage {
-    pub fn from_flag(guest_language: GuestLanguage) -> Option<SelectedLanguage> {
+    pub fn from_flag(dir: &Path, guest_language: GuestLanguage) -> Option<SelectedLanguage> {
         let language = match guest_language {
             GuestLanguage::C => Some(Language::CCcp),
             GuestLanguage::Go => Some(Language::Go),
@@ -73,35 +63,60 @@ impl SelectedLanguage {
 
         language.map(|language| SelectedLanguage {
             language,
-            project_dir: PathBuf::from("."),
+            project_dir: dir.to_path_buf(),
             detected_by_reason: None,
         })
     }
 
-    pub fn from_env() -> Option<SelectedLanguage> {
-        let ordered_language_project_hint_files: Vec<(&str, Language)> = vec![
+    pub fn from_env(dir: &Path) -> Option<SelectedLanguage> {
+        let ordered_language_project_hint_patterns: Vec<(&str, Language)> = vec![
             ("build.zig", Language::Zig),
             ("Cargo.toml", Language::Rust),
             ("go.mod", Language::Go),
             ("package.json", Language::JsTs),
             ("Makefile", Language::CCcp),
             ("main.py", Language::Python),
+            ("*.c", Language::CCcp),
+            ("*.h", Language::CCcp),
+            ("*.cpp", Language::CCcp),
+            ("*.go", Language::Go),
+            ("*.js", Language::JsTs),
+            ("*.ts", Language::JsTs),
+            ("*.py", Language::Python),
+            ("*.rs", Language::Rust),
+            ("*.zig", Language::Zig),
+            ("*.scala", Language::ScalaJs),
+            ("*.mbt", Language::MoonBit),
         ];
 
         let detect_in_dir = |dir: &Path| -> Option<SelectedLanguage> {
-            ordered_language_project_hint_files
+            ordered_language_project_hint_patterns
                 .iter()
-                .find_map(|(file, language)| {
-                    let path = dir.join(Path::new(file));
-                    path.exists().then_some(SelectedLanguage {
+                .find_map(|(file_pattern, language)| {
+                    let glob = Glob::new(file_pattern)
+                        .with_context(|| {
+                            anyhow!("Failed to compile file hint pattern: {}", file_pattern)
+                        })
+                        .unwrap();
+
+                    let file_match = glob
+                        .walk_with_behavior(
+                            dir,
+                            WalkBehavior {
+                                link: LinkBehavior::ReadFile,
+                                ..WalkBehavior::default()
+                            },
+                        )
+                        .next()
+                        .and_then(|item| item.ok())
+                        .map(|item| item.path().to_path_buf());
+
+                    file_match.map(|file_match| SelectedLanguage {
                         language: *language,
-                        project_dir: path
-                            .parent()
-                            .expect("Failed to get parent for project file")
-                            .to_path_buf(),
+                        project_dir: dir.to_path_buf(),
                         detected_by_reason: Some(format!(
                             "Detected project file: {}",
-                            path.to_string_lossy().green().bold()
+                            file_match.display().to_string().green().bold()
                         )),
                     })
                 })
@@ -124,7 +139,7 @@ impl SelectedLanguage {
 
         // Searching - down
         {
-            let language = walkdir::WalkDir::new(".")
+            let language = walkdir::WalkDir::new(dir)
                 .max_depth(4)
                 .into_iter()
                 .filter_entry(|e| is_dir(e) && !is_hidden(e))
@@ -731,34 +746,29 @@ impl DetectedTool {
     }
 }
 
-pub fn diagnose(command: cli::Command) {
-    let selected_language = match &command.language {
-        Some(language) => SelectedLanguage::from_flag(*language),
-        None => SelectedLanguage::from_env(),
+pub fn diagnose(dir: &Path, language: Option<GuestLanguage>) {
+    let selected_language = match &language {
+        Some(language) => SelectedLanguage::from_flag(dir, *language),
+        None => SelectedLanguage::from_env(dir),
     };
 
     match &selected_language {
         Some(selected_language) => {
             match &selected_language.detected_by_reason {
                 Some(reason) => {
-                    println!("{}", reason);
-                    println!(
-                        "Detected language: {} (to explicitly specify the language use the --language flag)",
+                    logln(reason);
+                    logln(format!(
+                        "Detected language: {}",
                         selected_language.language.to_string().bold().green(),
-                    );
+                    ));
                 }
-                None => {
-                    println!(
-                        "Explicitly selected language: {}",
-                        selected_language.language
-                    )
-                }
+                None => logln(format!("Selected language: {}", selected_language.language,)),
             }
-            println!("Online language setup guide(s):");
+            logln("Online language setup guide(s):");
             for url in selected_language.language.language_guide_setup_url() {
-                println!("  {}", url.bold().underline());
+                logln(format!("  {}", url.bold().underline()));
             }
-            println!();
+            logln("");
 
             report_tools(
                 Tool::with_all_dependencies(selected_language.language.tools_with_rpc())
@@ -767,24 +777,22 @@ pub fn diagnose(command: cli::Command) {
                     .collect(),
             );
         }
-        None => match &command.language {
+        None => match &language {
             Some(language) => {
-                println!(
+                logln(format!(
                     "The selected language ({}) has no language specific diagnostics currently.\n",
-                    language
-                );
-                println!("Running diagnostics for common Worker to Worker RPC tooling.\n");
-
-                let dir = PathBuf::from(".");
+                    language,
+                ));
+                logln("Running diagnostics for common Worker to Worker RPC tooling.\n");
                 report_tools(
                     Tool::with_all_dependencies(Language::common_rpc_tools())
                         .iter()
-                        .map(|t| DetectedTool::new(&dir, *t))
+                        .map(|t| DetectedTool::new(dir, *t))
                         .collect(),
                 );
             }
             None => {
-                println!("No language detected, use the --language flag to explicitly specify one");
+                logln("No language detected");
             }
         },
     }
@@ -804,28 +812,28 @@ fn report_tools(all_tools: Vec<DetectedTool>) {
         (name_padding + 1, version_padding + 1)
     };
 
-    println!("Recommended tooling:");
+    logln("Recommended tooling:");
     for tool in &all_tools {
-        println!(
+        logln(format!(
             "  {: <width$} {}",
             format!("{}:", tool.metadata.short_name),
             tool.metadata.description,
             width = name_padding,
-        );
+        ));
     }
-    println!();
+    logln("");
 
-    println!("Installed tool versions:");
+    logln("Installed tool versions:");
     for tool in &all_tools {
-        println!(
+        logln(format!(
             "  {: <name_padding$} {} {: <version_padding$}{}",
             format!("{}:", tool.metadata.short_name),
             tool.version_relation,
             tool.version.clone().unwrap_or_else(|| "".to_string()),
             tool.details,
-        );
+        ));
     }
-    println!();
+    logln("");
 
     let non_ok_tools: Vec<_> = all_tools
         .into_iter()
@@ -833,30 +841,30 @@ fn report_tools(all_tools: Vec<DetectedTool>) {
         .collect();
 
     if non_ok_tools.is_empty() {
-        println!("{}", "All tools are ok.".green())
+        logln("All tools are ok.".green().to_string());
     } else {
-        println!("{}", "Recommended steps:".yellow());
+        logln("Recommended steps:".yellow().to_string());
         for tool in &non_ok_tools {
-            println!();
-            println!(
+            logln("");
+            logln(format!(
                 "  {}",
                 format!(
                     "{}: {}",
                     tool.metadata.short_name, tool.metadata.description
                 )
-                .underline()
-            );
-            println!(
+                .underline(),
+            ));
+            logln(format!(
                 "    Problem: {} {}",
                 tool.version_relation,
                 tool.version
                     .clone()
                     .unwrap_or_else(|| tool.details.to_string()),
-            );
-            println!();
-            println!("    Instructions:");
+            ));
+            logln("");
+            logln("    Instructions:");
             for line in tool.metadata.instructions.lines() {
-                println!("      {}", line.yellow());
+                logln(format!("      {}", line.yellow()));
             }
         }
     }

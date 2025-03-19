@@ -12,14 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "server-commands")]
+use crate::command::server::ServerSubcommand;
 use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
+use crate::command_handler::api::cloud::certificate::ApiCloudCertificateCommandHandler;
+use crate::command_handler::api::cloud::domain::ApiCloudDomainCommandHandler;
+use crate::command_handler::api::cloud::ApiCloudCommandHandler;
+use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
+use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
+use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
+use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
+use crate::command_handler::cloud::account::grant::CloudAccountGrantCommandHandler;
+use crate::command_handler::cloud::account::CloudAccountCommandHandler;
+use crate::command_handler::cloud::policy::CloudProjectPolicyCommandHandler;
 use crate::command_handler::cloud::project::CloudProjectCommandHandler;
+use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::cloud::CloudCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
+use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::partial_match::ErrorHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
@@ -30,25 +44,15 @@ use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::init_tracing;
 use crate::model::text::fmt::log_error;
-
+use clap::CommandFactory;
+use clap_complete::Shell;
+#[cfg(feature = "server-commands")]
+use clap_verbosity_flag::Verbosity;
 use golem_wasm_rpc_stubgen::log::{logln, set_log_output, Output};
 use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{debug, Level};
-
-#[cfg(feature = "server-commands")]
-use crate::command::server::ServerSubcommand;
-use crate::command_handler::api::cloud::certificate::ApiCloudCertificateCommandHandler;
-use crate::command_handler::api::cloud::domain::ApiCloudDomainCommandHandler;
-use crate::command_handler::api::cloud::ApiCloudCommandHandler;
-use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
-use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
-use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
-use crate::command_handler::api::ApiCommandHandler;
-use crate::command_handler::interactive::InteractiveHandler;
-#[cfg(feature = "server-commands")]
-use clap_verbosity_flag::Verbosity;
 
 mod api;
 mod app;
@@ -227,13 +231,22 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
-            GolemCliSubcommand::Diagnose => {
-                todo!()
-            }
-            GolemCliSubcommand::Completion => {
-                todo!()
-            }
+            GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
         }
+    }
+
+    fn cmd_completion(&self, shell: Shell) -> anyhow::Result<()> {
+        let mut command = GolemCliCommand::command();
+        let command_name = std::env::current_exe()
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+            })
+            .unwrap_or("golem-cli".to_string());
+        debug!(command_name, shell=%shell, "completion");
+        clap_complete::generate(shell, &mut command, command_name, &mut std::io::stdout());
+        Ok(())
     }
 }
 
@@ -249,8 +262,12 @@ trait Handlers {
     fn api_handler(&self) -> ApiCommandHandler;
     fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
     fn app_handler(&self) -> AppCommandHandler;
+    fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler;
+    fn cloud_account_handler(&self) -> CloudAccountCommandHandler;
     fn cloud_handler(&self) -> CloudCommandHandler;
     fn cloud_project_handler(&self) -> CloudProjectCommandHandler;
+    fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler;
+    fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
@@ -290,43 +307,59 @@ impl Handlers for Arc<Context> {
     }
 
     fn app_handler(&self) -> AppCommandHandler {
-        AppCommandHandler::new(Arc::clone(self))
+        AppCommandHandler::new(self.clone())
+    }
+
+    fn cloud_account_handler(&self) -> CloudAccountCommandHandler {
+        CloudAccountCommandHandler::new(self.clone())
+    }
+
+    fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler {
+        CloudAccountGrantCommandHandler::new(self.clone())
     }
 
     fn cloud_handler(&self) -> CloudCommandHandler {
-        CloudCommandHandler::new(Arc::clone(self))
+        CloudCommandHandler::new(self.clone())
     }
 
     fn cloud_project_handler(&self) -> CloudProjectCommandHandler {
-        CloudProjectCommandHandler::new(Arc::clone(self))
+        CloudProjectCommandHandler::new(self.clone())
+    }
+
+    fn cloud_token_handler(&self) -> CloudTokenCommandHandler {
+        CloudTokenCommandHandler::new(self.clone())
     }
 
     fn component_handler(&self) -> ComponentCommandHandler {
-        ComponentCommandHandler::new(Arc::clone(self))
+        ComponentCommandHandler::new(self.clone())
     }
 
     fn error_handler(&self) -> ErrorHandler {
-        ErrorHandler::new(Arc::clone(self))
+        ErrorHandler::new(self.clone())
     }
 
     fn interactive_handler(&self) -> InteractiveHandler {
-        InteractiveHandler::new(Arc::clone(self))
+        InteractiveHandler::new(self.clone())
     }
 
     fn log_handler(&self) -> LogHandler {
-        LogHandler::new(Arc::clone(self))
+        LogHandler::new(self.clone())
     }
 
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler {
-        ProfileConfigCommandHandler::new(Arc::clone(self))
+        ProfileConfigCommandHandler::new(self.clone())
     }
 
     fn profile_handler(&self) -> ProfileCommandHandler {
-        ProfileCommandHandler::new(Arc::clone(self))
+        ProfileCommandHandler::new(self.clone())
     }
 
     fn worker_handler(&self) -> WorkerCommandHandler {
-        WorkerCommandHandler::new(Arc::clone(self))
+        WorkerCommandHandler::new(self.clone())
+    }
+
+    fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler {
+        CloudProjectPolicyCommandHandler::new(self.clone())
     }
 }
 

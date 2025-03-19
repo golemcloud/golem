@@ -18,6 +18,7 @@ use crate::command::shared_args::{
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::diagnose::diagnose;
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::model::component::Component;
@@ -79,6 +80,7 @@ impl AppCommandHandler {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
+            AppSubcommand::Diagnose { component_name } => self.cmd_diagnose(component_name).await,
             AppSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
         }
     }
@@ -305,6 +307,14 @@ impl AppCommandHandler {
             .await?;
 
         Ok(())
+    }
+
+    async fn cmd_diagnose(
+        &mut self,
+        component_names: AppOptionalComponentNames,
+    ) -> anyhow::Result<()> {
+        self.diagnose(component_names.component_name, &ComponentSelectMode::All)
+            .await
     }
 
     pub async fn build(
@@ -623,5 +633,44 @@ impl AppCommandHandler {
                 }
             }
         }
+    }
+
+    pub async fn diagnose(
+        &mut self,
+        component_names: Vec<ComponentName>,
+        default_component_select_mode: &ComponentSelectMode,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, default_component_select_mode)
+            .await?;
+
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let selected_component_names = app_ctx
+            .selected_component_names()
+            .iter()
+            .collect::<Vec<_>>();
+
+        if selected_component_names.is_empty() {
+            log_warn("The application has no components.");
+        }
+
+        for component_name in selected_component_names {
+            log_action(
+                "Diagnosing",
+                format!(
+                    "component {} for recommended tooling",
+                    component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+
+            diagnose(
+                app_ctx.application.component_source_dir(component_name),
+                None,
+            );
+        }
+
+        Ok(())
     }
 }
