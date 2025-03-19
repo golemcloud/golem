@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::empty_worker_metadata;
-use crate::gateway_execution::WorkerDetail;
+use crate::gateway_execution::WorkerDetails;
 use crate::getter::{get_response_headers_or_default, get_status_code};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::worker::{WorkerService, WorkerServiceError};
@@ -23,6 +23,7 @@ use futures::Stream;
 use futures_util::TryStreamExt;
 use golem_common::model::{ComponentFilePath, HasAccountId, TargetWorkerId, WorkerId};
 use golem_service_base::auth::EmptyAuthCtx;
+use golem_service_base::model::Component;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -38,7 +39,7 @@ pub trait FileServerBindingHandler<Namespace> {
     async fn handle_file_server_binding_result(
         &self,
         namespace: &Namespace,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
         original_result: RibResult,
     ) -> FileServerBindingResult;
 }
@@ -173,6 +174,49 @@ impl DefaultFileServerBindingHandler {
             worker_service,
         }
     }
+
+    async fn get_component_metadata(
+        &self,
+        worker_detail: &WorkerDetails,
+    ) -> Result<Component, FileServerBindingError> {
+        // Two cases, we either have an existing worker or not (either not configured or not existing).
+        // If there is no worker we need use the lastest component version, if there is none we need to use the exact component version
+        // the worker is using. Not doing that would make the blob_storage optimization for read-only files visible to users.
+
+        let component_version = if let Some(worker_id) = worker_detail.worker_id() {
+            let worker_metadata = self
+                .worker_service
+                .get_metadata(&worker_id, empty_worker_metadata())
+                .await;
+            match worker_metadata {
+                Ok(metadata) => Some(metadata.component_version),
+                Err(WorkerServiceError::WorkerNotFound(_)) => None,
+                Err(other) => Err(FileServerBindingError::InternalError(format!(
+                    "Failed looking up worker metadata: {other}"
+                )))?,
+            }
+        } else {
+            None
+        };
+
+        let component_metadata = if let Some(component_version) = component_version {
+            self.component_service
+                .get_by_version(
+                    &worker_detail.component_id,
+                    component_version,
+                    &EmptyAuthCtx(),
+                )
+                .await
+                .map_err(FileServerBindingError::ComponentServiceError)?
+        } else {
+            self.component_service
+                .get_latest(&worker_detail.component_id, &EmptyAuthCtx())
+                .await
+                .map_err(FileServerBindingError::ComponentServiceError)?
+        };
+
+        Ok(component_metadata)
+    }
 }
 
 #[async_trait]
@@ -182,29 +226,21 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
     async fn handle_file_server_binding_result(
         &self,
         namespace: &Namespace,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
         original_result: RibResult,
     ) -> FileServerBindingResult {
         let binding_details = FileServerBindingDetails::from_rib_result(original_result)
             .map_err(FileServerBindingError::InvalidRibResult)?;
 
-        let component_metadata = self
-            .component_service
-            .get_by_version(
-                &worker_detail.component_id.component_id,
-                worker_detail.component_id.version,
-                &EmptyAuthCtx(),
-            )
-            .await
-            .map_err(FileServerBindingError::ComponentServiceError)?;
+        let component_metadata = self.get_component_metadata(worker_detail).await?;
 
         // if we are serving a read_only file, we can just go straight to the blob storage.
-        let matching_file = component_metadata
+        let matching_ro_file = component_metadata
             .files
             .iter()
             .find(|file| file.path == binding_details.file_path && file.is_read_only());
 
-        if let Some(file) = matching_file {
+        if let Some(file) = matching_ro_file {
             let data = self
                 .initial_component_files_service
                 .get(&namespace.account_id(), &file.key)
@@ -240,7 +276,7 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
                     FileServerBindingError::InternalError(format!("Invalid worker name: {}", e))
                 })?;
 
-            let component_id = worker_detail.component_id.component_id.clone();
+            let component_id = worker_detail.component_id.clone();
 
             let worker_id = TargetWorkerId {
                 component_id,

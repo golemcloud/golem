@@ -19,7 +19,7 @@ use super::request::{
     authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
 };
 use super::to_response::GatewayHttpResult;
-use super::WorkerDetail;
+use super::WorkerDetails;
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
     resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled,
@@ -112,7 +112,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         let worker_detail = self
-            .get_worker_detail(
+            .get_worker_details(
                 request,
                 &rib_input,
                 &binding.worker_name_compiled,
@@ -151,7 +151,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         let worker_detail = self
-            .get_worker_detail(
+            .get_worker_details(
                 request,
                 &rib_input,
                 &binding.worker_name_compiled,
@@ -197,7 +197,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         let worker_detail = self
-            .get_worker_detail(
+            .get_worker_details(
                 request,
                 &rib_input,
                 &binding.worker_name_compiled,
@@ -345,7 +345,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         Ok(span)
     }
 
-    async fn get_worker_detail(
+    async fn get_worker_details(
         &self,
         request: &RichRequest,
         request_value: &serde_json::Map<String, Value>,
@@ -353,7 +353,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
         component_id: &VersionedComponentId,
         invocation_context_compiled: &Option<InvocationContextCompiled>,
-    ) -> GatewayHttpResult<WorkerDetail> {
+    ) -> GatewayHttpResult<WorkerDetails> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
             let result = self
                 .evaluate_worker_name_rib_script(worker_name_compiled, request_value)
@@ -434,8 +434,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             invocation_context_from_request(&request.underlying)
         };
 
-        Ok(WorkerDetail {
-            component_id: component_id.clone(),
+        Ok(WorkerDetails {
+            component_id: component_id.component_id.clone(),
             worker_name,
             idempotency_key,
             invocation_context,
@@ -447,7 +447,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         namespace: &Namespace,
         compiled_response_mapping: &ResponseMappingCompiled,
         request_value: &serde_json::Map<String, Value>,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
     ) -> GatewayHttpResult<RibResult> {
         let rib_input = resolve_rib_input(request_value, &compiled_response_mapping.rib_input)
             .await
@@ -456,7 +456,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         self.evaluator
             .evaluate(
                 worker_detail.worker_name.as_deref(),
-                &worker_detail.component_id.component_id,
+                &worker_detail.component_id,
                 &worker_detail.idempotency_key,
                 worker_detail.invocation_context.clone(),
                 &compiled_response_mapping.response_mapping_compiled,
