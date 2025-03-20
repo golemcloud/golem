@@ -43,23 +43,21 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(
-            between(
-                char_('{').skip(spaces()),
-                char_('}').skip(spaces()),
-                sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
-            )
-            .map(|fields: Vec<Field>| {
-                Expr::record(
-                    fields
-                        .iter()
-                        .map(|f| (f.key.clone(), f.value.clone()))
-                        .collect::<Vec<_>>(),
-                )
-            }),
+    spaces().with(
+        between(
+            char_('{').skip(spaces()),
+            char_('}').skip(spaces()),
+            sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
         )
-        .message("Invalid syntax for record type")
+        .map(|fields: Vec<Field>| {
+            Expr::record(
+                fields
+                    .iter()
+                    .map(|f| (f.key.clone(), f.value.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        }),
+    )
 }
 
 fn field_key<Input>() -> impl Parser<Input, Output = String>

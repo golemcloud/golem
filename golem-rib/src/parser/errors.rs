@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{write, Display};
 
 use serde::de::StdError;
 
@@ -105,7 +105,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 5, column: 35",
             "Unexpected `1`",
-            "Expected whitespace or then",
+            "Expected then",
             "",
         ]
         .join("\n");
@@ -148,8 +148,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 7, column: 13",
             "Unexpected `e`",
-            "Expected whitespace or `}`",
-            "Invalid syntax for pattern match",
+            "Expected `}`",
             "",
         ]
         .join("\n");
@@ -179,19 +178,18 @@ mod invalid_syntax_tests {
     }
 
     #[test]
-    fn invalid_sequence_in_rib_program() {
+    fn invalid_sequence_in_rib_program_1() {
         let input = r#"
           let x = 1;
           let y = 2;
           let z = 3;
-          let result = [x, y, z;
+          let result = [x y, y, z];
           result"#;
         let result = Expr::from_text(input);
         let expected_error = [
-            "Parse error at line: 5, column: 32",
-            "Unexpected `;`",
-            "Expected `,`, whitespaces or `]`",
-            "Invalid syntax for sequence type",
+            "Parse error at line: 5, column: 27",
+            "Unexpected `y`",
+            "Expected `,` or `]`",
             "",
         ]
         .join("\n");
@@ -211,8 +209,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 5, column: 32",
             "Unexpected `;`",
-            "Expected `,`, whitespaces or `)`",
-            "Invalid syntax for tuple type",
+            "Expected `,` or `)`",
             "",
         ]
         .join("\n");
@@ -231,8 +228,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 2, column: 19",
             "Unexpected `x`",
-            "Expected whitespace or =>",
-            "Invalid syntax for pattern match",
+            "Expected =>",
             "",
         ]
         .join("\n");
@@ -247,8 +243,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 6",
             "Unexpected end of input",
-            "Expected whitespace or `)`",
-            "Invalid syntax for Result type",
+            "Expected `)`",
             "",
         ]
         .join("\n");
@@ -263,8 +258,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 5",
             "Unexpected end of input",
-            "Expected whitespace or `)`",
-            "Invalid syntax for Result type",
+            "Expected `)`",
             "",
         ]
         .join("\n");
@@ -279,8 +273,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 7",
             "Unexpected end of input",
-            "Expected whitespace or `)`",
-            "Invalid syntax for Option type",
+            "Expected `)`",
             "",
         ]
         .join("\n");
@@ -299,8 +292,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 5, column: 11",
             "Unexpected end of input",
-            "Expected whitespace or `}`",
-            "Invalid syntax for pattern match",
+            "Expected `}`",
             "",
         ]
         .join("\n");
@@ -319,8 +311,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 3, column: 13",
             "Unexpected `e`",
-            "Expected whitespace or `}`",
-            "Invalid syntax for pattern match",
+            "Expected `}`",
             "",
         ]
         .join("\n");
@@ -339,8 +330,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 2, column: 13",
             "Unexpected `o`",
-            "Expected whitespace or `{`",
-            "Invalid syntax for pattern match",
+            "Expected `{`",
             "",
         ]
         .join("\n");
@@ -373,7 +363,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 6",
             "Unexpected `1`",
-            "Expected whitespace or then",
+            "Expected then",
             "",
         ]
         .join("\n");

@@ -38,11 +38,11 @@ where
             .skip(spaces())
             .map(VariableId::list_comprehension_identifier),
         string("in").skip(spaces()),
-        rib_expr().skip(spaces()),
+        rib_expr(),
         char('{').skip(spaces()),
         optional(block_without_return().skip(spaces())),
         string("yield").skip(spaces()),
-        rib_expr().skip(spaces()),
+        rib_expr(),
         char(';').skip(spaces()),
         char('}'),
     )
