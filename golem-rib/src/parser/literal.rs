@@ -49,33 +49,31 @@ mod internal {
         >,
         Input::Position: GetSourcePosition,
     {
-        spaces()
-            .with(
-                between(
-                    char_('\"'),
-                    char_('\"'),
-                    many(choice((dynamic_term(), static_term()))),
-                )
-                .map(|parts: Vec<LiteralTerm>| {
-                    if parts.is_empty() {
-                        Expr::literal("")
-                    } else if parts.len() == 1 {
-                        let first = parts.first().unwrap();
-                        match first {
-                            LiteralTerm::Static(s) => Expr::literal(s),
-                            LiteralTerm::Dynamic(expr) => match expr {
-                                Expr::Literal {
-                                    value, source_span, ..
-                                } => Expr::literal(value).with_source_span(source_span.clone()),
-                                _ => Expr::concat(vec![expr.clone()]),
-                            },
-                        }
-                    } else {
-                        Expr::concat(parts.into_iter().map(Expr::from).collect())
-                    }
-                }),
+        spaces().with(
+            between(
+                char_('\"'),
+                char_('\"'),
+                many(choice((dynamic_term(), static_term()))),
             )
-            .message("Invalid literal")
+            .map(|parts: Vec<LiteralTerm>| {
+                if parts.is_empty() {
+                    Expr::literal("")
+                } else if parts.len() == 1 {
+                    let first = parts.first().unwrap();
+                    match first {
+                        LiteralTerm::Static(s) => Expr::literal(s),
+                        LiteralTerm::Dynamic(expr) => match expr {
+                            Expr::Literal {
+                                value, source_span, ..
+                            } => Expr::literal(value).with_source_span(source_span.clone()),
+                            _ => Expr::concat(vec![expr.clone()]),
+                        },
+                    }
+                } else {
+                    Expr::concat(parts.into_iter().map(Expr::from).collect())
+                }
+            }),
+        )
     }
 
     fn static_term<Input>() -> impl Parser<Input, Output = LiteralTerm>

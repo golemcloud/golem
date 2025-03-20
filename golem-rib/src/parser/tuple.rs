@@ -31,16 +31,14 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(
-            between(
-                char('('),
-                char(')'),
-                sep_by(rib_expr(), char(',').skip(spaces())),
-            )
-            .map(Expr::tuple),
+    spaces().with(
+        between(
+            char('('),
+            char(')'),
+            sep_by(rib_expr(), char(',').skip(spaces().silent())),
         )
-        .message("Invalid syntax for tuple type")
+        .map(Expr::tuple),
+    )
 }
 
 #[cfg(test)]

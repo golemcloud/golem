@@ -28,13 +28,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(
-            (string("!").skip(spaces()), rib_expr())
-                .map(|(_, expr)| Expr::not(expr))
-                .message("Unable to parse not"),
-        )
-        .message("Unable to parse not")
+    spaces().with((string("!").skip(spaces()), rib_expr()).map(|(_, expr)| Expr::not(expr)))
 }
 
 #[cfg(test)]

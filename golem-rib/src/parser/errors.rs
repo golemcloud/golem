@@ -45,7 +45,6 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 5, column: 24",
             "some is a keyword",
-            "Invalid identifier",
             "",
         ]
         .join("\n");
@@ -62,13 +61,8 @@ mod invalid_syntax_tests {
           let result = ok [x);
           result"#;
         let result = Expr::from_text(input);
-        let expected_error = [
-            "Parse error at line: 5, column: 24",
-            "ok is a keyword",
-            "Invalid identifier",
-            "",
-        ]
-        .join("\n");
+        let expected_error =
+            ["Parse error at line: 5, column: 24", "ok is a keyword", ""].join("\n");
 
         assert_eq!(result, Err(expected_error));
     }
@@ -82,33 +76,8 @@ mod invalid_syntax_tests {
           let result = err [x);
           result"#;
         let result = Expr::from_text(input);
-        let expected_error = [
-            "Parse error at line: 5, column: 24",
-            "err is a keyword",
-            "Invalid identifier",
-            "",
-        ]
-        .join("\n");
-
-        assert_eq!(result, Err(expected_error));
-    }
-
-    #[test]
-    fn invalid_conditional_in_rib_program() {
-        let input = r#"
-          let x = 1;
-          let y = 2;
-          let z = 3;
-          let result = { if x > y 1 else 0 };
-          result"#;
-        let result = Expr::from_text(input);
-        let expected_error = [
-            "Parse error at line: 5, column: 35",
-            "Unexpected `1`",
-            "Expected whitespace or then",
-            "",
-        ]
-        .join("\n");
+        let expected_error =
+            ["Parse error at line: 5, column: 24", "err is a keyword", ""].join("\n");
 
         assert_eq!(result, Err(expected_error));
     }
@@ -148,8 +117,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 7, column: 13",
             "Unexpected `e`",
-            "Expected whitespace or `}`",
-            "Invalid syntax for pattern match",
+            "Expected `}`",
             "",
         ]
         .join("\n");
@@ -179,19 +147,18 @@ mod invalid_syntax_tests {
     }
 
     #[test]
-    fn invalid_sequence_in_rib_program() {
+    fn invalid_sequence_in_rib_program_1() {
         let input = r#"
           let x = 1;
           let y = 2;
           let z = 3;
-          let result = [x, y, z;
+          let result = [x y, y, z];
           result"#;
         let result = Expr::from_text(input);
         let expected_error = [
-            "Parse error at line: 5, column: 32",
-            "Unexpected `;`",
-            "Expected `,`, whitespaces or `]`",
-            "Invalid syntax for sequence type",
+            "Parse error at line: 5, column: 27",
+            "Unexpected `y`",
+            "Expected `,` or `]`",
             "",
         ]
         .join("\n");
@@ -211,8 +178,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 5, column: 32",
             "Unexpected `;`",
-            "Expected `,`, whitespaces or `)`",
-            "Invalid syntax for tuple type",
+            "Expected `,` or `)`",
             "",
         ]
         .join("\n");
@@ -231,8 +197,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 2, column: 19",
             "Unexpected `x`",
-            "Expected whitespace or =>",
-            "Invalid syntax for pattern match",
+            "Expected =>",
             "",
         ]
         .join("\n");
@@ -247,8 +212,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 6",
             "Unexpected end of input",
-            "Expected whitespace or `)`",
-            "Invalid syntax for Result type",
+            "Expected `)`",
             "",
         ]
         .join("\n");
@@ -263,8 +227,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 5",
             "Unexpected end of input",
-            "Expected whitespace or `)`",
-            "Invalid syntax for Result type",
+            "Expected `)`",
             "",
         ]
         .join("\n");
@@ -279,8 +242,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 7",
             "Unexpected end of input",
-            "Expected whitespace or `)`",
-            "Invalid syntax for Option type",
+            "Expected `)`",
             "",
         ]
         .join("\n");
@@ -299,8 +261,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 5, column: 11",
             "Unexpected end of input",
-            "Expected whitespace or `}`",
-            "Invalid syntax for pattern match",
+            "Expected `}`",
             "",
         ]
         .join("\n");
@@ -319,8 +280,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 3, column: 13",
             "Unexpected `e`",
-            "Expected whitespace or `}`",
-            "Invalid syntax for pattern match",
+            "Expected `}`",
             "",
         ]
         .join("\n");
@@ -339,8 +299,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 2, column: 13",
             "Unexpected `o`",
-            "Expected whitespace or `{`",
-            "Invalid syntax for pattern match",
+            "Expected `{`",
             "",
         ]
         .join("\n");
@@ -367,13 +326,85 @@ mod invalid_syntax_tests {
     }
 
     #[test]
-    fn missing_then_in_conditional() {
+    fn test_if_else_missing_then() {
         let input = r#"if x 1 else 2"#;
         let result = Expr::from_text(input);
         let expected_error = [
             "Parse error at line: 1, column: 6",
             "Unexpected `1`",
-            "Expected whitespace or then",
+            "Expected then",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_missing_else() {
+        let input = r#"if x then 1  2"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 14",
+            "Unexpected `2`",
+            "Expected else",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_missing_then_statement() {
+        let input = r#"if x then else 1"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 11",
+            "else is a keyword",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_missing_else_statement() {
+        let input = r#"if x then 1 else"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 17",
+            "Unexpected end of input",
+            "Expected else condition",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_invalid_then_statement() {
+        let input = r#"if x then a.1 else 1"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 11",
+            "fraction can only be applied to numbers",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_invalid_else_statement() {
+        let input = r#"if x then 1 else a.1"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 18",
+            "fraction can only be applied to numbers",
             "",
         ]
         .join("\n");

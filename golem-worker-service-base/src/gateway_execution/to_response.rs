@@ -466,7 +466,7 @@ mod test {
         let headers = response_parts.headers;
         let status = response_parts.status;
 
-        let expected_body = "Hello";
+        let expected_body = "\"Hello\"";
         let expected_headers = poem::web::headers::HeaderMap::from_iter(vec![(
             CONTENT_TYPE,
             "application/json".parse().unwrap(),

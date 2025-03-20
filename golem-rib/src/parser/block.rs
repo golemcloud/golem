@@ -14,7 +14,7 @@ where
     Input::Position: GetSourcePosition,
 {
     position()
-        .and(sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())))
+        .and(sep_by(rib_expr(), char(';').skip(spaces())))
         .and(position())
         .map(
             |((start, expressions), end): ((Input::Position, Vec<Expr>), Input::Position)| {

@@ -494,8 +494,14 @@ mod internal {
         content_type: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         let response_content_type = content_type.response_content_type()?;
-        Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
-            .with_content_type(response_content_type.to_string()))
+
+        let body = if content_type.has_application_json() {
+            bytes::Bytes::from(format!("\"{}\"", string))
+        } else {
+            bytes::Bytes::from(string.to_string())
+        };
+
+        Ok(Body::from_bytes(body).with_content_type(response_content_type.to_string()))
     }
 }
 
@@ -693,26 +699,16 @@ mod tests {
 
         #[test]
         async fn test_string_type_as_json() {
-            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-            let (content_type, body) =
-                get_content_type_and_body(&type_annotated_value, &ContentType::json());
-            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            assert_eq!(
-                (result, content_type),
-                ("Hello".to_string(), Some("application/json".to_string()))
-            );
-        }
-
-        #[test]
-        async fn test_json_string_type_as_json() {
             let type_annotated_value = TypeAnnotatedValue::Str("\"Hello\"".to_string());
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+
+            // It doesn't matter if the string is already jsonified, it will be jsonified again
             assert_eq!(
                 (result, content_type),
                 (
-                    "\"Hello\"".to_string(),
+                    "\"\"Hello\"\"".to_string(),
                     Some("application/json".to_string())
                 )
             );
@@ -819,7 +815,10 @@ mod tests {
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
-                ("Hello".to_string(), Some("application/json".to_string()))
+                (
+                    "\"Hello\"".to_string(),
+                    Some("application/json".to_string())
+                )
             );
         }
 
@@ -833,7 +832,10 @@ mod tests {
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
-                ("Hello".to_string(), Some("application/json".to_string()))
+                (
+                    "\"Hello\"".to_string(),
+                    Some("application/json".to_string())
+                )
             );
         }
 
