@@ -35,16 +35,14 @@ where
     let flag_name = many1(letter().or(char_('_')).or(digit()).or(char_('-')))
         .map(|s: Vec<char>| s.into_iter().collect());
 
-    spaces()
-        .with(
-            between(
-                char_('{').skip(spaces()),
-                char_('}').skip(spaces()),
-                sep_by(flag_name.skip(spaces()), char_(',').skip(spaces())),
-            )
-            .map(Expr::flags),
+    spaces().with(
+        between(
+            char_('{').skip(spaces()),
+            char_('}').skip(spaces()),
+            sep_by(flag_name.skip(spaces()), char_(',').skip(spaces())),
         )
-        .message("Invalid syntax for flag type")
+        .map(Expr::flags),
+    )
 }
 
 #[cfg(test)]

@@ -41,7 +41,7 @@ use std::time::SystemTime;
 #[oai(rename_all = "camelCase")]
 pub struct ApiDeploymentRequest {
     pub api_definitions: Vec<ApiDefinitionInfo>,
-    pub site: ApiSite,
+    pub site: Option<ApiSite>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

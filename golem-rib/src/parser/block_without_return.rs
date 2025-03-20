@@ -32,10 +32,7 @@ where
     Input::Position: GetSourcePosition,
 {
     spaces()
-        .with(sep_end_by(
-            attempt(rib_expr().skip(spaces())),
-            char(';').skip(spaces()),
-        ))
+        .with(sep_end_by(attempt(rib_expr()), char(';').skip(spaces())))
         .map(|block: Vec<Expr>| block)
 }
 
