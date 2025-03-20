@@ -661,7 +661,7 @@ async fn resolve_rib_input(
         let parsed_value = TypeAnnotatedValue::parse_with_type(input_value, analysed_type)
             .map_err(|_| {
                 GatewayHttpError::BadRequest(format!(
-                    "Invalid http request. Required types in request: {}",
+                    "Invalid http request. Available types in request: {}",
                     TypeName::try_from(analysed_type.clone())
                         .map(|x| x.to_string())
                         .unwrap_or_else(|_| format!("{:?}", analysed_type))
