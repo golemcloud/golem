@@ -20,9 +20,7 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::api_definition::{
     ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
 };
-use crate::model::{
-    ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin,
-};
+use crate::model::{ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin};
 use anyhow::Context as AnyhowContext;
 use golem_client::api::ApiDefinitionClient as ApiDefinitionClientOss;
 use golem_client::model::HttpApiDefinitionRequest as HttpApiDefinitionRequestOss;
@@ -46,18 +44,15 @@ impl ApiDefinitionCommandHandler {
             ApiDefinitionSubcommand::New {
                 project,
                 definition,
-                def_format,
-            } => self.cmd_new(project, definition, def_format).await,
+            } => self.cmd_new(project, definition).await,
             ApiDefinitionSubcommand::Update {
                 project,
                 definition,
-                def_format,
-            } => self.cmd_update(project, definition, def_format).await,
+            } => self.cmd_update(project, definition).await,
             ApiDefinitionSubcommand::Import {
                 project,
                 definition,
-                def_format,
-            } => self.cmd_import(project, definition, def_format).await,
+            } => self.cmd_import(project, definition).await,
             ApiDefinitionSubcommand::Get {
                 project,
                 id,
@@ -76,7 +71,6 @@ impl ApiDefinitionCommandHandler {
         &self,
         project: ProjectNameOptionalArg,
         definition: PathBufOrStdin,
-        format: Option<ApiDefinitionFileFormat>,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
@@ -87,7 +81,7 @@ impl ApiDefinitionCommandHandler {
         let result = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_definition
-                .create_definition_json(&read_and_parse_api_definition(definition, format)?)
+                .create_definition_json(&read_and_parse_api_definition(definition)?)
                 .await
                 .map_service_error()?,
             GolemClients::Cloud(clients) => {
@@ -100,7 +94,7 @@ impl ApiDefinitionCommandHandler {
                     .api_definition
                     .create_definition_json(
                         &project.project_id.0,
-                        &read_and_parse_api_definition(definition, format)?,
+                        &read_and_parse_api_definition(definition)?,
                     )
                     .await
                     .map_service_error()?
@@ -157,7 +151,6 @@ impl ApiDefinitionCommandHandler {
         &self,
         project: ProjectNameOptionalArg,
         definition: PathBufOrStdin,
-        format: Option<ApiDefinitionFileFormat>,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
@@ -168,7 +161,7 @@ impl ApiDefinitionCommandHandler {
         let result = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => {
                 let api_def: HttpApiDefinitionRequestOss =
-                    read_and_parse_api_definition(definition, format)?;
+                    read_and_parse_api_definition(definition)?;
                 clients
                     .api_definition
                     .update_definition_json(&api_def.id, &api_def.version, &api_def)
@@ -177,7 +170,7 @@ impl ApiDefinitionCommandHandler {
             }
             GolemClients::Cloud(clients) => {
                 let api_def: HttpApiDefinitionRequestCloud =
-                    read_and_parse_api_definition(definition, format)?;
+                    read_and_parse_api_definition(definition)?;
                 let project = self
                     .ctx
                     .cloud_project_handler()
@@ -207,7 +200,6 @@ impl ApiDefinitionCommandHandler {
         &self,
         project: ProjectNameOptionalArg,
         definition: PathBufOrStdin,
-        format: Option<ApiDefinitionFileFormat>,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
@@ -218,7 +210,7 @@ impl ApiDefinitionCommandHandler {
         let result = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_definition
-                .import_open_api_json(&read_and_parse_api_definition(definition, format)?)
+                .import_open_api_json(&read_and_parse_api_definition(definition)?)
                 .await
                 .map_service_error()?,
             GolemClients::Cloud(clients) => {
@@ -231,7 +223,7 @@ impl ApiDefinitionCommandHandler {
                     .api_definition
                     .import_open_api_json(
                         &project.project_id.0,
-                        &read_and_parse_api_definition(definition, format)?,
+                        &read_and_parse_api_definition(definition)?,
                     )
                     .await
                     .map_service_error()?
@@ -329,23 +321,10 @@ impl ApiDefinitionCommandHandler {
     }
 }
 
-fn parse_api_definition<T: DeserializeOwned>(
-    input: &str,
-    format: Option<ApiDefinitionFileFormat>,
-) -> anyhow::Result<T> {
-    match format.unwrap_or(ApiDefinitionFileFormat::Yaml) {
-        ApiDefinitionFileFormat::Json => {
-            serde_json::from_str(input).context("Failed to parse API definition as JSON")
-        }
-        ApiDefinitionFileFormat::Yaml => {
-            serde_yaml::from_str(input).context("Failed to parse API definition as YAML")
-        }
-    }
+fn parse_api_definition<T: DeserializeOwned>(input: &str) -> anyhow::Result<T> {
+    serde_yaml::from_str(input).context("Failed to parse API definition")
 }
 
-fn read_and_parse_api_definition<T: DeserializeOwned>(
-    source: PathBufOrStdin,
-    format: Option<ApiDefinitionFileFormat>,
-) -> anyhow::Result<T> {
-    parse_api_definition(&source.read_to_string()?, format)
+fn read_and_parse_api_definition<T: DeserializeOwned>(source: PathBufOrStdin) -> anyhow::Result<T> {
+    parse_api_definition(&source.read_to_string()?)
 }

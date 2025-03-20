@@ -963,9 +963,7 @@ pub mod api {
 
     pub mod definition {
         use crate::command::shared_args::ProjectNameOptionalArg;
-        use crate::model::{
-            ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin,
-        };
+        use crate::model::{ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin};
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
@@ -979,9 +977,6 @@ pub mod api {
                 /// Json format expected unless file name ends up in `.yaml`
                 #[arg(value_hint = clap::ValueHint::FilePath)]
                 definition: PathBufOrStdin,
-                /// Api Definition format
-                #[arg(short, long)]
-                def_format: Option<ApiDefinitionFileFormat>,
             },
             /// Creates an API definition
             New {
@@ -990,9 +985,6 @@ pub mod api {
                 /// The Golem API definition file
                 #[arg(value_hint = clap::ValueHint::FilePath)]
                 definition: PathBufOrStdin,
-                /// Api Definition format
-                #[arg(short, long)]
-                def_format: Option<ApiDefinitionFileFormat>,
             },
             /// Updates an api definition
             Update {
@@ -1001,9 +993,6 @@ pub mod api {
                 /// The Golem API definition file
                 #[arg(value_hint = clap::ValueHint::FilePath)]
                 definition: PathBufOrStdin,
-                /// Api Definition format
-                #[arg(short, long)]
-                def_format: Option<ApiDefinitionFileFormat>,
             },
             /// Retrieves metadata about an existing API definition
             Get {
@@ -1054,7 +1043,7 @@ pub mod api {
                 definitions: Vec<ApiDefinitionIdWithVersion>,
                 #[arg(long)]
                 /// API definition host
-                host: String,
+                host: Option<String>,
                 /// Optional API definition subdomain
                 #[arg(long)]
                 subdomain: Option<String>,

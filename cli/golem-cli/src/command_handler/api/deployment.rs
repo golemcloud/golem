@@ -64,7 +64,7 @@ impl ApiDeploymentCommandHandler {
         &self,
         project: ProjectNameOptionalArg,
         api_defs: Vec<ApiDefinitionIdWithVersion>,
-        host: String,
+        host: Option<String>,
         subdomain: Option<String>,
     ) -> anyhow::Result<()> {
         let project = self
@@ -74,27 +74,39 @@ impl ApiDeploymentCommandHandler {
             .await?;
 
         let result: ApiDeployment = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_deployment
-                .deploy(&ApiDeploymentRequestOss {
-                    api_definitions: api_defs
-                        .iter()
-                        .map(|d| ApiDefinitionInfoOss {
-                            id: d.id.0.clone(),
-                            version: d.version.0.clone(),
-                        })
-                        .collect::<Vec<_>>(),
-                    site: ApiSiteOss { host, subdomain },
-                })
-                .await
-                .map_service_error()?
-                .into(),
+            GolemClients::Oss(clients) => {
+                let site = ApiSiteOss {
+                    host: host.unwrap_or_else(|| "localhost:9006".to_string()),
+                    subdomain,
+                };
+
+                clients
+                    .api_deployment
+                    .deploy(&ApiDeploymentRequestOss {
+                        api_definitions: api_defs
+                            .iter()
+                            .map(|d| ApiDefinitionInfoOss {
+                                id: d.id.0.clone(),
+                                version: d.version.0.clone(),
+                            })
+                            .collect::<Vec<_>>(),
+                        site,
+                    })
+                    .await
+                    .map_service_error()?
+                    .into()
+            }
             GolemClients::Cloud(clients) => {
                 let project = self
                     .ctx
                     .cloud_project_handler()
                     .selected_project_or_default(project)
                     .await?;
+
+                let host = host.ok_or(anyhow::anyhow!(
+                    "Host is required to work with cloud API deployments"
+                ))?;
+
                 clients
                     .api_deployment
                     .deploy(&ApiDeploymentRequestCloud {

@@ -34,7 +34,7 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{Arg, Error, ValueEnum};
+use clap::{Arg, Error};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::{
@@ -275,23 +275,6 @@ impl From<&str> for ApiDefinitionId {
 impl From<String> for ApiDefinitionId {
     fn from(id: String) -> Self {
         ApiDefinitionId(id)
-    }
-}
-
-// TODO: given YAML is a JSON superset, we might want to get rid of this altogether
-#[derive(ValueEnum, Clone, Copy, Debug)]
-pub enum ApiDefinitionFileFormat {
-    Json,
-    Yaml,
-}
-
-impl Display for ApiDefinitionFileFormat {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-        };
-        Display::fmt(&s, f)
     }
 }
 
@@ -655,18 +638,6 @@ impl From<golem_cloud_client::model::SecuritySchemeData> for ApiSecurityScheme {
 
 pub trait HasVerbosity {
     fn verbosity(&self) -> Verbosity;
-}
-
-pub fn decode_api_definition<'de, T: Deserialize<'de>>(
-    input: &'de str,
-    format: &ApiDefinitionFileFormat,
-) -> anyhow::Result<T> {
-    match format {
-        ApiDefinitionFileFormat::Json => serde_json::from_str(input)
-            .map_err(|e| anyhow!("Failed to parse json api definition: {e:?}")),
-        ApiDefinitionFileFormat::Yaml => serde_yaml::from_str(input)
-            .map_err(|e| anyhow!("Failed to parse yaml api definition: {e:?}")),
-    }
 }
 
 #[derive(Debug, Clone)]
