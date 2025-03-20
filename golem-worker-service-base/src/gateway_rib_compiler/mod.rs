@@ -37,6 +37,11 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
                 },
                 GlobalVariableTypeSpec {
                     variable_id: VariableId::global("request".to_string()),
+                    path: Path::from_elems(vec!["query"]),
+                    inferred_type: InferredType::Str,
+                },
+                GlobalVariableTypeSpec {
+                    variable_id: VariableId::global("request".to_string()),
                     path: Path::from_elems(vec!["headers"]),
                     inferred_type: InferredType::Str,
                 },

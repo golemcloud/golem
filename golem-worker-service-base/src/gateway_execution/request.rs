@@ -121,29 +121,28 @@ impl RichRequest {
         let typed_query_values = self.request_query_values()?;
         let typed_header_values = self.request_header_values()?;
 
-        let mut path_values = serde_json::Map::new();
+        let mut path_key_values = serde_json::Map::new();
 
         for field in typed_path_values.0.fields.into_iter() {
-            path_values.insert(field.name, field.value);
+            path_key_values.insert(field.name, field.value);
         }
+
+        let mut query_key_values = serde_json::Map::new();
 
         for field in typed_query_values.0.fields.into_iter() {
-            path_values.insert(field.name, field.value);
+            query_key_values.insert(field.name, field.value);
         }
 
-        let merged_request_path_and_query = Value::Object(path_values);
-
-        let mut header_records = serde_json::Map::new();
+        let mut header_key_values = serde_json::Map::new();
 
         for field in typed_header_values.0.fields.iter() {
-            header_records.insert(field.name.clone(), field.value.clone());
+            header_key_values.insert(field.name.clone(), field.value.clone());
         }
 
-        let header_value = Value::Object(header_records);
-
         let mut basic = serde_json::Map::from_iter(vec![
-            ("path".to_string(), merged_request_path_and_query),
-            ("headers".to_string(), header_value),
+            ("path".to_string(), Value::Object(path_key_values)),
+            ("query".to_string(), Value::Object(query_key_values)),
+            ("headers".to_string(), Value::Object(header_key_values)),
         ]);
 
         if let Some(auth_data) = self.auth_data.as_ref() {
