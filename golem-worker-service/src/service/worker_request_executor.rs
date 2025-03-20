@@ -15,9 +15,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_common::model::TargetWorkerId;
+use golem_common::model::{TargetWorkerId, WorkerId};
 use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::model::validate_worker_name;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::gateway_execution::{
     GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
@@ -45,7 +44,7 @@ impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerReques
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = worker_request_params
             .worker_name
-            .map(|w| validate_worker_name(w.as_str()).map(|_| w))
+            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w))
             .transpose()?;
 
         let component_id = worker_request_params.component_id;
