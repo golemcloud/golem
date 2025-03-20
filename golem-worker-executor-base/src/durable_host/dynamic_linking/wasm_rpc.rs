@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::wasm_rpc::{
-    create_rpc_connection_span, UrnExtensions, WasmRpcEntryPayload,
-};
+use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayload};
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::OwnedWorkerId;
+use golem_common::model::{OwnedWorkerId, TargetWorkerId};
 use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore};
 use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
@@ -686,8 +684,8 @@ async fn create_rpc_target<Ctx: WorkerCtx>(
         let uri = Uri {
             value: location.clone(),
         };
-        match uri.parse_as_golem_urn() {
-            Some((remote_worker_id, None)) => {
+        match TargetWorkerId::parse_worker_urn(&uri.value) {
+            Some(remote_worker_id) => {
                 let remote_worker_id = store
                     .data_mut()
                     .generate_unique_local_worker_id(remote_worker_id)
@@ -702,7 +700,7 @@ async fn create_rpc_target<Ctx: WorkerCtx>(
             }
             _ => {
                 return Err(anyhow!(
-                    "Invalid URI: {}. Must be urn:worker:component-id/worker-name",
+                    "Invalid URI: {}. Must be urn:worker:component-id/worker-name (for durable workers) or urn:worker:component-id (for ephemeral workers)",
                     location
                 ))
             }

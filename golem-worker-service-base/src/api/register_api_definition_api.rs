@@ -673,8 +673,17 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
         let mut routes = Vec::new();
 
         for route_request_data in self.routes {
-            let v = RouteRequest::try_from(route_request_data)?;
-            routes.push(v);
+            let method = route_request_data.method.clone();
+            let path = route_request_data.path.clone();
+
+            match RouteRequest::try_from(route_request_data) {
+                Ok(v) => {
+                    routes.push(v);
+                }
+                Err(error) => {
+                    Err(format!("Error in endpoint {method} {path}: {error}"))?;
+                }
+            }
         }
 
         Ok(
@@ -1039,6 +1048,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
 #[cfg(test)]
 mod tests {
     use crate::gateway_api_definition::http::MethodPattern;
+    use assert2::check;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
     use test_r::test;
 
@@ -1049,5 +1059,92 @@ mod tests {
             let method_grpc: grpc_apidefinition::HttpMethod = method_pattern.into();
             assert_eq!(method, method_grpc as i32);
         }
+    }
+
+    #[test]
+    fn method_is_not_case_sensitive() {
+        let yaml_string = r#"
+          id: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+          version: 0.0.1
+          draft: true
+          routes:
+          - method: post
+            path: /good/syntax
+            binding:
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              response: |
+                  { status: 200, body: "x" }
+          - method: GET
+            path: /bad/syntax
+            binding:
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              response: |
+                  { status: 200, body: "x" }
+        "#;
+
+        let api: super::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string).unwrap();
+        let result: Result<crate::gateway_api_definition::http::HttpApiDefinitionRequest, String> =
+            api.try_into();
+
+        check!(result.is_ok(), "Expected success");
+    }
+
+    #[test]
+    fn rib_syntax_error_reporting() {
+        let yaml_string = r#"
+          id: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+          version: 0.0.1
+          draft: true
+          routes:
+          - method: Get
+            path: /good/syntax
+            binding:
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              response: |
+                  let email = "user@test.com";
+                  let temp_worker = instance("__accounts_proxy");
+                  let user = temp_worker.get-user-name(email);
+                  { status: 200, body: user }
+          - method: Get
+            path: /bad/syntax
+            binding:
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              response: |
+                  let email = "user@test.com";
+                  lett temp_worker = instance("__accounts_proxy");
+                  let user = temp_worker.get-user-name(email);
+                  { status: 200, body: user }
+        "#;
+
+        let api: super::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string).unwrap();
+        let result: Result<crate::gateway_api_definition::http::HttpApiDefinitionRequest, String> =
+            api.try_into();
+
+        let err = result.expect_err("Expected error");
+
+        check!(
+            err.contains("Parse error at line: 2"),
+            "Error contains the rib line number"
+        );
+        check!(
+            err.contains("/bad/syntax"),
+            "Error contains the failing endpoint path"
+        );
+        check!(
+            err.contains("GET"),
+            "Error contains the failing endpoint's method"
+        );
+        check!(
+            !err.contains("/good/syntax"),
+            "Error does not contain the correct endpoint's path"
+        );
     }
 }
