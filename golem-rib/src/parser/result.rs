@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::spaces;
 use combine::{
     attempt, choice,
     parser::char::{char, string},

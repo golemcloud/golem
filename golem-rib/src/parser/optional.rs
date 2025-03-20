@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use combine::parser::char::alpha_num;
-use combine::parser::char::spaces;
 use combine::{
     attempt, choice, not_followed_by,
     parser::char::{char, string},

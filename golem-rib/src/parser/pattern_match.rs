@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use combine::parser::char::{alpha_num, char, spaces, string};
-use combine::{
-    attempt, many1, not_followed_by, optional, sep_by1, sep_end_by1, ParseError, Parser,
-};
+use combine::{attempt, not_followed_by, sep_end_by1, ParseError, Parser};
 
 use match_arm::*;
 
