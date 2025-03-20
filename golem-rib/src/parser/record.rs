@@ -70,7 +70,6 @@ where
 {
     many1(letter().or(char_('_').or(char_('-')).or(digit())))
         .map(|s: Vec<char>| s.into_iter().collect())
-        .message("Invalid identifier")
 }
 
 struct Field {

@@ -296,9 +296,7 @@ mod internal {
         >,
         Input::Position: GetSourcePosition,
     {
-        many1(letter().or(char_('_').or(char_('-'))))
-            .map(|s: Vec<char>| s.into_iter().collect())
-            .message("Invalid identifier")
+        many1(letter().or(char_('_').or(char_('-')))).map(|s: Vec<char>| s.into_iter().collect())
     }
 
     fn constructor_type_name<Input>() -> impl Parser<Input, Output = String>

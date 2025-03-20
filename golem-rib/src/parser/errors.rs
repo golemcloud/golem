@@ -45,7 +45,6 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 5, column: 24",
             "some is a keyword",
-            "Invalid identifier",
             "",
         ]
         .join("\n");
@@ -62,13 +61,8 @@ mod invalid_syntax_tests {
           let result = ok [x);
           result"#;
         let result = Expr::from_text(input);
-        let expected_error = [
-            "Parse error at line: 5, column: 24",
-            "ok is a keyword",
-            "Invalid identifier",
-            "",
-        ]
-        .join("\n");
+        let expected_error =
+            ["Parse error at line: 5, column: 24", "ok is a keyword", ""].join("\n");
 
         assert_eq!(result, Err(expected_error));
     }
@@ -82,33 +76,8 @@ mod invalid_syntax_tests {
           let result = err [x);
           result"#;
         let result = Expr::from_text(input);
-        let expected_error = [
-            "Parse error at line: 5, column: 24",
-            "err is a keyword",
-            "Invalid identifier",
-            "",
-        ]
-        .join("\n");
-
-        assert_eq!(result, Err(expected_error));
-    }
-
-    #[test]
-    fn invalid_conditional_in_rib_program() {
-        let input = r#"
-          let x = 1;
-          let y = 2;
-          let z = 3;
-          let result = { if x > y 1 else 0 };
-          result"#;
-        let result = Expr::from_text(input);
-        let expected_error = [
-            "Parse error at line: 5, column: 35",
-            "Unexpected `1`",
-            "Expected then",
-            "",
-        ]
-        .join("\n");
+        let expected_error =
+            ["Parse error at line: 5, column: 24", "err is a keyword", ""].join("\n");
 
         assert_eq!(result, Err(expected_error));
     }
@@ -357,13 +326,85 @@ mod invalid_syntax_tests {
     }
 
     #[test]
-    fn missing_then_in_conditional() {
+    fn test_if_else_missing_then() {
         let input = r#"if x 1 else 2"#;
         let result = Expr::from_text(input);
         let expected_error = [
             "Parse error at line: 1, column: 6",
             "Unexpected `1`",
             "Expected then",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_missing_else() {
+        let input = r#"if x then 1  2"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 14",
+            "Unexpected `2`",
+            "Expected else",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_missing_then_statement() {
+        let input = r#"if x then else 1"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 11",
+            "else is a keyword",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_missing_else_statement() {
+        let input = r#"if x then 1 else"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 17",
+            "Unexpected end of input",
+            "Expected else condition",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_invalid_then_statement() {
+        let input = r#"if x then a.1 else 1"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 11",
+            "fraction can only be applied to numbers",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn test_if_else_invalid_else_statement() {
+        let input = r#"if x then 1 else a.1"#;
+        let result = Expr::from_text(input);
+        let expected_error = [
+            "Parse error at line: 1, column: 18",
+            "fraction can only be applied to numbers",
             "",
         ]
         .join("\n");
