@@ -52,7 +52,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
 use http::StatusCode;
 use poem::Body;
-use rib::{RibInput, RibInputTypeInfo, RibResult};
+use rib::{RibInput, RibInputTypeInfo, RibResult, TypeName};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -249,9 +249,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         script: &WorkerNameCompiled,
         request_value: &serde_json::Map<String, Value>,
     ) -> GatewayHttpResult<String> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input_type_info)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input: RibInput =
+            resolve_rib_input(request_value, &script.rib_input_type_info).await?;
 
         let result = rib::interpret_pure(&script.compiled_worker_name, &rib_input)
             .await
@@ -270,9 +269,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         script: &IdempotencyKeyCompiled,
         request_value: &serde_json::Map<String, Value>,
     ) -> GatewayHttpResult<IdempotencyKey> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input).await?;
 
         let value = rib::interpret_pure(&script.compiled_idempotency_key, &rib_input)
             .await
@@ -291,9 +288,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         script: &InvocationContextCompiled,
         request_value: &serde_json::Map<String, Value>,
     ) -> GatewayHttpResult<(Option<TraceId>, HashMap<String, ValueAndType>)> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input).await?;
 
         let value = rib::interpret_pure(&script.compiled_invocation_context, &rib_input)
             .await
@@ -449,9 +444,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         request_value: &serde_json::Map<String, Value>,
         worker_detail: &WorkerDetails,
     ) -> GatewayHttpResult<RibResult> {
-        let rib_input = resolve_rib_input(request_value, &compiled_response_mapping.rib_input)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input =
+            resolve_rib_input(request_value, &compiled_response_mapping.rib_input).await?;
 
         self.evaluator
             .evaluate(
@@ -655,21 +649,28 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 async fn resolve_rib_input(
     input: &serde_json::Map<String, Value>,
     required_types: &RibInputTypeInfo,
-) -> Result<RibInput, String> {
+) -> Result<RibInput, GatewayHttpError> {
     let mut result_map: HashMap<String, ValueAndType> = HashMap::new();
 
     for (key, analysed_type) in required_types.types.iter() {
-        let input_value = input
-            .get(key)
-            .ok_or(format!("Required input not available: {key}"))?;
+        let input_value = input.get(key).ok_or(GatewayHttpError::BadRequest(format!(
+            "Missing `{}` in http request",
+            key
+        )))?;
 
-        let parsed_value = TypeAnnotatedValue::parse_with_type(
-            input_value,
-            analysed_type,
-        ).map_err(|err| format!("Input {key} doesn't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), analysed_type))?;
+        let parsed_value = TypeAnnotatedValue::parse_with_type(input_value, analysed_type)
+            .map_err(|_| {
+                GatewayHttpError::BadRequest(format!(
+                    "Invalid http request. Required types in request: {}",
+                    TypeName::try_from(analysed_type.clone())
+                        .map(|x| x.to_string())
+                        .unwrap()
+                ))
+            })?;
 
         let converted_value = parsed_value.try_into().map_err(|err| {
-            format!("Internal error converting between value representations: {err}")
+            error!("internal value conversion error: {}", err);
+            GatewayHttpError::InternalError("internal value conversion error".to_string())
         })?;
 
         result_map.insert(key.clone(), converted_value);

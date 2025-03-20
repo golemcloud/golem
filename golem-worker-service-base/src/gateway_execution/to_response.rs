@@ -57,6 +57,7 @@ pub type GatewayHttpResult<T> = Result<T, GatewayHttpError>;
 
 pub enum GatewayHttpError {
     BadRequest(String),
+    InternalError(String),
     RibInputTypeMismatch(RibInputTypeMismatch),
     EvaluationError(EvaluationError),
     RibInterpretPureError(String),
@@ -75,7 +76,7 @@ impl ToHttpResponse for GatewayHttpError {
         match self {
             GatewayHttpError::BadRequest(e) => poem::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(format!("Invalid input: {e}"))),
+                .body(Body::from_string(e)),
             GatewayHttpError::RibInputTypeMismatch(err) => {
                 err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST)
             }
@@ -96,6 +97,9 @@ impl ToHttpResponse for GatewayHttpError {
             GatewayHttpError::AuthorisationError(inner) => {
                 inner.to_response(request_details, session_store).await
             }
+            GatewayHttpError::InternalError(e) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(e)),
         }
     }
 }
