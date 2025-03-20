@@ -664,7 +664,7 @@ async fn resolve_rib_input(
                     "Invalid http request. Required types in request: {}",
                     TypeName::try_from(analysed_type.clone())
                         .map(|x| x.to_string())
-                        .unwrap()
+                        .unwrap_or_else(|_| format!("{:?}", analysed_type))
                 ))
             })?;
 
