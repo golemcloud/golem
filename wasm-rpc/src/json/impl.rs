@@ -504,7 +504,7 @@ fn get_record(
                 Err(value_errors) => errors.extend(
                     value_errors
                         .iter()
-                        .map(|err| format!("invalid value at {}, error: {}", name, err))
+                        .map(|err| format!("Invalid value for the key {}. Error: {}", name, err))
                         .collect::<Vec<_>>(),
                 ),
             }
@@ -518,7 +518,7 @@ fn get_record(
 
                     vals.push((name.clone(), TypeAnnotatedValue::Option(Box::new(option))))
                 }
-                _ => errors.push(format!("key '{}' not found in json", name)),
+                _ => errors.push(format!("Key '{}' not found in json_map", name)),
             }
         }
     }
