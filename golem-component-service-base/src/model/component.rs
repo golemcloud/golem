@@ -14,7 +14,7 @@
 
 use chrono::Utc;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
+use golem_common::model::component_constraint::{FunctionConstraintUsage, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -149,6 +149,7 @@ pub struct ComponentConstraints<Owner: ComponentOwner> {
     pub constraints: FunctionConstraintCollection,
 }
 
+
 impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
     pub fn init(
         owner: &Owner,
@@ -162,7 +163,7 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
                 function_constraints: worker_functions_in_rib
                     .function_calls
                     .iter()
-                    .map(FunctionConstraint::from_worker_function_type)
+                    .map(FunctionConstraintUsage::from_worker_function_type)
                     .collect(),
             },
         }

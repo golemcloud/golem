@@ -31,6 +31,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     update_installed_plugin_response, ComponentError, CreateComponentConstraintsRequest,
     CreateComponentConstraintsResponse, CreateComponentConstraintsSuccessResponse,
     CreateComponentRequest, CreateComponentRequestHeader, CreateComponentResponse,
+    DeleteComponentConstraintsRequest, DeleteComponentConstraintsResponse,
     DownloadComponentRequest, DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
     GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
     GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
@@ -767,6 +768,13 @@ impl ComponentService for ComponentGrpcApi {
                 }))
             }
         }
+    }
+
+    async fn delete_component_constraint(
+        &self,
+        request: Request<DeleteComponentConstraintsRequest>,
+    ) -> Result<Response<DeleteComponentConstraintsResponse>, Status> {
+        todo!()
     }
 
     async fn get_installed_plugins(

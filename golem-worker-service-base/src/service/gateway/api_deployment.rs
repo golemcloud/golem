@@ -81,6 +81,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
     async fn delete(
         &self,
         namespace: &Namespace,
+        auth_ctx: &AuthCtx,
         site: &ApiSiteString,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 }
@@ -306,7 +307,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         }
 
         // Find component constraints and update
-        let constraints = ComponentConstraints::from_deployment_plan(&deployment_plan)?;
+        let constraints = ComponentConstraints::from_api_definitions(&deployment_plan.apis_to_deploy)?;
 
         for (component_id, constraints) in constraints.constraints {
             self.component_service
@@ -391,7 +392,6 @@ where
         deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %deployment.namespace, "Undeploying API definitions");
-
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
@@ -602,10 +602,32 @@ where
 
     async fn delete(
         &self,
+        auth_ctx: &AuthCtx,
         namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %namespace, "Get API deployment");
+
+
+        let existing_api_definitions =
+            self.get_definitions_by_site(
+                &namespace,
+                &site,
+            ).await?;
+
+        let constraints =
+            ComponentConstraints::from_api_definitions(&existing_api_definitions)?;
+
+        for (component_id, constraints) in constraints.constraints {
+            self.component_service
+                .create_or_update_constraints(&component_id, constraints, auth_ctx)
+                .await
+                .map_err(|err| {
+                    ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
+                })?;
+        }
+
+
         let existing_deployment_records =
             self.deployment_repo.get_by_site(&site.to_string()).await?;
 
@@ -771,12 +793,12 @@ struct ComponentConstraints {
 }
 
 impl ComponentConstraints {
-    fn from_deployment_plan<Namespace>(
-        deployment_plan: &ApiDeploymentPlan<Namespace>,
+    fn from_api_definitions<Namespace>(
+        definitions: &Vec<CompiledHttpApiDefinition<Namespace>>,
     ) -> Result<Self, ApiDeploymentError<Namespace>> {
         let mut worker_functions_in_rib = HashMap::new();
 
-        for definition in &deployment_plan.apis_to_deploy {
+        for definition in &definitions {
             for route in definition.routes.iter() {
                 if let GatewayBindingCompiled::Worker(worker_binding) = route.binding.clone() {
                     let component_id = worker_binding.component_id;

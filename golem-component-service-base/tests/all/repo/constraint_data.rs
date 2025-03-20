@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::FunctionConstraint;
+use golem_common::model::component_constraint::FunctionConstraintUsage;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
 use golem_component_service_base::model::ComponentConstraints;
@@ -23,7 +23,7 @@ use rib::RegistryKey;
 
 pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstraintCollection {
     FunctionConstraintCollection {
-        function_constraints: vec![FunctionConstraint {
+        function_constraints: vec![FunctionConstraintUsage {
             function_key: RegistryKey::FunctionNameWithInterface {
                 interface_name: "golem:it/api".to_string(),
                 function_name: "initialize-cart".to_string(),
@@ -37,7 +37,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstr
 
 pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstraintCollection {
     FunctionConstraintCollection {
-        function_constraints: vec![FunctionConstraint {
+        function_constraints: vec![FunctionConstraintUsage {
             function_key: RegistryKey::FunctionNameWithInterface {
                 interface_name: "golem:it/api".to_string(),
                 function_name: "get-cart-contents".to_string(),
@@ -70,7 +70,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstr
 pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible(
 ) -> FunctionConstraintCollection {
     FunctionConstraintCollection {
-        function_constraints: vec![FunctionConstraint {
+        function_constraints: vec![FunctionConstraintUsage {
             function_key: RegistryKey::FunctionNameWithInterface {
                 interface_name: "golem:it/api".to_string(),
                 function_name: "initialize-cart".to_string(),
@@ -84,7 +84,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible(
 
 pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraintCollection {
     FunctionConstraintCollection {
-        function_constraints: vec![FunctionConstraint {
+        function_constraints: vec![FunctionConstraintUsage {
             usage_count: 1,
             function_key: RegistryKey::FunctionName("foo".to_string()),
             parameter_types: vec![],

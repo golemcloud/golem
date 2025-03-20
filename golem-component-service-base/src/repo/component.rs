@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
 use futures::future::try_join_all;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::{ComponentPluginInstallationTarget, PluginOwner};
 use golem_common::model::{
@@ -307,6 +307,13 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
     async fn create_or_update_constraint(
         &self,
         component_constraint_record: &ComponentConstraintsRecord,
+    ) -> Result<(), RepoError>;
+
+    async fn delete_constraint(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+        component_constraint_record: &Vec<FunctionConstraint>,
     ) -> Result<(), RepoError>;
 
     async fn get_constraint(
@@ -1414,6 +1421,60 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .await?;
 
         transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn delete_constraint(
+        &self,
+        namespace: &str,
+        component_id: Uuid,
+        constraints: &Vec<FunctionConstraint>,
+    ) -> Result<(), RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+
+        let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
+            r#"
+                SELECT
+                    namespace,
+                    component_id,
+                    constraints
+                FROM component_constraints WHERE component_id = $1
+                "#,
+        )
+            .bind(component_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+
+        if let Some(existing_record) = existing_record {
+            let existing_constraints: FunctionConstraintCollection =
+                constraint_serde::deserialize(&existing_record.constraints)
+                    .map_err(RepoError::Internal)?;
+
+            existing_constraints.remove_constraints(constraints);
+
+            let merged_constraint_data: Vec<u8> = constraint_serde::serialize(&existing_constraints)
+                .map_err(RepoError::Internal)?
+                .into();
+
+            sqlx::query(
+                r#"
+                 UPDATE
+                   component_constraints
+                    SET constraints = $1
+                    WHERE namespace = $2 AND component_id = $3
+                    "#,
+            )
+                .bind(merged_constraint_data)
+                .bind(namespace)
+                .bind(component_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(RepoError::from)?;
+        }
+
+        transaction.commit().await?;
+
         Ok(())
     }
 

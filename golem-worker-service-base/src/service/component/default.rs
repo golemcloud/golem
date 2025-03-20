@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::ComponentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
@@ -57,6 +57,13 @@ pub trait ComponentService<AuthCtx> {
         constraints: FunctionConstraintCollection,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraintCollection>;
+
+    async fn delete_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraint: FunctionConstraint,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<()>;
 }
 
 #[derive(Clone)]
@@ -284,5 +291,14 @@ where
         .await?;
 
         Ok(value)
+    }
+
+    async fn delete_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraint: FunctionConstraint,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<()> {
+        todo!()
     }
 }

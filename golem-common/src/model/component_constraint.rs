@@ -15,6 +15,7 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
+use itertools::Itertools;
 
 // This is very similar to WorkerFunctionsInRib data structure in `rib`, however
 // it adds more info that is specific to other golem services,
@@ -22,7 +23,7 @@ use std::collections::HashMap;
 // This forms the core of component constraints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionConstraintCollection {
-    pub function_constraints: Vec<FunctionConstraint>,
+    pub function_constraints: Vec<FunctionConstraintUsage>,
 }
 
 impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
@@ -46,56 +47,70 @@ impl FunctionConstraintCollection {
         let functions = worker_functions_in_rib
             .function_calls
             .iter()
-            .map(FunctionConstraint::from_worker_function_type)
+            .map(FunctionConstraintUsage::from_worker_function_type)
             .collect::<Vec<_>>();
 
         FunctionConstraintCollection {
             function_constraints: functions,
         }
     }
+
+    pub fn remove_constraints(&self, constraints_to_remove: &Vec<FunctionConstraint>) {
+        let mut constraints = vec![];
+
+      for constraint in self.function_constraints {
+          if constraints_to_remove.contains(&constraint.constraint) {
+              let mut constraint = constraint;
+              constraint.decrement_usage_count();
+              constraints.push(constraint);
+          }
+      }
+
+    }
+
     pub fn try_merge(
         worker_functions: Vec<FunctionConstraintCollection>,
     ) -> Result<FunctionConstraintCollection, String> {
-        let mut merged_function_calls: HashMap<RegistryKey, FunctionConstraint> = HashMap::new();
+        let mut merged_function_calls: HashMap<RegistryKey, FunctionConstraintUsage> = HashMap::new();
 
         for wf in worker_functions {
-            for call in wf.function_constraints {
-                match merged_function_calls.get_mut(&call.function_key) {
-                    Some(existing_call) => {
+            for constraint_usage in wf.function_constraints {
+                match merged_function_calls.get_mut(constraint_usage.function_key()) {
+                    Some(existing_constraint) => {
                         // Check for parameter type conflicts
-                        if existing_call.parameter_types != call.parameter_types {
+                        if existing_constraint.parameter_types() != constraint_usage.parameter_types() {
                             return Err(format!(
                                 "Parameter type conflict for function key {:?}: {:?} vs {:?}",
-                                call.function_key,
-                                existing_call.parameter_types,
-                                call.parameter_types
+                                constraint_usage.function_key(),
+                                existing_constraint.parameter_types(),
+                                constraint_usage.parameter_types()
                             ));
                         }
 
                         // Check for return type conflicts
-                        if existing_call.return_types != call.return_types {
+                        if existing_constraint.return_types() != constraint_usage.return_types() {
                             return Err(format!(
                                 "Return type conflict for function key {:?}: {:?} vs {:?}",
-                                call.function_key, existing_call.return_types, call.return_types
+                                constraint_usage.function_key(), existing_constraint.return_types(), constraint_usage.return_types()
                             ));
                         }
 
                         // Update usage_count instead of overwriting
-                        existing_call.usage_count =
-                            existing_call.usage_count.saturating_add(call.usage_count);
+                        existing_constraint.usage_count =
+                            existing_constraint.usage_count.saturating_add(constraint_usage.usage_count);
                     }
                     None => {
                         // Insert if no conflict is found
-                        merged_function_calls.insert(call.function_key.clone(), call);
+                        merged_function_calls.insert(constraint_usage.function_key().clone(), constraint_usage);
                     }
                 }
             }
         }
 
-        let mut merged_function_calls_vec: Vec<FunctionConstraint> =
+        let mut merged_function_calls_vec: Vec<FunctionConstraintUsage> =
             merged_function_calls.into_values().collect();
 
-        merged_function_calls_vec.sort_by(|a, b| a.function_key.cmp(&b.function_key));
+        merged_function_calls_vec.sort_by(|a, b| a.function_key().cmp(b.function_key()));
 
         Ok(FunctionConstraintCollection {
             function_constraints: merged_function_calls_vec,
@@ -108,44 +123,60 @@ pub struct FunctionConstraint {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,
     pub return_types: Vec<AnalysedType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionConstraintUsage {
+    pub constraint: FunctionConstraint,
     pub usage_count: u32,
 }
 
-impl From<FunctionConstraint> for WorkerFunctionType {
-    fn from(value: FunctionConstraint) -> Self {
+impl From<FunctionConstraintUsage> for WorkerFunctionType {
+    fn from(value: FunctionConstraintUsage) -> Self {
         WorkerFunctionType {
-            function_key: value.function_key.clone(),
-            parameter_types: value.parameter_types.clone(),
-            return_types: value.return_types.clone(),
+            function_key: value.constraint.function_key.clone(),
+            parameter_types: value.constraint.parameter_types.clone(),
+            return_types: value.constraint.return_types.clone(),
         }
     }
 }
 
-impl FunctionConstraint {
+impl FunctionConstraintUsage {
+
+    pub fn function_key(&self) -> &RegistryKey {
+        &self.constraint.function_key
+    }
+
+    pub fn parameter_types(&self) -> &Vec<AnalysedType> {
+        &self.constraint.parameter_types
+    }
+
+    pub fn return_types(&self) -> &Vec<AnalysedType> {
+        &self.constraint.return_types
+    }
+
+
     pub fn from_worker_function_type(
         worker_function_type: &WorkerFunctionType,
-    ) -> FunctionConstraint {
-        FunctionConstraint {
-            function_key: worker_function_type.function_key.clone(),
-            parameter_types: worker_function_type.parameter_types.clone(),
-            return_types: worker_function_type.return_types.clone(),
+    ) -> FunctionConstraintUsage {
+        FunctionConstraintUsage {
+            constraint: FunctionConstraint {
+                function_key: worker_function_type.function_key.clone(),
+                parameter_types: worker_function_type.parameter_types.clone(),
+                return_types: worker_function_type.return_types.clone(),
+            },
             usage_count: 1,
         }
     }
 
-    pub fn increment_usage(&self) -> FunctionConstraint {
-        FunctionConstraint {
-            function_key: self.function_key.clone(),
-            parameter_types: self.parameter_types.clone(),
-            return_types: self.return_types.clone(),
-            usage_count: self.usage_count + 1,
-        }
+    fn decrement_usage_count(&mut self) {
+        self.usage_count -= 1;
     }
 }
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
+    use crate::model::component_constraint::{FunctionConstraintUsage, FunctionConstraintCollection, FunctionConstraint};
     use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
     use golem_wasm_ast::analysis::AnalysedType;
@@ -163,7 +194,7 @@ mod protobuf {
                 function_constraints: value
                     .constraints
                     .iter()
-                    .map(|constraint_proto| FunctionConstraint::try_from(constraint_proto.clone()))
+                    .map(|constraint_proto| FunctionConstraintUsage::try_from(constraint_proto.clone()))
                     .collect::<Result<_, _>>()?,
             };
 
@@ -185,7 +216,7 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<FunctionConstraintProto> for FunctionConstraint {
+    impl TryFrom<FunctionConstraintProto> for FunctionConstraintUsage {
         type Error = String;
 
         fn try_from(value: FunctionConstraintProto) -> Result<Self, Self::Error> {
@@ -206,27 +237,29 @@ mod protobuf {
             let usage_count = value.usage_count;
 
             Ok(Self {
-                function_key,
-                return_types,
-                parameter_types,
+                constraint: FunctionConstraint {
+                    function_key,
+                    parameter_types,
+                    return_types,
+                },
                 usage_count,
             })
         }
     }
 
-    impl From<FunctionConstraint> for FunctionConstraintProto {
-        fn from(value: FunctionConstraint) -> Self {
-            let registry_key = value.function_key.into();
+    impl From<FunctionConstraintUsage> for FunctionConstraintProto {
+        fn from(value: FunctionConstraintUsage) -> Self {
+            let registry_key = value.function_key().into();
 
             FunctionConstraintProto {
                 function_key: Some(registry_key),
                 parameter_types: value
-                    .parameter_types
+                    .parameter_types()
                     .iter()
                     .map(|analysed_type| analysed_type.into())
                     .collect(),
                 return_types: value
-                    .return_types
+                    .return_types()
                     .iter()
                     .map(|analysed_type| analysed_type.into())
                     .collect(),

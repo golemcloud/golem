@@ -28,7 +28,7 @@ use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -410,6 +410,13 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         &self,
         component_constraint: &ComponentConstraints<Owner>,
     ) -> Result<ComponentConstraints<Owner>, ComponentError>;
+
+    async fn delete_constraint(
+        &self,
+        owner: Owner,
+        component_id: ComponentId,
+        constraints: &Vec<FunctionConstraint>,
+    ) -> Result<(), ComponentError>;
 
     async fn get_component_constraint(
         &self,
@@ -1502,6 +1509,16 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         };
 
         Ok(component_constraints)
+    }
+
+    async fn delete_constraint(
+        &self,
+        owner: Owner,
+        component_id: ComponentId,
+        constraints: &Vec<FunctionConstraint>,
+    ) -> Result<(), ComponentError> {
+        info!(owner = %owner, component_id = %component_id, "Delete constraint");
+
     }
 
     async fn get_component_constraint(
