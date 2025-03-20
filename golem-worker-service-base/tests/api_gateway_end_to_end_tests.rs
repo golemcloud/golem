@@ -176,7 +176,135 @@ async fn test_first_class_worker_api_with_resource() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_for_valid_input() {
+async fn test_first_class_worker_api_def_with_query_only() {
+    let api_request = get_gateway_request("/foo?userid=jon", None, &HeaderMap::new(), Value::Null);
+
+    let response_mapping = r#"
+       let user_id = request.query.userid;
+       let worker-name = "shopping-cart-${user_id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, "bar");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_first_class_worker_api_def_with_multiple_query_params() {
+    let api_request = get_gateway_request(
+        "/foo?userid=jon&country=usa",
+        None,
+        &HeaderMap::new(),
+        Value::Null,
+    );
+
+    let response_mapping = r#"
+       let user_id = request.query.userid;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user_id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, country);
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}&{country}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("usa".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_first_class_worker_api_def_with_path_and_query() {
+    let api_request =
+        get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
+
+    let response_mapping = r#"
+       let user_id = request.path.user-id;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user_id}-${country}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, country);
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}?{country}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("usa".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_first_class_worker_api_def_with_path() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
@@ -1074,7 +1202,7 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
     let response_mapping = r#"
         let x: u64 = request.path.user-id;
         let my-instance = instance("shopping-cart-${x}");
-        let response = my-instance.get-cart-contents(request.path.token-id, request.path.token-id);
+        let response = my-instance.get-cart-contents(request.query.token-id, request.query.token-id);
         response
     "#;
 
@@ -1873,6 +2001,11 @@ mod internal {
         }
     }
 
+    // This worker-request-executor simply returns the same response to any worker function
+    // which is record of the details of the worker request such as function name, arguments, worker name etc,
+    // except for some specific functions which will return a specific valid response corresponding
+    // to that function. This way, most of the tests can validate the correctness of the worker request
+    // while others can validate the correctness of the real function result.
     pub struct TestApiGatewayWorkerRequestExecutor {}
 
     #[async_trait]
