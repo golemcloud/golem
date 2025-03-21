@@ -13,10 +13,20 @@ path = "wit-generated"
 [package.metadata.component.target.dependencies]
 "wasi:io" = { path = "wit-generated/deps/io" }
 "wasi:clocks" = { path = "wit-generated/deps/clocks" }
-"golem:rpc" = { path = "wit-generated/deps/wasm-rpc" }
+"golem:rpc" = { path = "wit-generated/deps/golem-rpc" }
 "golem:api" = { path = "wit-generated/deps/golem-1.x" }
 "golem:ictest-client" = { path = "wit-generated/deps/golem_ictest-client" }
 "golem:ictest-exports" = { path = "wit-generated/deps/golem_ictest-exports" }
+
+[package.metadata.component.bindings]
+
+[package.metadata.component.bindings.with]
+"wasi:io/poll@0.2.0" = "golem_rust::wasm_rpc::wasi::io::poll"
+"wasi:clocks/monotonic-clock@0.2.0" = "golem_rust::bindings::wasi::clocks::monotonic_clock"
+"wasi:clocks/wall-clock@0.2.0" = "golem_rust::wasm_rpc::wasi::clocks::wall_clock"
+"golem:rpc/types@0.2.0" = "golem_rust::wasm_rpc::golem_rpc_0_2_x::types"
+"golem:api/context@1.1.6" = "golem_rust::bindings::golem::api::context"
+"golem:api/host@1.1.6" = "golem_rust::bindings::golem::api::host"
 
 [dependencies.golem-rust]
 workspace = true

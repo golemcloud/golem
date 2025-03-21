@@ -2,9 +2,9 @@
 mod bindings;
 
 use crate::bindings::exports::golem::ictest_exports::golem_ictest_api::Guest;
-use crate::bindings::golem::api::context::{current_context, start_span, AttributeValue};
-use crate::bindings::golem::api::host::{resolve_worker_id, worker_uri};
 use crate::bindings::golem::ictest_client::golem_ictest_client::GolemIctestApi;
+use golem_rust::bindings::golem::api::context::{current_context, start_span, AttributeValue};
+use golem_rust::bindings::golem::api::host::resolve_worker_id;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -15,9 +15,7 @@ impl Guest for Component {
     fn test1() {
         broadcast_current_invocation_context("test1a");
 
-        let api = GolemIctestApi::new(&worker_uri(
-            &resolve_worker_id("golem_ictest", "w2").unwrap(),
-        ));
+        let api = GolemIctestApi::custom(&resolve_worker_id("golem_ictest", "w2").unwrap());
         api.blocking_test2();
     }
 
@@ -31,9 +29,7 @@ impl Guest for Component {
         let span2 = start_span("custom2");
         span2.set_attribute("z", &AttributeValue::String("3".to_string()));
 
-        let api = GolemIctestApi::new(&worker_uri(
-            &resolve_worker_id("golem_ictest", "w1").unwrap(),
-        ));
+        let api = GolemIctestApi::custom(&resolve_worker_id("golem_ictest", "w1").unwrap());
         api.test3();
     }
 
@@ -60,9 +56,12 @@ fn broadcast_current_invocation_context(from: &str) {
         let attributes = current.get_attributes(false);
         let mut span = HashMap::new();
         for attribute in attributes {
-            span.insert(attribute.key, match attribute.value {
-                AttributeValue::String(s) => s
-            });
+            span.insert(
+                attribute.key,
+                match attribute.value {
+                    AttributeValue::String(s) => s,
+                },
+            );
         }
         spans.push(span);
         if let Some(parent) = current.parent() {

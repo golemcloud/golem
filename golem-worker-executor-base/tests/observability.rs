@@ -90,7 +90,7 @@ async fn get_oplog_1(
 
     // Whether there is an "enqueued invocation" entry or just directly started invocation
     // depends on timing
-    assert!(oplog.len() >= 12 && oplog.len() <= 14);
+    assert!(oplog.len() >= 7 && oplog.len() <= 9);
     assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog
@@ -252,7 +252,7 @@ async fn get_oplog_with_api_changing_updates(
         .collect::<Vec<_>>();
 
     check!(result[0] == Value::U64(11));
-    assert_eq!(oplog.len(), 17);
+    assert_eq!(oplog.len(), 11);
 }
 
 #[test]

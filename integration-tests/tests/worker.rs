@@ -1421,7 +1421,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     // Whether there is an "enqueued invocation" entry or just directly started invocation
     // depends on oplog
-    assert!(oplog.len() >= 12 && oplog.len() <= 14);
+    assert!(oplog.len() >= 7 && oplog.len() <= 9);
     assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog
