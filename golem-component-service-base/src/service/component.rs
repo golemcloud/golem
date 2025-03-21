@@ -415,7 +415,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         &self,
         owner: &Owner,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionSignature>,
+        constraints_to_remove: &[FunctionSignature],
     ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
     async fn get_component_constraint(
@@ -1516,12 +1516,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         &self,
         owner: &Owner,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionSignature>,
+        constraints_to_remove: &[FunctionSignature],
     ) -> Result<ComponentConstraints<Owner>, ComponentError> {
         info!(owner = %owner, component_id = %component_id, "Delete constraint");
 
         self.component_repo
-            .delete_constraints(&owner.to_string(), &component_id.0, constraints)
+            .delete_constraints(&owner.to_string(), &component_id.0, constraints_to_remove)
             .await?;
 
         let result = self
@@ -1986,12 +1986,12 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         &self,
         owner: &Owner,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionSignature>,
+        constraints_to_remove: &[FunctionSignature],
     ) -> Result<ComponentConstraints<Owner>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
-            .delete_constraints(owner, component_id, constraints)
+            .delete_constraints(owner, component_id, constraints_to_remove)
             .await
     }
 

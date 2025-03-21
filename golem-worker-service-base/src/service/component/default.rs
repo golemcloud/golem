@@ -345,7 +345,7 @@ where
         metadata: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints> {
         let constraint = constraints
-            .into_iter()
+            .iter()
             .map(|x| FunctionUsageConstraint {
                 function_signature: x.clone(),
                 usage_count: 1, // this is to only reuse the existing grpc types

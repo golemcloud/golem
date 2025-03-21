@@ -54,10 +54,7 @@ impl FunctionConstraints {
         }
     }
 
-    pub fn remove_constraints(
-        &self,
-        constraints_to_remove: &Vec<FunctionSignature>,
-    ) -> Option<Self> {
+    pub fn remove_constraints(&self, constraints_to_remove: &[FunctionSignature]) -> Option<Self> {
         let mut constraints = vec![];
 
         for constraint in &self.constraints {

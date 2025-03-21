@@ -345,7 +345,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
                 .collect::<Vec<_>>();
 
             self.component_service
-                .delete_constraints(&component_id, &signatures_to_be_removed, auth_ctx)
+                .delete_constraints(component_id, &signatures_to_be_removed, auth_ctx)
                 .await
                 .map_err(|err| {
                     ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())

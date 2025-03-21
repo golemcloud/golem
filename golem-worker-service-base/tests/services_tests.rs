@@ -41,7 +41,7 @@ use golem_worker_service_base::service::gateway::api_deployment::{
 use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 
 use chrono::Utc;
-use golem_common::model::component_constraint::FunctionConstraints;
+use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::redis::RedisPool;
 use golem_service_base::storage::sqlite::SqlitePool;
 use golem_wasm_ast::analysis::analysed_type::str;
@@ -450,6 +450,17 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
             constraints: vec![],
         })
     }
+
+    async fn delete_constraints(
+        &self,
+        _component_id: &ComponentId,
+        _constraints: &Vec<FunctionSignature>,
+        _auth_ctx: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints> {
+        Ok(FunctionConstraints {
+            constraints: vec![],
+        })
+    }
 }
 
 async fn test_services(
@@ -701,6 +712,7 @@ async fn test_deployment(
         deployment_service
             .delete(
                 &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
                 &ApiSiteString("test.com".to_string()),
             )
             .await
