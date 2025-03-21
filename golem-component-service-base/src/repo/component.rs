@@ -1468,8 +1468,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 constraint_serde::deserialize(&existing_record.constraints)
                     .map_err(RepoError::Internal)?;
 
+            dbg!(existing_constraints.clone());
+
             let new_constraints: Option<FunctionConstraints> =
                 existing_constraints.remove_constraints(constraints);
+
+            dbg!(new_constraints.clone());
 
             match new_constraints {
                 None => {

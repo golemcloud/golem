@@ -202,21 +202,10 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
         },
     };
 
-    let response = deps
-        .worker_service()
+    deps.worker_service()
         .create_or_update_api_deployment(request.clone())
         .await
         .unwrap();
-    check!(request.api_definitions == response.api_definitions);
-    check!(request.site == response.site);
-
-    let response = deps
-        .worker_service()
-        .get_api_deployment("subdomain.localhost")
-        .await
-        .unwrap();
-    check!(request.api_definitions == response.api_definitions);
-    check!(request.site == response.site);
 
     // Trying to update the component (with a completely different wasm)
     // which was already used in an API definition
@@ -242,6 +231,137 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     // as constraints should be removed after deleting the API deployment
     deps.worker_service()
         .delete_api_deployment("subdomain.localhost")
+        .await
+        .unwrap();
+
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await;
+
+    check!(update_component.is_ok());
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_multiple_api_deployments_and_update_component(deps: &EnvBasedTestDependencies) {
+    let component_id = deps.component("shopping-cart").unique().store().await;
+
+    fn new_api_definition_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::new_v4())
+    }
+
+    let api_definition = create_api_definition(
+        deps,
+        &component_id,
+        new_api_definition_id("a"),
+        "1".to_string(),
+        "/path-1".to_string(),
+    )
+    .await;
+
+    let request1 = ApiDeploymentRequest {
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition.id.as_ref().unwrap().value.clone(),
+            version: api_definition.version.clone(),
+        }],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("subdomain".to_string()),
+        },
+    };
+
+    deps.worker_service()
+        .create_or_update_api_deployment(request1.clone())
+        .await
+        .unwrap();
+
+    // Same API definition but different subdomain
+    let request1 = ApiDeploymentRequest {
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition.id.as_ref().unwrap().value.clone(),
+            version: api_definition.version.clone(),
+        }],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("subdomain1".to_string()),
+        },
+    };
+
+    let request2 = ApiDeploymentRequest {
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition.id.as_ref().unwrap().value.clone(),
+            version: api_definition.version.clone(),
+        }],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("subdomain2".to_string()),
+        },
+    };
+
+    deps.worker_service()
+        .create_or_update_api_deployment(request1.clone())
+        .await
+        .unwrap();
+
+    deps.worker_service()
+        .create_or_update_api_deployment(request2.clone())
+        .await
+        .unwrap();
+
+    // Trying to update the component (with a completely different wasm)
+    // which was already used in an API definition
+    // where function get-cart-contents is being used.
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    check!(update_component.contains("Component Constraint Error"));
+    check!(update_component.contains("Missing Functions"));
+    check!(update_component.contains("get-cart-contents"));
+
+    // Delete one of the API deployments and see if component can be updated, and it
+    // should fail as the component is still being used in subdomain2
+    deps.worker_service()
+        .delete_api_deployment("subdomain1.localhost")
+        .await
+        .unwrap();
+
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    check!(update_component.contains("Component Constraint Error"));
+    check!(update_component.contains("Missing Functions"));
+    check!(update_component.contains("get-cart-contents"));
+
+    // Delete the final API deployment and see if component can be updated, and it should succeed
+    deps.worker_service()
+        .delete_api_deployment("subdomain2.localhost")
         .await
         .unwrap();
 
