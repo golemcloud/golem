@@ -52,7 +52,7 @@ pub struct K8sWorkerService {
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
-    component_service: Arc<dyn ComponentService>
+    component_service: Arc<dyn ComponentService>,
 }
 
 impl K8sWorkerService {
@@ -239,7 +239,7 @@ impl K8sWorkerService {
                 http_routing.port,
             )
             .await,
-            component_service: component_service.clone()
+            component_service: component_service.clone(),
         }
     }
 }

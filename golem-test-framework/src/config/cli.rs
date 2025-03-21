@@ -1026,7 +1026,7 @@ impl CliTestDependencies {
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
                         params.golem_client_protocol,
-                        component_service.clone()
+                        component_service.clone(),
                     )
                     .await,
                 );

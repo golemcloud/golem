@@ -354,9 +354,7 @@ impl GatewayBindingData {
         match v {
             Some(GatewayBindingType::Default) | Some(GatewayBindingType::FileServer) | None => {
                 let response = self.response.ok_or("Missing response field in binding")?;
-                let component = self
-                    .component
-                    .ok_or("Missing component field in binding")?;
+                let component = self.component.ok_or("Missing component field in binding")?;
 
                 let component_id = conversion_ctx.resolve_component_id(&component.name).await?;
 
@@ -401,9 +399,7 @@ impl GatewayBindingData {
             }
 
             Some(GatewayBindingType::HttpHandler) => {
-                let component = self
-                    .component
-                    .ok_or("Missing component field in binding")?;
+                let component = self.component.ok_or("Missing component field in binding")?;
 
                 let component_id = conversion_ctx.resolve_component_id(&component.name).await?;
 

@@ -1099,8 +1099,8 @@ async fn get_api_definition(
           - method: Get
             path: {}
             binding:
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               response: '{}'
         "#,

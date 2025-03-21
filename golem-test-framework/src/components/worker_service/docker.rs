@@ -44,7 +44,7 @@ pub struct DockerWorkerService {
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
-    component_service: Arc<dyn ComponentService>
+    component_service: Arc<dyn ComponentService>,
 }
 
 impl DockerWorkerService {
@@ -136,7 +136,7 @@ impl DockerWorkerService {
                 public_http_port,
             )
             .await,
-            component_service: component_service.clone()
+            component_service: component_service.clone(),
         }
     }
 }

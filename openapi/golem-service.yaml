@@ -4188,6 +4188,7 @@ components:
           $ref: '#/components/schemas/ApiSite'
       required:
       - apiDefinitions
+      - site
     ApiSite:
       type: object
       properties:
