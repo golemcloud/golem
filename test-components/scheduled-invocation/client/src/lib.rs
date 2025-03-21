@@ -5,7 +5,7 @@ use std::borrow::BorrowMut;
 use once_cell::sync::Lazy;
 use crate::bindings::golem::api::host::resolve_worker_id;
 use self::bindings::exports::it::scheduled_invocation_client_exports::client_api::Guest;
-use self::bindings::golem::api::host::{get_self_metadata, worker_uri};
+use self::bindings::golem::api::host::{get_self_metadata};
 use self::bindings::it::scheduled_invocation_client_client::client_client::ClientApi;
 use self::bindings::it::scheduled_invocation_server_client::server_client::{ServerApi, WasiClocksDatetime};
 use self::bindings::wasi::clocks::wall_clock::now;
@@ -23,7 +23,7 @@ struct Component;
 impl Guest for Component {
     fn test1(component_name: String, worker_name: String) {
         let worker_id = resolve_worker_id(&component_name, &worker_name).unwrap();
-        let server_api = ServerApi::new(&worker_uri(&worker_id));
+        let server_api = ServerApi::custom(&worker_id);
 
         let scheduled_for = increment_datetime(now(), 200_000_000);
         server_api.schedule_inc_global_by(1, scheduled_for);
@@ -32,7 +32,7 @@ impl Guest for Component {
 
     fn test2(component_name: String, worker_name: String) {
         let worker_id = resolve_worker_id(&component_name, &worker_name).unwrap();
-        let server_api = ServerApi::new(&worker_uri(&worker_id));
+        let server_api = ServerApi::custom(&&worker_id);
 
         let scheduled_for = increment_datetime(now(), 200_000_000);
         server_api.schedule_inc_global_by(1, scheduled_for).cancel();
@@ -41,7 +41,7 @@ impl Guest for Component {
 
     fn test3() {
         let worker_id = get_self_metadata().worker_id;
-        let client_api = ClientApi::new(&worker_uri(&worker_id));
+        let client_api = ClientApi::custom(&worker_id);
 
         let scheduled_for = increment_datetime(now(), 200_000_000);
         client_api.schedule_inc_global_by(1, scheduled_for);

@@ -542,42 +542,6 @@ async fn promise(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn get_self_uri(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
-
-    let component_id = executor.component("runtime-service").store().await;
-    let worker_id = executor
-        .start_worker(&component_id, "runtime-service-1")
-        .await;
-
-    let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-self-uri}",
-            vec!["function-name".into_value_and_type()],
-        )
-        .await
-        .unwrap();
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-    drop(executor);
-
-    check!(
-        result
-            == vec![Value::String(format!(
-                "urn:worker:{component_id}/runtime-service-1/function-name"
-            ))]
-    );
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
 async fn get_workers_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -639,7 +603,7 @@ async fn get_workers_from_worker(
                         typ: analysed_type::option(
                             type_resolve
                                 .analysed_type(&TypeName {
-                                    package: Some("golem:api@0.2.2".to_string()),
+                                    package: Some("golem:api@1.1.6".to_string()),
                                     owner: TypeOwner::Interface("host".to_string()),
                                     name: Some("worker-any-filter".to_string()),
                                 })
@@ -3005,7 +2969,7 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "\n\nthread '<unnamed>' panicked at src/lib.rs:29:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    let expected_stderr = "\n\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
     check!(worker_error_message(&result2.clone().err().unwrap()).ends_with(&expected_stderr));
     check!(worker_error_message(&result3.clone().err().unwrap()).ends_with(&expected_stderr));

@@ -10,10 +10,6 @@ use reqwest::{Client, Response};
 struct Component;
 
 impl Guest for Component {
-    fn get_self_uri(function_name: String) -> String {
-        get_self_uri(&function_name).value
-    }
-
     fn jump() -> u64 {
         let mut state = 0;
 
@@ -64,6 +60,7 @@ impl Guest for Component {
             min_delay: 1000000000, // 1s
             max_delay: 1000000000, // 1s
             multiplier: 1.0,
+            max_jitter_factor: None,
         });
         let overridden_retry_policy = get_retry_policy();
         println!("Overridden retry policy: {overridden_retry_policy:?}");

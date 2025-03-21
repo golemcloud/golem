@@ -9,7 +9,7 @@ path = "wit-generated"
 [package.metadata.component.target.dependencies]
 "wasi:io" = { path = "wit-generated/deps/io" }
 "wasi:clocks" = { path = "wit-generated/deps/clocks" }
-"golem:rpc" = { path = "wit-generated/deps/wasm-rpc" }
+"golem:rpc" = { path = "wit-generated/deps/golem-rpc" }
 "golem:api" = { path = "wit-generated/deps/golem-1.x" }
 "it:scheduled-invocation-client-client" = { path = "wit-generated/deps/it_scheduled-invocation-client-client" }
 "it:scheduled-invocation-server-client" = { path = "wit-generated/deps/it_scheduled-invocation-server-client" }
