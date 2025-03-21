@@ -1468,26 +1468,45 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 constraint_serde::deserialize(&existing_record.constraints)
                     .map_err(RepoError::Internal)?;
 
-            existing_constraints.remove_constraints(constraints);
+            let new_constraints: Option<FunctionConstraints> =
+                existing_constraints.remove_constraints(constraints);
 
-            let new_constraints: Vec<u8> = constraint_serde::serialize(&existing_constraints)
-                .map_err(RepoError::Internal)?
-                .into();
+            match new_constraints {
+                None => {
+                    sqlx::query(
+                        r#"
+                         DELETE FROM component_constraints
+                          WHERE namespace = $1 AND component_id = $2
+                          "#,
+                    )
+                    .bind(namespace)
+                    .bind(component_id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(RepoError::from)?;
+                }
 
-            sqlx::query(
-                r#"
+                Some(new_constraints) => {
+                    let new_constraints: Vec<u8> = constraint_serde::serialize(&new_constraints)
+                        .map_err(RepoError::Internal)?
+                        .into();
+
+                    sqlx::query(
+                        r#"
                  UPDATE
                    component_constraints
                     SET constraints = $1
                     WHERE namespace = $2 AND component_id = $3
                     "#,
-            )
-            .bind(new_constraints)
-            .bind(namespace)
-            .bind(component_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(RepoError::from)?;
+                    )
+                    .bind(new_constraints)
+                    .bind(namespace)
+                    .bind(component_id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(RepoError::from)?;
+                }
+            }
         }
 
         transaction.commit().await?;

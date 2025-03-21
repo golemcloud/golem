@@ -310,8 +310,6 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         let constraints =
             ComponentConstraints::from_api_definitions(&deployment_plan.apis_to_deploy)?;
 
-        dbg!(&constraints);
-
         for (component_id, constraints) in constraints.constraints {
             self.component_service
                 .create_or_update_constraints(&component_id, constraints, auth_ctx)
@@ -330,16 +328,13 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
 
     async fn remove_component_constraints<Namespace>(
         &self,
-        namespace: &Namespace,
-        site: &ApiSiteString,
+        existing_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>>
     where
         Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
         <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
     {
-        let existing_api_definitions = self.get_definitions_by_site(namespace, site).await?;
-
         let constraints = ComponentConstraints::from_api_definitions(&existing_api_definitions)?;
 
         for (component_id, constraints) in &constraints.constraints {
@@ -663,6 +658,9 @@ where
 
             Err(ApiDeploymentError::ApiDeploymentConflict(site.clone()))
         } else {
+            // API definitions corresponding to the deployment
+            let existing_api_definitions = self.get_definitions_by_site(namespace, site).await?;
+
             self.deployment_repo
                 .delete(existing_deployment_records.clone())
                 .await?;
@@ -670,7 +668,7 @@ where
             self.set_undeployed_as_draft(existing_deployment_records)
                 .await?;
 
-            self.remove_component_constraints(namespace, site, auth_ctx)
+            self.remove_component_constraints(existing_api_definitions, auth_ctx)
                 .await?;
 
             Ok(())

@@ -54,7 +54,10 @@ impl FunctionConstraints {
         }
     }
 
-    pub fn remove_constraints(&self, constraints_to_remove: &Vec<FunctionSignature>) -> Self {
+    pub fn remove_constraints(
+        &self,
+        constraints_to_remove: &Vec<FunctionSignature>,
+    ) -> Option<Self> {
         let mut constraints = vec![];
 
         for constraint in &self.constraints {
@@ -68,7 +71,11 @@ impl FunctionConstraints {
             }
         }
 
-        FunctionConstraints { constraints }
+        if self.constraints.is_empty() {
+            None
+        } else {
+            Some(FunctionConstraints { constraints })
+        }
     }
 
     pub fn try_merge(
