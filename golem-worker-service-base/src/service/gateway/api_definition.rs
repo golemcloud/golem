@@ -34,6 +34,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use rib::RibError;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -199,73 +200,100 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         AuthCtx: 'a;
 }
 
-type ComponentNameCache = Cache<
-    ComponentId,
-    (),
-    String,
-    String,
->;
-
-type ComponentIdCache = Cache<
-    String,
-    (),
-    ComponentId,
-    String,
->;
-
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApiDefinitionServiceConfig {
-    component_name_cache_size: usize,
-    component_id_cache_size: usize
+    component_by_name_cache_size: usize,
+    component_by_id_cache_size: usize,
 }
 
 impl Default for ApiDefinitionServiceConfig {
     fn default() -> Self {
         Self {
-            component_name_cache_size: 1024,
-            component_id_cache_size: 1024,
+            component_by_name_cache_size: 1024,
+            component_by_id_cache_size: 1024,
         }
     }
 }
+
+type ComponentByNameCache = Cache<ComponentId, (), Option<Component>, String>;
+
+type ComponentByIdCache = Cache<ComponentName, (), Option<Component>, String>;
 
 // TODO: cache mappings
 struct ConversionContextImpl<'a, AuthCtx> {
     component_service: &'a Arc<dyn ComponentService<AuthCtx>>,
     auth_ctx: &'a AuthCtx,
-    component_name_cache: &'a ComponentNameCache,
-    component_id_cache: &'a ComponentIdCache
+    component_name_cache: &'a ComponentByNameCache,
+    component_id_cache: &'a ComponentByIdCache,
 }
 
 #[async_trait]
 impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthCtx> {
-    async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
-        let result = self.component_id_cache.get_or_insert_simple(
-            &name.to_string(),
-            || Box::pin(async {
-                self
-                    .component_service
-                    .get_by_name(name, self.auth_ctx)
-                    .await
-                    .map_err(|e| format!("Failed to lookup component by name: {e}"))
-            })
-        );
+    async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+        let name = name.clone();
         let component = self
-            .component_service
-            .get_by_name(name, self.auth_ctx)
-            .await
-            .map_err(|e| format!("Failed to lookup component by name: {e}"))?;
-        Ok(component.versioned_component_id.component_id)
+            .component_id_cache
+            .get_or_insert_simple(&name, async || {
+                let result = self
+                    .component_service
+                    .get_by_name(&name, self.auth_ctx)
+                    .await;
+
+                match result {
+                    Ok(inner) => Ok(Some(inner)),
+                    Err(ComponentServiceError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(format!("Failed to lookup component by name: {e}")),
+                }
+            })
+            .await?;
+
+        if let Some(component) = component {
+            let component_id = component.versioned_component_id.component_id.clone();
+
+            // put component into the other cache to save lookups
+            let _ = self
+                .component_name_cache
+                .get_or_insert_simple(&component_id, async || Ok(Some(component)))
+                .await;
+
+            Ok(component_id)
+        } else {
+            Err(format!("Did not find component for name {name}"))
+        }
     }
     async fn get_component_name(
         &self,
         component_id: &ComponentId,
     ) -> Result<ComponentName, String> {
         let component = self
-            .component_service
-            .get_latest(component_id, self.auth_ctx)
-            .await
-            .map_err(|e| format!("Failed to lookup component by id: {e}"))?;
-        Ok(component.component_name)
+            .component_name_cache
+            .get_or_insert_simple(component_id, async || {
+                let result = self
+                    .component_service
+                    .get_latest(component_id, self.auth_ctx)
+                    .await;
+
+                match result {
+                    Ok(inner) => Ok(Some(inner)),
+                    Err(ComponentServiceError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(format!("Failed to lookup component by id: {e}")),
+                }
+            })
+            .await?;
+
+        if let Some(component) = component {
+            let component_name = component.component_name.clone();
+
+            // put component into the other cache to save lookups
+            let _ = self
+                .component_id_cache
+                .get_or_insert_simple(&component_name, async || Ok(Some(component)))
+                .await;
+
+            Ok(component_name)
+        } else {
+            Err(format!("Did not find component for id {component_id}"))
+        }
     }
 }
 
@@ -276,8 +304,8 @@ pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace> {
     security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
     api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
-    component_name_cache: ComponentNameCache,
-    component_id_cache: ComponentIdCache
+    component_name_cache: ComponentByNameCache,
+    component_id_cache: ComponentByIdCache,
 }
 
 impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
@@ -289,7 +317,7 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
         api_definition_validator: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send,
         >,
-        config: ApiDefinitionServiceConfig
+        config: ApiDefinitionServiceConfig,
     ) -> Self {
         Self {
             component_service,
@@ -297,8 +325,18 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
             security_scheme_service,
             deployment_repo,
             api_definition_validator,
-            component_name_cache: Cache::new(Some(config.component_name_cache_size), FullCacheEvictionMode::None, BackgroundEvictionMode::None, "component_name"),
-            component_id_cache: Cache::new(Some(config.component_id_cache_size), FullCacheEvictionMode::None, BackgroundEvictionMode::None, "component_id")
+            component_name_cache: Cache::new(
+                Some(config.component_by_name_cache_size),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_name",
+            ),
+            component_id_cache: Cache::new(
+                Some(config.component_by_id_cache_size),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_id",
+            ),
         }
     }
 
@@ -617,6 +655,8 @@ where
         ConversionContextImpl {
             component_service: &self.component_service,
             auth_ctx,
+            component_name_cache: &self.component_name_cache,
+            component_id_cache: &self.component_id_cache,
         }
         .boxed()
     }

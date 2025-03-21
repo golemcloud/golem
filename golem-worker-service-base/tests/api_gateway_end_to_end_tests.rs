@@ -88,8 +88,8 @@ struct TestConversionContext;
 
 #[async_trait]
 impl ConversionContext for TestConversionContext {
-    async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
-        if name == "test-component" {
+    async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+        if name.0 == "test-component" {
             Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
         } else {
             Err("component not found".to_string())
@@ -107,7 +107,7 @@ struct EmptyTestConversionContext;
 
 #[async_trait]
 impl ConversionContext for EmptyTestConversionContext {
-    async fn resolve_component_id(&self, _name: &str) -> Result<ComponentId, String> {
+    async fn resolve_component_id(&self, _name: &ComponentName) -> Result<ComponentId, String> {
         unimplemented!()
     }
     async fn get_component_name(

@@ -28,7 +28,7 @@ use crate::gateway_security::{
 };
 use crate::service::gateway::BoxConversionContext;
 use golem_common::model::GatewayBindingType;
-use golem_service_base::model::VersionedComponentId;
+use golem_service_base::model::{ComponentName, VersionedComponentId};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};
@@ -355,8 +355,9 @@ impl GatewayBindingData {
             Some(GatewayBindingType::Default) | Some(GatewayBindingType::FileServer) | None => {
                 let response = self.response.ok_or("Missing response field in binding")?;
                 let component = self.component.ok_or("Missing component field in binding")?;
+                let component_name = ComponentName(component.name);
 
-                let component_id = conversion_ctx.resolve_component_id(&component.name).await?;
+                let component_id = conversion_ctx.resolve_component_id(&component_name).await?;
 
                 let response: crate::gateway_binding::ResponseMapping = {
                     let r = rib::from_string(response.as_str()).map_err(|e| e.to_string())?;
@@ -400,8 +401,9 @@ impl GatewayBindingData {
 
             Some(GatewayBindingType::HttpHandler) => {
                 let component = self.component.ok_or("Missing component field in binding")?;
+                let component_name = ComponentName(component.name);
 
-                let component_id = conversion_ctx.resolve_component_id(&component.name).await?;
+                let component_id = conversion_ctx.resolve_component_id(&component_name).await?;
 
                 let worker_name = self
                     .worker_name
@@ -738,8 +740,11 @@ mod tests {
 
         #[async_trait]
         impl ConversionContext for TestConversionContext {
-            async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
-                if name == "test-component" {
+            async fn resolve_component_id(
+                &self,
+                name: &ComponentName,
+            ) -> Result<ComponentId, String> {
+                if name.0 == "test-component" {
                     Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
                 } else {
                     Err("unknown component name".to_string())
@@ -795,8 +800,11 @@ mod tests {
 
         #[async_trait]
         impl ConversionContext for TestConversionContext {
-            async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
-                if name == "test-component" {
+            async fn resolve_component_id(
+                &self,
+                name: &ComponentName,
+            ) -> Result<ComponentId, String> {
+                if name.0 == "test-component" {
                     Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
                 } else {
                     Err("unknown component name".to_string())

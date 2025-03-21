@@ -81,7 +81,7 @@ use golem_client::api::ApiSecurityClient as ApiSecurityServiceHttpClient;
 use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive;
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
-use golem_client::api::{ApiDefinitionClient as ApiDefinitionServiceHttpClient, ComponentClient};
+use golem_client::api::{ApiDefinitionClient as ApiDefinitionServiceHttpClient};
 use golem_client::model::{
     ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
 };

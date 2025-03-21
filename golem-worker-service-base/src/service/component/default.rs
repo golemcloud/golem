@@ -29,7 +29,7 @@ use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_service_base::model::Component;
+use golem_service_base::model::{Component, ComponentName};
 use http::Uri;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -54,7 +54,7 @@ pub trait ComponentService<AuthCtx>: Send + Sync {
 
     async fn get_by_name(
         &self,
-        component_id: &str,
+        component_id: &ComponentName,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
 
@@ -274,7 +274,7 @@ where
 
     async fn get_by_name(
         &self,
-        component_name: &str,
+        component_name: &ComponentName,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
         let value = with_retries(
@@ -284,7 +284,7 @@ where
             &self.retry_config,
             &(
                 self.client.clone(),
-                component_name.to_string(),
+                component_name.0.clone(),
                 metadata.clone(),
             ),
             |(client, name, metadata)| {

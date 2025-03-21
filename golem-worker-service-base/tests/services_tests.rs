@@ -36,7 +36,7 @@ use golem_worker_service_base::service::component::{
 };
 use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
-    ApiDefinitionServiceDefault,
+    ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
@@ -444,9 +444,13 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
         Ok(Self::test_component())
     }
 
-    async fn get_by_name(&self, name: &str, _auth_ctx: &AuthCtx) -> ComponentResult<Component> {
+    async fn get_by_name(
+        &self,
+        name: &ComponentName,
+        _auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
         let test_component = Self::test_component();
-        if name == test_component.component_name.0 {
+        if name.0 == test_component.component_name.0 {
             Ok(test_component)
         } else {
             Err(ComponentServiceError::NotFound(format!(
@@ -493,6 +497,7 @@ async fn test_services(
         api_deployment_repo.clone(),
         security_scheme_service.clone(),
         api_definition_validator_service.clone(),
+        ApiDefinitionServiceConfig::default(),
     ));
 
     let deployment_service: Arc<
@@ -1111,8 +1116,8 @@ async fn get_api_definition(
 
     #[async_trait]
     impl ConversionContext for TestConversionContext {
-        async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
-            if name == "test-component" {
+        async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+            if name.0 == "test-component" {
                 Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
             } else {
                 Err("component not found".to_string())

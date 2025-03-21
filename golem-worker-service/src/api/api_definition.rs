@@ -395,7 +395,7 @@ mod test {
     use golem_common::model::component_constraint::FunctionConstraintCollection;
     use golem_common::model::ComponentId;
     use golem_service_base::db;
-    use golem_service_base::model::Component;
+    use golem_service_base::model::{Component, ComponentName};
     use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
     use golem_worker_service_base::repo::api_definition::{
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
@@ -405,7 +405,9 @@ mod test {
         DbSecuritySchemeRepo, LoggedSecuritySchemeRepo, SecuritySchemeRepo,
     };
     use golem_worker_service_base::service::component::ComponentResult;
-    use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
+    use golem_worker_service_base::service::gateway::api_definition::{
+        ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
+    };
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
     use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
     use http::StatusCode;
@@ -457,7 +459,7 @@ mod test {
 
         async fn get_by_name(
             &self,
-            _component_id: &str,
+            _component_id: &ComponentName,
             _auth_ctx: &EmptyAuthCtx,
         ) -> ComponentResult<Component> {
             unimplemented!()
@@ -515,6 +517,7 @@ mod test {
             api_deployment_repo,
             security_scheme_service,
             Arc::new(HttpApiDefinitionValidator {}),
+            ApiDefinitionServiceConfig::default(),
         );
 
         let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service));

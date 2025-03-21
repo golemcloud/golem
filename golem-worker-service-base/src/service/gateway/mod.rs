@@ -23,7 +23,7 @@ pub mod security_scheme;
 
 #[async_trait]
 pub trait ConversionContext: Send + Sync {
-    async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String>;
+    async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String>;
     async fn get_component_name(&self, component_id: &ComponentId)
         -> Result<ComponentName, String>;
 

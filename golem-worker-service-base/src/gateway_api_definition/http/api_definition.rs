@@ -1089,8 +1089,8 @@ mod tests {
 
     #[async_trait]
     impl ConversionContext for TestConversionContext {
-        async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
-            if name == "foobar" {
+        async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+            if name.0 == "foobar" {
                 Ok(ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")))
             } else {
                 Err("unknown component name".to_string())

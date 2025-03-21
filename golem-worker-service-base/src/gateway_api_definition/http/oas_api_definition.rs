@@ -138,7 +138,7 @@ mod internal {
     };
     use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
-    use golem_service_base::model::VersionedComponentId;
+    use golem_service_base::model::{ComponentName, VersionedComponentId};
 
     pub(super) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(super) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -399,14 +399,16 @@ mod internal {
         }
     }
 
-    pub(super) fn get_component_name(gateway_binding_value: &Value) -> Result<String, String> {
+    pub(super) fn get_component_name(
+        gateway_binding_value: &Value,
+    ) -> Result<ComponentName, String> {
         let result = gateway_binding_value
             .get("component-name")
             .ok_or("No component-name found")?
             .as_str()
             .ok_or("component-name is not a string")?;
 
-        Ok(result.to_string())
+        Ok(ComponentName(result.to_string()))
     }
 
     pub(super) fn get_component_version(gateway_binding_value: &Value) -> Result<u64, String> {
@@ -517,7 +519,7 @@ mod tests {
 
     #[async_trait]
     impl ConversionContext for DummyConversionCtx {
-        async fn resolve_component_id(&self, _name: &str) -> Result<ComponentId, String> {
+        async fn resolve_component_id(&self, _name: &ComponentName) -> Result<ComponentId, String> {
             unimplemented!()
         }
         async fn get_component_name(
