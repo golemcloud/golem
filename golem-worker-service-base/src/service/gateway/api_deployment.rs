@@ -310,6 +310,8 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         let constraints =
             ComponentConstraints::from_api_definitions(&deployment_plan.apis_to_deploy)?;
 
+        dbg!(&constraints);
+
         for (component_id, constraints) in constraints.constraints {
             self.component_service
                 .create_or_update_constraints(&component_id, constraints, auth_ctx)
@@ -806,6 +808,7 @@ where
     }
 }
 
+#[derive(Debug)]
 struct ComponentConstraints {
     constraints: HashMap<ComponentId, FunctionConstraints>,
 }

@@ -40,7 +40,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("counters").unique().store().await;
+    let component_id = deps.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -176,7 +176,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("counters").unique().store().await;
+    let component_id = deps.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -218,20 +218,45 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     check!(request.api_definitions == response.api_definitions);
     check!(request.site == response.site);
 
+    // Trying to update the component (with a completely different wasm)
+    // which was already used in an API definition
+    // where function get-cart-contents is being used.
     let update_component = deps
         .component_service()
         .update_component(
             &component_id,
-            &deps.component_directory().join("shopping-cart.wasm"),
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    check!(update_component.contains("Component Constraint Error"));
+    check!(update_component.contains("Missing Functions"));
+    check!(update_component.contains("get-cart-contents"));
+
+    // Delete the API deployment and see if component can be updated
+    // as constraints should be removed after deleting the API deployment
+    deps.worker_service()
+        .delete_api_deployment("subdomain.localhost")
+        .await
+        .unwrap();
+
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
             None,
             None,
         )
         .await;
 
-    dbg!(&update_component);
-
-    assert!(update_component.is_err());
+    check!(update_component.is_ok());
 }
 
 #[test]
@@ -369,9 +394,11 @@ async fn create_api_definition(
                                         component_id: Some(component_id.clone().into()),
                                         version: 0,
                                     }),
-                                    worker_name: Some(to_grpc_rib_expr(r#""counter""#)),
+                                    worker_name: None,
                                     response: Some(to_grpc_rib_expr(
                                         r#"
+                                            let worker = instance("shopping-cart");
+                                            let result = worker.get-cart-contents();
                                             let status: u64 = 200;
                                             {
                                               headers: {
