@@ -441,9 +441,9 @@ mod test {
 
         async fn delete_constraints(
             &self,
-            component_id: &ComponentId,
-            constraints: &[FunctionSignature],
-            auth_ctx: &EmptyAuthCtx,
+            _component_id: &ComponentId,
+            _constraints: &[FunctionSignature],
+            _auth_ctx: &EmptyAuthCtx,
         ) -> ComponentResult<FunctionConstraints> {
             unimplemented!()
         }
