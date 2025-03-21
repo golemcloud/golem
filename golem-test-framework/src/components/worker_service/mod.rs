@@ -74,6 +74,7 @@ use golem_api_grpc::proto::golem::worker::{
     UpdateMode, UpdateRecord, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata,
     WorkerNameFilter, WorkerStatusFilter, WorkerVersionFilter,
 };
+use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionServiceHttpClientLive;
 use golem_client::api::ApiDeploymentClient as ApiDeploymentServiceHttpClient;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentServiceHttpClientLive;
@@ -81,7 +82,6 @@ use golem_client::api::ApiSecurityClient as ApiSecurityServiceHttpClient;
 use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive;
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
-use golem_client::api::{ApiDefinitionClient as ApiDefinitionServiceHttpClient};
 use golem_client::model::{
     ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
 };
