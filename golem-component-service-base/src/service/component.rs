@@ -28,7 +28,9 @@ use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::{FunctionConstraints, FunctionMetadata};
+use golem_common::model::component_constraint::{
+    FunctionConstraints, FunctionMetadata, FunctionSignature,
+};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -415,7 +417,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         &self,
         owner: &Owner,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionMetadata>,
+        constraints: &Vec<FunctionSignature>,
     ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
     async fn get_component_constraint(
@@ -1516,7 +1518,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         &self,
         owner: &Owner,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionMetadata>,
+        constraints: &Vec<FunctionSignature>,
     ) -> Result<ComponentConstraints<Owner>, ComponentError> {
         info!(owner = %owner, component_id = %component_id, "Delete constraint");
 
@@ -1979,6 +1981,19 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         lock.as_ref()
             .unwrap()
             .create_or_update_constraint(component_constraint)
+            .await
+    }
+
+    async fn delete_constraints(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints: &Vec<FunctionSignature>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .delete_constraints(owner, component_id, constraints)
             .await
     }
 
