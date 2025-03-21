@@ -219,7 +219,6 @@ type ComponentByNameCache = Cache<ComponentId, (), Option<Component>, String>;
 
 type ComponentByIdCache = Cache<ComponentName, (), Option<Component>, String>;
 
-// TODO: cache mappings
 struct ConversionContextImpl<'a, AuthCtx> {
     component_service: &'a Arc<dyn ComponentService<AuthCtx>>,
     auth_ctx: &'a AuthCtx,
