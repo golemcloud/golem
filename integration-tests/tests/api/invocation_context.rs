@@ -98,7 +98,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![(
+                targets: HashMap::from_iter(vec![(
                     "golem-ictest-api".to_string(),
                     "golem:ictest-exports/golem-ictest-api".to_string(),
                 )]),

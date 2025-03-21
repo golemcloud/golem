@@ -20,10 +20,12 @@ use axum::routing::get;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
-use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_common::model::{
-    AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    AccountId, ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatus,
 };
@@ -3225,18 +3227,28 @@ async fn scheduled_invocation_test(
             (
                 "it:scheduled-invocation-server-client/server-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: HashMap::from_iter(vec![(
+                    targets: HashMap::from_iter(vec![(
                         "server-api".to_string(),
-                        "it:scheduled-invocation-server-exports/server-api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "it:scheduled-invocation-server-exports/server-api"
+                                .to_string(),
+                            component_name: server_component_name.to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     )]),
                 }),
             ),
             (
                 "it:scheduled-invocation-client-client/client-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: HashMap::from_iter(vec![(
+                    targets: HashMap::from_iter(vec![(
                         "client-api".to_string(),
-                        "it:scheduled-invocation-client-exports/client-api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "it:scheduled-invocation-client-exports/client-api"
+                                .to_string(),
+                            component_name: server_component_name.to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     )]),
                 }),
             ),

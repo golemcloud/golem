@@ -45,7 +45,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 (
                     "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        target_interface_name: HashMap::from_iter(vec![
+                        targets: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
                             (
                                 "counter".to_string(),
@@ -57,7 +57,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 (
                     "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        target_interface_name: HashMap::from_iter(vec![(
+                        targets: HashMap::from_iter(vec![(
                             "api".to_string(),
                             "rpc:ephemeral-exports/api".to_string(),
                         )]),
@@ -149,7 +149,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
         )
         .unwrap()
             == DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![
+                targets: HashMap::from_iter(vec![
                     ("api".to_string(), "rpc:counters-exports/api".to_string()),
                     (
                         "counter".to_string(),
@@ -168,7 +168,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
         )
         .unwrap()
             == DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![(
+                targets: HashMap::from_iter(vec![(
                     "api".to_string(),
                     "rpc:ephemeral-exports/api".to_string(),
                 )]),
@@ -282,7 +282,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
     let link = (
         "dummy:dummy/dummy".to_string(),
         DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-            target_interface_name: HashMap::from_iter(vec![(
+            targets: HashMap::from_iter(vec![(
                 "dummy".to_string(),
                 "dummy:dummy/dummy-x".to_string(),
             )]),
