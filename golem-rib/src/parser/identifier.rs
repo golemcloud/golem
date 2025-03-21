@@ -33,9 +33,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    (identifier_text())
-        .map(|variable| Expr::identifier_global(variable, None))
-        .message("Invalid identifier")
+    (identifier_text()).map(|variable| Expr::identifier_global(variable, None))
 }
 pub fn identifier_text<Input>() -> impl Parser<Input, Output = String>
 where

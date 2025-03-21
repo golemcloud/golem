@@ -654,4 +654,14 @@ mod test {
         assert_eq!(Some(&1), root.matches_str("/api/v4/users/123"));
         assert_eq!(Some(&1), root.matches_str("/api/v5/users/123/profile"));
     }
+
+    #[test]
+    fn test_match_root_only() {
+        let mut root = RadixNode::default();
+
+        let path1 = RouterPattern::parse("/");
+        root.insert_path(path1.as_slice(), 1).unwrap();
+
+        assert_eq!(Some(&1), root.matches_str("/"));
+    }
 }

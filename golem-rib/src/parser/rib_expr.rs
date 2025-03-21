@@ -66,6 +66,7 @@ where
     Input::Position: GetSourcePosition,
 {
     spaces()
+        .silent()
         .with(
             (simple_expr(), rib_expr_rest()).and_then(|(expr, rest): (Expr, RibRest)| {
                 let with_index = fold_with_index_exprs(expr, rest.indices);
@@ -89,7 +90,7 @@ where
                 Ok(fold_with_binary_ops(with_range, rest.binary_ops))
             }),
         )
-        .skip(spaces())
+        .skip(spaces().silent())
 }
 
 parser! {
@@ -110,6 +111,7 @@ where
 {
     (
         spaces()
+            .silent()
             .with(choice((
                 list_comprehension(),
                 list_aggregation(),
@@ -129,8 +131,9 @@ where
                 identifier(),
                 integer(),
             )))
-            .skip(spaces()),
-        optional(optional(char(':').skip(spaces())).with(type_name())).skip(spaces()),
+            .skip(spaces().silent()),
+        optional(optional(char(':').skip(spaces().silent())).with(type_name()))
+            .skip(spaces().silent()),
     )
         .map(|(expr, type_name)| match type_name {
             Some(type_name) => expr.with_type_annotation(type_name),
@@ -166,7 +169,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
+    choice((attempt(flag()), attempt(record())))
 }
 
 // A rib rest always a start with a proper delimiter (ex: ., [, etc)
@@ -255,10 +258,7 @@ where
             ),
             many((
                 binary_op(),
-                (
-                    rib_expr().skip(spaces()),
-                    select_index_expression().skip(spaces()),
-                ),
+                (rib_expr(), select_index_expression().skip(spaces())),
             ))
             .map(|binary_math: Vec<(BinaryOp, (Expr, IndexExprs))>| {
                 binary_math

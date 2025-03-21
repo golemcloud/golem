@@ -36,13 +36,14 @@ where
     )
     .with(
         (
-            rib_expr().skip(spaces()),
-            string("then").skip(spaces()),
-            rib_expr().skip(spaces()),
-            string("else").skip(spaces()),
-            rib_expr().skip(spaces()),
+            rib_expr().message("Expected condition expression after `if`"), // Custom message for `rib_expr` after `if`
+            string("then").skip(spaces().silent()),
+            rib_expr(),
+            string("else"),
+            spaces().silent(),
+            rib_expr().silent().expected("else condition"),
         )
-            .map(|(cond, _, lhs, _, rhs)| Expr::cond(cond, lhs, rhs)),
+            .map(|(cond, _, lhs, _, _, rhs)| Expr::cond(cond, lhs, rhs)),
     )
 }
 

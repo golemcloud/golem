@@ -19,7 +19,7 @@ use super::request::{
     authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
 };
 use super::to_response::GatewayHttpResult;
-use super::WorkerDetail;
+use super::WorkerDetails;
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
     resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled,
@@ -52,7 +52,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
 use http::StatusCode;
 use poem::Body;
-use rib::{RibInput, RibInputTypeInfo, RibResult};
+use rib::{RibInput, RibInputTypeInfo, RibResult, TypeName};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -112,7 +112,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         let worker_detail = self
-            .get_worker_detail(
+            .get_worker_details(
                 request,
                 &rib_input,
                 &binding.worker_name_compiled,
@@ -151,7 +151,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         let worker_detail = self
-            .get_worker_detail(
+            .get_worker_details(
                 request,
                 &rib_input,
                 &binding.worker_name_compiled,
@@ -197,7 +197,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         let worker_detail = self
-            .get_worker_detail(
+            .get_worker_details(
                 request,
                 &rib_input,
                 &binding.worker_name_compiled,
@@ -249,9 +249,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         script: &WorkerNameCompiled,
         request_value: &serde_json::Map<String, Value>,
     ) -> GatewayHttpResult<String> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input_type_info)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input: RibInput =
+            resolve_rib_input(request_value, &script.rib_input_type_info).await?;
 
         let result = rib::interpret_pure(&script.compiled_worker_name, &rib_input)
             .await
@@ -270,9 +269,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         script: &IdempotencyKeyCompiled,
         request_value: &serde_json::Map<String, Value>,
     ) -> GatewayHttpResult<IdempotencyKey> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input).await?;
 
         let value = rib::interpret_pure(&script.compiled_idempotency_key, &rib_input)
             .await
@@ -291,9 +288,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         script: &InvocationContextCompiled,
         request_value: &serde_json::Map<String, Value>,
     ) -> GatewayHttpResult<(Option<TraceId>, HashMap<String, ValueAndType>)> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input).await?;
 
         let value = rib::interpret_pure(&script.compiled_invocation_context, &rib_input)
             .await
@@ -345,7 +340,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         Ok(span)
     }
 
-    async fn get_worker_detail(
+    async fn get_worker_details(
         &self,
         request: &RichRequest,
         request_value: &serde_json::Map<String, Value>,
@@ -353,7 +348,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
         component_id: &VersionedComponentId,
         invocation_context_compiled: &Option<InvocationContextCompiled>,
-    ) -> GatewayHttpResult<WorkerDetail> {
+    ) -> GatewayHttpResult<WorkerDetails> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
             let result = self
                 .evaluate_worker_name_rib_script(worker_name_compiled, request_value)
@@ -434,8 +429,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             invocation_context_from_request(&request.underlying)
         };
 
-        Ok(WorkerDetail {
-            component_id: component_id.clone(),
+        Ok(WorkerDetails {
+            component_id: component_id.component_id.clone(),
             worker_name,
             idempotency_key,
             invocation_context,
@@ -447,16 +442,15 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         namespace: &Namespace,
         compiled_response_mapping: &ResponseMappingCompiled,
         request_value: &serde_json::Map<String, Value>,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
     ) -> GatewayHttpResult<RibResult> {
-        let rib_input = resolve_rib_input(request_value, &compiled_response_mapping.rib_input)
-            .await
-            .map_err(GatewayHttpError::BadRequest)?;
+        let rib_input =
+            resolve_rib_input(request_value, &compiled_response_mapping.rib_input).await?;
 
         self.evaluator
             .evaluate(
                 worker_detail.worker_name.as_deref(),
-                &worker_detail.component_id.component_id,
+                &worker_detail.component_id,
                 &worker_detail.idempotency_key,
                 worker_detail.invocation_context.clone(),
                 &compiled_response_mapping.response_mapping_compiled,
@@ -655,21 +649,28 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 async fn resolve_rib_input(
     input: &serde_json::Map<String, Value>,
     required_types: &RibInputTypeInfo,
-) -> Result<RibInput, String> {
+) -> Result<RibInput, GatewayHttpError> {
     let mut result_map: HashMap<String, ValueAndType> = HashMap::new();
 
     for (key, analysed_type) in required_types.types.iter() {
-        let input_value = input
-            .get(key)
-            .ok_or(format!("Required input not available: {key}"))?;
+        let input_value = input.get(key).ok_or(GatewayHttpError::BadRequest(format!(
+            "Missing `{}` in http request",
+            key
+        )))?;
 
-        let parsed_value = TypeAnnotatedValue::parse_with_type(
-            input_value,
-            analysed_type,
-        ).map_err(|err| format!("Input {key} doesn't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), analysed_type))?;
+        let parsed_value = TypeAnnotatedValue::parse_with_type(input_value, analysed_type)
+            .map_err(|_| {
+                GatewayHttpError::BadRequest(format!(
+                    "Invalid http request. Available types in request: {}",
+                    TypeName::try_from(analysed_type.clone())
+                        .map(|x| x.to_string())
+                        .unwrap_or_else(|_| format!("{:?}", analysed_type))
+                ))
+            })?;
 
         let converted_value = parsed_value.try_into().map_err(|err| {
-            format!("Internal error converting between value representations: {err}")
+            error!("internal value conversion error: {}", err);
+            GatewayHttpError::InternalError("internal value conversion error".to_string())
         })?;
 
         result_map.insert(key.clone(), converted_value);

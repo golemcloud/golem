@@ -42,7 +42,7 @@ use http::header::LOCATION;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
-use serde_json::Value;
+use serde_json::{Number, Value};
 use url::Url;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
@@ -176,7 +176,135 @@ async fn test_first_class_worker_api_with_resource() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_for_valid_input() {
+async fn test_first_class_worker_api_def_with_query_only() {
+    let api_request = get_gateway_request("/foo?userid=jon", None, &HeaderMap::new(), Value::Null);
+
+    let response_mapping = r#"
+       let user_id = request.query.userid;
+       let worker-name = "shopping-cart-${user_id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, "bar");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_first_class_worker_api_def_with_multiple_query_params() {
+    let api_request = get_gateway_request(
+        "/foo?userid=jon&country=usa",
+        None,
+        &HeaderMap::new(),
+        Value::Null,
+    );
+
+    let response_mapping = r#"
+       let user_id = request.query.userid;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user_id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, country);
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}&{country}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("usa".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_first_class_worker_api_def_with_path_and_query() {
+    let api_request =
+        get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
+
+    let response_mapping = r#"
+       let user_id = request.path.user-id;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user_id}-${country}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, country);
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}?{country}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("usa".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_first_class_worker_api_def_with_path() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
@@ -340,6 +468,122 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_2() {
     .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+async fn test_api_def_with_request_with_request_body() {
+    let empty_headers = HeaderMap::new();
+
+    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+
+    request_body.insert("foo_key".to_string(), Value::Number(Number::from(1)));
+
+    request_body.insert(
+        "bar_key".to_string(),
+        Value::String("bar_value".to_string()),
+    );
+
+    let api_request = get_gateway_request(
+        "/foo/john",
+        None,
+        &empty_headers,
+        Value::Object(request_body),
+    );
+
+    let response_mapping = r#"
+         let userid: string = request.path.user-id;
+         let res = if userid == "john" then 1:u64 else 0: u64;
+         let worker = instance("shopping-cart-${res}");
+         let param1 = request.body.foo_key;
+         let param2 = request.body.bar_key;
+         let response = worker.add-item(param1, param2);
+
+         response
+        "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1".to_string(),
+        "golem:it/api.{add-item}".to_string(),
+        Value::Array(vec![
+            Value::Number(1.into()),
+            Value::String("bar_value".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_api_def_with_request_with_request_body_type_mismatch() {
+    let empty_headers = HeaderMap::new();
+
+    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+
+    request_body.insert("foo_key".to_string(), Value::String("1".to_string()));
+
+    request_body.insert(
+        "bar_key".to_string(),
+        Value::String("bar_value".to_string()),
+    );
+
+    let api_request = get_gateway_request(
+        "/foo/john",
+        None,
+        &empty_headers,
+        Value::Object(request_body),
+    );
+
+    let response_mapping = r#"
+         let userid: string = request.path.user-id;
+         let res = if userid == "john" then 1:u64 else 0: u64;
+         let worker = instance("shopping-cart-${res}");
+         let param1 = request.body.foo_key;
+         let param2 = request.body.bar_key;
+         let response = worker.add-item(param1, param2);
+
+         response
+        "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let status = response.status();
+
+    let body = response.into_body().into_string().await.unwrap();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body, "Invalid http request. Available types in request: record{body: record{bar_key: string, foo_key: u32}, path: record{user-id: string}}");
 }
 
 #[test]
@@ -1074,7 +1318,7 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
     let response_mapping = r#"
         let x: u64 = request.path.user-id;
         let my-instance = instance("shopping-cart-${x}");
-        let response = my-instance.get-cart-contents(request.path.token-id, request.path.token-id);
+        let response = my-instance.get-cart-contents(request.query.token-id, request.query.token-id);
         response
     "#;
 
@@ -1806,7 +2050,7 @@ mod internal {
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
-    use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple};
+    use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
@@ -1830,7 +2074,7 @@ mod internal {
     use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
         HttpHandlerBindingHandler, HttpHandlerBindingResult,
     };
-    use golem_worker_service_base::gateway_execution::WorkerDetail;
+    use golem_worker_service_base::gateway_execution::WorkerDetails;
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
@@ -1873,6 +2117,11 @@ mod internal {
         }
     }
 
+    // This worker-request-executor simply returns the same response to any worker function
+    // which is record of the details of the worker request such as function name, arguments, worker name etc,
+    // except for some specific functions which will return a specific valid response corresponding
+    // to that function. This way, most of the tests can validate the correctness of the worker request
+    // while others can validate the correctness of the real function result.
     pub struct TestApiGatewayWorkerRequestExecutor {}
 
     #[async_trait]
@@ -1934,7 +2183,7 @@ mod internal {
         async fn handle_file_server_binding_result(
             &self,
             _namespace: &Namespace,
-            _worker_detail: &WorkerDetail,
+            _worker_detail: &WorkerDetails,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
             unimplemented!()
@@ -1947,7 +2196,7 @@ mod internal {
         async fn handle_http_handler_binding(
             &self,
             _namespace: &Namespace,
-            _worker_detail: &WorkerDetail,
+            _worker_detail: &WorkerDetails,
             _request_details: IncomingHttpRequest,
         ) -> HttpHandlerBindingResult {
             unimplemented!()
@@ -2153,28 +2402,47 @@ mod internal {
     pub fn get_golem_shopping_cart_metadata() -> Vec<AnalysedExport> {
         let analysed_export = AnalysedExport::Instance(AnalysedInstance {
             name: "golem:it/api".to_string(),
-            functions: vec![AnalysedFunction {
-                name: "get-cart-contents".to_string(),
-                parameters: vec![
-                    AnalysedFunctionParameter {
-                        name: "a".to_string(),
+            functions: vec![
+                AnalysedFunction {
+                    name: "add-item".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "a".to_string(),
+                            typ: u32(),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "b".to_string(),
+                            typ: str(),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
                         typ: str(),
-                    },
-                    AnalysedFunctionParameter {
-                        name: "b".to_string(),
-                        typ: str(),
-                    },
-                ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: record(vec![
-                        field("component_id", str()),
-                        field("function_name", str()),
-                        field("function_params", tuple(vec![str(), str()])),
-                        field("worker_name", str()),
-                    ]),
-                }],
-            }],
+                    }],
+                },
+                AnalysedFunction {
+                    name: "get-cart-contents".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "a".to_string(),
+                            typ: str(),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "b".to_string(),
+                            typ: str(),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: record(vec![
+                            field("component_id", str()),
+                            field("function_name", str()),
+                            field("function_params", tuple(vec![str(), str()])),
+                            field("worker_name", str()),
+                        ]),
+                    }],
+                },
+            ],
         });
 
         vec![analysed_export]
