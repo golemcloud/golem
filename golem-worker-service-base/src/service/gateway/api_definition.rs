@@ -21,13 +21,14 @@ use crate::gateway_security::IdentityProviderError;
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;
-use crate::service::component::ComponentService;
+use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
 use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, ComponentName, VersionedComponentId};
@@ -198,15 +199,56 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         AuthCtx: 'a;
 }
 
+type ComponentNameCache = Cache<
+    ComponentId,
+    (),
+    String,
+    String,
+>;
+
+type ComponentIdCache = Cache<
+    String,
+    (),
+    ComponentId,
+    String,
+>;
+
+#[derive(Clone)]
+pub struct ApiDefinitionServiceConfig {
+    component_name_cache_size: usize,
+    component_id_cache_size: usize
+}
+
+impl Default for ApiDefinitionServiceConfig {
+    fn default() -> Self {
+        Self {
+            component_name_cache_size: 1024,
+            component_id_cache_size: 1024,
+        }
+    }
+}
+
 // TODO: cache mappings
 struct ConversionContextImpl<'a, AuthCtx> {
     component_service: &'a Arc<dyn ComponentService<AuthCtx>>,
     auth_ctx: &'a AuthCtx,
+    component_name_cache: &'a ComponentNameCache,
+    component_id_cache: &'a ComponentIdCache
 }
 
 #[async_trait]
 impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthCtx> {
     async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
+        let result = self.component_id_cache.get_or_insert_simple(
+            &name.to_string(),
+            || Box::pin(async {
+                self
+                    .component_service
+                    .get_by_name(name, self.auth_ctx)
+                    .await
+                    .map_err(|e| format!("Failed to lookup component by name: {e}"))
+            })
+        );
         let component = self
             .component_service
             .get_by_name(name, self.auth_ctx)
@@ -228,12 +270,14 @@ impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthC
 }
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace> {
-    pub component_service: Arc<dyn ComponentService<AuthCtx>>,
-    pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
-    pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
-    pub security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
-    pub api_definition_validator:
+    component_service: Arc<dyn ComponentService<AuthCtx>>,
+    definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
+    deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
+    security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
+    api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
+    component_name_cache: ComponentNameCache,
+    component_id_cache: ComponentIdCache
 }
 
 impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
@@ -245,6 +289,7 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
         api_definition_validator: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send,
         >,
+        config: ApiDefinitionServiceConfig
     ) -> Self {
         Self {
             component_service,
@@ -252,6 +297,8 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
             security_scheme_service,
             deployment_repo,
             api_definition_validator,
+            component_name_cache: Cache::new(Some(config.component_name_cache_size), FullCacheEvictionMode::None, BackgroundEvictionMode::None, "component_name"),
+            component_id_cache: Cache::new(Some(config.component_id_cache_size), FullCacheEvictionMode::None, BackgroundEvictionMode::None, "component_id")
         }
     }
 
