@@ -774,8 +774,8 @@ mod tests {
           - method: Get
             path: /good/syntax
             binding:
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               response: |
                   let email = "user@test.com";
@@ -785,8 +785,8 @@ mod tests {
           - method: Get
             path: /bad/syntax
             binding:
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               response: |
                   let email = "user@test.com";
