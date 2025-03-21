@@ -70,7 +70,7 @@ pub trait ComponentService<AuthCtx> {
     async fn delete_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionSignature>,
+        constraints: &[FunctionSignature],
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints>;
 }
@@ -341,7 +341,7 @@ where
     async fn delete_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionSignature>,
+        constraints: &[FunctionSignature],
         metadata: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints> {
         let constraint = constraints

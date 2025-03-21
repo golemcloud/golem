@@ -313,7 +313,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         &self,
         namespace: &str,
         component_id: &Uuid,
-        constraints_to_remove: &Vec<FunctionSignature>,
+        constraints_to_remove: &[FunctionSignature],
     ) -> Result<(), RepoError>;
 
     async fn get_constraint(
@@ -533,7 +533,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         component_id: &Uuid,
-        constraints_to_remove: &Vec<FunctionSignature>,
+        constraints_to_remove: &[FunctionSignature],
     ) -> Result<(), RepoError> {
         let result = self
             .repo
@@ -1445,7 +1445,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         component_id: &Uuid,
-        constraints: &Vec<FunctionSignature>,
+        constraints: &[FunctionSignature],
     ) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 

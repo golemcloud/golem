@@ -454,7 +454,7 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
     async fn delete_constraints(
         &self,
         _component_id: &ComponentId,
-        _constraints: &Vec<FunctionSignature>,
+        _constraints: &[FunctionSignature],
         _auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints> {
         Ok(FunctionConstraints {

@@ -367,7 +367,7 @@ mod test {
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
-    use golem_common::model::component_constraint::FunctionConstraints;
+    use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
@@ -435,6 +435,15 @@ mod test {
             _component_id: &ComponentId,
             _constraints: FunctionConstraints,
             _auth_ctx: &EmptyAuthCtx,
+        ) -> ComponentResult<FunctionConstraints> {
+            unimplemented!()
+        }
+
+        async fn delete_constraints(
+            &self,
+            component_id: &ComponentId,
+            constraints: &[FunctionSignature],
+            auth_ctx: &EmptyAuthCtx,
         ) -> ComponentResult<FunctionConstraints> {
             unimplemented!()
         }
