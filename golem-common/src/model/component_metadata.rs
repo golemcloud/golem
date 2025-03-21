@@ -68,10 +68,9 @@ pub struct DynamicLinkedWasmRpc {
 
 impl DynamicLinkedWasmRpc {
     pub fn target(&self, stub_resource: &str) -> Result<WasmRpcTarget, String> {
-        self.targets
-            .get(stub_resource)
-            .cloned()
-            .ok_or_else(|| format!("Resource '{stub_resource}' not found in dynamic linked interface"))
+        self.targets.get(stub_resource).cloned().ok_or_else(|| {
+            format!("Resource '{stub_resource}' not found in dynamic linked interface")
+        })
     }
 }
 

@@ -501,7 +501,7 @@ impl FromStr for ComponentId {
 
 impl Display for ComponentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let uuid: uuid::Uuid = self.uuid.clone().into();
+        let uuid: uuid::Uuid = self.uuid.into();
         write!(f, "{uuid}")
     }
 }

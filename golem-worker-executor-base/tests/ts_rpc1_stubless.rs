@@ -16,11 +16,13 @@ use test_r::{inherit_test_dep, test};
 
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
-use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
+use golem_common::model::ComponentType;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
-use golem_common::model::ComponentType;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -46,21 +48,22 @@ async fn counter_resource_test_1(
             "rpc:counters-client/counters-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                 targets: HashMap::from_iter(vec![
-                     ("api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
-                            },
-                        ),
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
+                    (
+                        "counter".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
                 ]),
             }),
         )])
@@ -114,21 +117,22 @@ async fn counter_resource_test_1_with_restart(
             "rpc:counters-client/counters-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                 targets: HashMap::from_iter(vec![
-                     ("api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
-                            },
-                        ),
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
+                    (
+                        "counter".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
                 ]),
             }),
         )])
@@ -186,21 +190,22 @@ async fn context_inheritance(
             "rpc:counters-client/counters-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                 targets: HashMap::from_iter(vec![
-                     ("api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
-                            },
-                        ),
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
+                    (
+                        "counter".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
                 ]),
             }),
         )])

@@ -420,6 +420,10 @@ impl WorkerCtx for Context {
         self.durable_ctx.worker_proxy()
     }
 
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+        self.durable_ctx.component_service()
+    }
+
     async fn generate_unique_local_worker_id(
         &mut self,
         remote_worker_id: TargetWorkerId,

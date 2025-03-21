@@ -48,12 +48,13 @@ async fn auction_example_1(
             "auction:auction-client/auction-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                 targets: HashMap::from_iter(vec![
-                    ("api".to_string(),
-                     WasmRpcTarget {
-                         interface_name:  "auction:auction-exports/api".to_string(),
-                         component_name: "auction:auction".to_string(),
-                         component_type: ComponentType::Durable,
-                     },
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "auction:auction-exports/api".to_string(),
+                            component_name: "auction:auction".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                     (
                         "running-auction".to_string(),
@@ -62,7 +63,6 @@ async fn auction_example_1(
                             component_name: "auction:auction".to_string(),
                             component_type: ComponentType::Durable,
                         },
-
                     ),
                 ]),
             }),
@@ -143,12 +143,13 @@ async fn auction_example_2(
             "auction:auction-client/auction-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                 targets: HashMap::from_iter(vec![
-                    ("api".to_string(),
-                     WasmRpcTarget {
-                         interface_name:  "auction:auction-exports/api".to_string(),
-                         component_name: "auction:auction".to_string(),
-                         component_type: ComponentType::Durable,
-                     },
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "auction:auction-exports/api".to_string(),
+                            component_name: "auction:auction".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                     (
                         "running-auction".to_string(),
@@ -157,7 +158,6 @@ async fn auction_example_2(
                             component_name: "auction:auction".to_string(),
                             component_type: ComponentType::Durable,
                         },
-
                     ),
                 ]),
             }),
@@ -240,7 +240,8 @@ async fn counter_resource_test_1(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -266,8 +267,8 @@ async fn counter_resource_test_1(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -322,7 +323,8 @@ async fn counter_resource_test_2(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -348,8 +350,8 @@ async fn counter_resource_test_2(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -405,7 +407,8 @@ async fn counter_resource_test_2_with_restart(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -431,8 +434,8 @@ async fn counter_resource_test_2_with_restart(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -492,7 +495,8 @@ async fn counter_resource_test_3(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -518,8 +522,8 @@ async fn counter_resource_test_3(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -575,7 +579,8 @@ async fn counter_resource_test_3_with_restart(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -601,8 +606,8 @@ async fn counter_resource_test_3_with_restart(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -662,7 +667,8 @@ async fn context_inheritance(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -688,8 +694,8 @@ async fn context_inheritance(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -792,7 +798,8 @@ async fn counter_resource_test_5(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -818,8 +825,8 @@ async fn counter_resource_test_5(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -878,7 +885,8 @@ async fn counter_resource_test_5_with_restart(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -904,8 +912,8 @@ async fn counter_resource_test_5_with_restart(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -983,7 +991,8 @@ async fn wasm_rpc_bug_32_test(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -1009,8 +1018,8 @@ async fn wasm_rpc_bug_32_test(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -1068,12 +1077,13 @@ async fn error_message_invalid_uri(
             "auction:auction-client/auction-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                 targets: HashMap::from_iter(vec![
-                    ("api".to_string(),
-                     WasmRpcTarget {
-                         interface_name:  "auction:auction-exports/api".to_string(),
-                         component_name: "auction:auction".to_string(),
-                         component_type: ComponentType::Durable,
-                     },
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "auction:auction-exports/api".to_string(),
+                            component_name: "auction:auction".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                     (
                         "running-auction".to_string(),
@@ -1082,7 +1092,6 @@ async fn error_message_invalid_uri(
                             component_name: "auction:auction".to_string(),
                             component_type: ComponentType::Durable,
                         },
-
                     ),
                 ]),
             }),
@@ -1149,12 +1158,13 @@ async fn error_message_non_existing_target_component(
             "auction:auction-client/auction-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                 targets: HashMap::from_iter(vec![
-                    ("api".to_string(),
-                     WasmRpcTarget {
-                         interface_name:  "auction:auction-exports/api".to_string(),
-                         component_name: "auction:auction".to_string(),
-                         component_type: ComponentType::Durable,
-                     },
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "auction:auction-exports/api".to_string(),
+                            component_name: "auction:auction".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                     (
                         "running-auction".to_string(),
@@ -1163,7 +1173,6 @@ async fn error_message_non_existing_target_component(
                             component_name: "auction:auction".to_string(),
                             component_type: ComponentType::Durable,
                         },
-
                     ),
                 ]),
             }),
@@ -1228,7 +1237,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -1254,8 +1264,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
@@ -1340,7 +1350,8 @@ async fn golem_bug_1265_test(
                 "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     targets: HashMap::from_iter(vec![
-                        ("api".to_string(),
+                        (
+                            "api".to_string(),
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
@@ -1366,8 +1377,8 @@ async fn golem_bug_1265_test(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral
-                        }
+                            component_type: ComponentType::Ephemeral,
+                        },
                     )]),
                 }),
             ),
