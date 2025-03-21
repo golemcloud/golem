@@ -293,13 +293,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .await
         .unwrap();
 
-    assert_eq!(
-        component1_constrained
-            .constraints
-            .function_constraints
-            .len(),
-        2
-    );
+    assert_eq!(component1_constrained.constraints.constraints.len(), 2);
 
     let component1v2 = component_service
         .update(

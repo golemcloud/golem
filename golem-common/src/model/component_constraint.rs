@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedType;
-use itertools::Itertools;
 use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
@@ -23,14 +22,14 @@ use std::collections::HashMap;
 // This forms the core of component constraints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionConstraints {
-    pub function_constraints: Vec<FunctionUsageConstraint>,
+    pub constraints: Vec<FunctionUsageConstraint>,
 }
 
 impl From<FunctionConstraints> for WorkerFunctionsInRib {
     fn from(value: FunctionConstraints) -> Self {
         WorkerFunctionsInRib {
             function_calls: value
-                .function_constraints
+                .constraints
                 .iter()
                 .map(|function_constraint| {
                     rib::WorkerFunctionType::from(function_constraint.clone())
@@ -51,16 +50,16 @@ impl FunctionConstraints {
             .collect::<Vec<_>>();
 
         FunctionConstraints {
-            function_constraints: functions,
+            constraints: functions,
         }
     }
 
-    pub fn remove_constraints(&self, constraints_to_remove: &Vec<FunctionSignature>) {
+    pub fn remove_constraints(&self, constraints_to_remove: &Vec<FunctionSignature>) -> Self {
         let mut constraints = vec![];
 
-        for constraint in self.function_constraints {
+        for constraint in &self.constraints {
             if constraints_to_remove.contains(&constraint.function_signature) {
-                let mut constraint = constraint;
+                let mut constraint = constraint.clone();
                 constraint.decrement_usage_count();
 
                 if constraint.usage_count > 0 {
@@ -68,6 +67,8 @@ impl FunctionConstraints {
                 }
             }
         }
+
+        FunctionConstraints { constraints }
     }
 
     pub fn try_merge(
@@ -77,7 +78,7 @@ impl FunctionConstraints {
             HashMap::new();
 
         for wf in worker_functions {
-            for constraint_usage in wf.function_constraints {
+            for constraint_usage in wf.constraints {
                 match merged_function_calls.get_mut(constraint_usage.function_key()) {
                     Some(existing_constraint) => {
                         // Check for parameter type conflicts
@@ -122,7 +123,7 @@ impl FunctionConstraints {
         merged_function_calls_vec.sort_by(|a, b| a.function_key().cmp(b.function_key()));
 
         Ok(FunctionConstraints {
-            function_constraints: merged_function_calls_vec,
+            constraints: merged_function_calls_vec,
         })
     }
 }
@@ -202,7 +203,7 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
         ) -> Result<Self, Self::Error> {
             let collection = FunctionConstraints {
-                function_constraints: value
+                constraints: value
                     .constraints
                     .iter()
                     .map(|constraint_proto| {
@@ -219,7 +220,7 @@ mod protobuf {
         fn from(value: FunctionConstraints) -> Self {
             FunctionConstraintCollectionProto {
                 constraints: value
-                    .function_constraints
+                    .constraints
                     .iter()
                     .map(|function_constraint| {
                         FunctionConstraintProto::from(function_constraint.clone())

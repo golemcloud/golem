@@ -384,12 +384,11 @@ async fn test_repo_component_constraints(
 
     let expected_updated_constraint = {
         let mut function_constraints =
-            constraint_data::get_shopping_cart_worker_functions_constraint2().function_constraints;
-        function_constraints.extend(
-            constraint_data::get_shopping_cart_worker_functions_constraint1().function_constraints,
-        );
+            constraint_data::get_shopping_cart_worker_functions_constraint2().constraints;
+        function_constraints
+            .extend(constraint_data::get_shopping_cart_worker_functions_constraint1().constraints);
         Some(FunctionConstraints {
-            function_constraints,
+            constraints: function_constraints,
         })
     };
 

@@ -441,12 +441,14 @@ mod protobuf {
         }
     }
 
-    impl From<RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
-        fn from(value: RegistryKey) -> Self {
+    impl From<&RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
+        fn from(value: &RegistryKey) -> Self {
             match value {
-                RegistryKey::FunctionName(str) => golem_api_grpc::proto::golem::rib::RegistryKey {
+                RegistryKey::FunctionName(name) => golem_api_grpc::proto::golem::rib::RegistryKey {
                     key_type: Some(KeyType::FunctionName(
-                        golem_api_grpc::proto::golem::rib::FunctionName { name: str },
+                        golem_api_grpc::proto::golem::rib::FunctionName {
+                            name: name.to_string(),
+                        },
                     )),
                 },
                 RegistryKey::FunctionNameWithInterface {
@@ -455,8 +457,8 @@ mod protobuf {
                 } => golem_api_grpc::proto::golem::rib::RegistryKey {
                     key_type: Some(KeyType::FunctionNameWithInterface(
                         golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
-                            interface_name,
-                            function_name,
+                            interface_name: interface_name.clone(),
+                            function_name: function_name.clone(),
                         },
                     )),
                 },

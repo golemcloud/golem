@@ -135,7 +135,7 @@ mod protobuf {
 
     impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
         fn from(value: WorkerFunctionType) -> Self {
-            let registry_key = value.function_key.into();
+            let registry_key = (&value.function_key).into();
 
             WorkerFunctionTypeProto {
                 function_key: Some(registry_key),

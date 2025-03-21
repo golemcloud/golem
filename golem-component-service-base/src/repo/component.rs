@@ -1441,7 +1441,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     async fn delete_constraints(
         &self,
         namespace: &str,
-        component_id: Uuid,
+        component_id: &Uuid,
         constraints: &Vec<FunctionSignature>,
     ) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;

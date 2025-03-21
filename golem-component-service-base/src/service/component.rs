@@ -28,9 +28,7 @@ use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::{
-    FunctionConstraints, FunctionMetadata, FunctionSignature,
-};
+use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -495,13 +493,13 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
     }
 
     pub fn find_component_metadata_conflicts(
-        function_constraint_collection: &FunctionConstraints,
+        function_constraints: &FunctionConstraints,
         new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
-        for existing_function_call in &function_constraint_collection.function_constraints {
+        for existing_function_call in &function_constraints.constraints {
             if let Some(new_registry_value) =
                 new_type_registry.lookup(existing_function_call.function_key())
             {

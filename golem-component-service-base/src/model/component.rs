@@ -15,7 +15,7 @@
 use chrono::Utc;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::{
-    FunctionConstraints, FunctionMetadata, FunctionSignature, FunctionUsageConstraint,
+    FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
@@ -152,12 +152,13 @@ pub struct ComponentConstraints<Owner: ComponentOwner> {
 }
 
 impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
-    pub fn function_signatures(&self) -> &Vec<FunctionSignature> {
-        &self
+    pub fn function_signatures(&self) -> Vec<FunctionSignature> {
+        let constraints = &self.constraints;
+
+        constraints
             .constraints
-            .function_constraints
             .iter()
-            .map(|x| x.function_signature)
+            .map(|x| x.function_signature.clone())
             .collect()
     }
 }
@@ -172,7 +173,7 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
             owner: owner.clone(),
             component_id: component_id.clone(),
             constraints: FunctionConstraints {
-                function_constraints: worker_functions_in_rib
+                constraints: worker_functions_in_rib
                     .function_calls
                     .iter()
                     .map(FunctionUsageConstraint::from_worker_function_type)
