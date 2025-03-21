@@ -262,7 +262,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
 #[test]
 #[tracing::instrument]
 async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("counters").unique().store().await;
+    let component_id = deps.component("shopping-cart").unique().store().await;
 
     let api_definition_1 = create_api_definition(
         deps,
