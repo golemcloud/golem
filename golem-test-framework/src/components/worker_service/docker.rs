@@ -31,6 +31,8 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
+use super::WorkerServiceInternal;
+
 pub struct DockerWorkerService {
     container: ContainerHandle<GolemWorkerServiceImage>,
     private_host: String,
@@ -42,6 +44,7 @@ pub struct DockerWorkerService {
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
+    component_service: Arc<dyn ComponentService>
 }
 
 impl DockerWorkerService {
@@ -50,9 +53,9 @@ impl DockerWorkerService {
     const CUSTOM_REQUEST_PORT: ContainerPort = ContainerPort::Tcp(9093);
 
     pub async fn new(
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync>,
+        rdb: Arc<dyn Rdb + Send + Sync>,
         verbosity: Level,
         client_protocol: GolemClientProtocol,
     ) -> Self {
@@ -62,9 +65,9 @@ impl DockerWorkerService {
             Self::HTTP_PORT.as_u16(),
             Self::GRPC_PORT.as_u16(),
             Self::CUSTOM_REQUEST_PORT.as_u16(),
-            component_service,
-            shard_manager,
-            rdb,
+            &component_service,
+            &shard_manager,
+            &rdb,
             verbosity,
             true,
         )
@@ -133,12 +136,12 @@ impl DockerWorkerService {
                 public_http_port,
             )
             .await,
+            component_service: component_service.clone()
         }
     }
 }
 
-#[async_trait]
-impl WorkerService for DockerWorkerService {
+impl WorkerServiceInternal for DockerWorkerService {
     fn client_protocol(&self) -> GolemClientProtocol {
         self.client_protocol
     }
@@ -159,6 +162,13 @@ impl WorkerService for DockerWorkerService {
         self.api_security_client.clone()
     }
 
+    fn component_service(&self) -> &Arc<dyn ComponentService> {
+        &self.component_service
+    }
+}
+
+#[async_trait]
+impl WorkerService for DockerWorkerService {
     fn private_host(&self) -> String {
         self.private_host.clone()
     }

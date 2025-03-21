@@ -1808,7 +1808,7 @@ paths:
       summary: Create a new API definition
       description: |-
         Creates a new API definition described by Golem's API definition JSON document.
-        If an API definition of the same version already exists, its an error.
+        If an API definition of the same version already exists, it is an error.
       operationId: create_definition
       requestBody:
         content:
@@ -4188,7 +4188,6 @@ components:
           $ref: '#/components/schemas/ApiSite'
       required:
       - apiDefinitions
-      - site
     ApiSite:
       type: object
       properties:
@@ -4515,13 +4514,24 @@ components:
       enum:
       - directory
       - file
+    GatewayBindingComponent:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+          format: uint64
+      required:
+      - name
+      - version
     GatewayBindingData:
       type: object
       properties:
         bindingType:
           $ref: '#/components/schemas/GatewayBindingType'
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
+        component:
+          $ref: '#/components/schemas/GatewayBindingComponent'
         workerName:
           type: string
         idempotencyKey:
@@ -4546,8 +4556,8 @@ components:
     GatewayBindingResponseData:
       type: object
       properties:
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
+        component:
+          $ref: '#/components/schemas/GatewayBindingComponent'
         workerName:
           type: string
         idempotencyKey:

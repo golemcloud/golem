@@ -40,7 +40,7 @@ use std::result::Result;
 #[oai(rename_all = "camelCase")]
 pub struct ApiDeploymentRequest {
     pub api_definitions: Vec<ApiDefinitionInfo>,
-    pub site: Option<ApiSite>,
+    pub site: ApiSite,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -356,7 +356,7 @@ impl GatewayBindingData {
                 let response = self.response.ok_or("Missing response field in binding")?;
                 let component = self
                     .component
-                    .ok_or("Missing componentId field in binding")?;
+                    .ok_or("Missing component field in binding")?;
 
                 let component_id = conversion_ctx.resolve_component_id(&component.name).await?;
 
@@ -403,7 +403,7 @@ impl GatewayBindingData {
             Some(GatewayBindingType::HttpHandler) => {
                 let component = self
                     .component
-                    .ok_or("Missing componentId field in binding")?;
+                    .ok_or("Missing component field in binding")?;
 
                 let component_id = conversion_ctx.resolve_component_id(&component.name).await?;
 
