@@ -12,13 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Display};
-use std::hash::Hash;
-use std::sync::Arc;
-
 use crate::gateway_api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
-    HttpApiDefinitionRequest, RouteCompilationErrors,
+    HttpApiDefinitionRequest, OpenApiHttpApiDefinition, RouteCompilationErrors,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_security::IdentityProviderError;
@@ -32,11 +28,17 @@ use crate::service::gateway::api_definition_validator::{
 use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{Component, VersionedComponentId};
+use golem_service_base::model::{Component, ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use rib::RibError;
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
+use std::sync::Arc;
 use tracing::{error, info};
+
+use super::{BoxConversionContext, ConversionContext};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
@@ -76,6 +78,8 @@ pub enum ApiDefinitionError {
     InternalRepoError(RepoError),
     #[error("Internal error: {0}")]
     Internal(String),
+    #[error("Invalid openapi api definition: {0}")]
+    InvalidOasDefinition(String),
 }
 
 impl ApiDefinitionError {}
@@ -102,6 +106,7 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
             ApiDefinitionError::RibInternal(_) => self.to_string(),
             ApiDefinitionError::InvalidRibScript(_) => self.to_string(),
+            ApiDefinitionError::InvalidOasDefinition(_) => self.to_string(),
         }
     }
 }
@@ -138,9 +143,23 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         auth_ctx: &AuthCtx,
     ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
 
+    async fn create_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
+
     async fn update(
         &self,
         definition: &HttpApiDefinitionRequest,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
+
+    async fn update_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
@@ -173,10 +192,43 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>>;
+
+    fn conversion_context<'a>(&'a self, auth_ctx: &'a AuthCtx) -> BoxConversionContext<'a>
+    where
+        AuthCtx: 'a;
+}
+
+// TODO: cache mappings
+struct ConversionContextImpl<'a, AuthCtx> {
+    component_service: &'a Arc<dyn ComponentService<AuthCtx>>,
+    auth_ctx: &'a AuthCtx,
+}
+
+#[async_trait]
+impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthCtx> {
+    async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
+        let component = self
+            .component_service
+            .get_by_name(name, self.auth_ctx)
+            .await
+            .map_err(|e| format!("Failed to lookup component by name: {e}"))?;
+        Ok(component.versioned_component_id.component_id)
+    }
+    async fn get_component_name(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<ComponentName, String> {
+        let component = self
+            .component_service
+            .get_latest(component_id, self.auth_ctx)
+            .await
+            .map_err(|e| format!("Failed to lookup component by id: {e}"))?;
+        Ok(component.component_name)
+    }
 }
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace> {
-    pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
+    pub component_service: Arc<dyn ComponentService<AuthCtx>>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
     pub security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
@@ -316,6 +368,20 @@ where
         Ok(compiled_http_api_definition)
     }
 
+    async fn create_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
+        let conversion_ctx = self.conversion_context(auth_ctx);
+        let converted = definition
+            .to_http_api_definition_request(&conversion_ctx)
+            .await
+            .map_err(ApiDefinitionError::InvalidOasDefinition)?;
+        self.create(&converted, namespace, auth_ctx).await
+    }
+
     async fn update(
         &self,
         definition: &HttpApiDefinitionRequest,
@@ -372,6 +438,20 @@ where
         self.definition_repo.update(&record).await?;
 
         Ok(compiled_http_api_definition)
+    }
+
+    async fn update_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
+        let conversion_ctx = self.conversion_context(auth_ctx);
+        let converted = definition
+            .to_http_api_definition_request(&conversion_ctx)
+            .await
+            .map_err(ApiDefinitionError::InvalidOasDefinition)?;
+        self.update(&converted, namespace, auth_ctx).await
     }
 
     async fn get(
@@ -481,6 +561,17 @@ where
             })?;
 
         Ok(values)
+    }
+
+    fn conversion_context<'a>(&'a self, auth_ctx: &'a AuthCtx) -> BoxConversionContext<'a>
+    where
+        AuthCtx: 'a,
+    {
+        ConversionContextImpl {
+            component_service: &self.component_service,
+            auth_ctx,
+        }
+        .boxed()
     }
 }
 

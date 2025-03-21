@@ -272,6 +272,9 @@ mod conversion {
                 ApiDefinitionServiceError::InvalidRibScript(_) => {
                     ApiEndpointError::bad_request(error)
                 }
+                ApiDefinitionServiceError::InvalidOasDefinition(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
             }
         }
     }
@@ -393,6 +396,11 @@ mod conversion {
                 ApiDefinitionServiceError::Internal(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::InvalidOasDefinition(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
                     })),
                 },
             }

@@ -191,9 +191,7 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
     }
 }
 
-impl TryFrom<grpc_apidefinition::ApiDefinition>
-    for crate::gateway_api_definition::http::HttpApiDefinition
-{
+impl TryFrom<grpc_apidefinition::ApiDefinition> for HttpApiDefinition {
     type Error = String;
     fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
         let routes = match value.definition.ok_or("definition is missing")? {
@@ -215,6 +213,38 @@ impl TryFrom<grpc_apidefinition::ApiDefinition>
             draft: value.draft,
             created_at: created_at.into(),
         };
+        Ok(result)
+    }
+}
+
+impl TryFrom<HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
+    type Error = String;
+
+    fn try_from(
+        value: crate::gateway_api_definition::http::HttpApiDefinition,
+    ) -> Result<Self, Self::Error> {
+        let routes = value
+            .routes
+            .into_iter()
+            .map(grpc_apidefinition::HttpRoute::try_from)
+            .collect::<Result<Vec<grpc_apidefinition::HttpRoute>, String>>()?;
+
+        let id = value.id.0;
+
+        let definition = grpc_apidefinition::HttpApiDefinition { routes };
+
+        let created_at = prost_types::Timestamp::from(SystemTime::from(value.created_at));
+
+        let result = grpc_apidefinition::ApiDefinition {
+            id: Some(grpc_apidefinition::ApiDefinitionId { value: id }),
+            version: value.version.0,
+            definition: Some(grpc_apidefinition::api_definition::Definition::Http(
+                definition,
+            )),
+            draft: value.draft,
+            created_at: Some(created_at),
+        };
+
         Ok(result)
     }
 }
@@ -424,6 +454,22 @@ impl<'de> Deserialize<'de> for MethodPattern {
     }
 }
 
+impl From<MethodPattern> for grpc_apidefinition::HttpMethod {
+    fn from(value: MethodPattern) -> Self {
+        match value {
+            MethodPattern::Get => grpc_apidefinition::HttpMethod::Get,
+            MethodPattern::Post => grpc_apidefinition::HttpMethod::Post,
+            MethodPattern::Put => grpc_apidefinition::HttpMethod::Put,
+            MethodPattern::Delete => grpc_apidefinition::HttpMethod::Delete,
+            MethodPattern::Patch => grpc_apidefinition::HttpMethod::Patch,
+            MethodPattern::Head => grpc_apidefinition::HttpMethod::Head,
+            MethodPattern::Options => grpc_apidefinition::HttpMethod::Options,
+            MethodPattern::Trace => grpc_apidefinition::HttpMethod::Trace,
+            MethodPattern::Connect => grpc_apidefinition::HttpMethod::Connect,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct LiteralInfo(pub String);
 
@@ -564,6 +610,15 @@ pub struct Route {
     pub binding: GatewayBinding,
 }
 
+impl Route {
+    pub fn cors_preflight_binding(&self) -> Option<HttpCors> {
+        match &self.binding {
+            GatewayBinding::Static(static_binding) => static_binding.get_cors_preflight(),
+            _ => None,
+        }
+    }
+}
+
 impl TryFrom<HttpRoute> for Route {
     type Error = String;
 
@@ -583,12 +638,26 @@ impl TryFrom<HttpRoute> for Route {
     }
 }
 
-impl Route {
-    pub fn cors_preflight_binding(&self) -> Option<HttpCors> {
-        match &self.binding {
-            GatewayBinding::Static(static_binding) => static_binding.get_cors_preflight(),
-            _ => None,
-        }
+impl TryFrom<Route> for grpc_apidefinition::HttpRoute {
+    type Error = String;
+
+    fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
+        let path = value.path.to_string();
+        let binding = grpc_apidefinition::GatewayBinding::try_from(value.binding)?;
+        let method: grpc_apidefinition::HttpMethod = value.method.into();
+        let middlewares = value.middlewares.clone();
+        let middleware_proto = middlewares
+            .map(golem_api_grpc::proto::golem::apidefinition::Middleware::try_from)
+            .transpose()?;
+
+        let result = grpc_apidefinition::HttpRoute {
+            method: method as i32,
+            path,
+            binding: Some(binding),
+            middleware: middleware_proto,
+        };
+
+        Ok(result)
     }
 }
 
@@ -613,6 +682,55 @@ impl CompiledRoute {
 
             _ => None,
         }
+    }
+}
+
+impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute {
+    type Error = String;
+
+    fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
+        let method = value.method as i32;
+        let path = value.path.to_string();
+        let binding =
+            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::try_from(
+                value.binding,
+            )?;
+
+        let middleware_proto = value
+            .middlewares
+            .map(golem_api_grpc::proto::golem::apidefinition::Middleware::try_from)
+            .transpose()?;
+
+        Ok(Self {
+            method,
+            path,
+            binding: Some(binding),
+            middleware: middleware_proto,
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for CompiledRoute {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute,
+    ) -> Result<Self, Self::Error> {
+        let method = MethodPattern::try_from(value.method)?;
+        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
+        let binding_proto = value.binding.ok_or("binding is missing")?;
+        let binding = GatewayBindingCompiled::try_from(binding_proto)?;
+        let middlewares = value
+            .middleware
+            .map(HttpMiddlewares::try_from)
+            .transpose()?;
+
+        Ok(CompiledRoute {
+            method,
+            path,
+            binding,
+            middlewares,
+        })
     }
 }
 
@@ -747,7 +865,10 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use crate::api;
+    use crate::service::gateway::ConversionContext;
     use async_trait::async_trait;
+    use golem_common::model::ComponentId;
+    use golem_service_base::model::ComponentName;
 
     use crate::gateway_security::{
         SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
@@ -756,6 +877,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use golem_service_base::auth::DefaultNamespace;
     use test_r::test;
+    use uuid::uuid;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -949,9 +1071,9 @@ mod tests {
           - method: Get
             path: {}
             binding:
-              componentId:
+              component:
                 version: 0
-                componentId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
+                name: 'foobar'
               workerName: '{}'
               response: '{}'
 
@@ -961,6 +1083,25 @@ mod tests {
 
         let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());
         serde_yaml::Value::deserialize(de).unwrap()
+    }
+
+    struct TestConversionContext;
+
+    #[async_trait]
+    impl ConversionContext for TestConversionContext {
+        async fn resolve_component_id(&self, name: &str) -> Result<ComponentId, String> {
+            if name == "foobar" {
+                Ok(ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")))
+            } else {
+                Err("unknown component name".to_string())
+            }
+        }
+        async fn get_component_name(
+            &self,
+            _component_id: &ComponentId,
+        ) -> Result<ComponentName, String> {
+            unimplemented!()
+        }
     }
 
     struct TestSecuritySchemeService;
@@ -998,8 +1139,12 @@ mod tests {
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let api_http_definition_request: api::HttpApiDefinitionRequest =
                 serde_yaml::from_value(yaml.clone()).unwrap();
+
             let core_http_definition_request: HttpApiDefinitionRequest =
-                api_http_definition_request.try_into().unwrap();
+                api_http_definition_request
+                    .into_core(&TestConversionContext.boxed())
+                    .await
+                    .unwrap();
             let timestamp: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
             let core_http_definition = HttpApiDefinition::from_http_api_definition_request(
                 &DefaultNamespace(),

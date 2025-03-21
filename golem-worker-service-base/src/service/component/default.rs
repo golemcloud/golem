@@ -18,8 +18,9 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     create_component_constraints_response, get_component_metadata_response,
-    CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
-    GetComponentMetadataResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
+    get_components_response, CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
+    GetComponentMetadataResponse, GetComponentsRequest, GetComponentsResponse,
+    GetLatestComponentRequest, GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
@@ -37,7 +38,7 @@ use tonic::transport::Channel;
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
 #[async_trait]
-pub trait ComponentService<AuthCtx> {
+pub trait ComponentService<AuthCtx>: Send + Sync {
     async fn get_by_version(
         &self,
         component_id: &ComponentId,
@@ -48,6 +49,12 @@ pub trait ComponentService<AuthCtx> {
     async fn get_latest(
         &self,
         component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component>;
+
+    async fn get_by_name(
+        &self,
+        component_id: &str,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
 
@@ -112,6 +119,36 @@ impl RemoteComponentService {
                 Ok(component_view?)
             }
             Some(get_component_metadata_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    fn process_get_components_response(
+        response: GetComponentsResponse,
+    ) -> Result<Component, ComponentServiceError> {
+        match response.result {
+            None => Err(ComponentServiceError::Internal(
+                "Empty response".to_string(),
+            )),
+
+            Some(get_components_response::Result::Success(response)) => {
+                let component = response.components.first();
+
+                let component_view: Result<Component, ComponentServiceError> = match component {
+                    Some(component) => {
+                        let component: Component = component.clone().try_into().map_err(|err| {
+                            ComponentServiceError::Internal(format!(
+                                "Response conversion error: {err}"
+                            ))
+                        })?;
+                        Ok(component)
+                    }
+                    None => Err(ComponentServiceError::Internal(
+                        "Empty component response".to_string(),
+                    )),
+                };
+                Ok(component_view?)
+            }
+            Some(get_components_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -226,6 +263,48 @@ where
                         .into_inner();
 
                     Self::process_metadata_response(response)
+                })
+            },
+            Self::is_retriable,
+        )
+        .await?;
+
+        Ok(value)
+    }
+
+    async fn get_by_name(
+        &self,
+        component_name: &str,
+        metadata: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        let value = with_retries(
+            "component",
+            "get_by_name",
+            Some(component_name.to_string()),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                component_name.to_string(),
+                metadata.clone(),
+            ),
+            |(client, name, metadata)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get_components", move |client| {
+                            // Not passing project_id here will cause it to be resolved in the current project inferred from the authctx.
+                            let request = GetComponentsRequest {
+                                project_id: None,
+                                component_name: Some(name.clone()),
+                            };
+
+                            let request = with_metadata(request, metadata.clone());
+
+                            Box::pin(client.get_components(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    Self::process_get_components_response(response)
                 })
             },
             Self::is_retriable,
