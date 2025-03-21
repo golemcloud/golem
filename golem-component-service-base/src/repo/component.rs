@@ -526,6 +526,9 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         Self::logged("create_component_constraint", result)
     }
 
+    // The only way to delete constraints is to delete through the usage interfaces.
+    // This is to avoid surprises. For example: An API might be deployed and is live,
+    // so any forceful deletes without deleting API deployment will result in irrecoverable issues.
     async fn delete_constraints(
         &self,
         namespace: &str,

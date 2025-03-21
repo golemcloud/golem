@@ -326,6 +326,34 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         Ok(())
     }
 
+    async fn remove_component_constraints<Namespace>(
+        &self,
+        namespace: &Namespace,
+        site: &ApiSiteString,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        let existing_api_definitions = self.get_definitions_by_site(&namespace, &site).await?;
+
+        let constraints = ComponentConstraints::from_api_definitions(&existing_api_definitions)?;
+
+        for (component_id, constraints) in constraints.constraints {
+            let signatures_to_be_removed = constraints
+                .constraints
+                .iter()
+                .map(|x| x.function_signature)
+                .collect();
+
+            self.component_service
+                .delete_constraints(&component_id, signatures_to_be_removed, auth_ctx)
+                .await
+                .map_err(|err| {
+                    ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
+                })?;
+        }
+
+        Ok(())
+    }
+
     async fn set_undeployed_as_draft<Namespace>(
         &self,
         deployments: Vec<ApiDeploymentRecord>,
@@ -603,25 +631,14 @@ where
 
     async fn delete(
         &self,
-        auth_ctx: &AuthCtx,
         namespace: &Namespace,
+        auth_ctx: &AuthCtx,
         site: &ApiSiteString,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %namespace, "Get API deployment");
 
-        let existing_api_definitions = self.get_definitions_by_site(&namespace, &site).await?;
-
-        let constraints = ComponentConstraints::from_api_definitions(&existing_api_definitions)?;
-
-        for (component_id, constraints) in constraints.constraints {
-            self.component_service
-                .create_or_update_constraints(&component_id, constraints, auth_ctx)
-                .await
-                .map_err(|err| {
-                    ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
-                })?;
-        }
-
+        // Not sure of the purpose of retrieving records at repo level to delete API deployment
+        // https://github.com/golemcloud/golem/issues/1443
         let existing_deployment_records =
             self.deployment_repo.get_by_site(&site.to_string()).await?;
 
@@ -645,6 +662,9 @@ where
                 .await?;
 
             self.set_undeployed_as_draft(existing_deployment_records)
+                .await?;
+
+            self.remove_component_constraints(namespace, site, auth_ctx)
                 .await?;
 
             Ok(())
