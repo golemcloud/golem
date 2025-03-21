@@ -78,8 +78,12 @@ impl FunctionConstraints {
     pub fn try_merge(
         worker_functions: Vec<FunctionConstraints>,
     ) -> Result<FunctionConstraints, String> {
+        // First time, 1 get-cart-contents
+        // Second time: 2 get-cart-contents
         let mut merged_function_calls: HashMap<RegistryKey, FunctionUsageConstraint> =
             HashMap::new();
+
+        dbg!(worker_functions.clone());
 
         for wf in worker_functions {
             for constraint_usage in wf.constraints {
@@ -107,13 +111,16 @@ impl FunctionConstraints {
                             ));
                         }
 
+                        dbg!(existing_constraint.usage_count);
+                        dbg!(constraint_usage.usage_count);
+
                         // Update usage_count instead of overwriting
                         existing_constraint.usage_count = existing_constraint
                             .usage_count
                             .saturating_add(constraint_usage.usage_count);
                     }
                     None => {
-                        // Insert if no conflict is found
+                        // get-cart-contents -> 1
                         merged_function_calls
                             .insert(constraint_usage.function_key().clone(), constraint_usage);
                     }
