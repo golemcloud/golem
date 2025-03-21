@@ -266,22 +266,6 @@ async fn create_multiple_api_deployments_and_update_component(deps: &EnvBasedTes
     )
     .await;
 
-    let request1 = ApiDeploymentRequest {
-        api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition.id.as_ref().unwrap().value.clone(),
-            version: api_definition.version.clone(),
-        }],
-        site: ApiSite {
-            host: "localhost".to_string(),
-            subdomain: Some("subdomain".to_string()),
-        },
-    };
-
-    deps.worker_service()
-        .create_or_update_api_deployment(request1.clone())
-        .await
-        .unwrap();
-
     // Same API definition but different subdomain
     let request1 = ApiDeploymentRequest {
         api_definitions: vec![ApiDefinitionInfo {

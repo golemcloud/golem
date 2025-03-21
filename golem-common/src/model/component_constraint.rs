@@ -83,8 +83,6 @@ impl FunctionConstraints {
         let mut merged_function_calls: HashMap<RegistryKey, FunctionUsageConstraint> =
             HashMap::new();
 
-        dbg!(worker_functions.clone());
-
         for wf in worker_functions {
             for constraint_usage in wf.constraints {
                 match merged_function_calls.get_mut(constraint_usage.function_key()) {
@@ -110,9 +108,6 @@ impl FunctionConstraints {
                                 constraint_usage.return_types()
                             ));
                         }
-
-                        dbg!(existing_constraint.usage_count);
-                        dbg!(constraint_usage.usage_count);
 
                         // Update usage_count instead of overwriting
                         existing_constraint.usage_count = existing_constraint
