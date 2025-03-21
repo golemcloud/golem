@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_constraints_response, create_component_request,
-    create_component_response, download_component_response,
+    create_component_response, delete_component_constraints_response, download_component_response,
     get_component_metadata_all_versions_response, get_component_metadata_response,
     get_components_response, get_installed_plugins_response, install_plugin_response,
     uninstall_plugin_response, update_component_request, update_component_response,
@@ -32,15 +32,15 @@ use golem_api_grpc::proto::golem::component::v1::{
     CreateComponentConstraintsResponse, CreateComponentConstraintsSuccessResponse,
     CreateComponentRequest, CreateComponentRequestHeader, CreateComponentResponse,
     DeleteComponentConstraintsRequest, DeleteComponentConstraintsResponse,
-    DownloadComponentRequest, DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
-    GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
-    GetComponentsSuccessResponse, GetInstalledPluginsRequest, GetInstalledPluginsResponse,
-    GetInstalledPluginsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
-    InstallPluginRequest, InstallPluginResponse, InstallPluginSuccessResponse,
-    UninstallPluginRequest, UninstallPluginResponse, UpdateComponentRequest,
-    UpdateComponentRequestHeader, UpdateComponentResponse, UpdateInstalledPluginRequest,
-    UpdateInstalledPluginResponse,
+    DeleteComponentConstraintsSuccessResponse, DownloadComponentRequest, DownloadComponentResponse,
+    GetComponentMetadataAllVersionsResponse, GetComponentMetadataResponse,
+    GetComponentMetadataSuccessResponse, GetComponentRequest, GetComponentSuccessResponse,
+    GetComponentsRequest, GetComponentsResponse, GetComponentsSuccessResponse,
+    GetInstalledPluginsRequest, GetInstalledPluginsResponse, GetInstalledPluginsSuccessResponse,
+    GetLatestComponentRequest, GetVersionedComponentRequest, InstallPluginRequest,
+    InstallPluginResponse, InstallPluginSuccessResponse, UninstallPluginRequest,
+    UninstallPluginResponse, UpdateComponentRequest, UpdateComponentRequestHeader,
+    UpdateComponentResponse, UpdateInstalledPluginRequest, UpdateInstalledPluginResponse,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
@@ -294,7 +294,7 @@ impl ComponentGrpcApi {
             .delete_constraints(
                 &component_constraint.owner,
                 &component_constraint.component_id,
-                &component_constraint.constraints,
+                &component_constraint.function_signatures(),
             )
             .await
             .map(|v| ComponentConstraintsProto {
@@ -793,7 +793,95 @@ impl ComponentService for ComponentGrpcApi {
         &self,
         request: Request<DeleteComponentConstraintsRequest>,
     ) -> Result<Response<DeleteComponentConstraintsResponse>, Status> {
-        todo!()
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("delete_component_constraints",);
+
+        match request.component_constraints {
+            Some(proto_constraints) => {
+                let component_id = match proto_constraints
+                    .component_id
+                    .and_then(|id| id.try_into().ok())
+                    .ok_or_else(|| bad_request_error("Missing component id"))
+                {
+                    Ok(id) => id,
+                    Err(fail) => {
+                        return Ok(Response::new(DeleteComponentConstraintsResponse {
+                            result: Some(record.fail(
+                                delete_component_constraints_response::Result::Error(fail.clone()),
+                                &ComponentTraceErrorKind(&fail),
+                            )),
+                        }))
+                    }
+                };
+
+                let constraints = if let Some(function_constraints) = proto_constraints.constraints
+                {
+                    let result = FunctionConstraints::try_from(function_constraints)
+                        .map_err(|err| bad_request_error(err.as_str()));
+
+                    match result {
+                        Ok(function_constraints) => function_constraints,
+                        Err(fail) => {
+                            return Ok(Response::new(DeleteComponentConstraintsResponse {
+                                result: Some(record.fail(
+                                    delete_component_constraints_response::Result::Error(
+                                        fail.clone(),
+                                    ),
+                                    &ComponentTraceErrorKind(&fail),
+                                )),
+                            }))
+                        }
+                    }
+                } else {
+                    let error = internal_error("Failed to create constraints");
+                    return Ok(Response::new(DeleteComponentConstraintsResponse {
+                        result: Some(record.fail(
+                            delete_component_constraints_response::Result::Error(error.clone()),
+                            &ComponentTraceErrorKind(&error),
+                        )),
+                    }));
+                };
+
+                let component_constraint = ComponentConstraints {
+                    owner: DefaultComponentOwner,
+                    component_id,
+                    constraints,
+                };
+
+                let response = match self
+                    .delete_component_constraints(&component_constraint)
+                    .instrument(record.span.clone())
+                    .await
+                {
+                    Ok(v) => {
+                        record.succeed(delete_component_constraints_response::Result::Success(
+                            DeleteComponentConstraintsSuccessResponse {
+                                components: Some(v),
+                            },
+                        ))
+                    }
+                    Err(error) => record.fail(
+                        delete_component_constraints_response::Result::Error(error.clone()),
+                        &ComponentTraceErrorKind(&error),
+                    ),
+                };
+
+                Ok(Response::new(DeleteComponentConstraintsResponse {
+                    result: Some(response),
+                }))
+            }
+
+            None => {
+                let bad_request = bad_request_error("Missing component constraints");
+                let error = record.fail(
+                    delete_component_constraints_response::Result::Error(bad_request.clone()),
+                    &ComponentTraceErrorKind(&bad_request),
+                );
+                Ok(Response::new(DeleteComponentConstraintsResponse {
+                    result: Some(error),
+                }))
+            }
+        }
     }
 
     async fn get_installed_plugins(

@@ -1531,7 +1531,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             .get_constraint(&owner.to_string(), &component_id.0)
             .await?
             .ok_or(ComponentError::ComponentConstraintCreateError(format!(
-                "Failed to create constraints for {}",
+                "Failed to get constraints for {}",
                 component_id
             )))?;
 
