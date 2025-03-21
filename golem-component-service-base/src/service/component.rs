@@ -28,7 +28,7 @@ use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
+use golem_common::model::component_constraint::{FunctionConstraints, FunctionMetadata};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -411,18 +411,18 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         component_constraint: &ComponentConstraints<Owner>,
     ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
-    async fn delete_constraint(
+    async fn delete_constraints(
         &self,
-        owner: Owner,
-        component_id: ComponentId,
-        constraints: &Vec<FunctionConstraint>,
-    ) -> Result<(), ComponentError>;
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints: &Vec<FunctionMetadata>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
+    ) -> Result<Option<FunctionConstraints>, ComponentError>;
 
     /// Gets the list of installed plugins for a given component version belonging to `owner`
     async fn get_plugin_installations_for_component(
@@ -493,7 +493,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
     }
 
     pub fn find_component_metadata_conflicts(
-        function_constraint_collection: &FunctionConstraintCollection,
+        function_constraint_collection: &FunctionConstraints,
         new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
@@ -501,12 +501,13 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
         for existing_function_call in &function_constraint_collection.function_constraints {
             if let Some(new_registry_value) =
-                new_type_registry.lookup(&existing_function_call.function_key)
+                new_type_registry.lookup(existing_function_call.function_key())
             {
                 let mut parameter_conflict = false;
                 let mut return_conflict = false;
 
-                if existing_function_call.parameter_types != new_registry_value.argument_types() {
+                if existing_function_call.parameter_types() != &new_registry_value.argument_types()
+                {
                     parameter_conflict = true;
                 }
 
@@ -515,21 +516,21 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     _ => vec![],
                 };
 
-                if existing_function_call.return_types != new_return_types {
+                if existing_function_call.return_types() != &new_return_types {
                     return_conflict = true;
                 }
 
                 if parameter_conflict || return_conflict {
                     conflicting_functions.push(ConflictingFunction {
-                        function: existing_function_call.function_key.clone(),
-                        existing_parameter_types: existing_function_call.parameter_types.clone(),
+                        function: existing_function_call.function_key().clone(),
+                        existing_parameter_types: existing_function_call.parameter_types().clone(),
                         new_parameter_types: new_registry_value.clone().argument_types().clone(),
-                        existing_result_types: existing_function_call.return_types.clone(),
+                        existing_result_types: existing_function_call.return_types().clone(),
                         new_result_types: new_return_types,
                     });
                 }
             } else {
-                missing_functions.push(existing_function_call.function_key.clone());
+                missing_functions.push(existing_function_call.function_key().clone());
             }
         }
 
@@ -1511,21 +1512,41 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         Ok(component_constraints)
     }
 
-    async fn delete_constraint(
+    async fn delete_constraints(
         &self,
-        owner: Owner,
-        component_id: ComponentId,
-        constraints: &Vec<FunctionConstraint>,
-    ) -> Result<(), ComponentError> {
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints: &Vec<FunctionMetadata>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
         info!(owner = %owner, component_id = %component_id, "Delete constraint");
 
+        self.component_repo
+            .delete_constraints(&owner.to_string(), &component_id.0, constraints)
+            .await?;
+
+        let result = self
+            .component_repo
+            .get_constraint(&owner.to_string(), &component_id.0)
+            .await?
+            .ok_or(ComponentError::ComponentConstraintCreateError(format!(
+                "Failed to create constraints for {}",
+                component_id
+            )))?;
+
+        let component_constraints = ComponentConstraints {
+            owner: owner.clone(),
+            component_id: component_id.clone(),
+            constraints: result,
+        };
+
+        Ok(component_constraints)
     }
 
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+    ) -> Result<Option<FunctionConstraints>, ComponentError> {
         info!(component_id = %component_id, "Get component constraint");
 
         let result = self
@@ -1965,7 +1986,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+    ) -> Result<Option<FunctionConstraints>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()

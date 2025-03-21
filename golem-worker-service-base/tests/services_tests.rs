@@ -41,7 +41,7 @@ use golem_worker_service_base::service::gateway::api_deployment::{
 use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 
 use chrono::Utc;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::redis::RedisPool;
 use golem_service_base::storage::sqlite::SqlitePool;
 use golem_wasm_ast::analysis::analysed_type::str;
@@ -443,10 +443,10 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
     async fn create_or_update_constraints(
         &self,
         _component_id: &ComponentId,
-        _constraints: FunctionConstraintCollection,
+        _constraints: FunctionConstraints,
         _auth_ctx: &AuthCtx,
-    ) -> ComponentResult<FunctionConstraintCollection> {
-        Ok(FunctionConstraintCollection {
+    ) -> ComponentResult<FunctionConstraints> {
+        Ok(FunctionConstraints {
             function_constraints: vec![],
         })
     }

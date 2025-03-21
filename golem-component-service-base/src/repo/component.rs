@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
 use futures::future::try_join_all;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
+use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::{ComponentPluginInstallationTarget, PluginOwner};
 use golem_common::model::{
@@ -179,7 +179,7 @@ impl<Owner: ComponentOwner> TryFrom<ComponentConstraintsRecord> for ComponentCon
     type Error = String;
 
     fn try_from(value: ComponentConstraintsRecord) -> Result<Self, Self::Error> {
-        let function_constraints: FunctionConstraintCollection =
+        let function_constraints: FunctionConstraints =
             constraint_serde::deserialize(&value.constraints)?;
         let owner = value.namespace.parse()?;
         Ok(ComponentConstraints {
@@ -309,18 +309,18 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         component_constraint_record: &ComponentConstraintsRecord,
     ) -> Result<(), RepoError>;
 
-    async fn delete_constraint(
+    async fn delete_constraints(
         &self,
         namespace: &str,
         component_id: &Uuid,
-        component_constraint_record: &Vec<FunctionConstraint>,
+        constraints_to_remove: &Vec<FunctionSignature>,
     ) -> Result<(), RepoError>;
 
     async fn get_constraint(
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Option<FunctionConstraintCollection>, RepoError>;
+    ) -> Result<Option<FunctionConstraints>, RepoError>;
 
     async fn get_installed_plugins(
         &self,
@@ -526,11 +526,25 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         Self::logged("create_component_constraint", result)
     }
 
+    async fn delete_constraints(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+        constraints_to_remove: &Vec<FunctionSignature>,
+    ) -> Result<(), RepoError> {
+        let result = self
+            .repo
+            .delete_constraints(namespace, component_id, constraints_to_remove)
+            .await;
+
+        Self::logged_with_id("delete_component_constraint", component_id, result)
+    }
+
     async fn get_constraint(
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Option<FunctionConstraintCollection>, RepoError> {
+    ) -> Result<Option<FunctionConstraints>, RepoError> {
         let result = self.repo.get_constraint(namespace, component_id).await;
         Self::logged("get_component_constraint", result)
     }
@@ -1424,15 +1438,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         Ok(())
     }
 
-    async fn delete_constraint(
+    async fn delete_constraints(
         &self,
         namespace: &str,
         component_id: Uuid,
-        constraints: &Vec<FunctionConstraint>,
+        constraints: &Vec<FunctionSignature>,
     ) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
-        let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
+        let existing_constraints_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
             r#"
                 SELECT
                     namespace,
@@ -1441,19 +1455,19 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM component_constraints WHERE component_id = $1
                 "#,
         )
-            .bind(component_id)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        .bind(component_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
 
-        if let Some(existing_record) = existing_record {
-            let existing_constraints: FunctionConstraintCollection =
+        if let Some(existing_record) = existing_constraints_record {
+            let existing_constraints: FunctionConstraints =
                 constraint_serde::deserialize(&existing_record.constraints)
                     .map_err(RepoError::Internal)?;
 
             existing_constraints.remove_constraints(constraints);
 
-            let merged_constraint_data: Vec<u8> = constraint_serde::serialize(&existing_constraints)
+            let new_constraints: Vec<u8> = constraint_serde::serialize(&existing_constraints)
                 .map_err(RepoError::Internal)?
                 .into();
 
@@ -1465,12 +1479,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     WHERE namespace = $2 AND component_id = $3
                     "#,
             )
-                .bind(merged_constraint_data)
-                .bind(namespace)
-                .bind(component_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(RepoError::from)?;
+            .bind(new_constraints)
+            .bind(namespace)
+            .bind(component_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(RepoError::from)?;
         }
 
         transaction.commit().await?;
@@ -1500,27 +1514,21 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .map_err(|e| RepoError::Internal(e.to_string()))?;
 
         if let Some(existing_record) = existing_record {
-            let existing_worker_calls_used =
-                constraint_serde::deserialize(&existing_record.constraints)
-                    .map_err(RepoError::Internal)?;
-            let new_worker_calls_used =
+            let existing_constraints = constraint_serde::deserialize(&existing_record.constraints)
+                .map_err(RepoError::Internal)?;
+
+            let new_constraints =
                 constraint_serde::deserialize(&component_constraint_record.constraints)
                     .map_err(RepoError::Internal)?;
 
-            // This shouldn't happen as it is validated in service layers.
-            // However, repo gives us more transactional guarantee.
-            let merged_worker_calls = FunctionConstraintCollection::try_merge(vec![
-                existing_worker_calls_used,
-                new_worker_calls_used,
-            ])
-            .map_err(RepoError::Internal)?;
+            let merged_worker_calls =
+                FunctionConstraints::try_merge(vec![existing_constraints, new_constraints])
+                    .map_err(RepoError::Internal)?;
 
-            // Serialize the merged result back to store in the database
             let merged_constraint_data: Vec<u8> = constraint_serde::serialize(&merged_worker_calls)
                 .map_err(RepoError::Internal)?
                 .into();
 
-            // Update the existing record in the database
             sqlx::query(
                 r#"
                  UPDATE
@@ -1560,7 +1568,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Option<FunctionConstraintCollection>, RepoError> {
+    ) -> Result<Option<FunctionConstraints>, RepoError> {
         let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
             r#"
                 SELECT
@@ -1880,12 +1888,12 @@ pub mod record_metadata_serde {
 pub mod constraint_serde {
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-    use golem_common::model::component_constraint::FunctionConstraintCollection;
+    use golem_common::model::component_constraint::FunctionConstraints;
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &FunctionConstraintCollection) -> Result<Bytes, String> {
+    pub fn serialize(value: &FunctionConstraints) -> Result<Bytes, String> {
         let proto_value: FunctionConstraintCollectionProto =
             FunctionConstraintCollectionProto::from(value.clone());
 
@@ -1895,7 +1903,7 @@ pub mod constraint_serde {
         Ok(bytes.freeze())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraintCollection, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraints, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
@@ -1903,7 +1911,7 @@ pub mod constraint_serde {
                 let proto_value: FunctionConstraintCollectionProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                let value = FunctionConstraintCollection::try_from(proto_value.clone())?;
+                let value = FunctionConstraints::try_from(proto_value.clone())?;
 
                 Ok(value)
             }

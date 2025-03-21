@@ -22,7 +22,7 @@ use std::fmt::{Display, Formatter};
 // A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
 // The structure is raw and closer to the original component metadata.
 // FunctionTypeRegistry act as a set of all dependencies in Rib.
-// Currently it talks about only 1 component.
+// Currently, it talks about only 1 component.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
@@ -165,6 +165,7 @@ impl FunctionTypeRegistry {
     }
 }
 
+// A registry key in Rib can in include real functions including the variant constructors.
 #[derive(Hash, Eq, PartialEq, PartialOrd, Ord, Clone, Debug)]
 pub enum RegistryKey {
     FunctionName(String),

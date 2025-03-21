@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
     DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
@@ -388,7 +388,7 @@ async fn test_repo_component_constraints(
         function_constraints.extend(
             constraint_data::get_shopping_cart_worker_functions_constraint1().function_constraints,
         );
-        Some(FunctionConstraintCollection {
+        Some(FunctionConstraints {
             function_constraints,
         })
     };

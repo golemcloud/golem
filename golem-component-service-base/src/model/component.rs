@@ -14,7 +14,9 @@
 
 use chrono::Utc;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::{FunctionConstraintUsage, FunctionConstraintCollection};
+use golem_common::model::component_constraint::{
+    FunctionConstraints, FunctionMetadata, FunctionUsageConstraint,
+};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -146,9 +148,19 @@ impl<Owner: ComponentOwner> From<Component<Owner>>
 pub struct ComponentConstraints<Owner: ComponentOwner> {
     pub owner: Owner,
     pub component_id: ComponentId,
-    pub constraints: FunctionConstraintCollection,
+    pub constraints: FunctionConstraints,
 }
 
+impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
+    pub fn function_signatures(&self) -> &Vec<FunctionMetadata> {
+        &self
+            .constraints
+            .function_constraints
+            .iter()
+            .map(|x| x.function_signature)
+            .collect()
+    }
+}
 
 impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
     pub fn init(
@@ -159,31 +171,14 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
         ComponentConstraints {
             owner: owner.clone(),
             component_id: component_id.clone(),
-            constraints: FunctionConstraintCollection {
+            constraints: FunctionConstraints {
                 function_constraints: worker_functions_in_rib
                     .function_calls
                     .iter()
-                    .map(FunctionConstraintUsage::from_worker_function_type)
+                    .map(FunctionUsageConstraint::from_worker_function_type)
                     .collect(),
             },
         }
-    }
-
-    pub fn update_with(
-        &self,
-        function_constraints: &FunctionConstraintCollection,
-    ) -> Result<ComponentConstraints<Owner>, String> {
-        let constraints = FunctionConstraintCollection::try_merge(vec![
-            self.constraints.clone(),
-            function_constraints.clone(),
-        ])?;
-        let component_constraints = ComponentConstraints {
-            owner: self.owner.clone(),
-            component_id: self.component_id.clone(),
-            constraints,
-        };
-
-        Ok(component_constraints)
     }
 }
 

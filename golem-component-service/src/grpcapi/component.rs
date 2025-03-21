@@ -47,7 +47,7 @@ use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as Fun
 use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
 use golem_common::model::component::DefaultComponentOwner;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginInstallationCreation, PluginInstallationUpdate,
@@ -276,6 +276,26 @@ impl ComponentGrpcApi {
         let response = self
             .component_service
             .create_or_update_constraint(component_constraint)
+            .await
+            .map(|v| ComponentConstraintsProto {
+                component_id: Some(v.component_id.into()),
+                constraints: Some(FunctionConstraintCollectionProto::from(v.constraints)),
+            })?;
+
+        Ok(response)
+    }
+
+    async fn delete_component_constraints(
+        &self,
+        component_constraint: &ComponentConstraints<DefaultComponentOwner>,
+    ) -> Result<ComponentConstraintsProto, ComponentError> {
+        let response = self
+            .component_service
+            .delete_constraints(
+                &component_constraint.owner,
+                &component_constraint.component_id,
+                &component_constraint.constraints,
+            )
             .await
             .map(|v| ComponentConstraintsProto {
                 component_id: Some(v.component_id.into()),
@@ -699,34 +719,33 @@ impl ComponentService for ComponentGrpcApi {
                     }
                 };
 
-                let constraints = if let Some(worker_functions_in_rib) =
-                    proto_constraints.constraints
-                {
-                    let result = FunctionConstraintCollection::try_from(worker_functions_in_rib)
-                        .map_err(|err| bad_request_error(err.as_str()));
+                let constraints =
+                    if let Some(worker_functions_in_rib) = proto_constraints.constraints {
+                        let result = FunctionConstraints::try_from(worker_functions_in_rib)
+                            .map_err(|err| bad_request_error(err.as_str()));
 
-                    match result {
-                        Ok(worker_functions_in_rib) => worker_functions_in_rib,
-                        Err(fail) => {
-                            return Ok(Response::new(CreateComponentConstraintsResponse {
-                                result: Some(record.fail(
-                                    create_component_constraints_response::Result::Error(
-                                        fail.clone(),
-                                    ),
-                                    &ComponentTraceErrorKind(&fail),
-                                )),
-                            }))
+                        match result {
+                            Ok(worker_functions_in_rib) => worker_functions_in_rib,
+                            Err(fail) => {
+                                return Ok(Response::new(CreateComponentConstraintsResponse {
+                                    result: Some(record.fail(
+                                        create_component_constraints_response::Result::Error(
+                                            fail.clone(),
+                                        ),
+                                        &ComponentTraceErrorKind(&fail),
+                                    )),
+                                }))
+                            }
                         }
-                    }
-                } else {
-                    let error = internal_error("Failed to create constraints");
-                    return Ok(Response::new(CreateComponentConstraintsResponse {
-                        result: Some(record.fail(
-                            create_component_constraints_response::Result::Error(error.clone()),
-                            &ComponentTraceErrorKind(&error),
-                        )),
-                    }));
-                };
+                    } else {
+                        let error = internal_error("Failed to create constraints");
+                        return Ok(Response::new(CreateComponentConstraintsResponse {
+                            result: Some(record.fail(
+                                create_component_constraints_response::Result::Error(error.clone()),
+                                &ComponentTraceErrorKind(&error),
+                            )),
+                        }));
+                    };
 
                 let component_constraint = ComponentConstraints {
                     owner: DefaultComponentOwner,

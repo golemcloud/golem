@@ -64,6 +64,7 @@ impl WorkerFunctionsInRib {
     }
 }
 
+// The type of a function call with worker (ephmeral or durable) in Rib script
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionType {
     pub function_key: RegistryKey,

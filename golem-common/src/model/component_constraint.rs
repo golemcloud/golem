@@ -13,21 +13,21 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedType;
+use itertools::Itertools;
 use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
-use itertools::Itertools;
 
 // This is very similar to WorkerFunctionsInRib data structure in `rib`, however
 // it adds more info that is specific to other golem services,
 // such as the total number of usages for each function in that component.
 // This forms the core of component constraints.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionConstraintCollection {
-    pub function_constraints: Vec<FunctionConstraintUsage>,
+pub struct FunctionConstraints {
+    pub function_constraints: Vec<FunctionUsageConstraint>,
 }
 
-impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
-    fn from(value: FunctionConstraintCollection) -> Self {
+impl From<FunctionConstraints> for WorkerFunctionsInRib {
+    fn from(value: FunctionConstraints) -> Self {
         WorkerFunctionsInRib {
             function_calls: value
                 .function_constraints
@@ -40,45 +40,50 @@ impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
     }
 }
 
-impl FunctionConstraintCollection {
+impl FunctionConstraints {
     pub fn from_worker_functions_in_rib(
         worker_functions_in_rib: &WorkerFunctionsInRib,
-    ) -> FunctionConstraintCollection {
+    ) -> FunctionConstraints {
         let functions = worker_functions_in_rib
             .function_calls
             .iter()
-            .map(FunctionConstraintUsage::from_worker_function_type)
+            .map(FunctionUsageConstraint::from_worker_function_type)
             .collect::<Vec<_>>();
 
-        FunctionConstraintCollection {
+        FunctionConstraints {
             function_constraints: functions,
         }
     }
 
-    pub fn remove_constraints(&self, constraints_to_remove: &Vec<FunctionConstraint>) {
+    pub fn remove_constraints(&self, constraints_to_remove: &Vec<FunctionSignature>) {
         let mut constraints = vec![];
 
-      for constraint in self.function_constraints {
-          if constraints_to_remove.contains(&constraint.constraint) {
-              let mut constraint = constraint;
-              constraint.decrement_usage_count();
-              constraints.push(constraint);
-          }
-      }
+        for constraint in self.function_constraints {
+            if constraints_to_remove.contains(&constraint.function_signature) {
+                let mut constraint = constraint;
+                constraint.decrement_usage_count();
 
+                if constraint.usage_count > 0 {
+                    constraints.push(constraint);
+                }
+            }
+        }
     }
 
     pub fn try_merge(
-        worker_functions: Vec<FunctionConstraintCollection>,
-    ) -> Result<FunctionConstraintCollection, String> {
-        let mut merged_function_calls: HashMap<RegistryKey, FunctionConstraintUsage> = HashMap::new();
+        worker_functions: Vec<FunctionConstraints>,
+    ) -> Result<FunctionConstraints, String> {
+        let mut merged_function_calls: HashMap<RegistryKey, FunctionUsageConstraint> =
+            HashMap::new();
 
         for wf in worker_functions {
             for constraint_usage in wf.function_constraints {
                 match merged_function_calls.get_mut(constraint_usage.function_key()) {
                     Some(existing_constraint) => {
                         // Check for parameter type conflicts
-                        if existing_constraint.parameter_types() != constraint_usage.parameter_types() {
+                        if existing_constraint.parameter_types()
+                            != constraint_usage.parameter_types()
+                        {
                             return Err(format!(
                                 "Parameter type conflict for function key {:?}: {:?} vs {:?}",
                                 constraint_usage.function_key(),
@@ -91,76 +96,80 @@ impl FunctionConstraintCollection {
                         if existing_constraint.return_types() != constraint_usage.return_types() {
                             return Err(format!(
                                 "Return type conflict for function key {:?}: {:?} vs {:?}",
-                                constraint_usage.function_key(), existing_constraint.return_types(), constraint_usage.return_types()
+                                constraint_usage.function_key(),
+                                existing_constraint.return_types(),
+                                constraint_usage.return_types()
                             ));
                         }
 
                         // Update usage_count instead of overwriting
-                        existing_constraint.usage_count =
-                            existing_constraint.usage_count.saturating_add(constraint_usage.usage_count);
+                        existing_constraint.usage_count = existing_constraint
+                            .usage_count
+                            .saturating_add(constraint_usage.usage_count);
                     }
                     None => {
                         // Insert if no conflict is found
-                        merged_function_calls.insert(constraint_usage.function_key().clone(), constraint_usage);
+                        merged_function_calls
+                            .insert(constraint_usage.function_key().clone(), constraint_usage);
                     }
                 }
             }
         }
 
-        let mut merged_function_calls_vec: Vec<FunctionConstraintUsage> =
+        let mut merged_function_calls_vec: Vec<FunctionUsageConstraint> =
             merged_function_calls.into_values().collect();
 
         merged_function_calls_vec.sort_by(|a, b| a.function_key().cmp(b.function_key()));
 
-        Ok(FunctionConstraintCollection {
+        Ok(FunctionConstraints {
             function_constraints: merged_function_calls_vec,
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionConstraint {
-    pub function_key: RegistryKey,
-    pub parameter_types: Vec<AnalysedType>,
-    pub return_types: Vec<AnalysedType>,
+pub struct FunctionSignature {
+    function_key: RegistryKey,
+    parameter_types: Vec<AnalysedType>,
+    return_types: Vec<AnalysedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionConstraintUsage {
-    pub constraint: FunctionConstraint,
+pub struct FunctionUsageConstraint {
+    pub function_signature: FunctionSignature,
     pub usage_count: u32,
 }
 
-impl From<FunctionConstraintUsage> for WorkerFunctionType {
-    fn from(value: FunctionConstraintUsage) -> Self {
+// The worker-functions in a rib script that's deployed in a host
+// becomes a function-usage-constraint to component-service.
+impl From<FunctionUsageConstraint> for WorkerFunctionType {
+    fn from(value: FunctionUsageConstraint) -> Self {
         WorkerFunctionType {
-            function_key: value.constraint.function_key.clone(),
-            parameter_types: value.constraint.parameter_types.clone(),
-            return_types: value.constraint.return_types.clone(),
+            function_key: value.function_signature.function_key.clone(),
+            parameter_types: value.function_signature.parameter_types.clone(),
+            return_types: value.function_signature.return_types.clone(),
         }
     }
 }
 
-impl FunctionConstraintUsage {
-
+impl FunctionUsageConstraint {
     pub fn function_key(&self) -> &RegistryKey {
-        &self.constraint.function_key
+        &self.function_signature.function_key
     }
 
     pub fn parameter_types(&self) -> &Vec<AnalysedType> {
-        &self.constraint.parameter_types
+        &self.function_signature.parameter_types
     }
 
     pub fn return_types(&self) -> &Vec<AnalysedType> {
-        &self.constraint.return_types
+        &self.function_signature.return_types
     }
-
 
     pub fn from_worker_function_type(
         worker_function_type: &WorkerFunctionType,
-    ) -> FunctionConstraintUsage {
-        FunctionConstraintUsage {
-            constraint: FunctionConstraint {
+    ) -> FunctionUsageConstraint {
+        FunctionUsageConstraint {
+            function_signature: FunctionSignature {
                 function_key: worker_function_type.function_key.clone(),
                 parameter_types: worker_function_type.parameter_types.clone(),
                 return_types: worker_function_type.return_types.clone(),
@@ -176,25 +185,29 @@ impl FunctionConstraintUsage {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::model::component_constraint::{FunctionConstraintUsage, FunctionConstraintCollection, FunctionConstraint};
+    use crate::model::component_constraint::{
+        FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
+    };
     use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
     use golem_wasm_ast::analysis::AnalysedType;
     use rib::RegistryKey;
 
     impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
-        for FunctionConstraintCollection
+        for FunctionConstraints
     {
         type Error = String;
 
         fn try_from(
             value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
         ) -> Result<Self, Self::Error> {
-            let collection = FunctionConstraintCollection {
+            let collection = FunctionConstraints {
                 function_constraints: value
                     .constraints
                     .iter()
-                    .map(|constraint_proto| FunctionConstraintUsage::try_from(constraint_proto.clone()))
+                    .map(|constraint_proto| {
+                        FunctionUsageConstraint::try_from(constraint_proto.clone())
+                    })
                     .collect::<Result<_, _>>()?,
             };
 
@@ -202,8 +215,8 @@ mod protobuf {
         }
     }
 
-    impl From<FunctionConstraintCollection> for FunctionConstraintCollectionProto {
-        fn from(value: FunctionConstraintCollection) -> Self {
+    impl From<FunctionConstraints> for FunctionConstraintCollectionProto {
+        fn from(value: FunctionConstraints) -> Self {
             FunctionConstraintCollectionProto {
                 constraints: value
                     .function_constraints
@@ -216,7 +229,7 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<FunctionConstraintProto> for FunctionConstraintUsage {
+    impl TryFrom<FunctionConstraintProto> for FunctionUsageConstraint {
         type Error = String;
 
         fn try_from(value: FunctionConstraintProto) -> Result<Self, Self::Error> {
@@ -237,7 +250,7 @@ mod protobuf {
             let usage_count = value.usage_count;
 
             Ok(Self {
-                constraint: FunctionConstraint {
+                function_signature: FunctionSignature {
                     function_key,
                     parameter_types,
                     return_types,
@@ -247,8 +260,8 @@ mod protobuf {
         }
     }
 
-    impl From<FunctionConstraintUsage> for FunctionConstraintProto {
-        fn from(value: FunctionConstraintUsage) -> Self {
+    impl From<FunctionUsageConstraint> for FunctionConstraintProto {
+        fn from(value: FunctionUsageConstraint) -> Self {
             let registry_key = value.function_key().into();
 
             FunctionConstraintProto {
