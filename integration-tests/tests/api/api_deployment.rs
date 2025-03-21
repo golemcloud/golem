@@ -23,7 +23,9 @@ use golem_api_grpc::proto::golem::apidefinition::{
     HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
-use golem_client::model::{ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite, ComponentType};
+use golem_client::model::{
+    ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite, ComponentType,
+};
 use golem_common::model::ComponentId;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
@@ -187,16 +189,13 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
         "1".to_string(),
         "/path-1".to_string(),
     )
-        .await;
-
+    .await;
 
     let request = ApiDeploymentRequest {
-        api_definitions: vec![
-            ApiDefinitionInfo {
-                id: api_definition_1.id.as_ref().unwrap().value.clone(),
-                version: api_definition_1.version.clone(),
-            }
-        ],
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            version: api_definition_1.version.clone(),
+        }],
         site: ApiSite {
             host: "localhost".to_string(),
             subdomain: Some("subdomain".to_string()),
@@ -219,10 +218,18 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     check!(request.api_definitions == response.api_definitions);
     check!(request.site == response.site);
 
-    let update_component =
-        deps.component_service().update_component(
+    let update_component = deps
+        .component_service()
+        .update_component(
             &component_id,
-            &deps.component_directory().join("shopping-cart.wasm"), ComponentType::Durable, None, None).await;
+            &deps.component_directory().join("shopping-cart.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await;
+
+    dbg!(&update_component);
 
     assert!(update_component.is_err());
 }

@@ -332,7 +332,7 @@ impl ComponentService for FileSystemComponentService {
         )
         .await
         .expect("Failed to write component to filesystem");
-        
+
         Ok(new_version)
     }
 

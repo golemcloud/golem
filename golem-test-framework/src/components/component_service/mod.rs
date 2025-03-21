@@ -504,9 +504,9 @@ pub trait ComponentService: ComponentServiceInternal {
                         info!("Updated component (GRPC) {component:?}");
                         Ok(component.versioned_component_id.unwrap().version)
                     }
-                    Some(update_component_response::Result::Error(error)) => {
-                        Err(anyhow!("Failed to update component in golem-component-service (GRPC): {error:?}"))
-                    }
+                    Some(update_component_response::Result::Error(error)) => Err(anyhow!(
+                        "Failed to update component in golem-component-service (GRPC): {error:?}"
+                    )),
                 }
             }
             ComponentServiceClient::Http(client) => {
@@ -546,9 +546,9 @@ pub trait ComponentService: ComponentServiceInternal {
                         debug!("Updated component (HTTP) {:?}", component);
                         Ok(component.versioned_component_id.version)
                     }
-                    Err(error) => {
-                        Err(anyhow!("Failed to update component in golem-component-service (HTTP): {error:?}"))
-                    }
+                    Err(error) => Err(anyhow!(
+                        "Failed to update component in golem-component-service (HTTP): {error:?}"
+                    )),
                 }
             }
         }
