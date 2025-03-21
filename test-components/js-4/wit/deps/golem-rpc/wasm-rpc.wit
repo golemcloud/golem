@@ -1,0 +1,143 @@
+package golem:rpc@0.2.0;
+
+interface types {
+  use wasi:clocks/wall-clock@0.2.0.{datetime};
+  use wasi:io/poll@0.2.0.{pollable};
+
+  /// Represents a Golem worker
+  record worker-id {
+    component-id: component-id,
+    worker-name: string
+  }
+
+  /// Represents a Golem component
+  record component-id {
+    uuid: uuid,
+  }
+
+  /// UUID
+  record uuid {
+    high-bits: u64,
+    low-bits: u64
+  }
+
+  /// Parses a UUID from a string
+  parse-uuid: func(uuid: string) -> result<uuid, string>;
+
+  /// Converts a UUID to a string
+  uuid-to-string: func(uuid: uuid) -> string;
+
+  type node-index = s32;
+
+  record wit-value {
+    nodes: list<wit-node>,
+  }
+
+  variant wit-node {
+    record-value(list<node-index>),
+    variant-value(tuple<u32, option<node-index>>),
+    enum-value(u32),
+    flags-value(list<bool>),
+    tuple-value(list<node-index>),
+    list-value(list<node-index>),
+    option-value(option<node-index>),
+    result-value(result<option<node-index>, option<node-index>>),
+    prim-u8(u8),
+    prim-u16(u16),
+    prim-u32(u32),
+    prim-u64(u64),
+    prim-s8(s8),
+    prim-s16(s16),
+    prim-s32(s32),
+    prim-s64(s64),
+    prim-float32(f32),
+    prim-float64(f64),
+    prim-char(char),
+    prim-bool(bool),
+    prim-string(string),
+    handle(tuple<uri, u64>)
+  }
+
+  record wit-type {
+    nodes: list<wit-type-node>,
+  }
+
+  type resource-id = u64;
+
+  enum resource-mode {
+    owned,
+    borrowed
+  }
+
+  variant wit-type-node {
+    record-type(list<tuple<string, node-index>>),
+    variant-type(list<tuple<string, option<node-index>>>),
+    enum-type(list<string>),
+    flags-type(list<string>),
+    tuple-type(list<node-index>),
+    list-type(node-index),
+    option-type(node-index),
+    result-type(tuple<option<node-index>, option<node-index>>),
+    prim-u8-type,
+    prim-u16-type,
+    prim-u32-type,
+    prim-u64-type,
+    prim-s8-type,
+    prim-s16-type,
+    prim-s32-type,
+    prim-s64-type,
+    prim-f32-type,
+    prim-f64-type,
+    prim-char-type,
+    prim-bool-type,
+    prim-string-type,
+    handle-type(tuple<resource-id, resource-mode>)
+  }
+
+  record value-and-type {
+    value: wit-value,
+    typ: wit-type
+  }
+
+  record uri {
+    value: string,
+  }
+
+  variant rpc-error {
+    protocol-error(string),
+    denied(string),
+    not-found(string),
+    remote-internal-error(string)
+  }
+
+  resource wasm-rpc {
+    constructor(worker-id: worker-id);
+    ephemeral: static func(component-id: component-id) -> wasm-rpc;
+
+    invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
+    invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
+
+    async-invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> future-invoke-result;
+
+    /// Schedule invocation for later
+    schedule-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>);
+    /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
+    schedule-cancelable-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>) -> cancellation-token;
+  }
+
+  resource future-invoke-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<result<wit-value, rpc-error>>;
+  }
+
+  resource cancellation-token {
+    cancel: func();
+  }
+
+  extract-value: func(vnt: value-and-type) -> wit-value;
+  extract-type: func(vnt: value-and-type) -> wit-type;
+}
+
+world wit-value {
+    import types;
+}

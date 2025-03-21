@@ -1,0 +1,39 @@
+[package]
+name = "golem_ictest"
+version = "0.0.1"
+edition = "2021"
+
+[package.metadata]
+
+[package.metadata.component]
+
+[package.metadata.component.target]
+path = "wit-generated"
+
+[package.metadata.component.target.dependencies]
+"wasi:io" = { path = "wit-generated/deps/io" }
+"wasi:clocks" = { path = "wit-generated/deps/clocks" }
+"golem:rpc" = { path = "wit-generated/deps/wasm-rpc" }
+"golem:api" = { path = "wit-generated/deps/golem-1.x" }
+"golem:ictest-client" = { path = "wit-generated/deps/golem_ictest-client" }
+"golem:ictest-exports" = { path = "wit-generated/deps/golem_ictest-exports" }
+
+[dependencies.golem-rust]
+workspace = true
+
+[dependencies.reqwest]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+
+[dependencies.serde_json]
+workspace = true
+
+[dependencies.wit-bindgen-rt]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []

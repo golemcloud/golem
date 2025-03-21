@@ -1,0 +1,6 @@
+package wasi:rdbms@0.0.1;
+
+world imports {
+     import postgres;
+     import mysql;
+}

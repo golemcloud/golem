@@ -1,0 +1,16 @@
+package golem:ictest;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface golem-ictest-api {
+    test1: func();
+    test2: func();
+    test3: func();
+}
+
+world golem-ictest {
+    import golem:api/host@1.1.5;
+    import golem:api/context@1.1.5;
+
+    export golem-ictest-api;
+}
