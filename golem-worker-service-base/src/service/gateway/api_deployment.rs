@@ -331,20 +331,24 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         namespace: &Namespace,
         site: &ApiSiteString,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), ApiDeploymentError<Namespace>> {
-        let existing_api_definitions = self.get_definitions_by_site(&namespace, &site).await?;
+    ) -> Result<(), ApiDeploymentError<Namespace>>
+    where
+        Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
+    {
+        let existing_api_definitions = self.get_definitions_by_site(namespace, site).await?;
 
         let constraints = ComponentConstraints::from_api_definitions(&existing_api_definitions)?;
 
-        for (component_id, constraints) in constraints.constraints {
+        for (component_id, constraints) in &constraints.constraints {
             let signatures_to_be_removed = constraints
                 .constraints
                 .iter()
-                .map(|x| x.function_signature)
-                .collect();
+                .map(|x| x.function_signature.clone())
+                .collect::<Vec<_>>();
 
             self.component_service
-                .delete_constraints(&component_id, signatures_to_be_removed, auth_ctx)
+                .delete_constraints(&component_id, &signatures_to_be_removed, auth_ctx)
                 .await
                 .map_err(|err| {
                     ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
@@ -812,7 +816,7 @@ impl ComponentConstraints {
     ) -> Result<Self, ApiDeploymentError<Namespace>> {
         let mut worker_functions_in_rib = HashMap::new();
 
-        for definition in &definitions {
+        for definition in definitions {
             for route in definition.routes.iter() {
                 if let GatewayBindingCompiled::Worker(worker_binding) = route.binding.clone() {
                     let component_id = worker_binding.component_id;

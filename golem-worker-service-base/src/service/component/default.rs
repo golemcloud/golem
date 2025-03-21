@@ -23,8 +23,8 @@ use golem_api_grpc::proto::golem::component::v1::{
     DeleteComponentConstraintsResponse, GetComponentMetadataResponse, GetLatestComponentRequest,
     GetVersionedComponentRequest,
 };
+use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-use golem_api_grpc::proto::golem::component::{ComponentConstraints, FunctionConstraint};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
