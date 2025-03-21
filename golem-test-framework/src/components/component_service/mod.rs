@@ -435,7 +435,7 @@ pub trait ComponentService: ComponentServiceInternal {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
-    ) -> u64 {
+    ) -> crate::Result<u64> {
         let mut file = File::open(local_path)
             .await
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
@@ -502,10 +502,10 @@ pub trait ComponentService: ComponentServiceInternal {
                     }
                     Some(update_component_response::Result::Success(component)) => {
                         info!("Updated component (GRPC) {component:?}");
-                        component.versioned_component_id.unwrap().version
+                        Ok(component.versioned_component_id.unwrap().version)
                     }
                     Some(update_component_response::Result::Error(error)) => {
-                        panic!("Failed to update component in golem-component-service (GRPC): {error:?}");
+                        Err(anyhow!("Failed to update component in golem-component-service (GRPC): {error:?}"))
                     }
                 }
             }
@@ -544,10 +544,10 @@ pub trait ComponentService: ComponentServiceInternal {
                 {
                     Ok(component) => {
                         debug!("Updated component (HTTP) {:?}", component);
-                        component.versioned_component_id.version
+                        Ok(component.versioned_component_id.version)
                     }
                     Err(error) => {
-                        panic!("Failed to update component in golem-component-service (HTTP): {error:?}");
+                        Err(anyhow!("Failed to update component in golem-component-service (HTTP): {error:?}"))
                     }
                 }
             }

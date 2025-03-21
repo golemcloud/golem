@@ -292,7 +292,7 @@ impl ComponentService for FileSystemComponentService {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
-    ) -> u64 {
+    ) -> crate::Result<u64> {
         let target_dir = &self.root;
 
         debug!("Local component store: {target_dir:?}");
@@ -332,7 +332,8 @@ impl ComponentService for FileSystemComponentService {
         )
         .await
         .expect("Failed to write component to filesystem");
-        new_version
+        
+        Ok(new_version)
     }
 
     async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {

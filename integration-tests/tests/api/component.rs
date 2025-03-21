@@ -296,7 +296,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             Some(&files),
             None,
         )
-        .await;
+        .await.unwrap();
 
     deps.component_service()
         .update_component(
@@ -306,7 +306,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             None,
             None,
         )
-        .await;
+        .await.unwrap();
 
     deps.component_service()
         .update_component(
@@ -316,7 +316,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             None,
             Some(&HashMap::from([link.clone()])),
         )
-        .await;
+        .await.unwrap();
 
     // Get all versions
     let result = deps

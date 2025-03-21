@@ -23,11 +23,12 @@ use golem_api_grpc::proto::golem::apidefinition::{
     HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
-use golem_client::model::{ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite};
+use golem_client::model::{ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite, ComponentType};
 use golem_common::model::ComponentId;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
+use std::panic;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -51,6 +52,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
         "/path-1".to_string(),
     )
     .await;
+
     let api_definition_2 = create_api_definition(
         deps,
         &component_id,
@@ -167,6 +169,62 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
         .await;
     assert!(response.is_err());
     check!(response.err().unwrap().to_string().contains("not found"));
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependencies) {
+    let component_id = deps.component("counters").unique().store().await;
+
+    fn new_api_definition_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::new_v4())
+    }
+
+    let api_definition_1 = create_api_definition(
+        deps,
+        &component_id,
+        new_api_definition_id("a"),
+        "1".to_string(),
+        "/path-1".to_string(),
+    )
+        .await;
+
+
+    let request = ApiDeploymentRequest {
+        api_definitions: vec![
+            ApiDefinitionInfo {
+                id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                version: api_definition_1.version.clone(),
+            }
+        ],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("subdomain".to_string()),
+        },
+    };
+
+    let response = deps
+        .worker_service()
+        .create_or_update_api_deployment(request.clone())
+        .await
+        .unwrap();
+    check!(request.api_definitions == response.api_definitions);
+    check!(request.site == response.site);
+
+    let response = deps
+        .worker_service()
+        .get_api_deployment("subdomain.localhost")
+        .await
+        .unwrap();
+    check!(request.api_definitions == response.api_definitions);
+    check!(request.site == response.site);
+
+    let update_component =
+        deps.component_service().update_component(
+            &component_id,
+            &deps.component_directory().join("shopping-cart.wasm"), ComponentType::Durable, None, None).await;
+
+    assert!(update_component.is_err());
 }
 
 #[test]
