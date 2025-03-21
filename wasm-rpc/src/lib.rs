@@ -1,6 +1,3 @@
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
 // Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -132,6 +129,10 @@ pub use golem_rpc_0_2_x::types::{
     ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode, WitType,
     WitTypeNode, WitValue, WorkerId,
 };
+
+use std::fmt;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
 impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
     fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {

@@ -1021,6 +1021,20 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
+    async fn parse_uuid(
+        &mut self,
+        uuid: String,
+    ) -> anyhow::Result<Result<golem_wasm_rpc::Uuid, String>> {
+        Ok(Uuid::parse_str(&uuid)
+            .map(|uuid| uuid.into())
+            .map_err(|e| e.to_string()))
+    }
+
+    async fn uuid_to_string(&mut self, uuid: golem_wasm_rpc::Uuid) -> anyhow::Result<String> {
+        let uuid: uuid::Uuid = uuid.into();
+        Ok(uuid.to_string())
+    }
+
     // NOTE: these extract functions are only added as a workaround for the fact that the binding
     // generator does not include types that are not used in any exported _functions_
     async fn extract_value(

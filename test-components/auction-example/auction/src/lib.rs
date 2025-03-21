@@ -1,6 +1,7 @@
 mod auction_logic;
 mod model;
 
+#[allow(static_mut_refs)]
 mod bindings;
 
 use bindings::*;
