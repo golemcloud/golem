@@ -583,7 +583,7 @@ async fn test_api_def_with_request_with_request_body_type_mismatch() {
     let body = response.into_body().into_string().await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, "Invalid http request. Required types in request: record{body: record{bar_key: string, foo_key: u32}, path: record{user-id: string}}");
+    assert_eq!(body, "Invalid http request. Available types in request: record{body: record{bar_key: string, foo_key: u32}, path: record{user-id: string}}");
 }
 
 #[test]
