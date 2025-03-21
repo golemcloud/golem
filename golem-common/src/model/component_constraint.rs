@@ -135,6 +135,20 @@ pub struct FunctionSignature {
     return_types: Vec<AnalysedType>,
 }
 
+impl FunctionSignature {
+    pub fn new(
+        function_key: RegistryKey,
+        parameter_types: Vec<AnalysedType>,
+        return_types: Vec<AnalysedType>,
+    ) -> Self {
+        FunctionSignature {
+            function_key,
+            parameter_types,
+            return_types,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionUsageConstraint {
     pub function_signature: FunctionSignature,
