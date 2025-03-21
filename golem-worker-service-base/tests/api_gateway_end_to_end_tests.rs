@@ -1770,8 +1770,8 @@ async fn get_api_def_with_worker_binding(
             path: {}
             binding:
               type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               workerName: '{}'
               response: '${{{}}}'
@@ -1869,7 +1869,7 @@ async fn get_api_def_with_security(
             binding:
               type: wit-worker
               component:
-                name: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                name: test-component
                 version: 0
               response: '${{{}}}'
         "#,
@@ -2071,7 +2071,7 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
             binding:
               type: wit-worker
               component:
-                name: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                name: test-component
                 version: 0
               workerName: '{}'
               response: '${{{}}}'
