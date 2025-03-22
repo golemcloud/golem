@@ -17,15 +17,18 @@ use crate::service::with_metadata;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    create_component_constraints_response, get_component_metadata_response,
-    get_components_response, CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
-    GetComponentMetadataResponse, GetComponentsRequest, GetComponentsResponse,
-    GetLatestComponentRequest, GetVersionedComponentRequest,
+    create_component_constraints_response, delete_component_constraints_response,
+    get_component_metadata_response, CreateComponentConstraintsRequest,
+    CreateComponentConstraintsResponse, DeleteComponentConstraintsRequest,
+    DeleteComponentConstraintsResponse, GetComponentMetadataResponse, GetLatestComponentRequest,
+    GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::{
+    FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
+};
 use golem_common::model::ComponentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
@@ -61,9 +64,21 @@ pub trait ComponentService<AuthCtx>: Send + Sync {
     async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: FunctionConstraintCollection,
+        constraints: FunctionConstraints,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<FunctionConstraintCollection>;
+    ) -> ComponentResult<FunctionConstraints>;
+
+    // Delete some constraints from the component
+    // returning the remaining constraints
+    // The way to invoke delete constraints is to delete a public deployed API
+    // that uses the component which will internally compute the function signatures
+    // that shouldn't be part of the signature anymore.
+    async fn delete_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraints: &[FunctionSignature],
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints>;
 }
 
 #[derive(Clone)]
@@ -154,7 +169,7 @@ impl RemoteComponentService {
 
     fn process_create_component_metadata_response(
         response: CreateComponentConstraintsResponse,
-    ) -> Result<FunctionConstraintCollection, ComponentServiceError> {
+    ) -> Result<FunctionConstraints, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Failed to create component constraints. Empty results".to_string(),
@@ -163,7 +178,7 @@ impl RemoteComponentService {
                 match response.components {
                     Some(constraints) => {
                         if let Some(constraints) = constraints.constraints {
-                            let constraints = FunctionConstraintCollection::try_from(constraints)
+                            let constraints = FunctionConstraints::try_from(constraints)
                                 .map_err(|err| {
                                 ComponentServiceError::Internal(format!(
                                     "Response conversion error: {err}"
@@ -178,11 +193,47 @@ impl RemoteComponentService {
                         }
                     }
                     None => Err(ComponentServiceError::Internal(
-                        "Empty component response".to_string(),
+                        "Empty component constraint create response".to_string(),
                     )),
                 }
             }
             Some(create_component_constraints_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    fn process_delete_component_metadata_response(
+        response: DeleteComponentConstraintsResponse,
+    ) -> Result<FunctionConstraints, ComponentServiceError> {
+        match response.result {
+            None => Err(ComponentServiceError::Internal(
+                "Failed to create component constraints. Empty results".to_string(),
+            )),
+            Some(delete_component_constraints_response::Result::Success(response)) => {
+                match response.components {
+                    Some(remaining_constraints) => {
+                        if let Some(remaining_constraints_proto) = remaining_constraints.constraints
+                        {
+                            let remaining_constraints =
+                                FunctionConstraints::try_from(remaining_constraints_proto)
+                                    .map_err(|err| {
+                                        ComponentServiceError::Internal(format!(
+                                            "Response conversion error: {err}"
+                                        ))
+                                    })?;
+
+                            Ok(remaining_constraints)
+                        } else {
+                            Err(ComponentServiceError::Internal(
+                                "Failed component constraint deletion".to_string(),
+                            ))
+                        }
+                    }
+                    None => Err(ComponentServiceError::Internal(
+                        "Empty component constraint delete response".to_string(),
+                    )),
+                }
+            }
+            Some(delete_component_constraints_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -309,7 +360,7 @@ where
             },
             Self::is_retriable,
         )
-        .await?;
+            .await?;
 
         Ok(value)
     }
@@ -317,9 +368,9 @@ where
     async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: FunctionConstraintCollection,
+        constraints: FunctionConstraints,
         metadata: &AuthCtx,
-    ) -> ComponentResult<FunctionConstraintCollection> {
+    ) -> ComponentResult<FunctionConstraints> {
         let constraints_proto = FunctionConstraintCollectionProto::from(constraints);
 
         let value = with_retries(
@@ -355,7 +406,68 @@ where
                         .await?
                         .into_inner();
 
-                    Self::process_create_component_metadata_response(response)
+                    Self::process_create_component_constraint_response(response)
+                })
+            },
+            Self::is_retriable,
+        )
+        .await?;
+
+        Ok(value)
+    }
+
+    async fn delete_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraints: &[FunctionSignature],
+        metadata: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints> {
+        let constraint = constraints
+            .iter()
+            .map(|x| FunctionUsageConstraint {
+                function_signature: x.clone(),
+                usage_count: 1, // this is to only reuse the existing grpc types
+            })
+            .collect::<Vec<_>>();
+
+        let constraints_proto = FunctionConstraintCollectionProto::from(FunctionConstraints {
+            constraints: constraint,
+        });
+
+        let value = with_retries(
+            "component",
+            "delete_component_constraints",
+            Some(component_id.to_string()),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                component_id.clone(),
+                metadata.clone(),
+                constraints_proto.clone(),
+            ),
+            |(client, id, metadata, function_constraints)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("delete_component_constraints", move |client| {
+                            let request = DeleteComponentConstraintsRequest {
+                                project_id: None,
+                                component_constraints: Some(ComponentConstraints {
+                                    component_id: Some(
+                                        golem_api_grpc::proto::golem::component::ComponentId::from(
+                                            id.clone(),
+                                        ),
+                                    ),
+                                    constraints: Some(function_constraints.clone()),
+                                }),
+                            };
+                            let request = with_metadata(request, metadata.clone());
+
+                            Box::pin(client.delete_component_constraint(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    Self::process_delete_component_metadata_response(response)
                 })
             },
             Self::is_retriable,

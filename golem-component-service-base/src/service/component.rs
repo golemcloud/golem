@@ -28,7 +28,7 @@ use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -411,11 +411,18 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         component_constraint: &ComponentConstraints<Owner>,
     ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
+    async fn delete_constraints(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints_to_remove: &[FunctionSignature],
+    ) -> Result<ComponentConstraints<Owner>, ComponentError>;
+
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
+    ) -> Result<Option<FunctionConstraints>, ComponentError>;
 
     /// Gets the list of installed plugins for a given component version belonging to `owner`
     async fn get_plugin_installations_for_component(
@@ -486,20 +493,21 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
     }
 
     pub fn find_component_metadata_conflicts(
-        function_constraint_collection: &FunctionConstraintCollection,
+        function_constraints: &FunctionConstraints,
         new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
-        for existing_function_call in &function_constraint_collection.function_constraints {
+        for existing_function_call in &function_constraints.constraints {
             if let Some(new_registry_value) =
-                new_type_registry.lookup(&existing_function_call.function_key)
+                new_type_registry.lookup(existing_function_call.function_key())
             {
                 let mut parameter_conflict = false;
                 let mut return_conflict = false;
 
-                if existing_function_call.parameter_types != new_registry_value.argument_types() {
+                if existing_function_call.parameter_types() != &new_registry_value.argument_types()
+                {
                     parameter_conflict = true;
                 }
 
@@ -508,21 +516,37 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     _ => vec![],
                 };
 
-                if existing_function_call.return_types != new_return_types {
+                if existing_function_call.return_types() != &new_return_types {
                     return_conflict = true;
                 }
 
-                if parameter_conflict || return_conflict {
+                let parameter_conflict = if parameter_conflict {
+                    Some(ParameterTypeConflict {
+                        existing: existing_function_call.parameter_types().clone(),
+                        new: new_registry_value.clone().argument_types().clone(),
+                    })
+                } else {
+                    None
+                };
+
+                let return_conflict = if return_conflict {
+                    Some(ReturnTypeConflict {
+                        existing: existing_function_call.return_types().clone(),
+                        new: new_return_types,
+                    })
+                } else {
+                    None
+                };
+
+                if parameter_conflict.is_some() || return_conflict.is_some() {
                     conflicting_functions.push(ConflictingFunction {
-                        function: existing_function_call.function_key.clone(),
-                        existing_parameter_types: existing_function_call.parameter_types.clone(),
-                        new_parameter_types: new_registry_value.clone().argument_types().clone(),
-                        existing_result_types: existing_function_call.return_types.clone(),
-                        new_result_types: new_return_types,
+                        function: existing_function_call.function_key().clone(),
+                        parameter_type_conflict: parameter_conflict,
+                        return_type_conflict: return_conflict,
                     });
                 }
             } else {
-                missing_functions.push(existing_function_call.function_key.clone());
+                missing_functions.push(existing_function_call.function_key().clone());
             }
         }
 
@@ -1504,11 +1528,41 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         Ok(component_constraints)
     }
 
+    async fn delete_constraints(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints_to_remove: &[FunctionSignature],
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        info!(owner = %owner, component_id = %component_id, "Delete constraint");
+
+        self.component_repo
+            .delete_constraints(&owner.to_string(), &component_id.0, constraints_to_remove)
+            .await?;
+
+        let result = self
+            .component_repo
+            .get_constraint(&owner.to_string(), &component_id.0)
+            .await?
+            .ok_or(ComponentError::ComponentConstraintCreateError(format!(
+                "Failed to get constraints for {}",
+                component_id
+            )))?;
+
+        let component_constraints = ComponentConstraints {
+            owner: owner.clone(),
+            component_id: component_id.clone(),
+            constraints: result,
+        };
+
+        Ok(component_constraints)
+    }
+
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+    ) -> Result<Option<FunctionConstraints>, ComponentError> {
         info!(component_id = %component_id, "Get component constraint");
 
         let result = self
@@ -1944,11 +1998,24 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
             .await
     }
 
+    async fn delete_constraints(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints_to_remove: &[FunctionSignature],
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .delete_constraints(owner, component_id, constraints_to_remove)
+            .await
+    }
+
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+    ) -> Result<Option<FunctionConstraints>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2014,38 +2081,63 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 #[derive(Debug)]
 pub struct ConflictingFunction {
     pub function: RegistryKey,
-    pub existing_parameter_types: Vec<AnalysedType>,
-    pub new_parameter_types: Vec<AnalysedType>,
-    pub existing_result_types: Vec<AnalysedType>,
-    pub new_result_types: Vec<AnalysedType>,
+    pub parameter_type_conflict: Option<ParameterTypeConflict>,
+    pub return_type_conflict: Option<ReturnTypeConflict>,
+}
+
+#[derive(Debug)]
+pub struct ParameterTypeConflict {
+    pub existing: Vec<AnalysedType>,
+    pub new: Vec<AnalysedType>,
+}
+
+#[derive(Debug)]
+pub struct ReturnTypeConflict {
+    pub existing: Vec<AnalysedType>,
+    pub new: Vec<AnalysedType>,
 }
 
 impl Display for ConflictingFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Function: {}", self.function)?;
-        writeln!(f, "  Parameter Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_parameter_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_parameter_types)
-        )?;
 
-        writeln!(f, "  Result Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_result_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_result_types)
-        )?;
+        match self.parameter_type_conflict {
+            Some(ref conflict) => {
+                writeln!(f, "  Parameter Type Conflict:")?;
+                writeln!(
+                    f,
+                    "    Existing: {}",
+                    internal::convert_to_pretty_types(&conflict.existing)
+                )?;
+                writeln!(
+                    f,
+                    "    New:      {}",
+                    internal::convert_to_pretty_types(&conflict.new)
+                )?;
+            }
+            None => {
+                writeln!(f, "  Parameter Type Conflict: None")?;
+            }
+        }
+
+        match self.return_type_conflict {
+            Some(ref conflict) => {
+                writeln!(f, "  Result Type Conflict:")?;
+                writeln!(
+                    f,
+                    "    Existing: {}",
+                    internal::convert_to_pretty_types(&conflict.existing)
+                )?;
+                writeln!(
+                    f,
+                    "    New:      {}",
+                    internal::convert_to_pretty_types(&conflict.new)
+                )?;
+            }
+            None => {
+                writeln!(f, "  Result Type Conflict: None")?;
+            }
+        }
 
         Ok(())
     }
