@@ -78,8 +78,6 @@ impl FunctionConstraints {
     pub fn try_merge(
         worker_functions: Vec<FunctionConstraints>,
     ) -> Result<FunctionConstraints, String> {
-        // First time, 1 get-cart-contents
-        // Second time: 2 get-cart-contents
         let mut merged_function_calls: HashMap<RegistryKey, FunctionUsageConstraint> =
             HashMap::new();
 
