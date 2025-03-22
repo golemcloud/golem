@@ -7,7 +7,7 @@ opt-level = "s"
 lto = true
 
 [workspace.dependencies]
-golem-rust = { path = "../../../golem-rust/golem-rust" }
+golem-rust = { version = "1.4.0" }
 reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-jun-2024", features = ["json"] }
 serde = { version = "1.0.0", features = ["derive"] }
 serde_json = "1.0"
