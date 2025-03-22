@@ -1,6 +1,7 @@
 use bindings::exports::wasi::logging::logging::{Guest, Level};
 
 #[allow(warnings)]
+#[allow(static_mut_refs)]
 mod bindings;
 
 struct Component;

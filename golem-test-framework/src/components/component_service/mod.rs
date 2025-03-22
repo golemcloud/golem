@@ -1020,7 +1020,7 @@ fn to_http_dynamic_linking(
                         DynamicLinkedInstance::WasmRpc(link) => {
                             golem_client::model::DynamicLinkedInstance::WasmRpc(
                                 golem_client::model::DynamicLinkedWasmRpc {
-                                    target_interface_name: link.target_interface_name.clone(),
+                                    targets: link.targets.clone(),
                                 },
                             )
                         }

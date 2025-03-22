@@ -1,6 +1,7 @@
 import { Counter } from "rpc:counters-client/counters-client";
 import { CallerInlineFunctions } from "./generated/caller";
 import { getEnvironment } from "wasi:cli/environment@0.2.0";
+import { ComponentId, parseUuid } from "golem:rpc/types@0.2.0";
 
 let globalCounter: Counter | undefined = undefined;
 
@@ -17,11 +18,16 @@ function getEnvironmentValue(key: string): string {
 
 function createGlobalCounter(workerName: string): Counter {
   const counterId = getEnvironmentValue("COUNTERS_COMPONENT_ID");
-  const value = `urn:worker:${counterId}/${workerName}`;
-  const uri = {
-    value,
+  console.log(`counterId = ${counterId}`);
+  const uuid = parseUuid(counterId);
+  const componentId = { uuid };
+  const workerId = {
+    componentId,
+    workerName,
   };
-  const counter = new Counter(uri, workerName);
+  console.log(`Creating counter resource on ${workerId}`);
+  const counter = Counter.custom(workerId, workerName);
+  console.log(`Created counter resource on ${workerId}: ${counter}`);
   globalCounter = counter;
   return counter;
 }
@@ -52,8 +58,7 @@ function test5(): BigUint64Array {
 }
 
 export const callerInlineFunctions: CallerInlineFunctions = {
-    test1,
-    test2,
-    test3,
+  test1,
+  test2,
+  test3,
 };
-

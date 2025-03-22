@@ -4,7 +4,7 @@
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
 pub mod golem {
-    pub mod rpc0_1_3 {
+    pub mod rpc0_2_0 {
         #[allow(dead_code, clippy::all)]
         pub mod types {
             #[used]
@@ -13,6 +13,55 @@ pub mod golem {
             use super::super::super::_rt;
             pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            /// UUID
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Uuid {
+                pub high_bits: u64,
+                pub low_bits: u64,
+            }
+            impl ::core::fmt::Debug for Uuid {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Uuid")
+                        .field("high-bits", &self.high_bits)
+                        .field("low-bits", &self.low_bits)
+                        .finish()
+                }
+            }
+            /// Represents a Golem component
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct ComponentId {
+                pub uuid: Uuid,
+            }
+            impl ::core::fmt::Debug for ComponentId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ComponentId").field("uuid", &self.uuid).finish()
+                }
+            }
+            /// Represents a Golem worker
+            #[derive(Clone)]
+            pub struct WorkerId {
+                pub component_id: ComponentId,
+                pub worker_name: _rt::String,
+            }
+            impl ::core::fmt::Debug for WorkerId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("WorkerId")
+                        .field("component-id", &self.component_id)
+                        .field("worker-name", &self.worker_name)
+                        .finish()
+                }
+            }
             pub type NodeIndex = i32;
             pub type ResourceId = u64;
             #[repr(u8)]
@@ -368,7 +417,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]wasm-rpc"]
                             fn drop(_: u32);
@@ -405,7 +454,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]future-invoke-result"]
                             fn drop(_: u32);
@@ -442,7 +491,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]cancellation-token"]
                             fn drop(_: u32);
@@ -453,23 +502,57 @@ pub mod golem {
             }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn new(location: &Uri) -> Self {
+                pub fn new(worker_id: &WorkerId) -> Self {
                     unsafe {
-                        let Uri { value: value0 } = location;
-                        let vec1 = value0;
-                        let ptr1 = vec1.as_ptr().cast::<u8>();
-                        let len1 = vec1.len();
+                        let WorkerId {
+                            component_id: component_id0,
+                            worker_name: worker_name0,
+                        } = worker_id;
+                        let ComponentId { uuid: uuid1 } = component_id0;
+                        let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                        let vec3 = worker_name0;
+                        let ptr3 = vec3.as_ptr().cast::<u8>();
+                        let len3 = vec3.len();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[constructor]wasm-rpc"]
-                            fn wit_import(_: *mut u8, _: usize) -> i32;
+                            fn wit_import(_: i64, _: i64, _: *mut u8, _: usize) -> i32;
                         }
                         #[cfg(not(target_arch = "wasm32"))]
-                        fn wit_import(_: *mut u8, _: usize) -> i32 {
+                        fn wit_import(_: i64, _: i64, _: *mut u8, _: usize) -> i32 {
                             unreachable!()
                         }
-                        let ret = wit_import(ptr1.cast_mut(), len1);
+                        let ret = wit_import(
+                            _rt::as_i64(high_bits2),
+                            _rt::as_i64(low_bits2),
+                            ptr3.cast_mut(),
+                            len3,
+                        );
+                        WasmRpc::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn ephemeral(component_id: ComponentId) -> WasmRpc {
+                    unsafe {
+                        let ComponentId { uuid: uuid0 } = component_id;
+                        let Uuid { high_bits: high_bits1, low_bits: low_bits1 } = uuid0;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[static]wasm-rpc.ephemeral"]
+                            fn wit_import(_: i64, _: i64) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i64, _: i64) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            _rt::as_i64(high_bits1),
+                            _rt::as_i64(low_bits1),
+                        );
                         WasmRpc::from_handle(ret as u32)
                     }
                 }
@@ -722,7 +805,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke-and-await"]
                             fn wit_import(
@@ -1358,7 +1441,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke"]
                             fn wit_import(
@@ -1716,7 +1799,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.async-invoke-and-await"]
                             fn wit_import(
@@ -2004,7 +2087,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.schedule-invocation"]
                             fn wit_import(
@@ -2297,7 +2380,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.schedule-cancelable-invocation"]
                             fn wit_import(
@@ -2348,7 +2431,7 @@ pub mod golem {
                 pub fn subscribe(&self) -> Pollable {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.subscribe"]
                             fn wit_import(_: i32) -> i32;
@@ -2375,7 +2458,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.get"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2749,7 +2832,7 @@ pub mod golem {
                 pub fn cancel(&self) {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]cancellation-token.cancel"]
                             fn wit_import(_: i32);
@@ -3220,7 +3303,7 @@ pub mod golem {
                     }
                     let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                     extern "C" {
                         #[link_name = "extract-value"]
                         fn wit_import(
@@ -3984,7 +4067,7 @@ pub mod golem {
                     }
                     let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                     extern "C" {
                         #[link_name = "extract-type"]
                         fn wit_import(
@@ -4600,6 +4683,29 @@ mod _rt {
     pub use alloc_crate::vec::Vec;
     pub use alloc_crate::alloc;
     pub use alloc_crate::string::String;
+    pub fn as_i64<T: AsI64>(t: T) -> i64 {
+        t.as_i64()
+    }
+    pub trait AsI64 {
+        fn as_i64(self) -> i64;
+    }
+    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
+        fn as_i64(self) -> i64 {
+            (*self).as_i64()
+        }
+    }
+    impl AsI64 for i64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
+    impl AsI64 for u64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
     pub fn as_i32<T: AsI32>(t: T) -> i32 {
         t.as_i32()
     }
@@ -4657,29 +4763,6 @@ mod _rt {
         #[inline]
         fn as_i32(self) -> i32 {
             self as i32
-        }
-    }
-    pub fn as_i64<T: AsI64>(t: T) -> i64 {
-        t.as_i64()
-    }
-    pub trait AsI64 {
-        fn as_i64(self) -> i64;
-    }
-    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
-        fn as_i64(self) -> i64 {
-            (*self).as_i64()
-        }
-    }
-    impl AsI64 for i64 {
-        #[inline]
-        fn as_i64(self) -> i64 {
-            self as i64
-        }
-    }
-    impl AsI64 for u64 {
-        #[inline]
-        fn as_i64(self) -> i64 {
-            self as i64
         }
     }
     pub fn as_f32<T: AsF32>(t: T) -> f32 {
@@ -4749,54 +4832,57 @@ mod _rt {
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:rpc:wasm-rpc:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2291] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf4\x10\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2450] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x93\x12\x01A\x02\x01\
 A\x08\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01\
 @\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/\
 wall-clock@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04sel\
 f\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\
 \0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\
 \0\x04poll\x01\x06\x03\0\x12wasi:io/poll@0.2.0\x05\x01\x02\x03\0\0\x08datetime\x02\
-\x03\0\x01\x08pollable\x01BK\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
-\x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01z\x04\0\x0anode-index\x03\0\x04\x01w\
-\x04\0\x0bresource-id\x03\0\x06\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-\
-mode\x03\0\x08\x01o\x02s\x05\x01p\x0a\x01k\x05\x01o\x02s\x0c\x01p\x0d\x01ps\x01p\
-\x05\x01o\x02\x0c\x0c\x01o\x02\x07\x09\x01q\x16\x0brecord-type\x01\x0b\0\x0cvari\
-ant-type\x01\x0e\0\x09enum-type\x01\x0f\0\x0aflags-type\x01\x0f\0\x0atuple-type\x01\
-\x10\0\x09list-type\x01\x05\0\x0boption-type\x01\x05\0\x0bresult-type\x01\x11\0\x0c\
-prim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0c\
-prim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0d\
-prim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\
-\0\x10prim-string-type\0\0\x0bhandle-type\x01\x12\0\x04\0\x0dwit-type-node\x03\0\
-\x13\x01p\x14\x01r\x01\x05nodes\x15\x04\0\x08wit-type\x03\0\x16\x01r\x01\x05valu\
-es\x04\0\x03uri\x03\0\x18\x01o\x02y\x0c\x01p\x7f\x01j\x01\x0c\x01\x0c\x01o\x02\x19\
-w\x01q\x16\x0crecord-value\x01\x10\0\x0dvariant-value\x01\x1a\0\x0aenum-value\x01\
-y\0\x0bflags-value\x01\x1b\0\x0btuple-value\x01\x10\0\x0alist-value\x01\x10\0\x0c\
-option-value\x01\x0c\0\x0cresult-value\x01\x1c\0\x07prim-u8\x01}\0\x08prim-u16\x01\
-{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08\
-prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\
-\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1d\
-\0\x04\0\x08wit-node\x03\0\x1e\x01p\x1f\x01r\x01\x05nodes\x20\x04\0\x09wit-value\
-\x03\0!\x01r\x02\x05value\"\x03typ\x17\x04\0\x0evalue-and-type\x03\0#\x01q\x04\x0e\
-protocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-er\
-ror\x01s\0\x04\0\x09rpc-error\x03\0%\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-i\
-nvoke-result\x03\x01\x04\0\x12cancellation-token\x03\x01\x01i'\x01@\x01\x08locat\
-ion\x19\0*\x04\0\x15[constructor]wasm-rpc\x01+\x01h'\x01p\"\x01j\x01\"\x01&\x01@\
-\x03\x04self,\x0dfunction-names\x0ffunction-params-\0.\x04\0![method]wasm-rpc.in\
-voke-and-await\x01/\x01j\0\x01&\x01@\x03\x04self,\x0dfunction-names\x0ffunction-\
-params-\00\x04\0\x17[method]wasm-rpc.invoke\x011\x01i(\x01@\x03\x04self,\x0dfunc\
-tion-names\x0ffunction-params-\02\x04\0'[method]wasm-rpc.async-invoke-and-await\x01\
-3\x01@\x04\x04self,\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params-\x01\
-\0\x04\0$[method]wasm-rpc.schedule-invocation\x014\x01i)\x01@\x04\x04self,\x0esc\
-heduled-time\x01\x0dfunction-names\x0ffunction-params-\05\x04\0/[method]wasm-rpc\
-.schedule-cancelable-invocation\x016\x01h(\x01i\x03\x01@\x01\x04self7\08\x04\0&[\
-method]future-invoke-result.subscribe\x019\x01k.\x01@\x01\x04self7\0:\x04\0\x20[\
-method]future-invoke-result.get\x01;\x01h)\x01@\x01\x04self<\x01\0\x04\0![method\
-]cancellation-token.cancel\x01=\x01@\x01\x03vnt$\0\"\x04\0\x0dextract-value\x01>\
-\x01@\x01\x03vnt$\0\x17\x04\0\x0cextract-type\x01?\x03\0\x15golem:rpc/types@0.1.\
-3\x05\x04\x04\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08wasm-rpc\x03\0\0\0G\
-\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen\
--rust\x060.36.0";
+\x03\0\x01\x08pollable\x01BS\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
+\x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\
+\0\x04uuid\x03\0\x04\x01r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\
+\x0ccomponent-id\x07\x0bworker-names\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0a\
+node-index\x03\0\x0a\x01w\x04\0\x0bresource-id\x03\0\x0c\x01m\x02\x05owned\x08bo\
+rrowed\x04\0\x0dresource-mode\x03\0\x0e\x01o\x02s\x0b\x01p\x10\x01k\x0b\x01o\x02\
+s\x12\x01p\x13\x01ps\x01p\x0b\x01o\x02\x12\x12\x01o\x02\x0d\x0f\x01q\x16\x0breco\
+rd-type\x01\x11\0\x0cvariant-type\x01\x14\0\x09enum-type\x01\x15\0\x0aflags-type\
+\x01\x15\0\x0atuple-type\x01\x16\0\x09list-type\x01\x0b\0\x0boption-type\x01\x0b\
+\0\x0bresult-type\x01\x17\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32\
+-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-\
+s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0ep\
+rim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\
+\x18\0\x04\0\x0dwit-type-node\x03\0\x19\x01p\x1a\x01r\x01\x05nodes\x1b\x04\0\x08\
+wit-type\x03\0\x1c\x01r\x01\x05values\x04\0\x03uri\x03\0\x1e\x01o\x02y\x12\x01p\x7f\
+\x01j\x01\x12\x01\x12\x01o\x02\x1fw\x01q\x16\x0crecord-value\x01\x16\0\x0dvarian\
+t-value\x01\x20\0\x0aenum-value\x01y\0\x0bflags-value\x01!\0\x0btuple-value\x01\x16\
+\0\x0alist-value\x01\x16\0\x0coption-value\x01\x12\0\x0cresult-value\x01\"\0\x07\
+prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-\
+s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float\
+32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bp\
+rim-string\x01s\0\x06handle\x01#\0\x04\0\x08wit-node\x03\0$\x01p%\x01r\x01\x05no\
+des&\x04\0\x09wit-value\x03\0'\x01r\x02\x05value(\x03typ\x1d\x04\0\x0evalue-and-\
+type\x03\0)\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\
+\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0+\x04\0\x08wasm-rpc\x03\
+\x01\x04\0\x14future-invoke-result\x03\x01\x04\0\x12cancellation-token\x03\x01\x01\
+i-\x01@\x01\x09worker-id\x09\00\x04\0\x15[constructor]wasm-rpc\x011\x01@\x01\x0c\
+component-id\x07\00\x04\0\x1a[static]wasm-rpc.ephemeral\x012\x01h-\x01p(\x01j\x01\
+(\x01,\x01@\x03\x04self3\x0dfunction-names\x0ffunction-params4\05\x04\0![method]\
+wasm-rpc.invoke-and-await\x016\x01j\0\x01,\x01@\x03\x04self3\x0dfunction-names\x0f\
+function-params4\07\x04\0\x17[method]wasm-rpc.invoke\x018\x01i.\x01@\x03\x04self\
+3\x0dfunction-names\x0ffunction-params4\09\x04\0'[method]wasm-rpc.async-invoke-a\
+nd-await\x01:\x01@\x04\x04self3\x0escheduled-time\x01\x0dfunction-names\x0ffunct\
+ion-params4\x01\0\x04\0$[method]wasm-rpc.schedule-invocation\x01;\x01i/\x01@\x04\
+\x04self3\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params4\0<\x04\0/[\
+method]wasm-rpc.schedule-cancelable-invocation\x01=\x01h.\x01i\x03\x01@\x01\x04s\
+elf>\0?\x04\0&[method]future-invoke-result.subscribe\x01@\x01k5\x01@\x01\x04self\
+>\0\xc1\0\x04\0\x20[method]future-invoke-result.get\x01B\x01h/\x01@\x01\x04self\xc3\
+\0\x01\0\x04\0![method]cancellation-token.cancel\x01D\x01@\x01\x03vnt*\0(\x04\0\x0d\
+extract-value\x01E\x01@\x01\x03vnt*\0\x1d\x04\0\x0cextract-type\x01F\x03\0\x15go\
+lem:rpc/types@0.2.0\x05\x04\x04\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08w\
+asm-rpc\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.22\
+0.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

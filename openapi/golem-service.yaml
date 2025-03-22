@@ -7167,13 +7167,13 @@ components:
     DynamicLinkedWasmRpc:
       type: object
       properties:
-        targetInterfaceName:
-          description: Maps resource names within the dynamic linked interface to target interfaces
+        targets:
+          description: Maps resource names within the dynamic linked interface to target information
           type: object
           additionalProperties:
-            type: string
+            $ref: '#/components/schemas/WasmRpcTarget'
       required:
-      - targetInterfaceName
+      - targets
     DynamicLinking:
       type: object
       properties:
@@ -7469,6 +7469,19 @@ components:
       required:
       - name
       - version
+    WasmRpcTarget:
+      type: object
+      properties:
+        interfaceName:
+          type: string
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+      required:
+      - interfaceName
+      - componentName
+      - componentType
 tags:
 - name: ApiDefinition
 - name: ApiDeployment

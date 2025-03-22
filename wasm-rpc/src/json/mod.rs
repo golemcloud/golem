@@ -47,8 +47,8 @@ struct TypeAnnotatedValueJson {
 /// The JSON format is backward compatible with `TypeAnnotatedValueJson`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OptionallyTypeAnnotatedValueJson {
-    typ: Option<AnalysedType>,
-    value: serde_json::Value,
+    pub typ: Option<AnalysedType>,
+    pub value: serde_json::Value,
 }
 
 impl OptionallyTypeAnnotatedValueJson {

@@ -16,7 +16,10 @@ use test_r::{inherit_test_dep, test};
 
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
-use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
+use golem_common::model::ComponentType;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
@@ -44,11 +47,22 @@ async fn counter_resource_test_1(
         .with_dynamic_linking(&[(
             "rpc:counters-client/counters-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![
-                    ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                targets: HashMap::from_iter(vec![
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
                     (
                         "counter".to_string(),
-                        "rpc:counters-exports/api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                 ]),
             }),
@@ -102,11 +116,22 @@ async fn counter_resource_test_1_with_restart(
         .with_dynamic_linking(&[(
             "rpc:counters-client/counters-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![
-                    ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                targets: HashMap::from_iter(vec![
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
                     (
                         "counter".to_string(),
-                        "rpc:counters-exports/api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                 ]),
             }),
@@ -164,11 +189,22 @@ async fn context_inheritance(
         .with_dynamic_linking(&[(
             "rpc:counters-client/counters-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![
-                    ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                targets: HashMap::from_iter(vec![
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
                     (
                         "counter".to_string(),
-                        "rpc:counters-exports/api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                 ]),
             }),

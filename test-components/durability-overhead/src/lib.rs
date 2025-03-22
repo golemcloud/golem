@@ -1,3 +1,4 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use golem_rust::bindings::golem::api::host::set_oplog_persistence_level;
