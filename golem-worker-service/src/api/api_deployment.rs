@@ -19,7 +19,7 @@ use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::{ApiDeployment, ApiDeploymentRequest};
 use golem_worker_service_base::gateway_api_definition::ApiDefinitionId;
 use golem_worker_service_base::gateway_api_deployment;
-use golem_worker_service_base::gateway_api_deployment::{ApiSite, ApiSiteString};
+use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentService;
 use poem_openapi::param::{Path, Query};
@@ -31,8 +31,6 @@ use tracing::Instrument;
 pub struct ApiDeploymentApi {
     deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 }
-
-const DEFAULT_HOST: &str = "localhost:9006";
 
 #[OpenApi(prefix_path = "/v1/api/deployments", tag = ApiTags::ApiDeployment)]
 impl ApiDeploymentApi {
@@ -52,14 +50,7 @@ impl ApiDeploymentApi {
         &self,
         payload: Json<ApiDeploymentRequest>,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
-        let record = recorded_http_api_request!(
-            "deploy",
-            site = payload
-                .0
-                .clone()
-                .site
-                .map_or(DEFAULT_HOST.to_string(), |s| s.to_string())
-        );
+        let record = recorded_http_api_request!("deploy", site = payload.0.site.to_string());
 
         let response = self
             .create_or_update_internal(payload.0)
@@ -82,15 +73,10 @@ impl ApiDeploymentApi {
             })
             .collect::<Vec<ApiDefinitionIdWithVersion>>();
 
-        let site = payload.site.clone().unwrap_or_else(|| ApiSite {
-            host: DEFAULT_HOST.to_string(),
-            subdomain: None,
-        });
-
         let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
             namespace: namespace.clone(),
             api_definition_keys: api_definition_infos,
-            site: site.clone(),
+            site: payload.site.clone(),
         };
 
         self.deployment_service
@@ -99,7 +85,7 @@ impl ApiDeploymentApi {
 
         let data = self
             .deployment_service
-            .get_by_site(&ApiSiteString::from(&site))
+            .get_by_site(&ApiSiteString::from(&payload.site))
             .await?;
 
         let deployment = data.ok_or(ApiEndpointError::internal(safe(

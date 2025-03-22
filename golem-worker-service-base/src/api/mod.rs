@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use api_definition::*;
 pub use common::*;
-pub use custom_http_request_api::*;
+pub use custom_http_request::*;
 pub use error::*;
 pub use healthcheck::*;
-pub use register_api_definition_api::*;
 
 // Components and request data that can be reused for implementing server API endpoints
+mod api_definition;
 mod common;
-mod custom_http_request_api;
+mod custom_http_request;
 mod error;
 mod healthcheck;
-mod register_api_definition_api;

@@ -41,7 +41,7 @@ use golem_common::grpc::{
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 
 #[derive(Clone)]
@@ -258,29 +258,30 @@ impl GrpcApiDefinitionService {
             .api_definition
             .ok_or(bad_request("Missing Api Definition"))?;
 
-        let internal_definition = match definition {
+        let result = match definition {
             create_api_definition_request::ApiDefinition::Definition(definition) => {
-                definition.clone().try_into().map_err(bad_request)?
+                let converted = definition.clone().try_into().map_err(bad_request)?;
+                self.definition_service
+                    .create(
+                        &converted,
+                        &DefaultNamespace::default(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .await?
             }
             create_api_definition_request::ApiDefinition::Openapi(definition) => {
-                let value = OpenApiHttpApiDefinitionRequest(
+                let converted = OpenApiHttpApiDefinition(
                     serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?,
                 );
-
-                value
-                    .to_http_api_definition_request()
-                    .map_err(bad_request)?
+                self.definition_service
+                    .create_with_oas(
+                        &converted,
+                        &DefaultNamespace::default(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .await?
             }
         };
-
-        let result = self
-            .definition_service
-            .create(
-                &internal_definition,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await?;
 
         let definition =
             golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition::from(
@@ -300,29 +301,30 @@ impl GrpcApiDefinitionService {
             .api_definition
             .ok_or(bad_request("Missing Api Definition"))?;
 
-        let internal_definition = match definition {
+        let result = match definition {
             update_api_definition_request::ApiDefinition::Definition(definition) => {
-                definition.clone().try_into().map_err(bad_request)?
+                let converted = definition.clone().try_into().map_err(bad_request)?;
+                self.definition_service
+                    .update(
+                        &converted,
+                        &DefaultNamespace::default(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .await?
             }
             update_api_definition_request::ApiDefinition::Openapi(definition) => {
-                let value = OpenApiHttpApiDefinitionRequest(
+                let converted = OpenApiHttpApiDefinition(
                     serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?,
                 );
-
-                value
-                    .to_http_api_definition_request()
-                    .map_err(bad_request)?
+                self.definition_service
+                    .update_with_oas(
+                        &converted,
+                        &DefaultNamespace::default(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .await?
             }
         };
-
-        let result = self
-            .definition_service
-            .update(
-                &internal_definition,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await?;
 
         let definition =
             golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition::from(

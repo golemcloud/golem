@@ -47,15 +47,17 @@ use golem_wasm_rpc::ValueAndType;
 use std::sync::Arc;
 use tonic::Streaming;
 
+use super::WorkerServiceInternal;
+
 pub struct ForwardingWorkerService {
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    component_service: Arc<dyn ComponentService>,
 }
 
 impl ForwardingWorkerService {
     pub fn new(
         worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService>,
     ) -> Self {
         Self {
             worker_executor,
@@ -76,8 +78,7 @@ impl ForwardingWorkerService {
     const RETRY_COUNT: usize = 5;
 }
 
-#[async_trait]
-impl WorkerService for ForwardingWorkerService {
+impl WorkerServiceInternal for ForwardingWorkerService {
     fn client_protocol(&self) -> GolemClientProtocol {
         panic!("There is no worker-service, cannot get client protocol")
     }
@@ -98,6 +99,13 @@ impl WorkerService for ForwardingWorkerService {
         panic!("There is no worker-service, cannot create api-security client")
     }
 
+    fn component_service(&self) -> &Arc<dyn ComponentService> {
+        &self.component_service
+    }
+}
+
+#[async_trait]
+impl WorkerService for ForwardingWorkerService {
     async fn create_worker(
         &self,
         request: LaunchNewWorkerRequest,

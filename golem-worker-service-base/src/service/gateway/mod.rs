@@ -12,8 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
+use golem_common::model::ComponentId;
+use golem_service_base::model::ComponentName;
 pub mod api_definition;
 pub mod api_definition_validator;
 pub mod api_deployment;
 pub mod http_api_definition_validator;
 pub mod security_scheme;
+
+#[async_trait]
+pub trait ConversionContext: Send + Sync {
+    async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String>;
+    async fn get_component_name(&self, component_id: &ComponentId)
+        -> Result<ComponentName, String>;
+
+    fn boxed<'a>(self) -> BoxConversionContext<'a>
+    where
+        Self: Sized + 'a,
+    {
+        Box::new(self)
+    }
+}
+
+pub type BoxConversionContext<'a> = Box<dyn ConversionContext + 'a>;

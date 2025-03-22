@@ -36,6 +36,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
+use super::WorkerServiceInternal;
+
 pub struct K8sWorkerService {
     namespace: K8sNamespace,
     local_host: String,
@@ -50,6 +52,7 @@ pub struct K8sWorkerService {
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
+    component_service: Arc<dyn ComponentService>,
 }
 
 impl K8sWorkerService {
@@ -62,34 +65,9 @@ impl K8sWorkerService {
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        timeout: Duration,
-        service_annotations: Option<std::collections::BTreeMap<String, String>>,
-        client_protocol: GolemClientProtocol,
-    ) -> Self {
-        Self::new_base(
-            namespace,
-            routing_type,
-            verbosity,
-            component_service,
-            shard_manager,
-            rdb,
-            timeout,
-            service_annotations,
-            client_protocol,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        namespace: &K8sNamespace,
-        routing_type: &K8sRoutingType,
-        verbosity: Level,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync>,
+        rdb: Arc<dyn Rdb + Send + Sync>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         client_protocol: GolemClientProtocol,
@@ -100,9 +78,9 @@ impl K8sWorkerService {
             Self::HTTP_PORT,
             Self::GRPC_PORT,
             Self::CUSTOM_REQUEST_PORT,
-            component_service,
-            shard_manager,
-            rdb,
+            &component_service,
+            &shard_manager,
+            &rdb,
             verbosity,
             true,
         )
@@ -261,12 +239,12 @@ impl K8sWorkerService {
                 http_routing.port,
             )
             .await,
+            component_service: component_service.clone(),
         }
     }
 }
 
-#[async_trait]
-impl WorkerService for K8sWorkerService {
+impl WorkerServiceInternal for K8sWorkerService {
     fn client_protocol(&self) -> GolemClientProtocol {
         self.client_protocol
     }
@@ -287,6 +265,13 @@ impl WorkerService for K8sWorkerService {
         self.api_security_client.clone()
     }
 
+    fn component_service(&self) -> &Arc<dyn ComponentService> {
+        &self.component_service
+    }
+}
+
+#[async_trait]
+impl WorkerService for K8sWorkerService {
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
     }
