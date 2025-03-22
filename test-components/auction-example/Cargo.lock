@@ -224,7 +224,9 @@ dependencies = [
 
 [[package]]
 name = "golem-rust"
-version = "0.0.0"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c988a314d2b3a6f1ccf8cf26f24253837a62e257f61f57ad33d30f83c17a2f2d"
 dependencies = [
  "golem-rust-macro",
  "golem-wasm-rpc",
@@ -236,7 +238,9 @@ dependencies = [
 
 [[package]]
 name = "golem-rust-macro"
-version = "0.0.0"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bdaa58a3dfea9eec292d4e0529358be7fd4240cdc459dc7b5bf203727559edc"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -246,7 +250,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.0"
+version = "1.2.0-rc4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80de906d46b1ff00f7cd695ad1c6b57f4679089063ae9d65a0226e7d2c424cc6"
 dependencies = [
  "cargo_metadata",
  "chrono",
