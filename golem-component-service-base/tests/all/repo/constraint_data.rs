@@ -45,7 +45,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstr
                     interface_name: "golem:it/api".to_string(),
                     function_name: "get-cart-contents".to_string(),
                 },
-                vec![str()],
+                vec![],
                 vec![list(record(vec![
                     NameTypePair {
                         name: "product-id".to_string(),

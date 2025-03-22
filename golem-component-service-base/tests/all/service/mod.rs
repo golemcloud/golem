@@ -46,7 +46,7 @@ use golem_component_service_base::repo::component::{
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
-    LazyComponentService,
+    LazyComponentService, ParameterTypeConflict, ReturnTypeConflict,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
@@ -305,6 +305,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
             &DefaultComponentOwner,
         )
         .await
+        .map_err(|err| err.to_string())
         .unwrap();
 
     let component1_result = component_service
@@ -650,10 +651,14 @@ async fn test_component_constraint_incompatible_updates(
                 interface_name: "golem:it/api".to_string(),
                 function_name: "initialize-cart".to_string(),
             },
-            existing_parameter_types: vec![u64()],
-            new_parameter_types: vec![str()],
-            existing_result_types: vec![str()],
-            new_result_types: vec![],
+            parameter_type_conflict: Some(ParameterTypeConflict {
+                existing: vec![u64()],
+                new: vec![str()],
+            }),
+            return_type_conflict: Some(ReturnTypeConflict {
+                existing: vec![str()],
+                new: vec![],
+            }),
         }],
     })
     .to_safe_string();

@@ -520,13 +520,29 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     return_conflict = true;
                 }
 
-                if parameter_conflict || return_conflict {
+                let parameter_conflict = if parameter_conflict {
+                    Some(ParameterTypeConflict {
+                        existing: existing_function_call.parameter_types().clone(),
+                        new: new_registry_value.clone().argument_types().clone(),
+                    })
+                } else {
+                    None
+                };
+
+                let return_conflict = if return_conflict {
+                    Some(ReturnTypeConflict {
+                        existing: existing_function_call.return_types().clone(),
+                        new: new_return_types,
+                    })
+                } else {
+                    None
+                };
+
+                if parameter_conflict.is_some() || return_conflict.is_some() {
                     conflicting_functions.push(ConflictingFunction {
                         function: existing_function_call.function_key().clone(),
-                        existing_parameter_types: existing_function_call.parameter_types().clone(),
-                        new_parameter_types: new_registry_value.clone().argument_types().clone(),
-                        existing_result_types: existing_function_call.return_types().clone(),
-                        new_result_types: new_return_types,
+                        parameter_type_conflict: parameter_conflict,
+                        return_type_conflict: return_conflict,
                     });
                 }
             } else {
@@ -2065,38 +2081,63 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 #[derive(Debug)]
 pub struct ConflictingFunction {
     pub function: RegistryKey,
-    pub existing_parameter_types: Vec<AnalysedType>,
-    pub new_parameter_types: Vec<AnalysedType>,
-    pub existing_result_types: Vec<AnalysedType>,
-    pub new_result_types: Vec<AnalysedType>,
+    pub parameter_type_conflict: Option<ParameterTypeConflict>,
+    pub return_type_conflict: Option<ReturnTypeConflict>,
+}
+
+#[derive(Debug)]
+pub struct ParameterTypeConflict {
+    pub existing: Vec<AnalysedType>,
+    pub new: Vec<AnalysedType>,
+}
+
+#[derive(Debug)]
+pub struct ReturnTypeConflict {
+    pub existing: Vec<AnalysedType>,
+    pub new: Vec<AnalysedType>,
 }
 
 impl Display for ConflictingFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Function: {}", self.function)?;
-        writeln!(f, "  Parameter Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_parameter_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_parameter_types)
-        )?;
 
-        writeln!(f, "  Result Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_result_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_result_types)
-        )?;
+        match self.parameter_type_conflict {
+            Some(ref conflict) => {
+                writeln!(f, "  Parameter Type Conflict:")?;
+                writeln!(
+                    f,
+                    "    Existing: {}",
+                    internal::convert_to_pretty_types(&conflict.existing)
+                )?;
+                writeln!(
+                    f,
+                    "    New:      {}",
+                    internal::convert_to_pretty_types(&conflict.new)
+                )?;
+            }
+            None => {
+                writeln!(f, "  Parameter Type Conflict: None")?;
+            }
+        }
+
+        match self.return_type_conflict {
+            Some(ref conflict) => {
+                writeln!(f, "  Result Type Conflict:")?;
+                writeln!(
+                    f,
+                    "    Existing: {}",
+                    internal::convert_to_pretty_types(&conflict.existing)
+                )?;
+                writeln!(
+                    f,
+                    "    New:      {}",
+                    internal::convert_to_pretty_types(&conflict.new)
+                )?;
+            }
+            None => {
+                writeln!(f, "  Result Type Conflict: None")?;
+            }
+        }
 
         Ok(())
     }
