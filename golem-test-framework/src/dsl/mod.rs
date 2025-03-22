@@ -597,6 +597,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 None,
             )
             .await
+            .unwrap()
     }
 
     async fn update_component_with_files(
@@ -615,6 +616,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 None,
             )
             .await
+            .unwrap()
     }
 
     async fn start_worker(

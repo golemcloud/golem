@@ -295,12 +295,12 @@ pub mod identity_provider_metadata_serde {
 pub mod constraint_serde {
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-    use golem_common::model::component_constraint::FunctionConstraintCollection;
+    use golem_common::model::component_constraint::FunctionConstraints;
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &FunctionConstraintCollection) -> Result<Bytes, String> {
+    pub fn serialize(value: &FunctionConstraints) -> Result<Bytes, String> {
         let proto_value: FunctionConstraintCollectionProto =
             FunctionConstraintCollectionProto::from(value.clone());
 
@@ -310,7 +310,7 @@ pub mod constraint_serde {
         Ok(bytes.freeze())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraintCollection, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraints, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
@@ -318,7 +318,7 @@ pub mod constraint_serde {
                 let proto_value: FunctionConstraintCollectionProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                let value = FunctionConstraintCollection::try_from(proto_value.clone())?;
+                let value = FunctionConstraints::try_from(proto_value.clone())?;
 
                 Ok(value)
             }
