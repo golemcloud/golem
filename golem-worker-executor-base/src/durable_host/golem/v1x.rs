@@ -430,14 +430,31 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem_api_1_x::host::Uuid> {
+        let durability = Durability::<(u64, u64), SerializableError>::new(
+            self,
+            "golem api",
+            "generate_idempotency_key",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
             .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.current_oplog_index().await;
 
-        let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-        let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
+        // NOTE: Even though IdempotencyKey::derived is used, we still need to persist this,
+        //       because the derived key depends on the oplog index.
+        let (hi, lo) = if durability.is_live() {
+            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
+            let result: Result<(u64, u64), anyhow::Error> = Ok(uuid.as_u64_pair());
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }?;
+        let uuid = Uuid::from_u64_pair(hi, lo);
         Ok(uuid.into())
     }
 
