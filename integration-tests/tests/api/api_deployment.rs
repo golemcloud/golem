@@ -280,7 +280,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
             version: api_definition.version.clone(),
         }],
         site: ApiSite {
-            host: "localhost".to_string(),
+            host: "domain1".to_string(),
             subdomain: Some("subdomain1".to_string()),
         },
     };
@@ -291,7 +291,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
             version: api_definition.version.clone(),
         }],
         site: ApiSite {
-            host: "localhost".to_string(),
+            host: "domain2".to_string(),
             subdomain: Some("subdomain2".to_string()),
         },
     };
@@ -329,7 +329,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
     // Delete one of the API deployments and see if component can be updated, and it
     // should fail as the component is still being used in subdomain2
     deps.worker_service()
-        .delete_api_deployment("subdomain1.localhost")
+        .delete_api_deployment("subdomain1.domain1")
         .await
         .unwrap();
 
@@ -352,7 +352,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
 
     // Delete the final API deployment and see if component can be updated, and it should succeed
     deps.worker_service()
-        .delete_api_deployment("subdomain2.localhost")
+        .delete_api_deployment("subdomain2.domain2")
         .await
         .unwrap();
 
@@ -373,8 +373,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
 // Deploy 2 API definitions (same component-id),
 // of which only one makes use of a worker function (get-cart-contents)
 // Update the component to a different wasm file, and it should fail.
-// Delete the first API deployment, and the update should still fail.
-// Delete the second API deployment, and the update should succeed.
+// Delete the API deployment that uses worker function, and the update should succeed.
 #[test]
 #[tracing::instrument]
 async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedTestDependencies) {
@@ -409,8 +408,8 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
             version: api_definition1.version.clone(),
         }],
         site: ApiSite {
-            host: "localhost".to_string(),
-            subdomain: Some("s1".to_string()),
+            host: "domain3".to_string(),
+            subdomain: Some("subdomain3".to_string()),
         },
     };
 
@@ -420,8 +419,8 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
             version: api_definition2.version.clone(),
         }],
         site: ApiSite {
-            host: "localhost".to_string(),
-            subdomain: Some("s2".to_string()),
+            host: "domain4".to_string(),
+            subdomain: Some("subdomain4".to_string()),
         },
     };
 
@@ -457,7 +456,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     // Delete API deployment that was using the worker function
     deps.worker_service()
-        .delete_api_deployment("s2.localhost")
+        .delete_api_deployment("subdomain4.domain4")
         .await
         .unwrap();
 
@@ -476,7 +475,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     // Delete the final API deployment and cleanup
     deps.worker_service()
-        .delete_api_deployment("s1.localhost")
+        .delete_api_deployment("domain3.subdomain3")
         .await
         .unwrap();
 }
