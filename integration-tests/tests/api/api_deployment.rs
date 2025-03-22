@@ -190,7 +190,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
-        "/path-1".to_string(),
+        "/path-4".to_string(),
     )
     .await;
 
@@ -269,7 +269,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
-        "/path-1".to_string(),
+        "/path-5".to_string(),
     )
     .await;
 
@@ -389,7 +389,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
-        "/path-1".to_string(),
+        "/path-6".to_string(),
     )
     .await;
 
@@ -398,7 +398,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
-        "/path-1".to_string(),
+        "/path-7".to_string(),
     )
     .await;
 
