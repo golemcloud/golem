@@ -18,10 +18,10 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     create_component_constraints_response, delete_component_constraints_response,
-    get_component_metadata_response, CreateComponentConstraintsRequest,
+    get_component_metadata_response, get_components_response, CreateComponentConstraintsRequest,
     CreateComponentConstraintsResponse, DeleteComponentConstraintsRequest,
-    DeleteComponentConstraintsResponse, GetComponentMetadataResponse, GetLatestComponentRequest,
-    GetVersionedComponentRequest,
+    DeleteComponentConstraintsResponse, GetComponentMetadataResponse, GetComponentsRequest,
+    GetComponentsResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
@@ -167,7 +167,7 @@ impl RemoteComponentService {
         }
     }
 
-    fn process_create_component_metadata_response(
+    fn process_create_component_constraint_response(
         response: CreateComponentConstraintsResponse,
     ) -> Result<FunctionConstraints, ComponentServiceError> {
         match response.result {
@@ -178,12 +178,12 @@ impl RemoteComponentService {
                 match response.components {
                     Some(constraints) => {
                         if let Some(constraints) = constraints.constraints {
-                            let constraints = FunctionConstraints::try_from(constraints)
-                                .map_err(|err| {
-                                ComponentServiceError::Internal(format!(
-                                    "Response conversion error: {err}"
-                                ))
-                            })?;
+                            let constraints =
+                                FunctionConstraints::try_from(constraints).map_err(|err| {
+                                    ComponentServiceError::Internal(format!(
+                                        "Response conversion error: {err}"
+                                    ))
+                                })?;
 
                             Ok(constraints)
                         } else {
@@ -360,7 +360,7 @@ where
             },
             Self::is_retriable,
         )
-            .await?;
+        .await?;
 
         Ok(value)
     }
