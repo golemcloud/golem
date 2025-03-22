@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let durability = Durability::<Instant, SerializableError>::new(
             self,
             "monotonic_clock",
-            "now", // TODO: fix in 2.0 - should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0
+            "subscribe_duration",
             DurableFunctionType::ReadLocal,
         )
         .await?;

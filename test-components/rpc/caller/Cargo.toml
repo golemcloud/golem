@@ -6,31 +6,27 @@ edition = "2021"
 [package.metadata.component.target]
 path = "wit-generated"
 
-[package.metadata.component.target.dependencies."golem:api"]
-path = "wit-generated/deps/golem-1.x"
+[package.metadata.component.target.dependencies]
+"wasi:io" = { path = "wit-generated/deps/io" }
+"wasi:clocks" = { path = "wit-generated/deps/clocks" }
+"golem:rpc" = { path = "wit-generated/deps/golem-rpc" }
+"golem:api" = { path = "wit-generated/deps/golem-1.x" }
+"rpc:counters-exports" = { path = "wit-generated/deps/rpc_counters-exports" }
+"rpc:counters-client" = { path = "wit-generated/deps/rpc_counters-client" }
+"rpc:ephemeral-client" = { path = "wit-generated/deps/rpc_ephemeral-client" }
+"rpc:caller-exports" = { path = "wit-generated/deps/rpc_caller-exports" }
 
-[package.metadata.component.target.dependencies."golem:rpc"]
-path = "wit-generated/deps/wasm-rpc"
+[package.metadata.component.bindings]
 
-[package.metadata.component.target.dependencies."rpc:caller-exports"]
-path = "wit-generated/deps/rpc_caller-exports"
-
-[package.metadata.component.target.dependencies."rpc:counters-client"]
-path = "wit-generated/deps/rpc_counters-client"
-
-[package.metadata.component.target.dependencies."rpc:counters-exports"]
-path = "wit-generated/deps/rpc_counters-exports"
-
-[package.metadata.component.target.dependencies."rpc:ephemeral-client"]
-path = "wit-generated/deps/rpc_ephemeral-client"
-
-[package.metadata.component.target.dependencies."wasi:clocks"]
-path = "wit-generated/deps/clocks"
-
-[package.metadata.component.target.dependencies."wasi:io"]
-path = "wit-generated/deps/io"
+[package.metadata.component.bindings.with]
+"wasi:io/poll@0.2.0" = "golem_rust::wasm_rpc::wasi::io::poll"
+"wasi:clocks/monotonic-clock@0.2.0" = "golem_rust::bindings::wasi::clocks::monotonic_clock"
+"wasi:clocks/wall-clock@0.2.0" = "golem_rust::wasm_rpc::wasi::clocks::wall_clock"
+"golem:rpc/types@0.2.0" = "golem_rust::wasm_rpc::golem_rpc_0_2_x::types"
+"golem:api/host@1.1.6" = "golem_rust::bindings::golem::api::host"
 
 [dependencies]
+golem-rust = { path = "../../../../golem-rust/golem-rust" }
 once_cell = "1.19.0"
 rand = "0.8.5"
 
@@ -39,7 +35,7 @@ version = "1.7.0"
 features = ["v4", "serde"]
 
 [dependencies.wit-bindgen-rt]
-version = "0.26.0"
+version = "0.40.0"
 features = ["bitflags"]
 
 [lib]

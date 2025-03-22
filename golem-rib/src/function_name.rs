@@ -674,6 +674,16 @@ impl ParsedFunctionName {
             _ => None,
         }
     }
+
+    pub fn is_static_method(&self) -> Option<&str> {
+        match &self.function {
+            ParsedFunctionReference::RawResourceStaticMethod { resource, .. }
+            | ParsedFunctionReference::IndexedResourceStaticMethod { resource, .. } => {
+                Some(resource)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(feature = "protobuf")]

@@ -80,7 +80,8 @@ rm -r wasm-rpc/wit/deps
 mkdir wasm-rpc/wit/deps
 cp wit/deps/io wasm-rpc/wit/deps
 cp wit/deps/clocks wasm-rpc/wit/deps
-cp wit/deps/wasm-rpc wasm-rpc/wit/deps
+cp wit/deps/golem-1.x wasm-rpc/wit/deps
+cp wit/deps/golem-rpc wasm-rpc/wit/deps
 """
 
 [tasks.wit-host]

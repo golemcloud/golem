@@ -1,10 +1,10 @@
-package golem:api@1.1.5;
+package golem:api@1.1.6;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use golem:rpc/types@0.1.3.{uri, wit-value};
     use wasi:clocks/monotonic-clock@0.2.0.{duration};
+    use golem:rpc/types@0.2.0.{component-id, uuid, worker-id};
 
     /// An index into the persistent log storing all performed operations of a worker
     type oplog-index = u64;
@@ -16,25 +16,8 @@ interface host {
         oplog-idx: oplog-index,
     }
 
-    /// Represents a Golem worker
-    record worker-id {
-        component-id: component-id,
-        worker-name: string
-    }
-
-    /// Represents a Golem component
-    record component-id {
-        uuid: uuid,
-    }
-
     /// Represents a Golem component's version
     type component-version = u64;
-
-    /// UUID
-    record uuid {
-      high-bits: u64,
-      low-bits: u64
-    }
 
     /// Represents a Golem Cloud account
     record account-id {
@@ -188,18 +171,18 @@ interface host {
     complete-promise: func(promise-id: promise-id, data: list<u8>) -> bool;
 
     /// Deletes the given promise
-    delete-promise: func(promise-id: promise-id) -> ();
+    delete-promise: func(promise-id: promise-id);
 
     /// Returns the current position in the persistent op log
     get-oplog-index: func() -> oplog-index;
 
     /// Makes the current worker travel back in time and continue execution from the given position in the persistent
     /// op log.
-    set-oplog-index: func(oplog-idx: oplog-index) -> ();
+    set-oplog-index: func(oplog-idx: oplog-index);
 
     /// Blocks the execution until the oplog has been written to at least the specified number of replicas,
     /// or the maximum number of replicas if the requested number is higher.
-    oplog-commit: func(replicas: u8) -> ();
+    oplog-commit: func(replicas: u8);
 
     /// Marks the beginning of an atomic operation.
     /// In case of a failure within the region selected by `mark-begin-operation` and `mark-end-operation`
@@ -209,21 +192,21 @@ interface host {
 
     /// Commits this atomic operation. After `mark-end-operation` is called for a given index, further calls
     /// with the same parameter will do nothing.
-    mark-end-operation: func(begin: oplog-index) -> ();
+    mark-end-operation: func(begin: oplog-index);
 
     /// Gets the current retry policy associated with the worker
     get-retry-policy: func() -> retry-policy;
 
     /// Overrides the current retry policy associated with the worker. Following this call, `get-retry-policy` will return the
     /// new retry policy.
-    set-retry-policy: func(new-retry-policy: retry-policy) -> ();
+    set-retry-policy: func(new-retry-policy: retry-policy);
 
     /// Gets the worker's current persistence level.
     get-oplog-persistence-level: func() -> persistence-level;
 
     /// Sets the worker's current persistence level. This can increase the performance of execution in cases where durable
     /// execution is not required.
-    set-oplog-persistence-level: func(new-persistence-level: persistence-level) -> ();
+    set-oplog-persistence-level: func(new-persistence-level: persistence-level);
 
     /// Gets the current idempotence mode. See `set-idempotence-mode` for details.
     get-idempotence-mode: func() -> bool;
@@ -232,7 +215,7 @@ interface host {
     /// True means side-effects are treated idempotent and Golem guarantees at-least-once semantics.
     /// In case of false the executor provides at-most-once semantics, failing the worker in case it is
     /// not known if the side effect was already executed.
-    set-idempotence-mode: func(idempotent: bool) -> ();
+    set-idempotence-mode: func(idempotent: bool);
 
     /// Generates an idempotency key. This operation will never be replayed —
     /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
@@ -241,7 +224,7 @@ interface host {
 
     /// Initiates an update attempt for the given worker. The function returns immediately once the request has been processed,
     /// not waiting for the worker to get updated.
-    update-worker:  func(worker-id: worker-id, target-version: component-version, mode: update-mode) -> ();
+    update-worker:  func(worker-id: worker-id, target-version: component-version, mode: update-mode);
 
     /// Get current worker metadata
     get-self-metadata: func() -> worker-metadata;
@@ -250,7 +233,7 @@ interface host {
     get-worker-metadata: func(worker-id: worker-id) -> option<worker-metadata>;
 
     /// Fork a worker to another worker at a given oplog index
-    fork-worker: func(source-worker-id: worker-id, target-worker-id: worker-id, oplog-idx-cut-off: oplog-index) -> ();
+    fork-worker: func(source-worker-id: worker-id, target-worker-id: worker-id, oplog-idx-cut-off: oplog-index);
 
     /// Revert a worker to a previous state
     revert-worker: func(worker-id: worker-id, revert-target: revert-worker-target);
@@ -273,9 +256,6 @@ interface host {
     /// Get the worker-id for a given component and worker name.
     /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
     resolve-worker-id-strict: func(component-reference: string, worker-name: string) -> option<worker-id>;
-
-    /// Construct an uri for a given worker id.
-    worker-uri: func(worker-id: worker-id) -> uri;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
