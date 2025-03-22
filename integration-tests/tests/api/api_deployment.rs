@@ -475,7 +475,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     // Delete the final API deployment and cleanup
     deps.worker_service()
-        .delete_api_deployment("domain3.subdomain3")
+        .delete_api_deployment("subdomain3.domain3")
         .await
         .unwrap();
 }
