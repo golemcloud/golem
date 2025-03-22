@@ -410,7 +410,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
         }],
         site: ApiSite {
             host: "localhost".to_string(),
-            subdomain: Some("subdomain1".to_string()),
+            subdomain: Some("s1".to_string()),
         },
     };
 
@@ -421,7 +421,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
         }],
         site: ApiSite {
             host: "localhost".to_string(),
-            subdomain: Some("subdomain2".to_string()),
+            subdomain: Some("s2".to_string()),
         },
     };
 
@@ -457,7 +457,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     // Delete API deployment that was using the worker function
     deps.worker_service()
-        .delete_api_deployment("subdomain2.localhost")
+        .delete_api_deployment("s2.localhost")
         .await
         .unwrap();
 
@@ -473,6 +473,12 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
         .await;
 
     check!(update_component.is_ok());
+
+    // Delete the final API deployment and cleanup
+    deps.worker_service()
+        .delete_api_deployment("s1.localhost")
+        .await
+        .unwrap();
 }
 
 #[test]
