@@ -15,17 +15,25 @@ crate-type = ["cdylib", "rlib"]
 golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
 serde = { version = "1.0.219", optional = true }
 serde_json = { version = "1.0.140", optional = true }
-uuid = { version = "1.15.1", features = ["v4"], optional = true }
+uuid = { version = "1", features = ["v4"] }
+golem-wasm-rpc = { version = "1.2.0-rc4", default-features = false, features = ["stub"] }
 wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [features]
-default = ["json", "macro", "uuid"]
+default = ["json", "macro"]
 json = ["dep:serde", "dep:serde_json"]
 macro = ["dep:golem-rust-macro"]
-uuid = ["dep:uuid"]
 
 [package.metadata.component]
 package = "golem:rust"
+
+[package.metadata.component.bindings]
+generate_unused_types = true
+
+[package.metadata.component.bindings.with]
+"golem:rpc/types@0.2.0" = "golem_wasm_rpc::golem_rpc_0_2_x::types"
+"wasi:io/poll@0.2.0" = "golem_wasm_rpc::wasi::io::poll"
+"wasi:clocks/wall-clock@0.2.0" = "golem_wasm_rpc::wasi::clocks::wall_clock"
 
 [package.metadata.component.target]
 path = "wit"
@@ -34,7 +42,7 @@ path = "wit"
 "golem:api" = { path = "wit/deps/golem-1.x" }
 "golem:durability" = { path = "wit/deps/golem-durability" }
 "golem:rdbms" = { path = "wit/deps/rdbms" }
-"golem:rpc" = { path = "wit/deps/wasm-rpc" }
+"golem:rpc" = { path = "wit/deps/golem-rpc" }
 "wasi:clocks" = { path = "wit/deps/clocks" }
 "wasi:io" = { path = "wit/deps/io" }
 "wasi:http" = { path = "wit/deps/http" }

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
 #[allow(unused)]
 #[allow(warnings)]
 #[rustfmt::skip]
@@ -23,19 +27,49 @@ mod json;
 #[cfg(feature = "json")]
 pub use json::*;
 
-#[cfg(feature = "uuid")]
-mod uuid;
-
 mod transaction;
 
 use bindings::golem::api::host::*;
+
+pub use golem_wasm_rpc as wasm_rpc;
 
 pub use bindings::golem::api::host::oplog_commit;
 pub use bindings::golem::api::host::PersistenceLevel;
 
 pub use transaction::*;
 
+#[cfg(feature = "macro")]
 pub use golem_rust_macro::*;
+
+impl Display for PromiseId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.worker_id, self.oplog_idx)
+    }
+}
+
+impl FromStr for PromiseId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 2 {
+            let worker_id = WorkerId::from_str(parts[0]).map_err(|_| {
+                format!("invalid worker id: {s} - expected format: <component_id>/<worker_name>")
+            })?;
+            let oplog_idx = parts[1]
+                .parse()
+                .map_err(|_| format!("invalid oplog index: {s} - expected integer"))?;
+            Ok(Self {
+                worker_id,
+                oplog_idx,
+            })
+        } else {
+            Err(format!(
+                "invalid promise id: {s} - expected format: <worker_id>/<oplog_idx>"
+            ))
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetryPolicy {
@@ -125,17 +159,8 @@ pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
 /// Generates an idempotency key. This operation will never be replayed —
 /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
 /// to introduce idempotence.
-#[cfg(feature = "uuid")]
-pub fn generate_idempotency_key() -> ::uuid::Uuid {
+pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(bindings::golem::api::host::generate_idempotency_key())
-}
-
-/// Generates an idempotency key. This operation will never be replayed —
-/// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
-/// to introduce idempotence.
-#[cfg(not(feature = "uuid"))]
-pub fn generate_idempotency_key() -> Uuid {
-    bindings::golem::api::host::generate_idempotency_key()
 }
 
 pub struct RetryPolicyGuard {
@@ -177,7 +202,7 @@ impl Drop for AtomicOperationGuard {
 /// Marks a block as an atomic operation
 ///
 /// When the returned guard is dropped, the operation gets committed.
-/// In case of a failure, the whole operation will be reexecuted during retry.
+/// In case of a failure, the whole operation will be re-executed during retry.
 #[must_use]
 pub fn mark_atomic_operation() -> AtomicOperationGuard {
     let begin = mark_begin_operation();
@@ -186,7 +211,7 @@ pub fn mark_atomic_operation() -> AtomicOperationGuard {
 
 /// Executes the given function as an atomic operation.
 ///
-/// In case of a failure, the whole operation will be reexecuted during retry.
+/// In case of a failure, the whole operation will be re-executed during retry.
 pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
     let _guard = mark_atomic_operation();
     f()
