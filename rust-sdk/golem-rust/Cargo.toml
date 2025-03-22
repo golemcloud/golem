@@ -16,7 +16,7 @@ golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional =
 serde = { version = "1.0.219", optional = true }
 serde_json = { version = "1.0.140", optional = true }
 uuid = { version = "1", features = ["v4"] }
-golem-wasm-rpc = { path = "../../golem-services/wasm-rpc", default-features = false, features = ["stub"] }
+golem-wasm-rpc = { version = "1.2.0-rc4", default-features = false, features = ["stub"] }
 wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [features]
