@@ -173,6 +173,9 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     check!(response.err().unwrap().to_string().contains("not found"));
 }
 
+// Deploy API that uses shopping-cart's get-cart-contents function.
+// Update the component to a different wasm file, and it should fail.
+// Delete the API deployment, and the update should succeed.
 #[test]
 #[tracing::instrument]
 async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependencies) {
@@ -248,9 +251,13 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     check!(update_component.is_ok());
 }
 
+// Deploy 2 API definitions, both making use of shopping-cart's get-cart-contents function.
+// Update the component to a different wasm file, and it should fail.
+// Delete the first API deployment, and the update should still fail.
+// Delete the second API deployment, and the update should succeed.
 #[test]
 #[tracing::instrument]
-async fn create_multiple_api_deployments_and_update_component(deps: &EnvBasedTestDependencies) {
+async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
@@ -344,6 +351,111 @@ async fn create_multiple_api_deployments_and_update_component(deps: &EnvBasedTes
     check!(update_component.contains("get-cart-contents"));
 
     // Delete the final API deployment and see if component can be updated, and it should succeed
+    deps.worker_service()
+        .delete_api_deployment("subdomain2.localhost")
+        .await
+        .unwrap();
+
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await;
+
+    check!(update_component.is_ok());
+}
+
+// Deploy 2 API definitions (same component-id),
+// of which only one makes use of a worker function (get-cart-contents)
+// Update the component to a different wasm file, and it should fail.
+// Delete the first API deployment, and the update should still fail.
+// Delete the second API deployment, and the update should succeed.
+#[test]
+#[tracing::instrument]
+async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedTestDependencies) {
+    let component_id = deps.component("shopping-cart").unique().store().await;
+
+    fn new_api_definition_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::new_v4())
+    }
+
+    let api_definition1 = create_api_definition_without_worker_calls(
+        deps,
+        &component_id,
+        new_api_definition_id("a"),
+        "1".to_string(),
+        "/path-1".to_string(),
+    )
+    .await;
+
+    let api_definition2 = create_api_definition(
+        deps,
+        &component_id,
+        new_api_definition_id("a"),
+        "1".to_string(),
+        "/path-1".to_string(),
+    )
+    .await;
+
+    //
+    let request1 = ApiDeploymentRequest {
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition1.id.as_ref().unwrap().value.clone(),
+            version: api_definition1.version.clone(),
+        }],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("subdomain1".to_string()),
+        },
+    };
+
+    let request2 = ApiDeploymentRequest {
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition2.id.as_ref().unwrap().value.clone(),
+            version: api_definition2.version.clone(),
+        }],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("subdomain2".to_string()),
+        },
+    };
+
+    deps.worker_service()
+        .create_or_update_api_deployment(request1.clone())
+        .await
+        .unwrap();
+
+    deps.worker_service()
+        .create_or_update_api_deployment(request2.clone())
+        .await
+        .unwrap();
+
+    // Trying to update the component (with a completely different wasm)
+    // which was already used in an API definition
+    // where function get-cart-contents is being used.
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    check!(update_component.contains("Component Constraint Error"));
+    check!(update_component.contains("Missing Functions"));
+    check!(update_component.contains("get-cart-contents"));
+
+    // Delete API deployment that was using the worker function
     deps.worker_service()
         .delete_api_deployment("subdomain2.localhost")
         .await
@@ -470,6 +582,61 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
     check!(!result.contains_key(".domain"));
     check!(!result.contains_key("subdomain.domain"));
     check!(result.contains_key(".other-domain"));
+}
+
+async fn create_api_definition_without_worker_calls(
+    deps: &EnvBasedTestDependencies,
+    component_id: &ComponentId,
+    api_definition_id: String,
+    version: String,
+    path: String,
+) -> ApiDefinition {
+    deps.worker_service()
+        .create_api_definition(CreateApiDefinitionRequest {
+            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                ApiDefinitionRequest {
+                    id: Some(ApiDefinitionId {
+                        value: api_definition_id,
+                    }),
+                    version,
+                    draft: false,
+                    definition: Some(api_definition_request::Definition::Http(
+                        HttpApiDefinition {
+                            routes: vec![HttpRoute {
+                                method: HttpMethod::Post as i32,
+                                path,
+                                binding: Some(GatewayBinding {
+                                    component: Some(VersionedComponentId {
+                                        component_id: Some(component_id.clone().into()),
+                                        version: 0,
+                                    }),
+                                    worker_name: None,
+                                    response: Some(to_grpc_rib_expr(
+                                        r#"
+                                            let status: u64 = 200;
+                                            {
+                                              headers: {
+                                                {ContentType: "json", userid: "foo"}
+                                              },
+                                              body: "foo",
+                                              status: status
+                                            }
+                                        "#,
+                                    )),
+                                    idempotency_key: None,
+                                    binding_type: Some(GatewayBindingType::Default as i32),
+                                    static_binding: None,
+                                    invocation_context: None,
+                                }),
+                                middleware: None,
+                            }],
+                        },
+                    )),
+                },
+            )),
+        })
+        .await
+        .unwrap()
 }
 
 async fn create_api_definition(
