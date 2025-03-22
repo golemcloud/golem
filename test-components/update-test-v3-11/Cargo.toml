@@ -21,7 +21,7 @@ path = "wit"
 
 [package.metadata.component.target.dependencies]
 "golem:api" = { path = "wit/deps/golem-1.x" }
-"golem:rpc" = { path = "wit/deps/wasm-rpc" }
+"golem:rpc" = { path = "wit/deps/golem-rpc" }
 "wasi:clocks" = { path = "wit/deps/clocks" }
 "wasi:io" = { path = "wit/deps/io" }
 "wasi:http" = { path = "wit/deps/http" }

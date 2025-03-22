@@ -353,6 +353,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.worker_proxy.clone()
     }
 
+    pub fn component_service(&self) -> Arc<dyn ComponentService<Ctx::Types>> {
+        self.state.component_service.clone()
+    }
+
     pub fn scheduler_service(&self) -> Arc<dyn SchedulerService + Send + Sync> {
         self.state.scheduler_service.clone()
     }

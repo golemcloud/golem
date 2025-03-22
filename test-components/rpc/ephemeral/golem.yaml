@@ -5,4 +5,9 @@
 
 components:
   ephemeral:
+    profiles:
+      debug:
+        componentType: ephemeral
+      release:
+        componentType: ephemeral
     template: rust

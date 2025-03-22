@@ -592,7 +592,7 @@ dependencies = [
  "once_cell",
  "rand",
  "reqwest",
- "wit-bindgen-rt 0.37.0",
+ "wit-bindgen-rt 0.40.0",
 ]
 
 [[package]]
@@ -1110,9 +1110,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rt"
-version = "0.37.0"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc801b991c56492f87ab3086e786468f75c285a4d73017ab0ebc2fa1aed5d82c"
+checksum = "68faed92ae696b93ea9a7b67ba6c37bf09d72c6d9a70fa824a743c3020212f11"
 dependencies = [
  "bitflags",
 ]
