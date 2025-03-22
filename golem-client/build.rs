@@ -72,6 +72,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "TypeAnnotatedValue",
                 "golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue",
             ),
+            (
+                "WasmRpcTarget",
+                "golem_common::model::component_metadata::WasmRpcTarget",
+            ),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),
             (

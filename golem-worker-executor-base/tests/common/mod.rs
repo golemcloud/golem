@@ -85,10 +85,10 @@ use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, WasmRpc};
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{HostFutureInvokeResult, Pollable};
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor_base::preview2::golem::durability;
-use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
+use golem_worker_executor_base::preview2::golem_api_1_x;
 use golem_worker_executor_base::services::component;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
@@ -754,6 +754,10 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.worker_proxy()
     }
 
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+        self.durable_ctx.component_service()
+    }
+
     async fn generate_unique_local_worker_id(
         &mut self,
         remote_worker_id: TargetWorkerId,
@@ -820,8 +824,18 @@ impl FileSystemReading for TestWorkerCtx {
 
 #[async_trait]
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(location).await
+    async fn new(
+        &mut self,
+        worker_id: golem_wasm_rpc::WorkerId,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.new(worker_id).await
+    }
+
+    async fn ephemeral(
+        &mut self,
+        component_id: golem_wasm_rpc::ComponentId,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
@@ -875,7 +889,7 @@ impl HostWasmRpc for TestWorkerCtx {
         datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_1_x::types::CancellationToken>> {
+    ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_2_x::types::CancellationToken>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, datetime, function_name, function_params)
             .await
@@ -1113,12 +1127,11 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem_api_0_2_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(
+        golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(
             &mut linker,
             get_durable_ctx,
         )?;

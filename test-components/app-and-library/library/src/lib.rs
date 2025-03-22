@@ -1,3 +1,4 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use self::bindings::exports::it::app_and_library_library::library_api::Guest;

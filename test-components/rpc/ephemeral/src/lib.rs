@@ -1,5 +1,6 @@
 use crate::bindings::exports::rpc::ephemeral_exports::api::Guest;
 
+#[allow(static_mut_refs)]
 mod bindings;
 
 pub struct Component;

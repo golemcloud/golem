@@ -829,8 +829,8 @@ impl WitTypeBuilder {
     }
 }
 
-impl From<crate::golem_rpc_0_1_x::types::ValueAndType> for ValueAndType {
-    fn from(value: crate::golem_rpc_0_1_x::types::ValueAndType) -> Self {
+impl From<crate::golem_rpc_0_2_x::types::ValueAndType> for ValueAndType {
+    fn from(value: crate::golem_rpc_0_2_x::types::ValueAndType) -> Self {
         Self {
             value: value.value.into(),
             typ: value.typ.into(),
@@ -838,7 +838,7 @@ impl From<crate::golem_rpc_0_1_x::types::ValueAndType> for ValueAndType {
     }
 }
 
-impl From<ValueAndType> for crate::golem_rpc_0_1_x::types::ValueAndType {
+impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
     fn from(value: ValueAndType) -> Self {
         Self {
             value: value.value.into(),

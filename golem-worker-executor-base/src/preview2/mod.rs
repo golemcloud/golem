@@ -31,10 +31,10 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
         "golem:api/context/span": super::durable_host::golem::invocation_context_api::SpanEntry,
         "golem:api/context/invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
-        "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
+        "golem:api/host/get-workers": super::durable_host::golem::v1x::GetWorkersEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
-        "golem:rpc": golem_wasm_rpc::golem_rpc_0_1_x,
+        "golem:rpc": golem_wasm_rpc::golem_rpc_0_2_x,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:io/poll/pollable": golem_wasm_rpc::wasi::io::poll::Pollable,
         "golem:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
@@ -54,5 +54,4 @@ pub type OutputStream = wasmtime_wasi::OutputStream;
 pub type Pollable = golem_wasm_rpc::wasi::io::poll::Pollable;
 
 // reexports so that we don't have to change version numbers everywhere
-pub use self::golem::api0_2_2 as golem_api_0_2_x;
-pub use self::golem::api1_1_5 as golem_api_1_x;
+pub use self::golem::api1_1_6 as golem_api_1_x;

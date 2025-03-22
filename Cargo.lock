@@ -3445,7 +3445,7 @@ dependencies = [
  "wasm-wave",
  "wasmtime",
  "wasmtime-wasi",
- "wit-bindgen-rt 0.36.0",
+ "wit-bindgen-rt 0.40.0",
 ]
 
 [[package]]
@@ -9768,9 +9768,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rt"
-version = "0.36.0"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7947d0131c7c9da3f01dfde0ab8bd4c4cf3c5bd49b6dba0ae640f1fa752572ea"
+checksum = "68faed92ae696b93ea9a7b67ba6c37bf09d72c6d9a70fa824a743c3020212f11"
 dependencies = [
  "bitflags 2.9.0",
 ]

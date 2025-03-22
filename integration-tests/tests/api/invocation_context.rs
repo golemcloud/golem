@@ -27,8 +27,11 @@ use golem_api_grpc::proto::golem::apidefinition::{
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
 use golem_api_grpc::proto::golem::rib::Expr;
 use golem_client::model::{ApiDefinitionInfo, ApiDeploymentRequest, ApiSite};
-use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
 use golem_common::model::invocation_context::{SpanId, TraceId};
+use golem_common::model::ComponentType;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use reqwest::header::HeaderValue;
@@ -98,9 +101,13 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![(
+                targets: HashMap::from_iter(vec![(
                     "golem-ictest-api".to_string(),
-                    "golem:ictest-exports/golem-ictest-api".to_string(),
+                    WasmRpcTarget {
+                        interface_name: "golem:ictest-exports/golem-ictest-api".to_string(),
+                        component_name: "golem:ictest".to_string(),
+                        component_type: ComponentType::Durable,
+                    },
                 )]),
             }),
         )])
