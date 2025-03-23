@@ -10,12 +10,12 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{CancellationTokenEntry, Value};
+use golem_wasm_rpc::{CancellationTokenEntry, ComponentId, Value};
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
@@ -369,8 +369,15 @@ impl<T: GolemTypes> ResourceLimiterAsync for DebugContext<T> {
 
 #[async_trait]
 impl<T: GolemTypes> HostWasmRpc for DebugContext<T> {
-    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(location).await
+    async fn new(
+        &mut self,
+        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::WorkerId,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.new(worker_id).await
+    }
+
+    async fn ephemeral(&mut self, component_id: ComponentId) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
@@ -620,5 +627,9 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
         self.durable_ctx
             .generate_unique_local_worker_id(remote_worker_id)
             .await
+    }
+
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+        self.durable_ctx().component_service()
     }
 }

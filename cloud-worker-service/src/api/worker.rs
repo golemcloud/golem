@@ -1346,7 +1346,7 @@ impl WorkerApi {
         worker_name: String,
         token: TokenSecret,
     ) -> Result<(WorkerId, ConnectWorkerStream)> {
-        validate_worker_name(&worker_name).map_err(|e| {
+        WorkerId::validate_worker_name(&worker_name).map_err(|e| {
             WorkerError::BadRequest(Json(ErrorsBody {
                 errors: vec![format!("Invalid worker name: {e}")],
             }))
@@ -1394,7 +1394,7 @@ fn validated_worker_id(
     component_id: ComponentId,
     worker_name: String,
 ) -> std::result::Result<WorkerId, WorkerError> {
-    validate_worker_name(&worker_name)
+    WorkerId::validate_worker_name(&worker_name)
         .map_err(|error| WorkerError::bad_request(format!("Invalid worker name: {error}")))?;
     Ok(WorkerId {
         component_id,
@@ -1408,7 +1408,7 @@ fn make_target_worker_id(
     worker_name: Option<String>,
 ) -> std::result::Result<TargetWorkerId, WorkerError> {
     if let Some(worker_name) = &worker_name {
-        validate_worker_name(worker_name).map_err(|error| {
+        WorkerId::validate_worker_name(worker_name).map_err(|error| {
             WorkerError::BadRequest(Json(ErrorsBody {
                 errors: vec![format!("Invalid worker name: {error}")],
             }))

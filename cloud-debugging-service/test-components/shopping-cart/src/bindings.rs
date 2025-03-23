@@ -13,61 +13,12 @@ pub mod golem {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
-            pub type Uri = super::super::super::golem::rpc::types::Uri;
             pub type Duration = super::super::super::wasi::clocks::monotonic_clock::Duration;
+            pub type ComponentId = super::super::super::golem::rpc::types::ComponentId;
+            pub type Uuid = super::super::super::golem::rpc::types::Uuid;
+            pub type WorkerId = super::super::super::golem::rpc::types::WorkerId;
             /// An index into the persistent log storing all performed operations of a worker
             pub type OplogIndex = u64;
-            /// Represents a Golem component's version
-            pub type ComponentVersion = u64;
-            /// UUID
-            #[repr(C)]
-            #[derive(Clone, Copy)]
-            pub struct Uuid {
-                pub high_bits: u64,
-                pub low_bits: u64,
-            }
-            impl ::core::fmt::Debug for Uuid {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("Uuid")
-                        .field("high-bits", &self.high_bits)
-                        .field("low-bits", &self.low_bits)
-                        .finish()
-                }
-            }
-            /// Represents a Golem component
-            #[repr(C)]
-            #[derive(Clone, Copy)]
-            pub struct ComponentId {
-                pub uuid: Uuid,
-            }
-            impl ::core::fmt::Debug for ComponentId {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("ComponentId").field("uuid", &self.uuid).finish()
-                }
-            }
-            /// Represents a Golem worker
-            #[derive(Clone)]
-            pub struct WorkerId {
-                pub component_id: ComponentId,
-                pub worker_name: _rt::String,
-            }
-            impl ::core::fmt::Debug for WorkerId {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerId")
-                        .field("component-id", &self.component_id)
-                        .field("worker-name", &self.worker_name)
-                        .finish()
-                }
-            }
             /// A promise ID is a value that can be passed to an external Golem API to complete that promise
             /// from an arbitrary external source, while Golem workers can await for this completion.
             #[derive(Clone)]
@@ -86,6 +37,8 @@ pub mod golem {
                         .finish()
                 }
             }
+            /// Represents a Golem component's version
+            pub type ComponentVersion = u64;
             /// Configures how the executor retries failures
             #[repr(C)]
             #[derive(Clone, Copy)]
@@ -98,6 +51,8 @@ pub mod golem {
                 pub max_delay: Duration,
                 /// Multiplier applied to the delay on each retry to implement exponential backoff
                 pub multiplier: f64,
+                /// The maximum amount of jitter to add to the delay
+                pub max_jitter_factor: Option<f64>,
             }
             impl ::core::fmt::Debug for RetryPolicy {
                 fn fmt(
@@ -109,6 +64,7 @@ pub mod golem {
                         .field("min-delay", &self.min_delay)
                         .field("max-delay", &self.max_delay)
                         .field("multiplier", &self.multiplier)
+                        .field("max-jitter-factor", &self.max_jitter_factor)
                         .finish()
                 }
             }
@@ -545,12 +501,39 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.6")]
                         extern "C" {
                             #[link_name = "[resource-drop]get-workers"]
                             fn drop(_: u32);
                         }
                         drop(_handle);
+                    }
+                }
+            }
+            /// Target parameter for the `revert-worker` operation
+            #[derive(Clone, Copy)]
+            pub enum RevertWorkerTarget {
+                /// Revert to a specific oplog index. The given index will be the last one to be kept.
+                RevertToOplogIndex(OplogIndex),
+                /// Revert the last N invocations.
+                RevertLastInvocations(u64),
+            }
+            impl ::core::fmt::Debug for RevertWorkerTarget {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        RevertWorkerTarget::RevertToOplogIndex(e) => {
+                            f.debug_tuple("RevertWorkerTarget::RevertToOplogIndex")
+                                .field(e)
+                                .finish()
+                        }
+                        RevertWorkerTarget::RevertLastInvocations(e) => {
+                            f.debug_tuple("RevertWorkerTarget::RevertLastInvocations")
+                                .field(e)
+                                .finish()
+                        }
                     }
                 }
             }
@@ -563,8 +546,13 @@ pub mod golem {
                 ) -> Self {
                     unsafe {
                         let mut cleanup_list = _rt::Vec::new();
-                        let ComponentId { uuid: uuid0 } = component_id;
-                        let Uuid { high_bits: high_bits1, low_bits: low_bits1 } = uuid0;
+                        let super::super::super::golem::rpc::types::ComponentId {
+                            uuid: uuid0,
+                        } = component_id;
+                        let super::super::super::golem::rpc::types::Uuid {
+                            high_bits: high_bits1,
+                            low_bits: low_bits1,
+                        } = uuid0;
                         let (result14_0, result14_1, result14_2) = match filter {
                             Some(e) => {
                                 let WorkerAnyFilter { filters: filters2 } = e;
@@ -684,7 +672,7 @@ pub mod golem {
                             None => (0i32, ::core::ptr::null_mut(), 0usize),
                         };
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.6")]
                         extern "C" {
                             #[link_name = "[constructor]get-workers"]
                             fn wit_import(
@@ -738,7 +726,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]get-workers.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -825,9 +813,9 @@ pub mod golem {
                                             let l25 = *base.add(48).cast::<i64>();
                                             let l26 = *base.add(56).cast::<i64>();
                                             WorkerMetadata {
-                                                worker_id: WorkerId {
-                                                    component_id: ComponentId {
-                                                        uuid: Uuid {
+                                                worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                                    component_id: super::super::super::golem::rpc::types::ComponentId {
+                                                        uuid: super::super::super::golem::rpc::types::Uuid {
                                                             high_bits: l4 as u64,
                                                             low_bits: l5 as u64,
                                                         },
@@ -862,7 +850,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "create-promise"]
                         fn wit_import(_: *mut u8);
@@ -880,9 +868,9 @@ pub mod golem {
                     let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
                     let l6 = *ptr0.add(24).cast::<i64>();
                     PromiseId {
-                        worker_id: WorkerId {
-                            component_id: ComponentId {
-                                uuid: Uuid {
+                        worker_id: super::super::super::golem::rpc::types::WorkerId {
+                            component_id: super::super::super::golem::rpc::types::ComponentId {
+                                uuid: super::super::super::golem::rpc::types::Uuid {
                                     high_bits: l1 as u64,
                                     low_bits: l2 as u64,
                                 },
@@ -902,18 +890,23 @@ pub mod golem {
                     struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
                         worker_name: worker_name1,
                     } = worker_id0;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "await-promise"]
                         fn wit_import(
@@ -951,17 +944,94 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
+            /// it returns the payload passed to the promise completion.
+            pub fn poll_promise(promise_id: &PromiseId) -> Option<_rt::Vec<u8>> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
+                    let super::super::super::golem::rpc::types::WorkerId {
+                        component_id: component_id1,
+                        worker_name: worker_name1,
+                    } = worker_id0;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
+                    let vec4 = worker_name1;
+                    let ptr4 = vec4.as_ptr().cast::<u8>();
+                    let len4 = vec4.len();
+                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
+                    extern "C" {
+                        #[link_name = "poll-promise"]
+                        fn wit_import(
+                            _: i64,
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: i64,
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        _rt::as_i64(high_bits3),
+                        _rt::as_i64(low_bits3),
+                        ptr4.cast_mut(),
+                        len4,
+                        _rt::as_i64(oplog_idx0),
+                        ptr5,
+                    );
+                    let l6 = i32::from(*ptr5.add(0).cast::<u8>());
+                    match l6 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l7 = *ptr5.add(4).cast::<*mut u8>();
+                                let l8 = *ptr5.add(8).cast::<usize>();
+                                let len9 = l8;
+                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9)
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
             /// Completes the given promise with the given payload. Returns true if the promise was completed, false
             /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
             pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
                 unsafe {
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
                         worker_name: worker_name1,
                     } = worker_id0;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
@@ -969,7 +1039,7 @@ pub mod golem {
                     let ptr5 = vec5.as_ptr().cast::<u8>();
                     let len5 = vec5.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "complete-promise"]
                         fn wit_import(
@@ -1011,17 +1081,22 @@ pub mod golem {
             pub fn delete_promise(promise_id: &PromiseId) {
                 unsafe {
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
                         worker_name: worker_name1,
                     } = worker_id0;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "delete-promise"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64);
@@ -1040,42 +1115,11 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Returns a Golem worker URI that can be used to invoke a given function on the current worker
-            pub fn get_self_uri(function_name: &str) -> Uri {
-                unsafe {
-                    #[repr(align(4))]
-                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
-                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
-                    let vec0 = function_name;
-                    let ptr0 = vec0.as_ptr().cast::<u8>();
-                    let len0 = vec0.len();
-                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
-                    extern "C" {
-                        #[link_name = "get-self-uri"]
-                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
-                        unreachable!()
-                    }
-                    wit_import(ptr0.cast_mut(), len0, ptr1);
-                    let l2 = *ptr1.add(0).cast::<*mut u8>();
-                    let l3 = *ptr1.add(4).cast::<usize>();
-                    let len4 = l3;
-                    let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
-                    super::super::super::golem::rpc::types::Uri {
-                        value: _rt::string_lift(bytes4),
-                    }
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
             /// Returns the current position in the persistent op log
             pub fn get_oplog_index() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-oplog-index"]
                         fn wit_import() -> i64;
@@ -1094,7 +1138,7 @@ pub mod golem {
             pub fn set_oplog_index(oplog_idx: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-oplog-index"]
                         fn wit_import(_: i64);
@@ -1112,7 +1156,7 @@ pub mod golem {
             pub fn oplog_commit(replicas: u8) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "oplog-commit"]
                         fn wit_import(_: i32);
@@ -1132,7 +1176,7 @@ pub mod golem {
             pub fn mark_begin_operation() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "mark-begin-operation"]
                         fn wit_import() -> i64;
@@ -1151,7 +1195,7 @@ pub mod golem {
             pub fn mark_end_operation(begin: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "mark-end-operation"]
                         fn wit_import(_: i64);
@@ -1168,11 +1212,11 @@ pub mod golem {
             pub fn get_retry_policy() -> RetryPolicy {
                 unsafe {
                     #[repr(align(8))]
-                    struct RetArea([::core::mem::MaybeUninit<u8>; 32]);
-                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 48]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 48]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-retry-policy"]
                         fn wit_import(_: *mut u8);
@@ -1186,11 +1230,23 @@ pub mod golem {
                     let l2 = *ptr0.add(8).cast::<i64>();
                     let l3 = *ptr0.add(16).cast::<i64>();
                     let l4 = *ptr0.add(24).cast::<f64>();
+                    let l5 = i32::from(*ptr0.add(32).cast::<u8>());
                     RetryPolicy {
                         max_attempts: l1 as u32,
                         min_delay: l2 as u64,
                         max_delay: l3 as u64,
                         multiplier: l4,
+                        max_jitter_factor: match l5 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l6 = *ptr0.add(40).cast::<f64>();
+                                    l6
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
                     }
                 }
             }
@@ -1204,15 +1260,20 @@ pub mod golem {
                         min_delay: min_delay0,
                         max_delay: max_delay0,
                         multiplier: multiplier0,
+                        max_jitter_factor: max_jitter_factor0,
                     } = new_retry_policy;
+                    let (result1_0, result1_1) = match max_jitter_factor0 {
+                        Some(e) => (1i32, _rt::as_f64(e)),
+                        None => (0i32, 0.0f64),
+                    };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-retry-policy"]
-                        fn wit_import(_: i32, _: i64, _: i64, _: f64);
+                        fn wit_import(_: i32, _: i64, _: i64, _: f64, _: i32, _: f64);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    fn wit_import(_: i32, _: i64, _: i64, _: f64) {
+                    fn wit_import(_: i32, _: i64, _: i64, _: f64, _: i32, _: f64) {
                         unreachable!()
                     }
                     wit_import(
@@ -1220,6 +1281,8 @@ pub mod golem {
                         _rt::as_i64(min_delay0),
                         _rt::as_i64(max_delay0),
                         _rt::as_f64(multiplier0),
+                        result1_0,
+                        result1_1,
                     );
                 }
             }
@@ -1228,7 +1291,7 @@ pub mod golem {
             pub fn get_oplog_persistence_level() -> PersistenceLevel {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-oplog-persistence-level"]
                         fn wit_import() -> i32;
@@ -1260,7 +1323,7 @@ pub mod golem {
                         PersistenceLevel::Smart => 2i32,
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-oplog-persistence-level"]
                         fn wit_import(_: i32);
@@ -1277,7 +1340,7 @@ pub mod golem {
             pub fn get_idempotence_mode() -> bool {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-idempotence-mode"]
                         fn wit_import() -> i32;
@@ -1298,7 +1361,7 @@ pub mod golem {
             pub fn set_idempotence_mode(idempotent: bool) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-idempotence-mode"]
                         fn wit_import(_: i32);
@@ -1326,7 +1389,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "generate-idempotency-key"]
                         fn wit_import(_: *mut u8);
@@ -1338,7 +1401,7 @@ pub mod golem {
                     wit_import(ptr0);
                     let l1 = *ptr0.add(0).cast::<i64>();
                     let l2 = *ptr0.add(8).cast::<i64>();
-                    Uuid {
+                    super::super::super::golem::rpc::types::Uuid {
                         high_bits: l1 as u64,
                         low_bits: l2 as u64,
                     }
@@ -1353,17 +1416,22 @@ pub mod golem {
                 mode: UpdateMode,
             ) {
                 unsafe {
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id0,
                         worker_name: worker_name0,
                     } = worker_id;
-                    let ComponentId { uuid: uuid1 } = component_id0;
-                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
                     let vec3 = worker_name0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "update-worker"]
                         fn wit_import(
@@ -1398,7 +1466,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 64]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-self-metadata"]
                         fn wit_import(_: *mut u8);
@@ -1468,9 +1536,9 @@ pub mod golem {
                     let l22 = *ptr0.add(48).cast::<i64>();
                     let l23 = *ptr0.add(56).cast::<i64>();
                     WorkerMetadata {
-                        worker_id: WorkerId {
-                            component_id: ComponentId {
-                                uuid: Uuid {
+                        worker_id: super::super::super::golem::rpc::types::WorkerId {
+                            component_id: super::super::super::golem::rpc::types::ComponentId {
+                                uuid: super::super::super::golem::rpc::types::Uuid {
                                     high_bits: l1 as u64,
                                     low_bits: l2 as u64,
                                 },
@@ -1492,18 +1560,23 @@ pub mod golem {
                     #[repr(align(8))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 72]);
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 72]);
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id0,
                         worker_name: worker_name0,
                     } = worker_id;
-                    let ComponentId { uuid: uuid1 } = component_id0;
-                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
                     let vec3 = worker_name0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-worker-metadata"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
@@ -1588,9 +1661,9 @@ pub mod golem {
                                 let l27 = *ptr4.add(56).cast::<i64>();
                                 let l28 = *ptr4.add(64).cast::<i64>();
                                 WorkerMetadata {
-                                    worker_id: WorkerId {
-                                        component_id: ComponentId {
-                                            uuid: Uuid {
+                                    worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                        component_id: super::super::super::golem::rpc::types::ComponentId {
+                                            uuid: super::super::super::golem::rpc::types::Uuid {
                                                 high_bits: l6 as u64,
                                                 low_bits: l7 as u64,
                                             },
@@ -1610,6 +1683,337 @@ pub mod golem {
                     }
                 }
             }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Fork a worker to another worker at a given oplog index
+            pub fn fork_worker(
+                source_worker_id: &WorkerId,
+                target_worker_id: &WorkerId,
+                oplog_idx_cut_off: OplogIndex,
+            ) {
+                unsafe {
+                    let super::super::super::golem::rpc::types::WorkerId {
+                        component_id: component_id0,
+                        worker_name: worker_name0,
+                    } = source_worker_id;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
+                    let vec3 = worker_name0;
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    let super::super::super::golem::rpc::types::WorkerId {
+                        component_id: component_id4,
+                        worker_name: worker_name4,
+                    } = target_worker_id;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid5,
+                    } = component_id4;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits6,
+                        low_bits: low_bits6,
+                    } = uuid5;
+                    let vec7 = worker_name4;
+                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                    let len7 = vec7.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
+                    extern "C" {
+                        #[link_name = "fork-worker"]
+                        fn wit_import(
+                            _: i64,
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: i64,
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        _rt::as_i64(high_bits2),
+                        _rt::as_i64(low_bits2),
+                        ptr3.cast_mut(),
+                        len3,
+                        _rt::as_i64(high_bits6),
+                        _rt::as_i64(low_bits6),
+                        ptr7.cast_mut(),
+                        len7,
+                        _rt::as_i64(oplog_idx_cut_off),
+                    );
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Revert a worker to a previous state
+            pub fn revert_worker(
+                worker_id: &WorkerId,
+                revert_target: RevertWorkerTarget,
+            ) {
+                unsafe {
+                    let super::super::super::golem::rpc::types::WorkerId {
+                        component_id: component_id0,
+                        worker_name: worker_name0,
+                    } = worker_id;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
+                    let vec3 = worker_name0;
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    let (result4_0, result4_1) = match revert_target {
+                        RevertWorkerTarget::RevertToOplogIndex(e) => {
+                            (0i32, _rt::as_i64(e))
+                        }
+                        RevertWorkerTarget::RevertLastInvocations(e) => {
+                            (1i32, _rt::as_i64(e))
+                        }
+                    };
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
+                    extern "C" {
+                        #[link_name = "revert-worker"]
+                        fn wit_import(
+                            _: i64,
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: i64,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i32, _: i64) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        _rt::as_i64(high_bits2),
+                        _rt::as_i64(low_bits2),
+                        ptr3.cast_mut(),
+                        len3,
+                        result4_0,
+                        result4_1,
+                    );
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the component-id for a given component reference.
+            /// Returns none when no component with the specified reference exists.
+            /// The syntax of the component reference is implementation dependent.
+            ///
+            /// Golem OSS: "{component_name}"
+            /// Golem Cloud:
+            /// 1: "{component_name}" -> will resolve in current account and project
+            /// 2: "{project_name}/{component_name}" -> will resolve in current account
+            /// 3: "{account_id}/{project_name}/{component_name}"
+            pub fn resolve_component_id(
+                component_reference: &str,
+            ) -> Option<ComponentId> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let vec0 = component_reference;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
+                    extern "C" {
+                        #[link_name = "resolve-component-id"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i64>();
+                                let l4 = *ptr1.add(16).cast::<i64>();
+                                super::super::super::golem::rpc::types::ComponentId {
+                                    uuid: super::super::super::golem::rpc::types::Uuid {
+                                        high_bits: l3 as u64,
+                                        low_bits: l4 as u64,
+                                    },
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the worker-id for a given component and worker name.
+            /// Returns none when no component for the specified reference exists.
+            pub fn resolve_worker_id(
+                component_reference: &str,
+                worker_name: &str,
+            ) -> Option<WorkerId> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 32]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
+                    let vec0 = component_reference;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = worker_name;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
+                    extern "C" {
+                        #[link_name = "resolve-worker-id"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1.cast_mut(), len1, ptr2);
+                    let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                    match l3 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l4 = *ptr2.add(8).cast::<i64>();
+                                let l5 = *ptr2.add(16).cast::<i64>();
+                                let l6 = *ptr2.add(24).cast::<*mut u8>();
+                                let l7 = *ptr2.add(28).cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(
+                                    l6.cast(),
+                                    len8,
+                                    len8,
+                                );
+                                super::super::super::golem::rpc::types::WorkerId {
+                                    component_id: super::super::super::golem::rpc::types::ComponentId {
+                                        uuid: super::super::super::golem::rpc::types::Uuid {
+                                            high_bits: l4 as u64,
+                                            low_bits: l5 as u64,
+                                        },
+                                    },
+                                    worker_name: _rt::string_lift(bytes8),
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the worker-id for a given component and worker name.
+            /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
+            pub fn resolve_worker_id_strict(
+                component_reference: &str,
+                worker_name: &str,
+            ) -> Option<WorkerId> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 32]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
+                    let vec0 = component_reference;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = worker_name;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
+                    extern "C" {
+                        #[link_name = "resolve-worker-id-strict"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1.cast_mut(), len1, ptr2);
+                    let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                    match l3 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l4 = *ptr2.add(8).cast::<i64>();
+                                let l5 = *ptr2.add(16).cast::<i64>();
+                                let l6 = *ptr2.add(24).cast::<*mut u8>();
+                                let l7 = *ptr2.add(28).cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(
+                                    l6.cast(),
+                                    len8,
+                                    len8,
+                                );
+                                super::super::super::golem::rpc::types::WorkerId {
+                                    component_id: super::super::super::golem::rpc::types::ComponentId {
+                                        uuid: super::super::super::golem::rpc::types::Uuid {
+                                            high_bits: l4 as u64,
+                                            low_bits: l5 as u64,
+                                        },
+                                    },
+                                    worker_name: _rt::string_lift(bytes8),
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
         }
     }
     pub mod rpc {
@@ -1619,8 +2023,205 @@ pub mod golem {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
+            pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            /// UUID
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Uuid {
+                pub high_bits: u64,
+                pub low_bits: u64,
+            }
+            impl ::core::fmt::Debug for Uuid {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Uuid")
+                        .field("high-bits", &self.high_bits)
+                        .field("low-bits", &self.low_bits)
+                        .finish()
+                }
+            }
+            /// Represents a Golem component
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct ComponentId {
+                pub uuid: Uuid,
+            }
+            impl ::core::fmt::Debug for ComponentId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ComponentId").field("uuid", &self.uuid).finish()
+                }
+            }
+            /// Represents a Golem worker
+            #[derive(Clone)]
+            pub struct WorkerId {
+                pub component_id: ComponentId,
+                pub worker_name: _rt::String,
+            }
+            impl ::core::fmt::Debug for WorkerId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("WorkerId")
+                        .field("component-id", &self.component_id)
+                        .field("worker-name", &self.worker_name)
+                        .finish()
+                }
+            }
             pub type NodeIndex = i32;
+            pub type ResourceId = u64;
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum ResourceMode {
+                Owned,
+                Borrowed,
+            }
+            impl ::core::fmt::Debug for ResourceMode {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        ResourceMode::Owned => {
+                            f.debug_tuple("ResourceMode::Owned").finish()
+                        }
+                        ResourceMode::Borrowed => {
+                            f.debug_tuple("ResourceMode::Borrowed").finish()
+                        }
+                    }
+                }
+            }
+            impl ResourceMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> ResourceMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+                    match val {
+                        0 => ResourceMode::Owned,
+                        1 => ResourceMode::Borrowed,
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+            #[derive(Clone)]
+            pub enum WitTypeNode {
+                RecordType(_rt::Vec<(_rt::String, NodeIndex)>),
+                VariantType(_rt::Vec<(_rt::String, Option<NodeIndex>)>),
+                EnumType(_rt::Vec<_rt::String>),
+                FlagsType(_rt::Vec<_rt::String>),
+                TupleType(_rt::Vec<NodeIndex>),
+                ListType(NodeIndex),
+                OptionType(NodeIndex),
+                ResultType((Option<NodeIndex>, Option<NodeIndex>)),
+                PrimU8Type,
+                PrimU16Type,
+                PrimU32Type,
+                PrimU64Type,
+                PrimS8Type,
+                PrimS16Type,
+                PrimS32Type,
+                PrimS64Type,
+                PrimF32Type,
+                PrimF64Type,
+                PrimCharType,
+                PrimBoolType,
+                PrimStringType,
+                HandleType((ResourceId, ResourceMode)),
+            }
+            impl ::core::fmt::Debug for WitTypeNode {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        WitTypeNode::RecordType(e) => {
+                            f.debug_tuple("WitTypeNode::RecordType").field(e).finish()
+                        }
+                        WitTypeNode::VariantType(e) => {
+                            f.debug_tuple("WitTypeNode::VariantType").field(e).finish()
+                        }
+                        WitTypeNode::EnumType(e) => {
+                            f.debug_tuple("WitTypeNode::EnumType").field(e).finish()
+                        }
+                        WitTypeNode::FlagsType(e) => {
+                            f.debug_tuple("WitTypeNode::FlagsType").field(e).finish()
+                        }
+                        WitTypeNode::TupleType(e) => {
+                            f.debug_tuple("WitTypeNode::TupleType").field(e).finish()
+                        }
+                        WitTypeNode::ListType(e) => {
+                            f.debug_tuple("WitTypeNode::ListType").field(e).finish()
+                        }
+                        WitTypeNode::OptionType(e) => {
+                            f.debug_tuple("WitTypeNode::OptionType").field(e).finish()
+                        }
+                        WitTypeNode::ResultType(e) => {
+                            f.debug_tuple("WitTypeNode::ResultType").field(e).finish()
+                        }
+                        WitTypeNode::PrimU8Type => {
+                            f.debug_tuple("WitTypeNode::PrimU8Type").finish()
+                        }
+                        WitTypeNode::PrimU16Type => {
+                            f.debug_tuple("WitTypeNode::PrimU16Type").finish()
+                        }
+                        WitTypeNode::PrimU32Type => {
+                            f.debug_tuple("WitTypeNode::PrimU32Type").finish()
+                        }
+                        WitTypeNode::PrimU64Type => {
+                            f.debug_tuple("WitTypeNode::PrimU64Type").finish()
+                        }
+                        WitTypeNode::PrimS8Type => {
+                            f.debug_tuple("WitTypeNode::PrimS8Type").finish()
+                        }
+                        WitTypeNode::PrimS16Type => {
+                            f.debug_tuple("WitTypeNode::PrimS16Type").finish()
+                        }
+                        WitTypeNode::PrimS32Type => {
+                            f.debug_tuple("WitTypeNode::PrimS32Type").finish()
+                        }
+                        WitTypeNode::PrimS64Type => {
+                            f.debug_tuple("WitTypeNode::PrimS64Type").finish()
+                        }
+                        WitTypeNode::PrimF32Type => {
+                            f.debug_tuple("WitTypeNode::PrimF32Type").finish()
+                        }
+                        WitTypeNode::PrimF64Type => {
+                            f.debug_tuple("WitTypeNode::PrimF64Type").finish()
+                        }
+                        WitTypeNode::PrimCharType => {
+                            f.debug_tuple("WitTypeNode::PrimCharType").finish()
+                        }
+                        WitTypeNode::PrimBoolType => {
+                            f.debug_tuple("WitTypeNode::PrimBoolType").finish()
+                        }
+                        WitTypeNode::PrimStringType => {
+                            f.debug_tuple("WitTypeNode::PrimStringType").finish()
+                        }
+                        WitTypeNode::HandleType(e) => {
+                            f.debug_tuple("WitTypeNode::HandleType").field(e).finish()
+                        }
+                    }
+                }
+            }
+            #[derive(Clone)]
+            pub struct WitType {
+                pub nodes: _rt::Vec<WitTypeNode>,
+            }
+            impl ::core::fmt::Debug for WitType {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("WitType").field("nodes", &self.nodes).finish()
+                }
+            }
             #[derive(Clone)]
             pub struct Uri {
                 pub value: _rt::String,
@@ -1746,6 +2347,22 @@ pub mod golem {
                 }
             }
             #[derive(Clone)]
+            pub struct ValueAndType {
+                pub value: WitValue,
+                pub typ: WitType,
+            }
+            impl ::core::fmt::Debug for ValueAndType {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ValueAndType")
+                        .field("value", &self.value)
+                        .field("typ", &self.typ)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
             pub enum RpcError {
                 ProtocolError(_rt::String),
                 Denied(_rt::String),
@@ -1812,7 +2429,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]wasm-rpc"]
                             fn drop(_: u32);
@@ -1849,7 +2466,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]future-invoke-result"]
                             fn drop(_: u32);
@@ -1858,25 +2475,176 @@ pub mod golem {
                     }
                 }
             }
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct CancellationToken {
+                handle: _rt::Resource<CancellationToken>,
+            }
+            impl CancellationToken {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for CancellationToken {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]cancellation-token"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Parses a UUID from a string
+            pub fn parse_uuid(uuid: &str) -> Result<Uuid, _rt::String> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let vec0 = uuid;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "parse-uuid"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i64>();
+                                let l4 = *ptr1.add(16).cast::<i64>();
+                                Uuid {
+                                    high_bits: l3 as u64,
+                                    low_bits: l4 as u64,
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = *ptr1.add(8).cast::<*mut u8>();
+                                let l6 = *ptr1.add(12).cast::<usize>();
+                                let len7 = l6;
+                                let bytes7 = _rt::Vec::from_raw_parts(
+                                    l5.cast(),
+                                    len7,
+                                    len7,
+                                );
+                                _rt::string_lift(bytes7)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Converts a UUID to a string
+            pub fn uuid_to_string(uuid: Uuid) -> _rt::String {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let Uuid { high_bits: high_bits0, low_bits: low_bits0 } = uuid;
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "uuid-to-string"]
+                        fn wit_import(_: i64, _: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(_rt::as_i64(high_bits0), _rt::as_i64(low_bits0), ptr1);
+                    let l2 = *ptr1.add(0).cast::<*mut u8>();
+                    let l3 = *ptr1.add(4).cast::<usize>();
+                    let len4 = l3;
+                    let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
+                    _rt::string_lift(bytes4)
+                }
+            }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn new(location: &Uri) -> Self {
+                pub fn new(worker_id: &WorkerId) -> Self {
                     unsafe {
-                        let Uri { value: value0 } = location;
-                        let vec1 = value0;
-                        let ptr1 = vec1.as_ptr().cast::<u8>();
-                        let len1 = vec1.len();
+                        let WorkerId {
+                            component_id: component_id0,
+                            worker_name: worker_name0,
+                        } = worker_id;
+                        let ComponentId { uuid: uuid1 } = component_id0;
+                        let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                        let vec3 = worker_name0;
+                        let ptr3 = vec3.as_ptr().cast::<u8>();
+                        let len3 = vec3.len();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[constructor]wasm-rpc"]
-                            fn wit_import(_: *mut u8, _: usize) -> i32;
+                            fn wit_import(_: i64, _: i64, _: *mut u8, _: usize) -> i32;
                         }
                         #[cfg(not(target_arch = "wasm32"))]
-                        fn wit_import(_: *mut u8, _: usize) -> i32 {
+                        fn wit_import(_: i64, _: i64, _: *mut u8, _: usize) -> i32 {
                             unreachable!()
                         }
-                        let ret = wit_import(ptr1.cast_mut(), len1);
+                        let ret = wit_import(
+                            _rt::as_i64(high_bits2),
+                            _rt::as_i64(low_bits2),
+                            ptr3.cast_mut(),
+                            len3,
+                        );
+                        WasmRpc::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn ephemeral(component_id: ComponentId) -> WasmRpc {
+                    unsafe {
+                        let ComponentId { uuid: uuid0 } = component_id;
+                        let Uuid { high_bits: high_bits1, low_bits: low_bits1 } = uuid0;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[static]wasm-rpc.ephemeral"]
+                            fn wit_import(_: i64, _: i64) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i64, _: i64) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            _rt::as_i64(high_bits1),
+                            _rt::as_i64(low_bits1),
+                        );
                         WasmRpc::from_handle(ret as u32)
                     }
                 }
@@ -2129,7 +2897,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke-and-await"]
                             fn wit_import(
@@ -2765,7 +3533,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke"]
                             fn wit_import(
@@ -3123,7 +3891,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.async-invoke-and-await"]
                             fn wit_import(
@@ -3163,12 +3931,599 @@ pub mod golem {
                     }
                 }
             }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Schedule invocation for later
+                pub fn schedule_invocation(
+                    &self,
+                    scheduled_time: Datetime,
+                    function_name: &str,
+                    function_params: &[WitValue],
+                ) {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        let super::super::super::wasi::clocks::wall_clock::Datetime {
+                            seconds: seconds0,
+                            nanoseconds: nanoseconds0,
+                        } = scheduled_time;
+                        let vec1 = function_name;
+                        let ptr1 = vec1.as_ptr().cast::<u8>();
+                        let len1 = vec1.len();
+                        let vec13 = function_params;
+                        let len13 = vec13.len();
+                        let layout13 = _rt::alloc::Layout::from_size_align_unchecked(
+                            vec13.len() * 8,
+                            4,
+                        );
+                        let result13 = if layout13.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout13).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout13);
+                            }
+                            ptr
+                        } else {
+                            ::core::ptr::null_mut()
+                        };
+                        for (i, e) in vec13.into_iter().enumerate() {
+                            let base = result13.add(i * 8);
+                            {
+                                let WitValue { nodes: nodes2 } = e;
+                                let vec12 = nodes2;
+                                let len12 = vec12.len();
+                                let layout12 = _rt::alloc::Layout::from_size_align_unchecked(
+                                    vec12.len() * 24,
+                                    8,
+                                );
+                                let result12 = if layout12.size() != 0 {
+                                    let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                                    if ptr.is_null() {
+                                        _rt::alloc::handle_alloc_error(layout12);
+                                    }
+                                    ptr
+                                } else {
+                                    ::core::ptr::null_mut()
+                                };
+                                for (i, e) in vec12.into_iter().enumerate() {
+                                    let base = result12.add(i * 24);
+                                    {
+                                        match e {
+                                            WitNode::RecordValue(e) => {
+                                                *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                let vec3 = e;
+                                                let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                let len3 = vec3.len();
+                                                *base.add(12).cast::<usize>() = len3;
+                                                *base.add(8).cast::<*mut u8>() = ptr3.cast_mut();
+                                            }
+                                            WitNode::VariantValue(e) => {
+                                                *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                let (t4_0, t4_1) = e;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(t4_0);
+                                                match t4_1 {
+                                                    Some(e) => {
+                                                        *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::EnumValue(e) => {
+                                                *base.add(0).cast::<u8>() = (2i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::FlagsValue(e) => {
+                                                *base.add(0).cast::<u8>() = (3i32) as u8;
+                                                let vec5 = e;
+                                                let len5 = vec5.len();
+                                                let layout5 = _rt::alloc::Layout::from_size_align_unchecked(
+                                                    vec5.len() * 1,
+                                                    1,
+                                                );
+                                                let result5 = if layout5.size() != 0 {
+                                                    let ptr = _rt::alloc::alloc(layout5).cast::<u8>();
+                                                    if ptr.is_null() {
+                                                        _rt::alloc::handle_alloc_error(layout5);
+                                                    }
+                                                    ptr
+                                                } else {
+                                                    ::core::ptr::null_mut()
+                                                };
+                                                for (i, e) in vec5.into_iter().enumerate() {
+                                                    let base = result5.add(i * 1);
+                                                    {
+                                                        *base.add(0).cast::<u8>() = (match e {
+                                                            true => 1,
+                                                            false => 0,
+                                                        }) as u8;
+                                                    }
+                                                }
+                                                *base.add(12).cast::<usize>() = len5;
+                                                *base.add(8).cast::<*mut u8>() = result5;
+                                                cleanup_list.extend_from_slice(&[(result5, layout5)]);
+                                            }
+                                            WitNode::TupleValue(e) => {
+                                                *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                let vec6 = e;
+                                                let ptr6 = vec6.as_ptr().cast::<u8>();
+                                                let len6 = vec6.len();
+                                                *base.add(12).cast::<usize>() = len6;
+                                                *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                            }
+                                            WitNode::ListValue(e) => {
+                                                *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                let vec7 = e;
+                                                let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                let len7 = vec7.len();
+                                                *base.add(12).cast::<usize>() = len7;
+                                                *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                            }
+                                            WitNode::OptionValue(e) => {
+                                                *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                match e {
+                                                    Some(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::ResultValue(e) => {
+                                                *base.add(0).cast::<u8>() = (7i32) as u8;
+                                                match e {
+                                                    Ok(e) => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    Err(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                };
+                                            }
+                                            WitNode::PrimU8(e) => {
+                                                *base.add(0).cast::<u8>() = (8i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimU16(e) => {
+                                                *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimU32(e) => {
+                                                *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimU64(e) => {
+                                                *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimS8(e) => {
+                                                *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimS16(e) => {
+                                                *base.add(0).cast::<u8>() = (13i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimS32(e) => {
+                                                *base.add(0).cast::<u8>() = (14i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimS64(e) => {
+                                                *base.add(0).cast::<u8>() = (15i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimFloat32(e) => {
+                                                *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                            }
+                                            WitNode::PrimFloat64(e) => {
+                                                *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                            }
+                                            WitNode::PrimChar(e) => {
+                                                *base.add(0).cast::<u8>() = (18i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimBool(e) => {
+                                                *base.add(0).cast::<u8>() = (19i32) as u8;
+                                                *base.add(8).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                }) as u8;
+                                            }
+                                            WitNode::PrimString(e) => {
+                                                *base.add(0).cast::<u8>() = (20i32) as u8;
+                                                let vec8 = e;
+                                                let ptr8 = vec8.as_ptr().cast::<u8>();
+                                                let len8 = vec8.len();
+                                                *base.add(12).cast::<usize>() = len8;
+                                                *base.add(8).cast::<*mut u8>() = ptr8.cast_mut();
+                                            }
+                                            WitNode::Handle(e) => {
+                                                *base.add(0).cast::<u8>() = (21i32) as u8;
+                                                let (t9_0, t9_1) = e;
+                                                let Uri { value: value10 } = t9_0;
+                                                let vec11 = value10;
+                                                let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                let len11 = vec11.len();
+                                                *base.add(12).cast::<usize>() = len11;
+                                                *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(t9_1);
+                                            }
+                                        }
+                                    }
+                                }
+                                *base.add(4).cast::<usize>() = len12;
+                                *base.add(0).cast::<*mut u8>() = result12;
+                                cleanup_list.extend_from_slice(&[(result12, layout12)]);
+                            }
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]wasm-rpc.schedule-invocation"]
+                            fn wit_import(
+                                _: i32,
+                                _: i64,
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            _rt::as_i64(seconds0),
+                            _rt::as_i32(nanoseconds0),
+                            ptr1.cast_mut(),
+                            len1,
+                            result13,
+                            len13,
+                        );
+                        if layout13.size() != 0 {
+                            _rt::alloc::dealloc(result13.cast(), layout13);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                    }
+                }
+            }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
+                pub fn schedule_cancelable_invocation(
+                    &self,
+                    scheduled_time: Datetime,
+                    function_name: &str,
+                    function_params: &[WitValue],
+                ) -> CancellationToken {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        let super::super::super::wasi::clocks::wall_clock::Datetime {
+                            seconds: seconds0,
+                            nanoseconds: nanoseconds0,
+                        } = scheduled_time;
+                        let vec1 = function_name;
+                        let ptr1 = vec1.as_ptr().cast::<u8>();
+                        let len1 = vec1.len();
+                        let vec13 = function_params;
+                        let len13 = vec13.len();
+                        let layout13 = _rt::alloc::Layout::from_size_align_unchecked(
+                            vec13.len() * 8,
+                            4,
+                        );
+                        let result13 = if layout13.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout13).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout13);
+                            }
+                            ptr
+                        } else {
+                            ::core::ptr::null_mut()
+                        };
+                        for (i, e) in vec13.into_iter().enumerate() {
+                            let base = result13.add(i * 8);
+                            {
+                                let WitValue { nodes: nodes2 } = e;
+                                let vec12 = nodes2;
+                                let len12 = vec12.len();
+                                let layout12 = _rt::alloc::Layout::from_size_align_unchecked(
+                                    vec12.len() * 24,
+                                    8,
+                                );
+                                let result12 = if layout12.size() != 0 {
+                                    let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                                    if ptr.is_null() {
+                                        _rt::alloc::handle_alloc_error(layout12);
+                                    }
+                                    ptr
+                                } else {
+                                    ::core::ptr::null_mut()
+                                };
+                                for (i, e) in vec12.into_iter().enumerate() {
+                                    let base = result12.add(i * 24);
+                                    {
+                                        match e {
+                                            WitNode::RecordValue(e) => {
+                                                *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                let vec3 = e;
+                                                let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                let len3 = vec3.len();
+                                                *base.add(12).cast::<usize>() = len3;
+                                                *base.add(8).cast::<*mut u8>() = ptr3.cast_mut();
+                                            }
+                                            WitNode::VariantValue(e) => {
+                                                *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                let (t4_0, t4_1) = e;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(t4_0);
+                                                match t4_1 {
+                                                    Some(e) => {
+                                                        *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::EnumValue(e) => {
+                                                *base.add(0).cast::<u8>() = (2i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::FlagsValue(e) => {
+                                                *base.add(0).cast::<u8>() = (3i32) as u8;
+                                                let vec5 = e;
+                                                let len5 = vec5.len();
+                                                let layout5 = _rt::alloc::Layout::from_size_align_unchecked(
+                                                    vec5.len() * 1,
+                                                    1,
+                                                );
+                                                let result5 = if layout5.size() != 0 {
+                                                    let ptr = _rt::alloc::alloc(layout5).cast::<u8>();
+                                                    if ptr.is_null() {
+                                                        _rt::alloc::handle_alloc_error(layout5);
+                                                    }
+                                                    ptr
+                                                } else {
+                                                    ::core::ptr::null_mut()
+                                                };
+                                                for (i, e) in vec5.into_iter().enumerate() {
+                                                    let base = result5.add(i * 1);
+                                                    {
+                                                        *base.add(0).cast::<u8>() = (match e {
+                                                            true => 1,
+                                                            false => 0,
+                                                        }) as u8;
+                                                    }
+                                                }
+                                                *base.add(12).cast::<usize>() = len5;
+                                                *base.add(8).cast::<*mut u8>() = result5;
+                                                cleanup_list.extend_from_slice(&[(result5, layout5)]);
+                                            }
+                                            WitNode::TupleValue(e) => {
+                                                *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                let vec6 = e;
+                                                let ptr6 = vec6.as_ptr().cast::<u8>();
+                                                let len6 = vec6.len();
+                                                *base.add(12).cast::<usize>() = len6;
+                                                *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                            }
+                                            WitNode::ListValue(e) => {
+                                                *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                let vec7 = e;
+                                                let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                let len7 = vec7.len();
+                                                *base.add(12).cast::<usize>() = len7;
+                                                *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                            }
+                                            WitNode::OptionValue(e) => {
+                                                *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                match e {
+                                                    Some(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::ResultValue(e) => {
+                                                *base.add(0).cast::<u8>() = (7i32) as u8;
+                                                match e {
+                                                    Ok(e) => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    Err(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                };
+                                            }
+                                            WitNode::PrimU8(e) => {
+                                                *base.add(0).cast::<u8>() = (8i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimU16(e) => {
+                                                *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimU32(e) => {
+                                                *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimU64(e) => {
+                                                *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimS8(e) => {
+                                                *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimS16(e) => {
+                                                *base.add(0).cast::<u8>() = (13i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimS32(e) => {
+                                                *base.add(0).cast::<u8>() = (14i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimS64(e) => {
+                                                *base.add(0).cast::<u8>() = (15i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimFloat32(e) => {
+                                                *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                            }
+                                            WitNode::PrimFloat64(e) => {
+                                                *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                            }
+                                            WitNode::PrimChar(e) => {
+                                                *base.add(0).cast::<u8>() = (18i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimBool(e) => {
+                                                *base.add(0).cast::<u8>() = (19i32) as u8;
+                                                *base.add(8).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                }) as u8;
+                                            }
+                                            WitNode::PrimString(e) => {
+                                                *base.add(0).cast::<u8>() = (20i32) as u8;
+                                                let vec8 = e;
+                                                let ptr8 = vec8.as_ptr().cast::<u8>();
+                                                let len8 = vec8.len();
+                                                *base.add(12).cast::<usize>() = len8;
+                                                *base.add(8).cast::<*mut u8>() = ptr8.cast_mut();
+                                            }
+                                            WitNode::Handle(e) => {
+                                                *base.add(0).cast::<u8>() = (21i32) as u8;
+                                                let (t9_0, t9_1) = e;
+                                                let Uri { value: value10 } = t9_0;
+                                                let vec11 = value10;
+                                                let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                let len11 = vec11.len();
+                                                *base.add(12).cast::<usize>() = len11;
+                                                *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(t9_1);
+                                            }
+                                        }
+                                    }
+                                }
+                                *base.add(4).cast::<usize>() = len12;
+                                *base.add(0).cast::<*mut u8>() = result12;
+                                cleanup_list.extend_from_slice(&[(result12, layout12)]);
+                            }
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]wasm-rpc.schedule-cancelable-invocation"]
+                            fn wit_import(
+                                _: i32,
+                                _: i64,
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                            ) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                        ) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            _rt::as_i64(seconds0),
+                            _rt::as_i32(nanoseconds0),
+                            ptr1.cast_mut(),
+                            len1,
+                            result13,
+                            len13,
+                        );
+                        if layout13.size() != 0 {
+                            _rt::alloc::dealloc(result13.cast(), layout13);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                        CancellationToken::from_handle(ret as u32)
+                    }
+                }
+            }
             impl FutureInvokeResult {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn subscribe(&self) -> Pollable {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.subscribe"]
                             fn wit_import(_: i32) -> i32;
@@ -3195,7 +4550,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.get"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -3564,6 +4919,1497 @@ pub mod golem {
                     }
                 }
             }
+            impl CancellationToken {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn cancel(&self) {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]cancellation-token.cancel"]
+                            fn wit_import(_: i32);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32);
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn extract_value(vnt: &ValueAndType) -> WitValue {
+                unsafe {
+                    let mut cleanup_list = _rt::Vec::new();
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ValueAndType { value: value0, typ: typ0 } = vnt;
+                    let WitValue { nodes: nodes1 } = value0;
+                    let vec11 = nodes1;
+                    let len11 = vec11.len();
+                    let layout11 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec11.len() * 24,
+                        8,
+                    );
+                    let result11 = if layout11.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout11).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout11);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec11.into_iter().enumerate() {
+                        let base = result11.add(i * 24);
+                        {
+                            match e {
+                                WitNode::RecordValue(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec2 = e;
+                                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                                    let len2 = vec2.len();
+                                    *base.add(12).cast::<usize>() = len2;
+                                    *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                }
+                                WitNode::VariantValue(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let (t3_0, t3_1) = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(t3_0);
+                                    match t3_1 {
+                                        Some(e) => {
+                                            *base.add(12).cast::<u8>() = (1i32) as u8;
+                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(12).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::EnumValue(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::FlagsValue(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec4 = e;
+                                    let len4 = vec4.len();
+                                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec4.len() * 1,
+                                        1,
+                                    );
+                                    let result4 = if layout4.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout4);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec4.into_iter().enumerate() {
+                                        let base = result4.add(i * 1);
+                                        {
+                                            *base.add(0).cast::<u8>() = (match e {
+                                                true => 1,
+                                                false => 0,
+                                            }) as u8;
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len4;
+                                    *base.add(8).cast::<*mut u8>() = result4;
+                                    cleanup_list.extend_from_slice(&[(result4, layout4)]);
+                                }
+                                WitNode::TupleValue(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec5 = e;
+                                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                                    let len5 = vec5.len();
+                                    *base.add(12).cast::<usize>() = len5;
+                                    *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
+                                }
+                                WitNode::ListValue(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    let vec6 = e;
+                                    let ptr6 = vec6.as_ptr().cast::<u8>();
+                                    let len6 = vec6.len();
+                                    *base.add(12).cast::<usize>() = len6;
+                                    *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                }
+                                WitNode::OptionValue(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::ResultValue(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    match e {
+                                        Ok(e) => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        Err(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    };
+                                }
+                                WitNode::PrimU8(e) => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimU16(e) => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimU32(e) => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimU64(e) => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimS8(e) => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimS16(e) => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimS32(e) => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimS64(e) => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimFloat32(e) => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                    *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                }
+                                WitNode::PrimFloat64(e) => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                    *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                }
+                                WitNode::PrimChar(e) => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimBool(e) => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                    *base.add(8).cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                WitNode::PrimString(e) => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                    let vec7 = e;
+                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                    let len7 = vec7.len();
+                                    *base.add(12).cast::<usize>() = len7;
+                                    *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                }
+                                WitNode::Handle(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t8_0, t8_1) = e;
+                                    let Uri { value: value9 } = t8_0;
+                                    let vec10 = value9;
+                                    let ptr10 = vec10.as_ptr().cast::<u8>();
+                                    let len10 = vec10.len();
+                                    *base.add(12).cast::<usize>() = len10;
+                                    *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(t8_1);
+                                }
+                            }
+                        }
+                    }
+                    let WitType { nodes: nodes12 } = typ0;
+                    let vec26 = nodes12;
+                    let len26 = vec26.len();
+                    let layout26 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec26.len() * 24,
+                        8,
+                    );
+                    let result26 = if layout26.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout26).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout26);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec26.into_iter().enumerate() {
+                        let base = result26.add(i * 24);
+                        {
+                            match e {
+                                WitTypeNode::RecordType(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec15 = e;
+                                    let len15 = vec15.len();
+                                    let layout15 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec15.len() * 12,
+                                        4,
+                                    );
+                                    let result15 = if layout15.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout15).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout15);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec15.into_iter().enumerate() {
+                                        let base = result15.add(i * 12);
+                                        {
+                                            let (t13_0, t13_1) = e;
+                                            let vec14 = t13_0;
+                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                            let len14 = vec14.len();
+                                            *base.add(4).cast::<usize>() = len14;
+                                            *base.add(0).cast::<*mut u8>() = ptr14.cast_mut();
+                                            *base.add(8).cast::<i32>() = _rt::as_i32(t13_1);
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len15;
+                                    *base.add(8).cast::<*mut u8>() = result15;
+                                    cleanup_list.extend_from_slice(&[(result15, layout15)]);
+                                }
+                                WitTypeNode::VariantType(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let vec18 = e;
+                                    let len18 = vec18.len();
+                                    let layout18 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec18.len() * 16,
+                                        4,
+                                    );
+                                    let result18 = if layout18.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout18).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout18);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec18.into_iter().enumerate() {
+                                        let base = result18.add(i * 16);
+                                        {
+                                            let (t16_0, t16_1) = e;
+                                            let vec17 = t16_0;
+                                            let ptr17 = vec17.as_ptr().cast::<u8>();
+                                            let len17 = vec17.len();
+                                            *base.add(4).cast::<usize>() = len17;
+                                            *base.add(0).cast::<*mut u8>() = ptr17.cast_mut();
+                                            match t16_1 {
+                                                Some(e) => {
+                                                    *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len18;
+                                    *base.add(8).cast::<*mut u8>() = result18;
+                                    cleanup_list.extend_from_slice(&[(result18, layout18)]);
+                                }
+                                WitTypeNode::EnumType(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    let vec20 = e;
+                                    let len20 = vec20.len();
+                                    let layout20 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec20.len() * 8,
+                                        4,
+                                    );
+                                    let result20 = if layout20.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout20).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout20);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec20.into_iter().enumerate() {
+                                        let base = result20.add(i * 8);
+                                        {
+                                            let vec19 = e;
+                                            let ptr19 = vec19.as_ptr().cast::<u8>();
+                                            let len19 = vec19.len();
+                                            *base.add(4).cast::<usize>() = len19;
+                                            *base.add(0).cast::<*mut u8>() = ptr19.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len20;
+                                    *base.add(8).cast::<*mut u8>() = result20;
+                                    cleanup_list.extend_from_slice(&[(result20, layout20)]);
+                                }
+                                WitTypeNode::FlagsType(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec22 = e;
+                                    let len22 = vec22.len();
+                                    let layout22 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec22.len() * 8,
+                                        4,
+                                    );
+                                    let result22 = if layout22.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout22).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout22);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec22.into_iter().enumerate() {
+                                        let base = result22.add(i * 8);
+                                        {
+                                            let vec21 = e;
+                                            let ptr21 = vec21.as_ptr().cast::<u8>();
+                                            let len21 = vec21.len();
+                                            *base.add(4).cast::<usize>() = len21;
+                                            *base.add(0).cast::<*mut u8>() = ptr21.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len22;
+                                    *base.add(8).cast::<*mut u8>() = result22;
+                                    cleanup_list.extend_from_slice(&[(result22, layout22)]);
+                                }
+                                WitTypeNode::TupleType(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec23 = e;
+                                    let ptr23 = vec23.as_ptr().cast::<u8>();
+                                    let len23 = vec23.len();
+                                    *base.add(12).cast::<usize>() = len23;
+                                    *base.add(8).cast::<*mut u8>() = ptr23.cast_mut();
+                                }
+                                WitTypeNode::ListType(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::OptionType(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::ResultType(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    let (t24_0, t24_1) = e;
+                                    match t24_0 {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match t24_1 {
+                                        Some(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitTypeNode::PrimU8Type => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                }
+                                WitTypeNode::PrimU16Type => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                }
+                                WitTypeNode::PrimU32Type => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                }
+                                WitTypeNode::PrimU64Type => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                }
+                                WitTypeNode::PrimS8Type => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                }
+                                WitTypeNode::PrimS16Type => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                }
+                                WitTypeNode::PrimS32Type => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                }
+                                WitTypeNode::PrimS64Type => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                }
+                                WitTypeNode::PrimF32Type => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                }
+                                WitTypeNode::PrimF64Type => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                }
+                                WitTypeNode::PrimCharType => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                }
+                                WitTypeNode::PrimBoolType => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                }
+                                WitTypeNode::PrimStringType => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                }
+                                WitTypeNode::HandleType(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t25_0, t25_1) = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(t25_0);
+                                    *base.add(16).cast::<u8>() = (t25_1.clone() as i32) as u8;
+                                }
+                            }
+                        }
+                    }
+                    let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "extract-value"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(result11, len11, result26, len26, ptr27);
+                    let l28 = *ptr27.add(0).cast::<*mut u8>();
+                    let l29 = *ptr27.add(4).cast::<usize>();
+                    let base75 = l28;
+                    let len75 = l29;
+                    let mut result75 = _rt::Vec::with_capacity(len75);
+                    for i in 0..len75 {
+                        let base = base75.add(i * 24);
+                        let e75 = {
+                            let l30 = i32::from(*base.add(0).cast::<u8>());
+                            let v74 = match l30 {
+                                0 => {
+                                    let e74 = {
+                                        let l31 = *base.add(8).cast::<*mut u8>();
+                                        let l32 = *base.add(12).cast::<usize>();
+                                        let len33 = l32;
+                                        _rt::Vec::from_raw_parts(l31.cast(), len33, len33)
+                                    };
+                                    WitNode::RecordValue(e74)
+                                }
+                                1 => {
+                                    let e74 = {
+                                        let l34 = *base.add(8).cast::<i32>();
+                                        let l35 = i32::from(*base.add(12).cast::<u8>());
+                                        (
+                                            l34 as u32,
+                                            match l35 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l36 = *base.add(16).cast::<i32>();
+                                                        l36
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                        )
+                                    };
+                                    WitNode::VariantValue(e74)
+                                }
+                                2 => {
+                                    let e74 = {
+                                        let l37 = *base.add(8).cast::<i32>();
+                                        l37 as u32
+                                    };
+                                    WitNode::EnumValue(e74)
+                                }
+                                3 => {
+                                    let e74 = {
+                                        let l38 = *base.add(8).cast::<*mut u8>();
+                                        let l39 = *base.add(12).cast::<usize>();
+                                        let base41 = l38;
+                                        let len41 = l39;
+                                        let mut result41 = _rt::Vec::with_capacity(len41);
+                                        for i in 0..len41 {
+                                            let base = base41.add(i * 1);
+                                            let e41 = {
+                                                let l40 = i32::from(*base.add(0).cast::<u8>());
+                                                _rt::bool_lift(l40 as u8)
+                                            };
+                                            result41.push(e41);
+                                        }
+                                        _rt::cabi_dealloc(base41, len41 * 1, 1);
+                                        result41
+                                    };
+                                    WitNode::FlagsValue(e74)
+                                }
+                                4 => {
+                                    let e74 = {
+                                        let l42 = *base.add(8).cast::<*mut u8>();
+                                        let l43 = *base.add(12).cast::<usize>();
+                                        let len44 = l43;
+                                        _rt::Vec::from_raw_parts(l42.cast(), len44, len44)
+                                    };
+                                    WitNode::TupleValue(e74)
+                                }
+                                5 => {
+                                    let e74 = {
+                                        let l45 = *base.add(8).cast::<*mut u8>();
+                                        let l46 = *base.add(12).cast::<usize>();
+                                        let len47 = l46;
+                                        _rt::Vec::from_raw_parts(l45.cast(), len47, len47)
+                                    };
+                                    WitNode::ListValue(e74)
+                                }
+                                6 => {
+                                    let e74 = {
+                                        let l48 = i32::from(*base.add(8).cast::<u8>());
+                                        match l48 {
+                                            0 => None,
+                                            1 => {
+                                                let e = {
+                                                    let l49 = *base.add(12).cast::<i32>();
+                                                    l49
+                                                };
+                                                Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                        }
+                                    };
+                                    WitNode::OptionValue(e74)
+                                }
+                                7 => {
+                                    let e74 = {
+                                        let l50 = i32::from(*base.add(8).cast::<u8>());
+                                        match l50 {
+                                            0 => {
+                                                let e = {
+                                                    let l51 = i32::from(*base.add(12).cast::<u8>());
+                                                    match l51 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l52 = *base.add(16).cast::<i32>();
+                                                                l52
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    }
+                                                };
+                                                Ok(e)
+                                            }
+                                            1 => {
+                                                let e = {
+                                                    let l53 = i32::from(*base.add(12).cast::<u8>());
+                                                    match l53 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l54 = *base.add(16).cast::<i32>();
+                                                                l54
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    }
+                                                };
+                                                Err(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                        }
+                                    };
+                                    WitNode::ResultValue(e74)
+                                }
+                                8 => {
+                                    let e74 = {
+                                        let l55 = i32::from(*base.add(8).cast::<u8>());
+                                        l55 as u8
+                                    };
+                                    WitNode::PrimU8(e74)
+                                }
+                                9 => {
+                                    let e74 = {
+                                        let l56 = i32::from(*base.add(8).cast::<u16>());
+                                        l56 as u16
+                                    };
+                                    WitNode::PrimU16(e74)
+                                }
+                                10 => {
+                                    let e74 = {
+                                        let l57 = *base.add(8).cast::<i32>();
+                                        l57 as u32
+                                    };
+                                    WitNode::PrimU32(e74)
+                                }
+                                11 => {
+                                    let e74 = {
+                                        let l58 = *base.add(8).cast::<i64>();
+                                        l58 as u64
+                                    };
+                                    WitNode::PrimU64(e74)
+                                }
+                                12 => {
+                                    let e74 = {
+                                        let l59 = i32::from(*base.add(8).cast::<i8>());
+                                        l59 as i8
+                                    };
+                                    WitNode::PrimS8(e74)
+                                }
+                                13 => {
+                                    let e74 = {
+                                        let l60 = i32::from(*base.add(8).cast::<i16>());
+                                        l60 as i16
+                                    };
+                                    WitNode::PrimS16(e74)
+                                }
+                                14 => {
+                                    let e74 = {
+                                        let l61 = *base.add(8).cast::<i32>();
+                                        l61
+                                    };
+                                    WitNode::PrimS32(e74)
+                                }
+                                15 => {
+                                    let e74 = {
+                                        let l62 = *base.add(8).cast::<i64>();
+                                        l62
+                                    };
+                                    WitNode::PrimS64(e74)
+                                }
+                                16 => {
+                                    let e74 = {
+                                        let l63 = *base.add(8).cast::<f32>();
+                                        l63
+                                    };
+                                    WitNode::PrimFloat32(e74)
+                                }
+                                17 => {
+                                    let e74 = {
+                                        let l64 = *base.add(8).cast::<f64>();
+                                        l64
+                                    };
+                                    WitNode::PrimFloat64(e74)
+                                }
+                                18 => {
+                                    let e74 = {
+                                        let l65 = *base.add(8).cast::<i32>();
+                                        _rt::char_lift(l65 as u32)
+                                    };
+                                    WitNode::PrimChar(e74)
+                                }
+                                19 => {
+                                    let e74 = {
+                                        let l66 = i32::from(*base.add(8).cast::<u8>());
+                                        _rt::bool_lift(l66 as u8)
+                                    };
+                                    WitNode::PrimBool(e74)
+                                }
+                                20 => {
+                                    let e74 = {
+                                        let l67 = *base.add(8).cast::<*mut u8>();
+                                        let l68 = *base.add(12).cast::<usize>();
+                                        let len69 = l68;
+                                        let bytes69 = _rt::Vec::from_raw_parts(
+                                            l67.cast(),
+                                            len69,
+                                            len69,
+                                        );
+                                        _rt::string_lift(bytes69)
+                                    };
+                                    WitNode::PrimString(e74)
+                                }
+                                n => {
+                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
+                                    let e74 = {
+                                        let l70 = *base.add(8).cast::<*mut u8>();
+                                        let l71 = *base.add(12).cast::<usize>();
+                                        let len72 = l71;
+                                        let bytes72 = _rt::Vec::from_raw_parts(
+                                            l70.cast(),
+                                            len72,
+                                            len72,
+                                        );
+                                        let l73 = *base.add(16).cast::<i64>();
+                                        (
+                                            Uri {
+                                                value: _rt::string_lift(bytes72),
+                                            },
+                                            l73 as u64,
+                                        )
+                                    };
+                                    WitNode::Handle(e74)
+                                }
+                            };
+                            v74
+                        };
+                        result75.push(e75);
+                    }
+                    _rt::cabi_dealloc(base75, len75 * 24, 8);
+                    if layout11.size() != 0 {
+                        _rt::alloc::dealloc(result11.cast(), layout11);
+                    }
+                    if layout26.size() != 0 {
+                        _rt::alloc::dealloc(result26.cast(), layout26);
+                    }
+                    for (ptr, layout) in cleanup_list {
+                        if layout.size() != 0 {
+                            _rt::alloc::dealloc(ptr.cast(), layout);
+                        }
+                    }
+                    WitValue { nodes: result75 }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn extract_type(vnt: &ValueAndType) -> WitType {
+                unsafe {
+                    let mut cleanup_list = _rt::Vec::new();
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ValueAndType { value: value0, typ: typ0 } = vnt;
+                    let WitValue { nodes: nodes1 } = value0;
+                    let vec11 = nodes1;
+                    let len11 = vec11.len();
+                    let layout11 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec11.len() * 24,
+                        8,
+                    );
+                    let result11 = if layout11.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout11).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout11);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec11.into_iter().enumerate() {
+                        let base = result11.add(i * 24);
+                        {
+                            match e {
+                                WitNode::RecordValue(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec2 = e;
+                                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                                    let len2 = vec2.len();
+                                    *base.add(12).cast::<usize>() = len2;
+                                    *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                }
+                                WitNode::VariantValue(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let (t3_0, t3_1) = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(t3_0);
+                                    match t3_1 {
+                                        Some(e) => {
+                                            *base.add(12).cast::<u8>() = (1i32) as u8;
+                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(12).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::EnumValue(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::FlagsValue(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec4 = e;
+                                    let len4 = vec4.len();
+                                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec4.len() * 1,
+                                        1,
+                                    );
+                                    let result4 = if layout4.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout4);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec4.into_iter().enumerate() {
+                                        let base = result4.add(i * 1);
+                                        {
+                                            *base.add(0).cast::<u8>() = (match e {
+                                                true => 1,
+                                                false => 0,
+                                            }) as u8;
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len4;
+                                    *base.add(8).cast::<*mut u8>() = result4;
+                                    cleanup_list.extend_from_slice(&[(result4, layout4)]);
+                                }
+                                WitNode::TupleValue(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec5 = e;
+                                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                                    let len5 = vec5.len();
+                                    *base.add(12).cast::<usize>() = len5;
+                                    *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
+                                }
+                                WitNode::ListValue(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    let vec6 = e;
+                                    let ptr6 = vec6.as_ptr().cast::<u8>();
+                                    let len6 = vec6.len();
+                                    *base.add(12).cast::<usize>() = len6;
+                                    *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                }
+                                WitNode::OptionValue(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::ResultValue(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    match e {
+                                        Ok(e) => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        Err(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    };
+                                }
+                                WitNode::PrimU8(e) => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimU16(e) => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimU32(e) => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimU64(e) => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimS8(e) => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimS16(e) => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimS32(e) => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimS64(e) => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimFloat32(e) => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                    *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                }
+                                WitNode::PrimFloat64(e) => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                    *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                }
+                                WitNode::PrimChar(e) => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimBool(e) => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                    *base.add(8).cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                WitNode::PrimString(e) => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                    let vec7 = e;
+                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                    let len7 = vec7.len();
+                                    *base.add(12).cast::<usize>() = len7;
+                                    *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                }
+                                WitNode::Handle(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t8_0, t8_1) = e;
+                                    let Uri { value: value9 } = t8_0;
+                                    let vec10 = value9;
+                                    let ptr10 = vec10.as_ptr().cast::<u8>();
+                                    let len10 = vec10.len();
+                                    *base.add(12).cast::<usize>() = len10;
+                                    *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(t8_1);
+                                }
+                            }
+                        }
+                    }
+                    let WitType { nodes: nodes12 } = typ0;
+                    let vec26 = nodes12;
+                    let len26 = vec26.len();
+                    let layout26 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec26.len() * 24,
+                        8,
+                    );
+                    let result26 = if layout26.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout26).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout26);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec26.into_iter().enumerate() {
+                        let base = result26.add(i * 24);
+                        {
+                            match e {
+                                WitTypeNode::RecordType(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec15 = e;
+                                    let len15 = vec15.len();
+                                    let layout15 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec15.len() * 12,
+                                        4,
+                                    );
+                                    let result15 = if layout15.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout15).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout15);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec15.into_iter().enumerate() {
+                                        let base = result15.add(i * 12);
+                                        {
+                                            let (t13_0, t13_1) = e;
+                                            let vec14 = t13_0;
+                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                            let len14 = vec14.len();
+                                            *base.add(4).cast::<usize>() = len14;
+                                            *base.add(0).cast::<*mut u8>() = ptr14.cast_mut();
+                                            *base.add(8).cast::<i32>() = _rt::as_i32(t13_1);
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len15;
+                                    *base.add(8).cast::<*mut u8>() = result15;
+                                    cleanup_list.extend_from_slice(&[(result15, layout15)]);
+                                }
+                                WitTypeNode::VariantType(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let vec18 = e;
+                                    let len18 = vec18.len();
+                                    let layout18 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec18.len() * 16,
+                                        4,
+                                    );
+                                    let result18 = if layout18.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout18).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout18);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec18.into_iter().enumerate() {
+                                        let base = result18.add(i * 16);
+                                        {
+                                            let (t16_0, t16_1) = e;
+                                            let vec17 = t16_0;
+                                            let ptr17 = vec17.as_ptr().cast::<u8>();
+                                            let len17 = vec17.len();
+                                            *base.add(4).cast::<usize>() = len17;
+                                            *base.add(0).cast::<*mut u8>() = ptr17.cast_mut();
+                                            match t16_1 {
+                                                Some(e) => {
+                                                    *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len18;
+                                    *base.add(8).cast::<*mut u8>() = result18;
+                                    cleanup_list.extend_from_slice(&[(result18, layout18)]);
+                                }
+                                WitTypeNode::EnumType(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    let vec20 = e;
+                                    let len20 = vec20.len();
+                                    let layout20 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec20.len() * 8,
+                                        4,
+                                    );
+                                    let result20 = if layout20.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout20).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout20);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec20.into_iter().enumerate() {
+                                        let base = result20.add(i * 8);
+                                        {
+                                            let vec19 = e;
+                                            let ptr19 = vec19.as_ptr().cast::<u8>();
+                                            let len19 = vec19.len();
+                                            *base.add(4).cast::<usize>() = len19;
+                                            *base.add(0).cast::<*mut u8>() = ptr19.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len20;
+                                    *base.add(8).cast::<*mut u8>() = result20;
+                                    cleanup_list.extend_from_slice(&[(result20, layout20)]);
+                                }
+                                WitTypeNode::FlagsType(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec22 = e;
+                                    let len22 = vec22.len();
+                                    let layout22 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec22.len() * 8,
+                                        4,
+                                    );
+                                    let result22 = if layout22.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout22).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout22);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec22.into_iter().enumerate() {
+                                        let base = result22.add(i * 8);
+                                        {
+                                            let vec21 = e;
+                                            let ptr21 = vec21.as_ptr().cast::<u8>();
+                                            let len21 = vec21.len();
+                                            *base.add(4).cast::<usize>() = len21;
+                                            *base.add(0).cast::<*mut u8>() = ptr21.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len22;
+                                    *base.add(8).cast::<*mut u8>() = result22;
+                                    cleanup_list.extend_from_slice(&[(result22, layout22)]);
+                                }
+                                WitTypeNode::TupleType(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec23 = e;
+                                    let ptr23 = vec23.as_ptr().cast::<u8>();
+                                    let len23 = vec23.len();
+                                    *base.add(12).cast::<usize>() = len23;
+                                    *base.add(8).cast::<*mut u8>() = ptr23.cast_mut();
+                                }
+                                WitTypeNode::ListType(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::OptionType(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::ResultType(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    let (t24_0, t24_1) = e;
+                                    match t24_0 {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match t24_1 {
+                                        Some(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitTypeNode::PrimU8Type => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                }
+                                WitTypeNode::PrimU16Type => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                }
+                                WitTypeNode::PrimU32Type => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                }
+                                WitTypeNode::PrimU64Type => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                }
+                                WitTypeNode::PrimS8Type => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                }
+                                WitTypeNode::PrimS16Type => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                }
+                                WitTypeNode::PrimS32Type => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                }
+                                WitTypeNode::PrimS64Type => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                }
+                                WitTypeNode::PrimF32Type => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                }
+                                WitTypeNode::PrimF64Type => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                }
+                                WitTypeNode::PrimCharType => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                }
+                                WitTypeNode::PrimBoolType => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                }
+                                WitTypeNode::PrimStringType => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                }
+                                WitTypeNode::HandleType(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t25_0, t25_1) = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(t25_0);
+                                    *base.add(16).cast::<u8>() = (t25_1.clone() as i32) as u8;
+                                }
+                            }
+                        }
+                    }
+                    let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "extract-type"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(result11, len11, result26, len26, ptr27);
+                    let l28 = *ptr27.add(0).cast::<*mut u8>();
+                    let l29 = *ptr27.add(4).cast::<usize>();
+                    let base70 = l28;
+                    let len70 = l29;
+                    let mut result70 = _rt::Vec::with_capacity(len70);
+                    for i in 0..len70 {
+                        let base = base70.add(i * 24);
+                        let e70 = {
+                            let l30 = i32::from(*base.add(0).cast::<u8>());
+                            let v69 = match l30 {
+                                0 => {
+                                    let e69 = {
+                                        let l31 = *base.add(8).cast::<*mut u8>();
+                                        let l32 = *base.add(12).cast::<usize>();
+                                        let base37 = l31;
+                                        let len37 = l32;
+                                        let mut result37 = _rt::Vec::with_capacity(len37);
+                                        for i in 0..len37 {
+                                            let base = base37.add(i * 12);
+                                            let e37 = {
+                                                let l33 = *base.add(0).cast::<*mut u8>();
+                                                let l34 = *base.add(4).cast::<usize>();
+                                                let len35 = l34;
+                                                let bytes35 = _rt::Vec::from_raw_parts(
+                                                    l33.cast(),
+                                                    len35,
+                                                    len35,
+                                                );
+                                                let l36 = *base.add(8).cast::<i32>();
+                                                (_rt::string_lift(bytes35), l36)
+                                            };
+                                            result37.push(e37);
+                                        }
+                                        _rt::cabi_dealloc(base37, len37 * 12, 4);
+                                        result37
+                                    };
+                                    WitTypeNode::RecordType(e69)
+                                }
+                                1 => {
+                                    let e69 = {
+                                        let l38 = *base.add(8).cast::<*mut u8>();
+                                        let l39 = *base.add(12).cast::<usize>();
+                                        let base45 = l38;
+                                        let len45 = l39;
+                                        let mut result45 = _rt::Vec::with_capacity(len45);
+                                        for i in 0..len45 {
+                                            let base = base45.add(i * 16);
+                                            let e45 = {
+                                                let l40 = *base.add(0).cast::<*mut u8>();
+                                                let l41 = *base.add(4).cast::<usize>();
+                                                let len42 = l41;
+                                                let bytes42 = _rt::Vec::from_raw_parts(
+                                                    l40.cast(),
+                                                    len42,
+                                                    len42,
+                                                );
+                                                let l43 = i32::from(*base.add(8).cast::<u8>());
+                                                (
+                                                    _rt::string_lift(bytes42),
+                                                    match l43 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l44 = *base.add(12).cast::<i32>();
+                                                                l44
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                )
+                                            };
+                                            result45.push(e45);
+                                        }
+                                        _rt::cabi_dealloc(base45, len45 * 16, 4);
+                                        result45
+                                    };
+                                    WitTypeNode::VariantType(e69)
+                                }
+                                2 => {
+                                    let e69 = {
+                                        let l46 = *base.add(8).cast::<*mut u8>();
+                                        let l47 = *base.add(12).cast::<usize>();
+                                        let base51 = l46;
+                                        let len51 = l47;
+                                        let mut result51 = _rt::Vec::with_capacity(len51);
+                                        for i in 0..len51 {
+                                            let base = base51.add(i * 8);
+                                            let e51 = {
+                                                let l48 = *base.add(0).cast::<*mut u8>();
+                                                let l49 = *base.add(4).cast::<usize>();
+                                                let len50 = l49;
+                                                let bytes50 = _rt::Vec::from_raw_parts(
+                                                    l48.cast(),
+                                                    len50,
+                                                    len50,
+                                                );
+                                                _rt::string_lift(bytes50)
+                                            };
+                                            result51.push(e51);
+                                        }
+                                        _rt::cabi_dealloc(base51, len51 * 8, 4);
+                                        result51
+                                    };
+                                    WitTypeNode::EnumType(e69)
+                                }
+                                3 => {
+                                    let e69 = {
+                                        let l52 = *base.add(8).cast::<*mut u8>();
+                                        let l53 = *base.add(12).cast::<usize>();
+                                        let base57 = l52;
+                                        let len57 = l53;
+                                        let mut result57 = _rt::Vec::with_capacity(len57);
+                                        for i in 0..len57 {
+                                            let base = base57.add(i * 8);
+                                            let e57 = {
+                                                let l54 = *base.add(0).cast::<*mut u8>();
+                                                let l55 = *base.add(4).cast::<usize>();
+                                                let len56 = l55;
+                                                let bytes56 = _rt::Vec::from_raw_parts(
+                                                    l54.cast(),
+                                                    len56,
+                                                    len56,
+                                                );
+                                                _rt::string_lift(bytes56)
+                                            };
+                                            result57.push(e57);
+                                        }
+                                        _rt::cabi_dealloc(base57, len57 * 8, 4);
+                                        result57
+                                    };
+                                    WitTypeNode::FlagsType(e69)
+                                }
+                                4 => {
+                                    let e69 = {
+                                        let l58 = *base.add(8).cast::<*mut u8>();
+                                        let l59 = *base.add(12).cast::<usize>();
+                                        let len60 = l59;
+                                        _rt::Vec::from_raw_parts(l58.cast(), len60, len60)
+                                    };
+                                    WitTypeNode::TupleType(e69)
+                                }
+                                5 => {
+                                    let e69 = {
+                                        let l61 = *base.add(8).cast::<i32>();
+                                        l61
+                                    };
+                                    WitTypeNode::ListType(e69)
+                                }
+                                6 => {
+                                    let e69 = {
+                                        let l62 = *base.add(8).cast::<i32>();
+                                        l62
+                                    };
+                                    WitTypeNode::OptionType(e69)
+                                }
+                                7 => {
+                                    let e69 = {
+                                        let l63 = i32::from(*base.add(8).cast::<u8>());
+                                        let l65 = i32::from(*base.add(16).cast::<u8>());
+                                        (
+                                            match l63 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l64 = *base.add(12).cast::<i32>();
+                                                        l64
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            match l65 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l66 = *base.add(20).cast::<i32>();
+                                                        l66
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                        )
+                                    };
+                                    WitTypeNode::ResultType(e69)
+                                }
+                                8 => WitTypeNode::PrimU8Type,
+                                9 => WitTypeNode::PrimU16Type,
+                                10 => WitTypeNode::PrimU32Type,
+                                11 => WitTypeNode::PrimU64Type,
+                                12 => WitTypeNode::PrimS8Type,
+                                13 => WitTypeNode::PrimS16Type,
+                                14 => WitTypeNode::PrimS32Type,
+                                15 => WitTypeNode::PrimS64Type,
+                                16 => WitTypeNode::PrimF32Type,
+                                17 => WitTypeNode::PrimF64Type,
+                                18 => WitTypeNode::PrimCharType,
+                                19 => WitTypeNode::PrimBoolType,
+                                20 => WitTypeNode::PrimStringType,
+                                n => {
+                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
+                                    let e69 = {
+                                        let l67 = *base.add(8).cast::<i64>();
+                                        let l68 = i32::from(*base.add(16).cast::<u8>());
+                                        (l67 as u64, ResourceMode::_lift(l68 as u8))
+                                    };
+                                    WitTypeNode::HandleType(e69)
+                                }
+                            };
+                            v69
+                        };
+                        result70.push(e70);
+                    }
+                    _rt::cabi_dealloc(base70, len70 * 24, 8);
+                    if layout11.size() != 0 {
+                        _rt::alloc::dealloc(result11.cast(), layout11);
+                    }
+                    if layout26.size() != 0 {
+                        _rt::alloc::dealloc(result26.cast(), layout26);
+                    }
+                    for (ptr, layout) in cleanup_list {
+                        if layout.size() != 0 {
+                            _rt::alloc::dealloc(ptr.cast(), layout);
+                        }
+                    }
+                    WitType { nodes: result70 }
+                }
+            }
         }
     }
 }
@@ -3675,6 +6521,112 @@ pub mod wasi {
                     super::super::super::wasi::io::poll::Pollable::from_handle(
                         ret as u32,
                     )
+                }
+            }
+        }
+        /// WASI Wall Clock is a clock API intended to let users query the current
+        /// time. The name "wall" makes an analogy to a "clock on the wall", which
+        /// is not necessarily monotonic as it may be reset.
+        ///
+        /// It is intended to be portable at least between Unix-family platforms and
+        /// Windows.
+        ///
+        /// A wall clock is a clock which measures the date and time according to
+        /// some external reference.
+        ///
+        /// External references may be reset, so this clock is not necessarily
+        /// monotonic, making it unsuitable for measuring elapsed time.
+        ///
+        /// It is intended for reporting the current date and time for humans.
+        #[allow(dead_code, clippy::all)]
+        pub mod wall_clock {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            /// A time and date in seconds plus nanoseconds.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Datetime {
+                pub seconds: u64,
+                pub nanoseconds: u32,
+            }
+            impl ::core::fmt::Debug for Datetime {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Datetime")
+                        .field("seconds", &self.seconds)
+                        .field("nanoseconds", &self.nanoseconds)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Read the current value of the clock.
+            ///
+            /// This clock is not monotonic, therefore calling this function repeatedly
+            /// will not necessarily produce a sequence of non-decreasing values.
+            ///
+            /// The returned timestamps represent the number of seconds since
+            /// 1970-01-01T00:00:00Z, also known as [POSIX's Seconds Since the Epoch],
+            /// also known as [Unix Time].
+            ///
+            /// The nanoseconds field of the output is always less than 1000000000.
+            ///
+            /// [POSIX's Seconds Since the Epoch]: https://pubs.opengroup.org/onlinepubs/9699919799/xrat/V4_xbd_chap04.html#tag_21_04_16
+            /// [Unix Time]: https://en.wikipedia.org/wiki/Unix_time
+            pub fn now() -> Datetime {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                        #[link_name = "now"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i32>();
+                    Datetime {
+                        seconds: l1 as u64,
+                        nanoseconds: l2 as u32,
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Query the resolution of the clock.
+            ///
+            /// The nanoseconds field of the output is always less than 1000000000.
+            pub fn resolution() -> Datetime {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                        #[link_name = "resolution"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i32>();
+                    Datetime {
+                        seconds: l1 as u64,
+                        nanoseconds: l2 as u32,
+                    }
                 }
             }
         }
@@ -4228,7 +7180,44 @@ mod _rt {
     }
     pub use alloc_crate::vec::Vec;
     pub use alloc_crate::alloc;
+    pub fn as_i64<T: AsI64>(t: T) -> i64 {
+        t.as_i64()
+    }
+    pub trait AsI64 {
+        fn as_i64(self) -> i64;
+    }
+    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
+        fn as_i64(self) -> i64 {
+            (*self).as_i64()
+        }
+    }
+    impl AsI64 for i64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
+    impl AsI64 for u64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
     pub use alloc_crate::string::String;
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
+    pub unsafe fn invalid_enum_discriminant<T>() -> T {
+        if cfg!(debug_assertions) {
+            panic!("invalid enum discriminant")
+        } else {
+            core::hint::unreachable_unchecked()
+        }
+    }
     pub fn as_i32<T: AsI32>(t: T) -> i32 {
         t.as_i32()
     }
@@ -4288,29 +7277,6 @@ mod _rt {
             self as i32
         }
     }
-    pub fn as_i64<T: AsI64>(t: T) -> i64 {
-        t.as_i64()
-    }
-    pub trait AsI64 {
-        fn as_i64(self) -> i64;
-    }
-    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
-        fn as_i64(self) -> i64 {
-            (*self).as_i64()
-        }
-    }
-    impl AsI64 for i64 {
-        #[inline]
-        fn as_i64(self) -> i64 {
-            self as i64
-        }
-    }
-    impl AsI64 for u64 {
-        #[inline]
-        fn as_i64(self) -> i64 {
-            self as i64
-        }
-    }
     pub fn as_f32<T: AsF32>(t: T) -> f32 {
         t.as_f32()
     }
@@ -4345,13 +7311,6 @@ mod _rt {
             self as f64
         }
     }
-    pub unsafe fn invalid_enum_discriminant<T>() -> T {
-        if cfg!(debug_assertions) {
-            panic!("invalid enum discriminant")
-        } else {
-            core::hint::unreachable_unchecked()
-        }
-    }
     pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
         if size == 0 {
             return;
@@ -4364,13 +7323,6 @@ mod _rt {
             core::char::from_u32(val).unwrap()
         } else {
             core::char::from_u32_unchecked(val)
-        }
-    }
-    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
-        if cfg!(debug_assertions) {
-            String::from_utf8(bytes).unwrap()
-        } else {
-            String::from_utf8_unchecked(bytes)
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -4412,91 +7364,121 @@ pub(crate) use __export_shopping_cart_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:it:shopping-cart:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3995] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x97\x1e\x01A\x02\x01\
-A\x0d\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
-\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
-ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
-\x03\0\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B*\x02\x03\x02\x01\
-\x01\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01r\x01\x05va\
-lues\x04\0\x03uri\x03\0\x04\x01p\x03\x01k\x03\x01o\x02y\x07\x01p\x7f\x01j\x01\x07\
-\x01\x07\x01o\x02\x05w\x01q\x16\x0crecord-value\x01\x06\0\x0dvariant-value\x01\x08\
-\0\x0aenum-value\x01y\0\x0bflags-value\x01\x09\0\x0btuple-value\x01\x06\0\x0alis\
-t-value\x01\x06\0\x0coption-value\x01\x07\0\x0cresult-value\x01\x0a\0\x07prim-u8\
-\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\
-\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\
-\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-str\
-ing\x01s\0\x06handle\x01\x0b\0\x04\0\x08wit-node\x03\0\x0c\x01p\x0d\x01r\x01\x05\
-nodes\x0e\x04\0\x09wit-value\x03\0\x0f\x01q\x04\x0eprotocol-error\x01s\0\x06deni\
-ed\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\
-\x03\0\x11\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i\x13\
-\x01@\x01\x08location\x05\0\x15\x04\0\x15[constructor]wasm-rpc\x01\x16\x01h\x13\x01\
-p\x10\x01j\x01\x10\x01\x12\x01@\x03\x04self\x17\x0dfunction-names\x0ffunction-pa\
-rams\x18\0\x19\x04\0![method]wasm-rpc.invoke-and-await\x01\x1a\x01j\0\x01\x12\x01\
-@\x03\x04self\x17\x0dfunction-names\x0ffunction-params\x18\0\x1b\x04\0\x17[metho\
-d]wasm-rpc.invoke\x01\x1c\x01i\x14\x01@\x03\x04self\x17\x0dfunction-names\x0ffun\
-ction-params\x18\0\x1d\x04\0'[method]wasm-rpc.async-invoke-and-await\x01\x1e\x01\
-h\x14\x01i\x01\x01@\x01\x04self\x1f\0\x20\x04\0&[method]future-invoke-result.sub\
-scribe\x01!\x01k\x19\x01@\x01\x04self\x1f\0\"\x04\0\x20[method]future-invoke-res\
-ult.get\x01#\x03\0\x15golem:rpc/types@0.1.0\x05\x02\x01B\x0f\x02\x03\x02\x01\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5580] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc8*\x01A\x02\x01A\x12\
+\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
+method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
+le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
+\0\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
 \x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duratio\
 n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\
 \x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\
 \x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/mon\
-otonic-clock@0.2.0\x05\x03\x02\x03\0\x01\x03uri\x02\x03\0\x02\x08duration\x01Bf\x02\
-\x03\x02\x01\x04\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x05\x04\0\x08duration\x03\0\
-\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\0\x06\
-\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\
-\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\x0bworker-names\x04\
-\0\x09worker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog-idx\x05\x04\0\x0apr\
-omise-id\x03\0\x0e\x01r\x04\x0cmax-attemptsy\x09min-delay\x03\x09max-delay\x03\x0a\
-multiplieru\x04\0\x0cretry-policy\x03\0\x10\x01q\x03\x0fpersist-nothing\0\0\x1bp\
-ersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x12\
-\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x14\x01m\x06\
-\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11\
-filter-comparator\x03\0\x16\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\
-\0\x18string-filter-comparator\x03\0\x18\x01m\x07\x07running\x04idle\x09suspende\
-d\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1a\
-\x01r\x02\x0acomparator\x19\x05values\x04\0\x12worker-name-filter\x03\0\x1c\x01r\
-\x02\x0acomparator\x17\x05value\x1b\x04\0\x14worker-status-filter\x03\0\x1e\x01r\
-\x02\x0acomparator\x17\x05valuew\x04\0\x15worker-version-filter\x03\0\x20\x01r\x02\
-\x0acomparator\x17\x05valuew\x04\0\x18worker-created-at-filter\x03\0\"\x01r\x03\x04\
-names\x0acomparator\x19\x05values\x04\0\x11worker-env-filter\x03\0$\x01q\x05\x04\
-name\x01\x1d\0\x06status\x01\x1f\0\x07version\x01!\0\x0acreated-at\x01#\0\x03env\
-\x01%\0\x04\0\x16worker-property-filter\x03\0&\x01p'\x01r\x01\x07filters(\x04\0\x11\
-worker-all-filter\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-any-filter\x03\
-\0,\x01ps\x01o\x02ss\x01p/\x01r\x06\x09worker-id\x0d\x04args.\x03env0\x06status\x1b\
-\x11component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\01\x04\0\x0b\
-get-workers\x03\x01\x01k-\x01i3\x01@\x03\x0ccomponent-id\x0b\x06filter4\x07preci\
-se\x7f\05\x04\0\x18[constructor]get-workers\x016\x01h3\x01p2\x01k8\x01@\x01\x04s\
-elf7\09\x04\0\x1c[method]get-workers.get-next\x01:\x01@\0\0\x0f\x04\0\x0ecreate-\
-promise\x01;\x01p}\x01@\x01\x0apromise-id\x0f\0<\x04\0\x0dawait-promise\x01=\x01\
-@\x02\x0apromise-id\x0f\x04data<\0\x7f\x04\0\x10complete-promise\x01>\x01@\x01\x0a\
-promise-id\x0f\x01\0\x04\0\x0edelete-promise\x01?\x01@\x01\x0dfunction-names\0\x01\
-\x04\0\x0cget-self-uri\x01@\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01A\x01@\x01\x09\
-oplog-idx\x05\x01\0\x04\0\x0fset-oplog-index\x01B\x01@\x01\x08replicas}\x01\0\x04\
-\0\x0coplog-commit\x01C\x04\0\x14mark-begin-operation\x01A\x01@\x01\x05begin\x05\
-\x01\0\x04\0\x12mark-end-operation\x01D\x01@\0\0\x11\x04\0\x10get-retry-policy\x01\
-E\x01@\x01\x10new-retry-policy\x11\x01\0\x04\0\x10set-retry-policy\x01F\x01@\0\0\
-\x13\x04\0\x1bget-oplog-persistence-level\x01G\x01@\x01\x15new-persistence-level\
-\x13\x01\0\x04\0\x1bset-oplog-persistence-level\x01H\x01@\0\0\x7f\x04\0\x14get-i\
-dempotence-mode\x01I\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-m\
-ode\x01J\x01@\0\0\x09\x04\0\x18generate-idempotency-key\x01K\x01@\x03\x09worker-\
-id\x0d\x0etarget-version\x07\x04mode\x15\x01\0\x04\0\x0dupdate-worker\x01L\x01@\0\
-\02\x04\0\x11get-self-metadata\x01M\x01k2\x01@\x01\x09worker-id\x0d\0\xce\0\x04\0\
-\x13get-worker-metadata\x01O\x03\0\x14golem:api/host@0.2.0\x05\x06\x01B\x17\x01r\
-\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cproduct-item\x03\0\0\
-\x01p\x01\x01r\x04\x08order-ids\x05items\x02\x05totalv\x09timestampw\x04\0\x05or\
-der\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x03\0\x05\x01q\x02\
-\x05error\x01s\0\x07success\x01\x06\0\x04\0\x0fcheckout-result\x03\0\x07\x01@\x01\
-\x07user-ids\x01\0\x04\0\x0finitialize-cart\x01\x09\x01@\x01\x04item\x01\x01\0\x04\
-\0\x08add-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\0\x04\0\x0bremove-item\x01\x0b\
-\x01@\x02\x0aproduct-ids\x08quantityy\x01\0\x04\0\x14update-item-quantity\x01\x0c\
-\x01@\0\0\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\x02\x04\0\x11get-cart-contents\x01\
-\x0e\x01@\x01\x05count}\x01\0\x04\0\x0cforce-commit\x01\x0f\x04\0\x0cgolem:it/ap\
-i\x05\x07\x04\0\x16golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dshopping-cart\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-\
-bindgen-rust\x060.36.0";
+otonic-clock@0.2.0\x05\x02\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08\
+datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\
+\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x03\x02\x03\0\x02\x08datetime\x01BX\x02\x03\
+\x02\x01\x04\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
+\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x04\x01r\x01\x04u\
+uid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0ccomponent-id\x07\x0bworker-n\
+ames\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0anode-index\x03\0\x0a\x01w\x04\0\x0b\
+resource-id\x03\0\x0c\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\
+\x0e\x01o\x02s\x0b\x01p\x10\x01k\x0b\x01o\x02s\x12\x01p\x13\x01ps\x01p\x0b\x01o\x02\
+\x12\x12\x01o\x02\x0d\x0f\x01q\x16\x0brecord-type\x01\x11\0\x0cvariant-type\x01\x14\
+\0\x09enum-type\x01\x15\0\x0aflags-type\x01\x15\0\x0atuple-type\x01\x16\0\x09lis\
+t-type\x01\x0b\0\x0boption-type\x01\x0b\0\x0bresult-type\x01\x17\0\x0cprim-u8-ty\
+pe\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8\
+-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim\
+-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
+prim-string-type\0\0\x0bhandle-type\x01\x18\0\x04\0\x0dwit-type-node\x03\0\x19\x01\
+p\x1a\x01r\x01\x05nodes\x1b\x04\0\x08wit-type\x03\0\x1c\x01r\x01\x05values\x04\0\
+\x03uri\x03\0\x1e\x01o\x02y\x12\x01p\x7f\x01j\x01\x12\x01\x12\x01o\x02\x1fw\x01q\
+\x16\x0crecord-value\x01\x16\0\x0dvariant-value\x01\x20\0\x0aenum-value\x01y\0\x0b\
+flags-value\x01!\0\x0btuple-value\x01\x16\0\x0alist-value\x01\x16\0\x0coption-va\
+lue\x01\x12\0\x0cresult-value\x01\"\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08pr\
+im-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s3\
+2\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09pri\
+m-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01#\0\x04\0\
+\x08wit-node\x03\0$\x01p%\x01r\x01\x05nodes&\x04\0\x09wit-value\x03\0'\x01r\x02\x05\
+value(\x03typ\x1d\x04\0\x0evalue-and-type\x03\0)\x01q\x04\x0eprotocol-error\x01s\
+\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09\
+rpc-error\x03\0+\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\
+\x04\0\x12cancellation-token\x03\x01\x01i-\x01@\x01\x09worker-id\x09\00\x04\0\x15\
+[constructor]wasm-rpc\x011\x01@\x01\x0ccomponent-id\x07\00\x04\0\x1a[static]wasm\
+-rpc.ephemeral\x012\x01h-\x01p(\x01j\x01(\x01,\x01@\x03\x04self3\x0dfunction-nam\
+es\x0ffunction-params4\05\x04\0![method]wasm-rpc.invoke-and-await\x016\x01j\0\x01\
+,\x01@\x03\x04self3\x0dfunction-names\x0ffunction-params4\07\x04\0\x17[method]wa\
+sm-rpc.invoke\x018\x01i.\x01@\x03\x04self3\x0dfunction-names\x0ffunction-params4\
+\09\x04\0'[method]wasm-rpc.async-invoke-and-await\x01:\x01@\x04\x04self3\x0esche\
+duled-time\x01\x0dfunction-names\x0ffunction-params4\x01\0\x04\0$[method]wasm-rp\
+c.schedule-invocation\x01;\x01i/\x01@\x04\x04self3\x0escheduled-time\x01\x0dfunc\
+tion-names\x0ffunction-params4\0<\x04\0/[method]wasm-rpc.schedule-cancelable-inv\
+ocation\x01=\x01h.\x01i\x03\x01@\x01\x04self>\0?\x04\0&[method]future-invoke-res\
+ult.subscribe\x01@\x01k5\x01@\x01\x04self>\0\xc1\0\x04\0\x20[method]future-invok\
+e-result.get\x01B\x01h/\x01@\x01\x04self\xc3\0\x01\0\x04\0![method]cancellation-\
+token.cancel\x01D\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc5\0\x04\0\x0aparse-uui\
+d\x01F\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01G\x01@\x01\x03vnt*\0(\x04\
+\0\x0dextract-value\x01H\x01@\x01\x03vnt*\0\x1d\x04\0\x0cextract-type\x01I\x03\0\
+\x15golem:rpc/types@0.2.0\x05\x05\x02\x03\0\x01\x08duration\x02\x03\0\x03\x0ccom\
+ponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x09worker-id\x01Bu\x02\x03\x02\x01\
+\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\
+\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x09worker\
+-id\x03\0\x06\x01w\x04\0\x0boplog-index\x03\0\x08\x01r\x02\x09worker-id\x07\x09o\
+plog-idx\x09\x04\0\x0apromise-id\x03\0\x0a\x01w\x04\0\x11component-version\x03\0\
+\x0c\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x0e\x01ku\x01r\x05\x0cmax-atte\
+mptsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x10\x04\
+\0\x0cretry-policy\x03\0\x11\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-s\
+ide-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x13\x01m\x02\x09au\
+tomatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x15\x01m\x06\x05equal\x09no\
+t-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-compar\
+ator\x03\0\x17\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18strin\
+g-filter-comparator\x03\0\x19\x01m\x07\x07running\x04idle\x09suspended\x0binterr\
+upted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1b\x01r\x02\x0a\
+comparator\x1a\x05values\x04\0\x12worker-name-filter\x03\0\x1d\x01r\x02\x0acompa\
+rator\x18\x05value\x1c\x04\0\x14worker-status-filter\x03\0\x1f\x01r\x02\x0acompa\
+rator\x18\x05valuew\x04\0\x15worker-version-filter\x03\0!\x01r\x02\x0acomparator\
+\x18\x05valuew\x04\0\x18worker-created-at-filter\x03\0#\x01r\x03\x04names\x0acom\
+parator\x1a\x05values\x04\0\x11worker-env-filter\x03\0%\x01q\x05\x04name\x01\x1e\
+\0\x06status\x01\x20\0\x07version\x01\"\0\x0acreated-at\x01$\0\x03env\x01&\0\x04\
+\0\x16worker-property-filter\x03\0'\x01p(\x01r\x01\x07filters)\x04\0\x11worker-a\
+ll-filter\x03\0*\x01p+\x01r\x01\x07filters,\x04\0\x11worker-any-filter\x03\0-\x01\
+ps\x01o\x02ss\x01p0\x01r\x06\x09worker-id\x07\x04args/\x03env1\x06status\x1c\x11\
+component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\02\x04\0\x0bget-\
+workers\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\x09\0\x17revert-last-invoc\
+ations\x01w\0\x04\0\x14revert-worker-target\x03\05\x01k.\x01i4\x01@\x03\x0ccompo\
+nent-id\x03\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-workers\x019\x01\
+h4\x01p3\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01\
+@\0\0\x0b\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0b\0?\x04\0\
+\x0dawait-promise\x01@\x01k?\x01@\x01\x0apromise-id\x0b\0\xc1\0\x04\0\x0cpoll-pr\
+omise\x01B\x01@\x02\x0apromise-id\x0b\x04data?\0\x7f\x04\0\x10complete-promise\x01\
+C\x01@\x01\x0apromise-id\x0b\x01\0\x04\0\x0edelete-promise\x01D\x01@\0\0\x09\x04\
+\0\x0fget-oplog-index\x01E\x01@\x01\x09oplog-idx\x09\x01\0\x04\0\x0fset-oplog-in\
+dex\x01F\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01G\x04\0\x14mark-be\
+gin-operation\x01E\x01@\x01\x05begin\x09\x01\0\x04\0\x12mark-end-operation\x01H\x01\
+@\0\0\x12\x04\0\x10get-retry-policy\x01I\x01@\x01\x10new-retry-policy\x12\x01\0\x04\
+\0\x10set-retry-policy\x01J\x01@\0\0\x14\x04\0\x1bget-oplog-persistence-level\x01\
+K\x01@\x01\x15new-persistence-level\x14\x01\0\x04\0\x1bset-oplog-persistence-lev\
+el\x01L\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01M\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01N\x01@\0\0\x05\x04\0\x18generate-idempot\
+ency-key\x01O\x01@\x03\x09worker-id\x07\x0etarget-version\x0d\x04mode\x16\x01\0\x04\
+\0\x0dupdate-worker\x01P\x01@\0\03\x04\0\x11get-self-metadata\x01Q\x01k3\x01@\x01\
+\x09worker-id\x07\0\xd2\0\x04\0\x13get-worker-metadata\x01S\x01@\x03\x10source-w\
+orker-id\x07\x10target-worker-id\x07\x11oplog-idx-cut-off\x09\x01\0\x04\0\x0bfor\
+k-worker\x01T\x01@\x02\x09worker-id\x07\x0drevert-target6\x01\0\x04\0\x0drevert-\
+worker\x01U\x01k\x03\x01@\x01\x13component-references\0\xd6\0\x04\0\x14resolve-c\
+omponent-id\x01W\x01k\x07\x01@\x02\x13component-references\x0bworker-names\0\xd8\
+\0\x04\0\x11resolve-worker-id\x01Y\x04\0\x18resolve-worker-id-strict\x01Y\x03\0\x14\
+golem:api/host@1.1.6\x05\x0a\x01B\x17\x01r\x04\x0aproduct-ids\x04names\x05pricev\
+\x08quantityy\x04\0\x0cproduct-item\x03\0\0\x01p\x01\x01r\x04\x08order-ids\x05it\
+ems\x02\x05totalv\x09timestampw\x04\0\x05order\x03\0\x03\x01r\x01\x08order-ids\x04\
+\0\x12order-confirmation\x03\0\x05\x01q\x02\x05error\x01s\0\x07success\x01\x06\0\
+\x04\0\x0fcheckout-result\x03\0\x07\x01@\x01\x07user-ids\x01\0\x04\0\x0finitiali\
+ze-cart\x01\x09\x01@\x01\x04item\x01\x01\0\x04\0\x08add-item\x01\x0a\x01@\x01\x0a\
+product-ids\x01\0\x04\0\x0bremove-item\x01\x0b\x01@\x02\x0aproduct-ids\x08quanti\
+tyy\x01\0\x04\0\x14update-item-quantity\x01\x0c\x01@\0\0\x08\x04\0\x08checkout\x01\
+\x0d\x01@\0\0\x02\x04\0\x11get-cart-contents\x01\x0e\x01@\x01\x05count}\x01\0\x04\
+\0\x0cforce-commit\x01\x0f\x04\0\x0cgolem:it/api\x05\x0b\x04\0\x16golem:it/shopp\
+ing-cart\x04\0\x0b\x13\x01\0\x0dshopping-cart\x03\0\0\0G\x09producers\x01\x0cpro\
+cessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

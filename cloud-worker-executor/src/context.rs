@@ -12,12 +12,14 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, RpcError, Uri, Value, WitValue};
+use golem_wasm_rpc::{
+    CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue,
+};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -157,15 +159,15 @@ impl InvocationManagement for Context {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
-    async fn get_current_invocation_context(&self) -> InvocationContextStack {
-        self.durable_ctx.get_current_invocation_context().await
-    }
-
     async fn set_current_invocation_context(
         &mut self,
         stack: InvocationContextStack,
     ) -> Result<(), GolemError> {
         self.durable_ctx.set_current_invocation_context(stack).await
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.durable_ctx.get_current_invocation_context().await
     }
 
     fn is_live(&self) -> bool {
@@ -434,8 +436,15 @@ impl FileSystemReading for Context {
 
 #[async_trait]
 impl HostWasmRpc for Context {
-    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(location).await
+    async fn new(
+        &mut self,
+        worker_id: golem_wasm_rpc::WorkerId,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.new(worker_id).await
+    }
+
+    async fn ephemeral(&mut self, component_id: ComponentId) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
@@ -689,5 +698,9 @@ impl WorkerCtx for Context {
         self.durable_ctx
             .generate_unique_local_worker_id(remote_worker_id)
             .await
+    }
+
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+        self.durable_ctx.component_service()
     }
 }

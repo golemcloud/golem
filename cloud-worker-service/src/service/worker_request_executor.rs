@@ -3,8 +3,7 @@ use std::sync::Arc;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use cloud_common::auth::CloudNamespace;
-use golem_common::model::TargetWorkerId;
-use golem_service_base::model::validate_worker_name;
+use golem_common::model::{TargetWorkerId, WorkerId};
 use golem_worker_service_base::gateway_execution::{
     GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
     WorkerResponse,
@@ -29,7 +28,7 @@ impl GatewayWorkerRequestExecutor<CloudNamespace> for CloudGatewayWorkerRequestE
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = resolved_worker_request
             .worker_name
-            .map(|w| validate_worker_name(w.as_str()).map(|_| w))
+            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w))
             .transpose()?;
 
         debug!(

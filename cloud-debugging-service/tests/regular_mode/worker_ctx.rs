@@ -9,7 +9,7 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -119,6 +119,10 @@ impl WorkerCtx for TestWorkerCtx {
         Ok(Self { durable_ctx })
     }
 
+    fn component_service(&self) -> Arc<dyn ComponentService<DefaultGolemTypes> + Send + Sync> {
+        self.durable_ctx.component_service()
+    }
+
     fn as_wasi_view(&mut self) -> impl WasiView {
         self.durable_ctx.as_wasi_view()
     }
@@ -225,8 +229,18 @@ impl FileSystemReading for TestWorkerCtx {
 
 #[async_trait]
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(location).await
+    async fn new(
+        &mut self,
+        worker_id: golem_wasm_rpc::WorkerId,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.new(worker_id).await
+    }
+
+    async fn ephemeral(
+        &mut self,
+        component_id: golem_wasm_rpc::ComponentId,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
