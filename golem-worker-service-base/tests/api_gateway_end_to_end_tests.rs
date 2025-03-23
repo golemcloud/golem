@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_service_base::model::ComponentName;
+use golem_worker_service_base::service::gateway::ConversionContext;
 use std::sync::Arc;
 use test_r::test;
 
@@ -23,8 +25,9 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefi
 
 use crate::internal::get_preflight_from_response;
 use crate::security::TestIdentityProvider;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::IdempotencyKey;
+use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
@@ -44,6 +47,7 @@ use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
 use serde_json::{Number, Value};
 use url::Url;
+use uuid::uuid;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
 // and stays independent of other modules.
@@ -78,6 +82,40 @@ async fn execute(
     );
 
     test_executor.execute_http_request(api_request).await
+}
+
+struct TestConversionContext;
+
+#[async_trait]
+impl ConversionContext for TestConversionContext {
+    async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+        if name.0 == "test-component" {
+            Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
+        } else {
+            Err("component not found".to_string())
+        }
+    }
+    async fn get_component_name(
+        &self,
+        _component_id: &ComponentId,
+    ) -> Result<ComponentName, String> {
+        unimplemented!()
+    }
+}
+
+struct EmptyTestConversionContext;
+
+#[async_trait]
+impl ConversionContext for EmptyTestConversionContext {
+    async fn resolve_component_id(&self, _name: &ComponentName) -> Result<ComponentId, String> {
+        unimplemented!()
+    }
+    async fn get_component_name(
+        &self,
+        _component_id: &ComponentId,
+    ) -> Result<ComponentName, String> {
+        unimplemented!()
+    }
 }
 
 #[test]
@@ -1732,8 +1770,8 @@ async fn get_api_def_with_worker_binding(
             path: {}
             binding:
               type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               workerName: '{}'
               response: '${{{}}}'
@@ -1753,8 +1791,8 @@ async fn get_api_def_with_worker_binding(
             path: {}
             binding:
               type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               response: '${{{}}}'
 
@@ -1769,7 +1807,10 @@ async fn get_api_def_with_worker_binding(
         serde_yaml::from_str(yaml_string.as_str()).unwrap();
 
     let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        http_api_definition_request.try_into().unwrap();
+        http_api_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
 
@@ -1827,8 +1868,8 @@ async fn get_api_def_with_security(
             security: {}
             binding:
               type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               response: '${{{}}}'
         "#,
@@ -1839,7 +1880,10 @@ async fn get_api_def_with_security(
         serde_yaml::from_str(api_definition_yaml.as_str()).unwrap();
 
     let core_definition_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        user_facing_definition_request.try_into().unwrap();
+        user_facing_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
 
@@ -1873,7 +1917,10 @@ async fn get_api_def_with_default_cors_preflight(path_pattern: &str) -> HttpApiD
         serde_yaml::from_str(yaml_string.as_str()).unwrap();
 
     let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        http_api_definition_request.try_into().unwrap();
+        http_api_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
     HttpApiDefinition::from_http_api_definition_request(
@@ -1920,8 +1967,12 @@ async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) ->
     let http_api_definition_request: api::HttpApiDefinitionRequest =
         serde_yaml::from_str(yaml_string.as_str()).unwrap();
 
-    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        { http_api_definition_request.try_into().unwrap() };
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest = {
+        http_api_definition_request
+            .into_core(&EmptyTestConversionContext.boxed())
+            .await
+            .unwrap()
+    };
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
     HttpApiDefinition::from_http_api_definition_request(
@@ -1962,8 +2013,8 @@ async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
             path: {}
             binding:
               type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               response: '${{{}}}'
 
@@ -1984,7 +2035,10 @@ async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
         serde_yaml::from_str(yaml_string.as_str()).unwrap();
 
     let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        http_api_definition_request.try_into().unwrap();
+        http_api_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
     HttpApiDefinition::from_http_api_definition_request(
@@ -2016,8 +2070,8 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
             path: {}
             binding:
               type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               workerName: '{}'
               response: '${{{}}}'
@@ -2031,7 +2085,10 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
         serde_yaml::from_str(yaml_string.as_str()).unwrap();
 
     let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        http_api_definition_request.try_into().unwrap();
+        http_api_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
     HttpApiDefinition::from_http_api_definition_request(

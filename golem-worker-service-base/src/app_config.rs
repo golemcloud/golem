@@ -27,6 +27,8 @@ use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 
+use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
+
 // The base configuration for the worker service
 // If there are extra configurations for custom services,
 // it's preferred to reuse base config.
@@ -43,6 +45,7 @@ pub struct WorkerServiceBaseConfig {
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
     pub blob_storage: BlobStorageConfig,
+    pub api_definition: ApiDefinitionServiceConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +96,7 @@ impl Default for WorkerServiceBaseConfig {
                 max_jitter_factor: Some(0.15),
             },
             blob_storage: BlobStorageConfig::default(),
+            api_definition: ApiDefinitionServiceConfig::default(),
         }
     }
 }

@@ -86,7 +86,7 @@ pub enum PluginServiceClient {
 }
 
 #[async_trait]
-pub trait ComponentServiceInternal {
+pub trait ComponentServiceInternal: Send + Sync {
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;

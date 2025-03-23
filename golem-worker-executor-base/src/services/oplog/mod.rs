@@ -39,7 +39,6 @@ use golem_common::model::{
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
-use tracing::Instrument;
 
 mod blob;
 mod compressed;
@@ -401,22 +400,17 @@ impl OpenOplogs {
                 .get_or_insert(
                     worker_id,
                     || Ok(()),
-                    |_| {
-                        Box::pin(
-                            async move {
-                                let result = constructor_clone.create_oplog(close).await;
+                    async |_| {
+                        let result = constructor_clone.create_oplog(close).await;
 
-                                // Temporarily increasing ref count because we want to store a weak pointer
-                                // but not drop it before we re-gain a strong reference when got out of the cache
-                                let result = unsafe {
-                                    let ptr = Arc::into_raw(result);
-                                    Arc::increment_strong_count(ptr);
-                                    Arc::from_raw(ptr)
-                                };
-                                Ok(OpenOplogEntry::new(result))
-                            }
-                            .in_current_span(),
-                        )
+                        // Temporarily increasing ref count because we want to store a weak pointer
+                        // but not drop it before we re-gain a strong reference when got out of the cache
+                        let result = unsafe {
+                            let ptr = Arc::into_raw(result);
+                            Arc::increment_strong_count(ptr);
+                            Arc::from_raw(ptr)
+                        };
+                        Ok(OpenOplogEntry::new(result))
                     },
                 )
                 .await
