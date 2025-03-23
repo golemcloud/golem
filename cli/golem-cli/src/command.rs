@@ -92,10 +92,10 @@ pub struct GolemCliGlobalFlags {
     // The flags below can only be set through env vars, as they are mostly
     // useful for testing, so we do not want to pollute the flag space with them
     #[arg(skip)]
-    pub wasm_rpc_path: Option<PathBuf>,
+    pub golem_rust_path: Option<PathBuf>,
 
     #[arg(skip)]
-    pub wasm_rpc_version: Option<String>,
+    pub golem_rust_version: Option<String>,
 
     #[arg(skip)]
     pub wasm_rpc_offline: bool,
@@ -143,15 +143,15 @@ impl GolemCliGlobalFlags {
                 .unwrap_or_default()
         }
 
-        if self.wasm_rpc_path.is_none() {
-            if let Ok(wasm_rpc_path) = std::env::var("GOLEM_WASM_RPC_PATH") {
-                self.wasm_rpc_path = Some(PathBuf::from(wasm_rpc_path));
+        if self.golem_rust_path.is_none() {
+            if let Ok(wasm_rpc_path) = std::env::var("GOLEM_RUST_PATH") {
+                self.golem_rust_path = Some(PathBuf::from(wasm_rpc_path));
             }
         }
 
-        if self.wasm_rpc_version.is_none() {
-            if let Ok(version) = std::env::var("GOLEM_WASM_RPC_VERSION") {
-                self.wasm_rpc_version = Some(version);
+        if self.golem_rust_version.is_none() {
+            if let Ok(version) = std::env::var("GOLEM_RUST_VERSION") {
+                self.golem_rust_version = Some(version);
             }
         }
 

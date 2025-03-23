@@ -40,6 +40,7 @@ use golem_client::model::DynamicLinkedWasmRpc as DynamicLinkedWasmRpcOss;
 use golem_client::model::DynamicLinking as DynamicLinkingOss;
 use golem_cloud_client::api::ComponentClient as ComponentClientCloud;
 use golem_cloud_client::model::ComponentQuery;
+use golem_common::model::component_metadata::WasmRpcTarget;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
@@ -1146,8 +1147,27 @@ fn app_component_dynamic_linking(
                 (
                     stub_interfaces.stub_interface_name,
                     DynamicLinkedInstanceOss::WasmRpc(DynamicLinkedWasmRpcOss {
-                        target_interface_name: HashMap::from_iter(
-                            stub_interfaces.exported_interfaces_per_stub_resource,
+                        targets: HashMap::from_iter(
+                            stub_interfaces
+                                .exported_interfaces_per_stub_resource
+                                .into_iter()
+                                .map(|(resource_name, interface_name)| {
+                                    (
+                                        resource_name,
+                                        WasmRpcTarget {
+                                            interface_name,
+                                            component_name: stub_interfaces
+                                                .component_name
+                                                .as_str()
+                                                .to_string(),
+                                            component_type: if stub_interfaces.is_ephemeral {
+                                                ComponentType::Ephemeral
+                                            } else {
+                                                ComponentType::Durable
+                                            },
+                                        },
+                                    )
+                                }),
                         ),
                     }),
                 )

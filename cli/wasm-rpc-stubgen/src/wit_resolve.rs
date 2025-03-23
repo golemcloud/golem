@@ -12,7 +12,8 @@ use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_parser::{
-    Package, PackageId, PackageName, PackageSourceMap, Resolve, UnresolvedPackageGroup,
+    InterfaceId, Package, PackageId, PackageName, PackageSourceMap, Resolve,
+    UnresolvedPackageGroup, WorldItem,
 };
 
 pub struct PackageSource {
@@ -54,6 +55,36 @@ impl ResolvedWitDir {
 
     pub fn main_package(&self) -> anyhow::Result<&Package> {
         self.package(self.package_id)
+    }
+
+    pub fn used_interfaces(&self) -> anyhow::Result<HashSet<(InterfaceId, PackageName, String)>> {
+        let mut result = HashSet::new();
+        let main = self.main_package()?;
+        for (world_name, world_id) in &main.worlds {
+            let world = self
+                .resolve
+                .worlds
+                .get(*world_id)
+                .ok_or_else(|| anyhow!("Could not find world {world_name} in resolve"))?;
+            for (key, item) in world.imports.iter().chain(world.exports.iter()) {
+                if let WorldItem::Interface { id, .. } = item {
+                    let interface =
+                        self.resolve.interfaces.get(*id).ok_or_else(|| {
+                            anyhow!("Could not find interface {key:?} in resolve")
+                        })?;
+                    if let Some(package_id) = interface.package {
+                        let package = self.resolve.packages.get(package_id).ok_or_else(|| {
+                            anyhow!("Could not find package {package_id:?} in resolve")
+                        })?;
+                        if let Some(interface_name) = &interface.name {
+                            result.insert((*id, package.name.clone(), interface_name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 

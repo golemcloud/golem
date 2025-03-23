@@ -53,7 +53,7 @@ use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourc
 use golem_wasm_rpc_stubgen::log::{set_log_output, LogOutput, Output};
 use golem_wasm_rpc_stubgen::model::app::AppBuildStep;
 use golem_wasm_rpc_stubgen::model::app::BuildProfileName as AppBuildProfileName;
-use golem_wasm_rpc_stubgen::stub::WasmRpcOverride;
+use golem_wasm_rpc_stubgen::stub::RustDependencyOverride;
 use std::collections::{BTreeMap, HashSet};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -113,9 +113,9 @@ impl Context {
                     .map(|bp| bp.0.clone().into()),
                 app_manifest_path: global_flags.app_manifest_path.clone(),
                 disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,
-                wasm_rpc_override: WasmRpcOverride {
-                    wasm_rpc_path_override: global_flags.wasm_rpc_path.clone(),
-                    wasm_rpc_version_override: global_flags.wasm_rpc_version.clone(),
+                golem_rust_override: RustDependencyOverride {
+                    path_override: global_flags.golem_rust_path.clone(),
+                    version_override: global_flags.golem_rust_version.clone(),
                 },
             },
             http_batch_size: global_flags.http_batch_size.unwrap_or(50),
@@ -485,7 +485,7 @@ struct ApplicationContextConfig {
     build_profile: Option<AppBuildProfileName>,
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
-    wasm_rpc_override: WasmRpcOverride,
+    golem_rust_override: RustDependencyOverride,
 }
 
 #[derive(Default)]
@@ -527,7 +527,7 @@ impl ApplicationContextState {
             offline: false, // TODO:
             extensions: PhantomData::<GolemComponentExtensions>,
             steps_filter: self.build_steps_filter.clone(),
-            wasm_rpc_override: config.wasm_rpc_override.clone(),
+            golem_rust_override: config.golem_rust_override.clone(),
         };
 
         debug!(config = ?config, "Initializing application context");

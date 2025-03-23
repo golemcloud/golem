@@ -15,15 +15,17 @@
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize};
 use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
-use crate::{fs, naming};
+use crate::{fs, naming, GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use std::collections::HashSet;
+use semver::Version;
+use std::collections::{HashMap, HashSet};
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
-    Enum, Flags, Handle, Record, Result_, Tuple, Type, TypeDef, TypeDefKind, TypeOwner, Variant,
+    Enum, Flags, Handle, PackageName, Record, Result_, Tuple, Type, TypeDef, TypeDefKind,
+    TypeOwner, Variant,
 };
 
 pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
@@ -42,16 +44,19 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         let additional_fields = if interface.is_resource() {
             vec![quote! {
                 id: u64,
-                uri: golem_wasm_rpc::Uri
+                uri: golem_rust::wasm_rpc::Uri
             }]
         } else {
             vec![]
         };
         let struct_fns: Vec<TokenStream> = if interface.is_resource() {
             vec![quote! {
-                pub fn from_remote_handle(uri: golem_wasm_rpc::Uri, id: u64) -> Self {
+                pub fn from_remote_handle(uri: golem_rust::wasm_rpc::Uri, id: u64) -> Self {
+                    let worker_id: golem_rust::wasm_rpc::WorkerId = uri.clone().try_into().expect(
+                        &format!("Invalid worker uri in remote resource handle: {}", uri.value)
+                    );
                     Self {
-                        rpc: WasmRpc::new(&uri),
+                        rpc: WasmRpc::new(&worker_id),
                         id,
                         uri,
                     }
@@ -121,7 +126,11 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 FunctionMode::Global
             };
             fn_impls.push(generate_function_stub_source(
-                def, function, interface, mode,
+                def,
+                function,
+                interface,
+                &interface_name,
+                mode,
             )?);
 
             if !function.results.is_empty() {
@@ -130,10 +139,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     naming::rust::result_wrapper_interface_ident(function, interface);
 
                 let subscribe = quote! {
-                    fn subscribe(&self) -> golem_wasm_rpc::Pollable {
+                    fn subscribe(&self) -> golem_rust::wasm_rpc::Pollable {
                         let pollable = self.future_invoke_result.subscribe();
                         let pollable = unsafe {
-                            golem_wasm_rpc::Pollable::from_handle(
+                            golem_rust::wasm_rpc::Pollable::from_handle(
                                 pollable.take_handle()
                             )
                         };
@@ -141,7 +150,13 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     }
                 };
 
-                let get = generate_result_wrapper_get_source(def, interface, function, mode)?;
+                let get = generate_result_wrapper_get_source(
+                    def,
+                    interface,
+                    function,
+                    &interface_name,
+                    mode,
+                )?;
 
                 let result_wrapper_impl = quote! {
                     impl crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#result_wrapper_interface for #result_wrapper {
@@ -158,6 +173,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 def,
                 function,
                 interface,
+                &interface_name,
                 FunctionMode::Static,
             )?);
 
@@ -182,6 +198,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     def,
                     interface,
                     function,
+                    &interface_name,
                     FunctionMode::Static,
                 )?;
 
@@ -201,18 +218,68 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 params: interface.constructor_params.clone().unwrap_or_default(),
                 results: FunctionResultStub::SelfType,
             };
-            generate_function_stub_source(
+            let default_constructor = generate_function_stub_source(
                 def,
                 &constructor_stub,
                 interface,
+                &interface_name,
                 FunctionMode::Constructor,
-            )?
-        } else {
+            )?;
+
+            let mut custom_constructor_stub = constructor_stub.clone();
+            custom_constructor_stub.name = "custom".to_string();
+            let custom_constructor = generate_function_stub_source(
+                def,
+                &custom_constructor_stub,
+                interface,
+                &interface_name,
+                FunctionMode::CustomConstructor,
+            )?;
             quote! {
-                fn new(location: golem_wasm_rpc::Uri) -> Self {
-                    let location = golem_wasm_rpc::Uri { value: location.value };
-                    Self {
-                        rpc: WasmRpc::new(&location)
+                #default_constructor
+                #custom_constructor
+            }
+        } else {
+            let component_name = def.config.component_name.as_str();
+
+            if def.config.is_ephemeral {
+                quote! {
+                    fn new() -> Self {
+                        let component_name = #component_name;
+                        let component_id = golem_rust::bindings::golem::api::host::resolve_component_id(component_name).expect(
+                            &format!("Failed to resolve component id: {}", component_name)
+                        );
+                        Self {
+                            rpc: WasmRpc::ephemeral(component_id)
+                        }
+                    }
+
+                    fn custom(component_id: golem_rust::wasm_rpc:: ComponentId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
+                        crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
+                            Self {
+                                rpc: WasmRpc::ephemeral(component_id)
+                            }
+                        )
+                    }
+                }
+            } else {
+                quote! {
+                    fn new(worker_name: String) -> Self {
+                        let component_name = #component_name;
+                        let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &worker_name).expect(
+                            &format!("Failed to resolve worker id: {}/{}", component_name, worker_name)
+                        );
+                        Self {
+                            rpc: WasmRpc::new(&worker_id)
+                        }
+                    }
+
+                    fn custom(worker_id: golem_rust::wasm_rpc::WorkerId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
+                        crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
+                            Self {
+                                rpc: WasmRpc::new(&worker_id)
+                            }
+                        )
                     }
                 }
             }
@@ -261,7 +328,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let lib = quote! {
         #![allow(warnings)]
 
-        use golem_wasm_rpc::*;
+        use golem_rust::wasm_rpc::*;
 
         #[allow(dead_code)]
         mod bindings;
@@ -293,16 +360,18 @@ enum FunctionMode {
     Static,
     Method,
     Constructor,
+    CustomConstructor,
 }
 
 fn generate_result_wrapper_get_source(
     def: &StubDefinition,
     interface: &InterfaceStub,
     function: &FunctionStub,
+    interface_name: &Ident,
     mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
-    let result_type = get_result_type_source(def, function)?;
-    let output_values = get_output_values_source(def, function, mode)?;
+    let result_type = get_result_type_source(def, function, interface_name, mode)?;
+    let output_values = get_output_values_source(def, function, interface_name, mode)?;
 
     let remote_function_name = get_remote_function_name(
         interface.interface_name(),
@@ -324,6 +393,7 @@ fn generate_function_stub_source(
     def: &StubDefinition,
     function: &FunctionStub,
     owner: &InterfaceStub,
+    interface_name: &Ident,
     mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
@@ -331,15 +401,22 @@ fn generate_function_stub_source(
     let mut param_names = HashSet::new();
     let mut input_values = Vec::new();
 
-    if mode != FunctionMode::Static && mode != FunctionMode::Constructor {
+    if mode != FunctionMode::Static
+        && mode != FunctionMode::Constructor
+        && mode != FunctionMode::CustomConstructor
+    {
         params.push(quote! {&self});
     }
 
-    if mode == FunctionMode::Constructor {
-        params.push(quote! { location: golem_wasm_rpc::Uri });
-    }
-
-    if mode == FunctionMode::Method {
+    if mode == FunctionMode::Constructor && !def.config.is_ephemeral {
+        params.push(quote! { wasm_rpc_worker_name: String });
+    } else if mode == FunctionMode::CustomConstructor {
+        if def.config.is_ephemeral {
+            params.push(quote! { wasm_rpc_component_id: golem_rust::wasm_rpc::ComponentId });
+        } else {
+            params.push(quote! { wasm_rpc_worker_id: golem_rust::wasm_rpc::WorkerId });
+        }
+    } else if mode == FunctionMode::Method {
         input_values.push(quote! {
             WitValue::builder().handle(self.uri.clone(), self.id)
         });
@@ -365,13 +442,17 @@ fn generate_function_stub_source(
         )?);
     }
 
-    let result_type = get_result_type_source(def, function)?;
-    let output_values = get_output_values_source(def, function, mode)?;
+    let result_type = get_result_type_source(def, function, interface_name, mode)?;
+    let output_values = get_output_values_source(def, function, interface_name, mode)?;
 
     let remote_function_name = get_remote_function_name(
         owner.interface_name(),
         owner.resource_name(),
-        &function.name,
+        if mode == FunctionMode::CustomConstructor {
+            "new" // custom constructors still have to call the real remote constructor
+        } else {
+            &function.name
+        },
     );
 
     let rpc = match mode {
@@ -399,7 +480,7 @@ fn generate_function_stub_source(
 
             quote! { #first_param_ident.get::<#first_param_type>().rpc }
         }
-        FunctionMode::Constructor => {
+        FunctionMode::Constructor | FunctionMode::CustomConstructor => {
             quote! { rpc }
         }
         _ => {
@@ -407,21 +488,46 @@ fn generate_function_stub_source(
         }
     };
 
+    let component_name = def.config.component_name.as_str();
     let init = if mode == FunctionMode::Constructor {
-        quote! {
-            let location = golem_wasm_rpc::Uri { value: location.value };
-            let rpc = WasmRpc::new(&location);
+        if def.config.is_ephemeral {
+            quote! {
+                let component_name = #component_name;
+                let component_id = golem_rust::bindings::golem::api::host::resolve_component_id(component_name).expect(
+                    &format!("Failed to resolve component id: {}", component_name)
+                );
+                let rpc = WasmRpc::ephemeral(component_id);
+            }
+        } else {
+            quote! {
+                let component_name = #component_name;
+                let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &wasm_rpc_worker_name).expect(
+                    &format!("Failed to resolve worker id: {}/{}", component_name, wasm_rpc_worker_name)
+                );
+                let rpc = WasmRpc::new(&worker_id);
+            }
+        }
+    } else if mode == FunctionMode::CustomConstructor {
+        if def.config.is_ephemeral {
+            quote! {
+                let rpc = WasmRpc::ephemeral(wasm_rpc_component_id);
+            }
+        } else {
+            quote! {
+                let rpc = WasmRpc::new(&wasm_rpc_worker_id);
+            }
         }
     } else {
         quote! {}
     };
 
     let blocking = {
-        let blocking_function_name = if mode == FunctionMode::Constructor {
-            function.name.clone()
-        } else {
-            format!("blocking-{}", function.name)
-        };
+        let blocking_function_name =
+            if mode == FunctionMode::Constructor || mode == FunctionMode::CustomConstructor {
+                function.name.clone()
+            } else {
+                format!("blocking-{}", function.name)
+            };
         let function_name = Ident::new(&to_rust_ident(&blocking_function_name), Span::call_site());
         quote! {
             fn #function_name(#(#params),*) -> #result_type {
@@ -437,7 +543,9 @@ fn generate_function_stub_source(
         }
     };
 
-    let non_blocking = if mode != FunctionMode::Constructor {
+    let non_blocking = if mode != FunctionMode::Constructor
+        && mode != FunctionMode::CustomConstructor
+    {
         if function.results.is_empty() {
             quote! {
                 fn #function_name(#(#params),*) -> #result_type {
@@ -473,7 +581,8 @@ fn generate_function_stub_source(
         quote! {}
     };
 
-    let scheduled = if mode != FunctionMode::Constructor {
+    let scheduled = if mode != FunctionMode::Constructor && mode != FunctionMode::CustomConstructor
+    {
         let scheduled_function_name = format!("schedule-{}", function.name);
         let function_name = Ident::new(&to_rust_ident(&scheduled_function_name), Span::call_site());
 
@@ -483,8 +592,8 @@ fn generate_function_stub_source(
         quote! {
             fn #function_name(
                 #(#params),*,
-                #schedule_for_param: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime
-            ) -> golem_wasm_rpc::golem_rpc_0_1_x::types::CancellationToken {
+                #schedule_for_param: golem_rust::wasm_rpc::wasi::clocks::wall_clock::Datetime
+            ) -> golem_rust::wasm_rpc::golem_rpc_0_2_x::types::CancellationToken {
                 #init
                 #rpc.schedule_cancelable_invocation(
                     #schedule_for_param,
@@ -509,6 +618,7 @@ fn generate_function_stub_source(
 fn get_output_values_source(
     def: &StubDefinition,
     function: &FunctionStub,
+    interface_name: &Ident,
     mode: FunctionMode,
 ) -> anyhow::Result<Vec<TokenStream>> {
     let mut output_values = Vec::new();
@@ -538,6 +648,24 @@ fn get_output_values_source(
                         id,
                         uri
                     }
+                }
+            });
+        }
+        FunctionResultStub::SelfType if mode == FunctionMode::CustomConstructor => {
+            let root_ns = def.rust_root_namespace();
+            let root_name = def.rust_client_root_name();
+            let stub_interface_name = def.rust_client_interface_name();
+
+            output_values.push(quote! {
+                {
+                    let (uri, id) = result.tuple_element(0).expect("tuple not found").handle().expect("handle not found");
+                    crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
+                        Self {
+                            rpc,
+                            id,
+                            uri
+                        }
+                    )
                 }
             });
         }
@@ -576,6 +704,8 @@ fn new_param_name(name: &str, used_names: &mut HashSet<String>) -> String {
 fn get_result_type_source(
     def: &StubDefinition,
     function: &FunctionStub,
+    interface_name: &Ident,
+    function_mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
     let result_type = match &function.results {
         FunctionResultStub::Anon(typ) => {
@@ -603,7 +733,17 @@ fn get_result_type_source(
                 }
             }
         }
-        FunctionResultStub::SelfType => quote! { Self },
+        FunctionResultStub::SelfType => {
+            if function_mode == FunctionMode::CustomConstructor {
+                let root_ns = def.rust_root_namespace();
+                let root_name = def.rust_client_root_name();
+                let stub_interface_name = def.rust_client_interface_name();
+
+                quote! { crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name }
+            } else {
+                quote! { Self }
+            }
+        }
     };
     Ok(result_type)
 }
@@ -707,6 +847,7 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                             .to_upper_camel_case(),
                         Span::call_site(),
                     );
+
                     let mut path = Vec::new();
                     path.push(quote! { crate });
                     path.push(quote! { bindings });
@@ -735,17 +876,31 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                                 .name
                                 .as_ref()
                                 .ok_or(anyhow!("interface has no name"))?;
-                            let ns_ident = Ident::new(
-                                &to_rust_ident(&package.name.namespace),
-                                Span::call_site(),
-                            );
-                            let name_ident =
-                                Ident::new(&to_rust_ident(&package.name.name), Span::call_site());
-                            let interface_ident =
-                                Ident::new(&to_rust_ident(interface_name), Span::call_site());
-                            path.push(quote! { #ns_ident });
-                            path.push(quote! { #name_ident });
-                            path.push(quote! { #interface_ident });
+
+                            if let Some(module_path) = def
+                                .client_binding_mapping
+                                .get_mapped_module_path(&package.name, interface_name)
+                            {
+                                path.clear();
+                                for entry in module_path {
+                                    let ident = Ident::new(&entry, Span::call_site());
+                                    path.push(quote! { #ident });
+                                }
+                            } else {
+                                let ns_ident = Ident::new(
+                                    &to_rust_ident(&package.name.namespace),
+                                    Span::call_site(),
+                                );
+                                let name_ident = Ident::new(
+                                    &to_rust_ident(&package.name.name),
+                                    Span::call_site(),
+                                );
+                                let interface_ident =
+                                    Ident::new(&to_rust_ident(interface_name), Span::call_site());
+                                path.push(quote! { #ns_ident });
+                                path.push(quote! { #name_ident });
+                                path.push(quote! { #interface_ident });
+                            }
                         }
                         TypeOwner::None => {}
                     }
@@ -1537,5 +1692,109 @@ fn extract_from_handle_value(
                 }
             })
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BindingMappingKey {
+    package_name: PackageName,
+    interface_name: String,
+}
+
+#[derive(Debug, Clone)]
+struct BindingMappingEntry {
+    module_path: Vec<String>,
+}
+
+pub struct BindingMapping {
+    mappings: HashMap<BindingMappingKey, BindingMappingEntry>,
+}
+
+impl BindingMapping {
+    pub fn add_to_cargo_bindings_table(&self, target: &mut HashMap<String, String>) {
+        for (key, entry) in &self.mappings {
+            let string_key = key.package_name.interface_id(&key.interface_name);
+            let string_value = entry.module_path.join("::");
+            target.insert(string_key, string_value);
+        }
+    }
+
+    pub fn get_mapped_module_path(
+        &self,
+        package_name: &PackageName,
+        interface_name: &str,
+    ) -> Option<Vec<String>> {
+        let key = BindingMappingKey {
+            package_name: package_name.clone(),
+            interface_name: interface_name.to_string(),
+        };
+        self.mappings
+            .get(&key)
+            .map(|value| value.module_path.clone())
+    }
+}
+
+impl Default for BindingMapping {
+    fn default() -> Self {
+        let mut mappings = HashMap::new();
+
+        mappings.insert(
+            BindingMappingKey {
+                package_name: PackageName {
+                    namespace: "wasi".to_string(),
+                    name: "io".to_string(),
+                    version: Some(Version::parse(WASI_WIT_VERSION).unwrap()),
+                },
+                interface_name: "poll".to_string(),
+            },
+            BindingMappingEntry {
+                module_path: vec![
+                    "golem_rust".to_string(),
+                    "wasm_rpc".to_string(),
+                    "wasi".to_string(),
+                    "io".to_string(),
+                    "poll".to_string(),
+                ],
+            },
+        );
+        mappings.insert(
+            BindingMappingKey {
+                package_name: PackageName {
+                    namespace: "wasi".to_string(),
+                    name: "clocks".to_string(),
+                    version: Some(Version::parse(WASI_WIT_VERSION).unwrap()),
+                },
+                interface_name: "wall-clock".to_string(),
+            },
+            BindingMappingEntry {
+                module_path: vec![
+                    "golem_rust".to_string(),
+                    "wasm_rpc".to_string(),
+                    "wasi".to_string(),
+                    "clocks".to_string(),
+                    "wall_clock".to_string(),
+                ],
+            },
+        );
+        mappings.insert(
+            BindingMappingKey {
+                package_name: PackageName {
+                    namespace: "golem".to_string(),
+                    name: "rpc".to_string(),
+                    version: Some(Version::parse(GOLEM_RPC_WIT_VERSION).unwrap()),
+                },
+                interface_name: "types".to_string(),
+            },
+            BindingMappingEntry {
+                module_path: vec![
+                    "golem_rust".to_string(),
+                    "wasm_rpc".to_string(),
+                    "golem_rpc_0_2_x".to_string(),
+                    "types".to_string(),
+                ],
+            },
+        );
+
+        BindingMapping { mappings }
     }
 }

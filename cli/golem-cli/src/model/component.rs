@@ -142,9 +142,11 @@ impl From<&Component> for ComponentView {
                         name.clone(),
                         match link {
                             DynamicLinkedInstance::WasmRpc(links) => links
-                                .target_interface_name
+                                .targets
                                 .iter()
-                                .map(|(resource, interface)| (resource.clone(), interface.clone()))
+                                .map(|(resource, target)| {
+                                    (resource.clone(), target.interface_name.clone())
+                                })
                                 .collect::<BTreeMap<String, String>>(),
                         },
                     )

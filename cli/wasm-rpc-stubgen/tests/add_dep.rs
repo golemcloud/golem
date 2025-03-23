@@ -19,7 +19,8 @@ use test_r::test;
 use assert2::assert;
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
-use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition, WasmRpcOverride};
+use golem_wasm_rpc_stubgen::model::app::ComponentName;
+use golem_wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::wit_generate::{
     add_client_as_dependency_to_wit_dir, AddClientAsDepConfig, UpdateCargoToml,
 };
@@ -573,9 +574,11 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
         client_root: canonical_target,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
-        wasm_rpc_override: WasmRpcOverride::default(),
+        golem_rust_override: RustDependencyOverride::default(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
+        component_name: ComponentName::from("test:component"),
+        is_ephemeral: false,
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();
@@ -588,9 +591,11 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         client_root: stub_dir.to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
-        wasm_rpc_override: WasmRpcOverride::default(),
+        golem_rust_override: RustDependencyOverride::default(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
+        component_name: ComponentName::from("test:component"),
+        is_ephemeral: false,
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();
@@ -670,7 +675,7 @@ fn assert_has_same_wit_package(
     let expected_wit = expected_wit_source
         .encoded_package_wit(package_name)
         .unwrap();
-    assert!(actual_wit == expected_wit)
+    assert_eq!(actual_wit, expected_wit)
 }
 
 fn assert_has_no_package_by_name(package_name: &PackageName, wit_source: impl WitSource) {
@@ -699,7 +704,7 @@ fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
         deps.as_slice(),
     );
     assert_has_same_wit_package(
-        &PackageName::new("golem", "rpc", Some(Version::new(0, 1, 3))),
+        &PackageName::new("golem", "rpc", Some(Version::new(0, 2, 0))),
         wit_dir,
         deps.as_slice(),
     );

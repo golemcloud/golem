@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app::ComponentName;
 use crate::naming;
+use crate::rust::BindingMapping;
 use crate::wit_encode::EncodedWitDir;
 use crate::wit_generate::extract_exports_as_wit_dep;
 use crate::wit_resolve::{PackageSource, ResolvedWitDir};
@@ -34,21 +36,23 @@ pub struct StubConfig {
     pub client_root: PathBuf,
     pub selected_world: Option<String>,
     pub stub_crate_version: String,
-    pub wasm_rpc_override: WasmRpcOverride,
+    pub golem_rust_override: RustDependencyOverride,
     pub extract_source_exports_package: bool,
     pub seal_cargo_workspace: bool,
+    pub component_name: ComponentName,
+    pub is_ephemeral: bool,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct WasmRpcOverride {
-    pub wasm_rpc_path_override: Option<PathBuf>,
-    pub wasm_rpc_version_override: Option<String>,
+pub struct RustDependencyOverride {
+    pub path_override: Option<PathBuf>,
+    pub version_override: Option<String>,
 }
 
 pub struct StubDefinition {
     pub config: StubConfig,
 
-    resolve: Resolve,
+    pub resolve: Resolve,
     source_world_id: WorldId,
     package_sources: IndexMap<PackageId, PackageSource>,
 
@@ -58,6 +62,8 @@ pub struct StubDefinition {
 
     pub source_package_id: PackageId,
     pub source_package_name: PackageName,
+
+    pub client_binding_mapping: BindingMapping,
 }
 
 impl StubDefinition {
@@ -96,6 +102,7 @@ impl StubDefinition {
             stub_dep_package_ids: OnceLock::new(),
             source_package_id: resolved_source.package_id,
             source_package_name,
+            client_binding_mapping: BindingMapping::default(),
         })
     }
 

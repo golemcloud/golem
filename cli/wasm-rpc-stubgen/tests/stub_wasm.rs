@@ -15,17 +15,17 @@
 //! Tests in this module are verifying the STUB WASM created by the stub generator
 //! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
-use crate::{test_data_path, wasm_rpc_override};
+use crate::{golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
 use golem_wasm_ast::analysis::analysed_type::*;
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
-    AnalysedResourceMode, AnalysedType, AnalysisContext, NameTypePair, TypeHandle, TypeOption,
-    TypeRecord, TypeStr,
+    AnalysedResourceMode, AnalysedType, AnalysisContext, TypeHandle, TypeOption,
 };
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
+use golem_wasm_rpc_stubgen::model::app::ComponentName;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use tempfile::tempdir;
 use test_r::test;
@@ -50,9 +50,11 @@ async fn all_wit_types() {
         client_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
-        wasm_rpc_override: wasm_rpc_override(),
+        golem_rust_override: golem_rust_override(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
+        component_name: ComponentName::from("test:component"),
+        is_ephemeral: false,
     })
     .unwrap();
 
@@ -359,9 +361,11 @@ async fn resource() {
         client_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
-        wasm_rpc_override: wasm_rpc_override(),
+        golem_rust_override: golem_rust_override(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
+        component_name: ComponentName::from("test:component"),
+        is_ephemeral: false,
     })
     .unwrap();
 
@@ -406,13 +410,39 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
     assert_eq!(
         fun.parameters,
         vec![AnalysedFunctionParameter {
-            name: "location".to_string(),
-            typ: AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "value".to_string(),
-                    typ: AnalysedType::Str(TypeStr)
-                }]
-            })
+            name: "worker-name".to_string(),
+            typ: str()
+        }]
+    );
+
+    let custom_fun = exported_interface
+        .functions
+        .iter()
+        .find(|f| f.name == format!("[static]{name}.custom"))
+        .unwrap_or_else(|| panic!("missing custom constructor for {name}"));
+
+    assert_eq!(custom_fun.results.len(), 1);
+    assert!(matches!(
+        custom_fun.results[0].typ,
+        AnalysedType::Handle(TypeHandle {
+            mode: AnalysedResourceMode::Owned,
+            ..
+        })
+    ));
+    assert_eq!(
+        custom_fun.parameters,
+        vec![AnalysedFunctionParameter {
+            name: "worker-id".to_string(),
+            typ: record(vec![
+                field(
+                    "component-id",
+                    record(vec![field(
+                        "uuid",
+                        record(vec![field("high-bits", u64()), field("low-bits", u64()),])
+                    ),])
+                ),
+                field("worker-name", str()),
+            ])
         }]
     );
 }

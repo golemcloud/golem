@@ -92,6 +92,10 @@ impl ComponentPropertiesExtensions for GolemComponentExtensions {
             Ok(Some((self, any_overrides)))
         }
     }
+
+    fn is_ephemeral(&self) -> bool {
+        self.component_type == ComponentType::Ephemeral
+    }
 }
 
 fn convert_component_file(

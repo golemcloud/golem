@@ -10,7 +10,7 @@ use crate::model::app::{
     DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
-use crate::stub::{StubConfig, StubDefinition, WasmRpcOverride};
+use crate::stub::{RustDependencyOverride, StubConfig, StubDefinition};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wit_generate::{
     add_client_as_dependency_to_wit_dir, extract_exports_as_wit_dep, AddClientAsDepConfig,
@@ -45,7 +45,7 @@ pub struct Config<CPE: ComponentPropertiesExtensions> {
     pub offline: bool,
     pub extensions: PhantomData<CPE>,
     pub steps_filter: HashSet<AppBuildStep>,
-    pub wasm_rpc_override: WasmRpcOverride,
+    pub golem_rust_override: RustDependencyOverride,
 }
 
 impl<CPE: ComponentPropertiesExtensions> Config<CPE> {
@@ -101,6 +101,8 @@ pub struct DynamicHelpSections {
 #[derive(Debug)]
 pub struct ComponentStubInterfaces {
     pub stub_interface_name: String,
+    pub component_name: ComponentName,
+    pub is_ephemeral: bool,
     pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
 }
 
@@ -333,6 +335,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
     fn component_stub_def(
         &mut self,
         component_name: &ComponentName,
+        is_ephemeral: bool,
     ) -> anyhow::Result<&StubDefinition> {
         if !self.component_stub_defs.contains_key(component_name) {
             self.component_stub_defs.insert(
@@ -344,9 +347,11 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                     client_root: self.application.client_temp_build_dir(component_name),
                     selected_world: None,
                     stub_crate_version: WASM_RPC_VERSION.to_string(),
-                    wasm_rpc_override: self.config.wasm_rpc_override.clone(),
+                    golem_rust_override: self.config.golem_rust_override.clone(),
                     extract_source_exports_package: false,
                     seal_cargo_workspace: true,
+                    component_name: component_name.clone(),
+                    is_ephemeral,
                 })
                 .context("Failed to gather information for the stub generator")?,
             );
@@ -358,9 +363,16 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
         &mut self,
         component_name: &ComponentName,
     ) -> anyhow::Result<ComponentStubInterfaces> {
-        let stub_def = self.component_stub_def(component_name)?;
+        let is_ephemeral = self
+            .application
+            .component_properties(component_name, self.profile())
+            .extensions
+            .is_ephemeral();
+        let stub_def = self.component_stub_def(component_name, is_ephemeral)?;
         let client_package_name = stub_def.client_parser_package_name();
         let result = ComponentStubInterfaces {
+            component_name: component_name.clone(),
+            is_ephemeral,
             stub_interface_name: client_package_name
                 .interface_id(&stub_def.client_interface_name()),
             exported_interfaces_per_stub_resource: BTreeMap::from_iter(
@@ -560,9 +572,14 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
 
         {
             let mut any_changed = false;
-            for component_name in self.application.component_names() {
-                let changed = create_generated_wit(self, component_name)?;
-                update_cargo_toml(self, changed, component_name)?;
+            let component_names = self
+                .application
+                .component_names()
+                .cloned()
+                .collect::<Vec<_>>();
+            for component_name in component_names {
+                let changed = create_generated_wit(self, &component_name)?;
+                update_cargo_toml(self, changed, &component_name)?;
                 any_changed |= changed;
             }
             if any_changed {
@@ -1499,7 +1516,7 @@ fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
 }
 
 fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
-    ctx: &ApplicationContext<CPE>,
+    ctx: &mut ApplicationContext<CPE>,
     mut skip_up_to_date_checks: bool,
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
@@ -1548,7 +1565,13 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
     ctx: &mut ApplicationContext<CPE>,
     component: &DependentComponent,
 ) -> anyhow::Result<bool> {
-    let stub_def = ctx.component_stub_def(&component.name)?;
+    let stub_def = ctx.component_stub_def(
+        &component.name,
+        ctx.application
+            .component_properties(&component.name, ctx.profile())
+            .extensions
+            .is_ephemeral(),
+    )?;
     let client_wit_root = stub_def.client_wit_root();
 
     let client_dep_package_ids = stub_def.stub_dep_package_ids();
@@ -1619,7 +1642,13 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
 
                         let offline = ctx.config.offline;
                         commands::generate::build(
-                            ctx.component_stub_def(&component.name)?,
+                            ctx.component_stub_def(
+                                &component.name,
+                                ctx.application
+                                    .component_properties(&component.name, ctx.profile())
+                                    .extensions
+                                    .is_ephemeral(),
+                            )?,
                             &client_wasm,
                             &client_wit,
                             offline,
@@ -1653,7 +1682,13 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
                         );
                         fs::create_dir_all(&client_wit_root)?;
 
-                        let stub_def = ctx.component_stub_def(&component.name)?;
+                        let stub_def = ctx.component_stub_def(
+                            &component.name,
+                            ctx.application
+                                .component_properties(&component.name, ctx.profile())
+                                .extensions
+                                .is_ephemeral(),
+                        )?;
                         commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
                     }
                 }

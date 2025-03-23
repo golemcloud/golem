@@ -1,5 +1,5 @@
 use assert2::assert;
-use golem_wasm_rpc_stubgen::stub::WasmRpcOverride;
+use golem_wasm_rpc_stubgen::stub::RustDependencyOverride;
 use std::path::Path;
 use test_r::tag_suite;
 
@@ -22,10 +22,10 @@ pub fn test_data_path() -> &'static Path {
     Path::new(TEST_DATA_PATH)
 }
 
-pub fn wasm_rpc_override() -> WasmRpcOverride {
-    WasmRpcOverride {
-        wasm_rpc_path_override: None,
-        wasm_rpc_version_override: None,
+pub fn golem_rust_override() -> RustDependencyOverride {
+    RustDependencyOverride {
+        path_override: None,
+        version_override: None,
     }
 }
 

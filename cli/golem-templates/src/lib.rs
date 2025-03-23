@@ -558,7 +558,7 @@ fn parse_template(
             });
 
         wit_deps.push(PathBuf::from("golem-1.x"));
-        wit_deps.push(PathBuf::from("wasm-rpc"));
+        wit_deps.push(PathBuf::from("golem-rpc"));
     }
     if metadata.requires_wasi.unwrap_or(false) {
         wit_deps.push(PathBuf::from("blobstore"));

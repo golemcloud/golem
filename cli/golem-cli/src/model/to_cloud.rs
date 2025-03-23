@@ -79,10 +79,23 @@ impl ToCloud<golem_cloud_client::model::DynamicLinking> for golem_client::model:
                         key.clone(),
                         golem_cloud_client::model::DynamicLinkedInstance::WasmRpc(
                             golem_cloud_client::model::DynamicLinkedWasmRpc {
-                                target_interface_name: match oss_instance {
-                                    golem_client::model::DynamicLinkedInstance::WasmRpc(
-                                        target_interface_name,
-                                    ) => target_interface_name.clone().target_interface_name,
+                                targets: match oss_instance {
+                                    golem_client::model::DynamicLinkedInstance::WasmRpc(rpc) => rpc
+                                        .targets
+                                        .iter()
+                                        .map(|(name, target)| {
+                                            (
+                                                name.clone(),
+                                                golem_cloud_client::model::WasmRpcTarget {
+                                                    interface_name: target.interface_name.clone(),
+                                                    component_name: target.component_name.clone(),
+                                                    component_type: target
+                                                        .component_type
+                                                        .to_cloud(),
+                                                },
+                                            )
+                                        })
+                                        .collect(),
                                 },
                             },
                         ),

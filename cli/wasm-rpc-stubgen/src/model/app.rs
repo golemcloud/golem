@@ -696,6 +696,8 @@ pub trait ComponentPropertiesExtensions: Sized + Debug + Clone + Default {
         validation: &mut ValidationBuilder,
         overrides: Self::Raw,
     ) -> serde_json::Result<Option<(Self, bool)>>;
+
+    fn is_ephemeral(&self) -> bool;
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -728,6 +730,10 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
     ) -> serde_json::Result<Option<(Self, bool)>> {
         Ok(Some((self, false)))
     }
+
+    fn is_ephemeral(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -758,6 +764,10 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
         _overrides: Self::Raw,
     ) -> serde_json::Result<Option<(Self, bool)>> {
         Ok(Some((self, false)))
+    }
+
+    fn is_ephemeral(&self) -> bool {
+        false
     }
 }
 
