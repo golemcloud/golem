@@ -652,9 +652,7 @@ mod tests {
                     "binding-type": "default",
                     "response" : "{}",
                     "workerName": "{}",
-                    "component": {
-                        "name": "foobar"
-                    }
+                    "component-name": "foobar"
                 }),
             )]
             .into_iter()
