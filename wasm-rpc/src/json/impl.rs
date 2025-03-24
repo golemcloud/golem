@@ -179,7 +179,7 @@ fn get_bool(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         _ => {
             let type_description = type_description(json);
             Err(vec![format!(
-                "Expected function parameter type is Boolean. But found {}",
+                "expected bool, found {}",
                 type_description
             )])
         }
@@ -276,7 +276,7 @@ fn get_string(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         // If the JSON value is not a string, return an error with type information
         let type_description = type_description(json);
         Err(vec![format!(
-            "Expected function parameter type is String. But found {}",
+            "expected string, found {}",
             type_description
         )])
     }
@@ -296,7 +296,7 @@ fn get_char(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         let type_description = type_description(json);
 
         Err(vec![format!(
-            "Expected function parameter type is Char. But found {}",
+            "expected char, found {}",
             type_description
         )])
     }
@@ -504,7 +504,7 @@ fn get_record(
                 Err(value_errors) => errors.extend(
                     value_errors
                         .iter()
-                        .map(|err| format!("Invalid value for the key {}. Error: {}", name, err))
+                        .map(|err| format!("invalid value for key {}: {}", name, err))
                         .collect::<Vec<_>>(),
                 ),
             }
@@ -518,7 +518,7 @@ fn get_record(
 
                     vals.push((name.clone(), TypeAnnotatedValue::Option(Box::new(option))))
                 }
-                _ => errors.push(format!("Key '{}' not found", name)),
+                _ => errors.push(format!("key '{}' not found", name)),
             }
         }
     }
@@ -694,13 +694,13 @@ fn get_handle(
                 }
             } else {
                 Err(vec![format!(
-                    "Expected function parameter type is Handle, represented by a worker-url/resource-id string. But found {}",
+                    "expected handle, represented by a worker-url/resource-id string, found {}",
                     str
                 )])
             }
         }
         None => Err(vec![format!(
-            "Expected function parameter type is Handle, represented by a worker-url/resource-id string. But found {}",
+            "expected handle, represented by a worker-url/resource-id string, found {}",
             type_description(value)
         )]),
     }
@@ -708,12 +708,12 @@ fn get_handle(
 
 fn type_description(value: &JsonValue) -> &'static str {
     match value {
-        JsonValue::Null => "Null",
-        JsonValue::Bool(_) => "Boolean",
-        JsonValue::Number(_) => "Number",
-        JsonValue::String(_) => "String",
-        JsonValue::Array(_) => "Array",
-        JsonValue::Object(_) => "Object",
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "list",
+        JsonValue::Object(_) => "record",
     }
 }
 
@@ -739,13 +739,13 @@ fn get_big_decimal(value: &JsonValue) -> Result<BigDecimal, Vec<String>> {
             if let Ok(f64) = BigDecimal::from_str(num.to_string().as_str()) {
                 Ok(f64)
             } else {
-                Err(vec![format!("Cannot convert {} to f64", num)])
+                Err(vec![format!("cannot convert {} to f64", num)])
             }
         }
         _ => {
             let type_description = type_description(value);
             Err(vec![format!(
-                "Expected function parameter type is BigDecimal. But found {}",
+                "expected number, found {}",
                 type_description
             )])
         }
@@ -764,7 +764,7 @@ fn get_u64(value: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         _ => {
             let type_description = type_description(value);
             Err(vec![format!(
-                "Expected function parameter type is u64. But found {}",
+                "expected u64, found {}",
                 type_description
             )])
         }

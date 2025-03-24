@@ -74,8 +74,7 @@ impl RichRequest {
     pub fn path_params(&self) -> HashMap<String, String> {
         use crate::gateway_request::http_request::router;
 
-        self
-            .path_param_extractors
+        self.path_param_extractors
             .iter()
             .map(|param| match param {
                 router::PathParamExtractor::Single { var_info, index } => (
