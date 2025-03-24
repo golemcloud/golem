@@ -342,7 +342,7 @@ async fn test_first_class_worker_api_def_with_path_and_query() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_with_path() {
+async fn test_first_class_worker_api_def_with_path_1() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
@@ -374,6 +374,48 @@ async fn test_first_class_worker_api_def_with_path() {
         "golem:it/api.{get-cart-contents}".to_string(),
         Value::Array(vec![
             Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+// A test where input requirement is a string, but the actual input is a number
+#[test]
+async fn test_first_class_worker_api_def_with_path_2() {
+    let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
+
+    // Anything under request.path is a string
+    let response_mapping = r#"
+       let id = request.path.user-id;
+       let worker-name = "shopping-cart-${id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(id, "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("1".to_string()),
             Value::String("b".to_string()),
         ]),
     );
@@ -1387,6 +1429,55 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
         Value::Array(vec![
             Value::String("jon".to_string()),
             Value::String("jon".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+// A test where input requirement of path and query is a string, but the actual inputs are numbers
+#[test]
+async fn test_api_def_with_path_and_query_params_lookup_for_valid_input_2() {
+    let empty_headers = HeaderMap::new();
+    let api_request =
+        get_gateway_request("/foo/1", Some("token-id=2"), &empty_headers, Value::Null);
+
+    // Default types for path and query parameters are string
+    let response_mapping = r#"
+        let user_id_from_path = request.path.user-id;
+        let token_id_from_query = request.query.token-id;
+        let my-instance = instance("shopping-cart-${user_id_from_path}");
+        let response = my-instance.get-cart-contents(user_id_from_path, token_id_from_query);
+        response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1".to_string(),
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("1".to_string()),
+            Value::String("2".to_string()),
         ]),
     );
 
