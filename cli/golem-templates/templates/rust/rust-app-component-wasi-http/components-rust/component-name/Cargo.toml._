@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 required-features = []
 
 [dependencies]
-common-lib = { path = "../../common-rust/common-lib" }
+# To use common shared libs, use the following:
+# common-lib = { path = "../../common-rust/common-lib" }
 
 wit-bindgen-rt = { workspace = true }

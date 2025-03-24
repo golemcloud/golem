@@ -29,8 +29,9 @@ test_r::enable!();
 
 mod cmd {
     pub static APP: &str = "app";
-    pub static COMPONENT: &str = "component";
     pub static BUILD: &str = "build";
+    pub static COMPLETION: &str = "completion";
+    pub static COMPONENT: &str = "component";
     pub static NEW: &str = "new";
 }
 
@@ -157,7 +158,6 @@ fn app_build_with_rust_component(_tracing: &Tracing) {
     check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
 }
 
-// TODO: re-enable once every language has templates
 #[test]
 fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
@@ -174,6 +174,26 @@ fn app_new_language_hints(_tracing: &Tracing) {
         "{:?}",
         languages_without_templates
     );
+}
+
+#[test]
+fn completion(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+
+    let outputs = ctx.cli([cmd::COMPLETION, "bash"]);
+    assert!(outputs.success(), "bash");
+
+    let outputs = ctx.cli([cmd::COMPLETION, "elvish"]);
+    assert!(outputs.success(), "elvish");
+
+    let outputs = ctx.cli([cmd::COMPLETION, "fish"]);
+    assert!(outputs.success(), "fish");
+
+    let outputs = ctx.cli([cmd::COMPLETION, "powershell"]);
+    assert!(outputs.success(), "powershell");
+
+    let outputs = ctx.cli([cmd::COMPLETION, "zsh"]);
+    assert!(outputs.success(), "zsh");
 }
 
 pub struct Output {

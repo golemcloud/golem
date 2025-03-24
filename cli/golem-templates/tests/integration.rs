@@ -16,62 +16,6 @@
 test_r::enable!();
 
 #[cfg(test)]
-mod templates {
-    use assert2::{assert, let_assert};
-    use std::process::Command;
-    use test_r::test;
-
-    #[test]
-    fn templates_c() {
-        test_templates("c")
-    }
-
-    #[test]
-    fn templates_go() {
-        test_templates("go")
-    }
-
-    #[test]
-    fn templates_js() {
-        test_templates("js")
-    }
-
-    #[test]
-    fn templates_python() {
-        test_templates("python")
-    }
-
-    #[test]
-    fn templates_rust() {
-        test_templates("rust")
-    }
-
-    #[test]
-    fn templates_ts() {
-        test_templates("ts")
-    }
-
-    #[test]
-    fn templates_zig() {
-        test_templates("zig")
-    }
-
-    fn test_templates(test_prefix: &str) {
-        let status = Command::new("../target/debug/golem-templates-test-cli")
-            .args([
-                "templates",
-                "--filter",
-                &format!("^{}-", test_prefix),
-                "--target-path",
-                "../target/templates-test",
-            ])
-            .status();
-        let_assert!(Ok(status) = status);
-        assert!(status.success());
-    }
-}
-
-#[cfg(test)]
 mod app {
     use assert2::{assert, let_assert};
 

@@ -9,8 +9,7 @@ interface component-name-api {
 }
 
 world component-name {
-  import golem:api/host@1.1.5;
-  import golem:rpc/types@0.1.3;
+  import golem:api/host@1.1.6;
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;

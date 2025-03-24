@@ -5,11 +5,11 @@
     "components-ts/*/*"
   ],
   "dependencies": {
-    "@golemcloud/golem-ts": "1.1.2"
+    "@golemcloud/golem-ts": "1.2.0"
   },
   "devDependencies": {
     "@golemcloud/componentize-js": "0.10.5-golem.4",
-    "@golemcloud/jco": "1.4.4-golem.2",
+    "@golemcloud/jco": "1.4.4-golem.3",
     "@rollup/plugin-alias": "^5.1.1",
     "@rollup/plugin-node-resolve": "^16.0.0",
     "@rollup/plugin-typescript": "^12.1.2",

@@ -14,6 +14,7 @@
 
 use clap_verbosity_flag::Verbosity;
 use log::Level;
+use shadow_rs::shadow;
 use tracing_subscriber::FmtSubscriber;
 
 pub mod auth;
@@ -32,8 +33,25 @@ pub mod model;
 #[cfg(test)]
 test_r::enable!();
 
-// TODO:
-// const VERSION: &str = golem_version!();
+shadow!(build);
+
+pub fn command_name() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|name| name.to_string_lossy().to_string())
+        })
+        .unwrap_or("golem-cli".to_string())
+}
+
+pub fn version() -> &'static str {
+    if build::PKG_VERSION != "0.0.0" {
+        build::PKG_VERSION
+    } else {
+        build::GIT_DESCRIBE_TAGS
+    }
+}
 
 pub fn init_tracing(verbosity: Verbosity) {
     if let Some(level) = verbosity.log_level() {

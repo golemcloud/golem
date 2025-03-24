@@ -9,7 +9,8 @@ crate-type = ["cdylib"]
 required-features = []
 
 [dependencies]
-common-lib = { path = "../../common-rust/common-lib" }
+# To use common shared libs, use the following:
+# common-lib = { path = "../../common-rust/common-lib" }
 
 golem-rust = { workspace = true }
 reqwest = { workspace = true }

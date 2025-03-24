@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::bail;
 use clap::Parser;
 use colored::{ColoredString, Colorize};
 use golem_templates::model::{
@@ -25,6 +26,7 @@ use golem_templates::{
 use nanoid::nanoid;
 use regex::Regex;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::str::FromStr;
@@ -131,6 +133,9 @@ pub fn main() -> anyhow::Result<()> {
             for (language, templates) in &app_templates {
                 if !languages.is_empty() && !languages.contains(language) {
                     continue;
+                } else if languages.is_empty() && *language == GuestLanguage::ScalaJs {
+                    // Disable ScalaJs, unless explicitly asked for
+                    continue;
                 }
 
                 println!("Adding components for language {}", language.name().blue());
@@ -139,8 +144,12 @@ pub fn main() -> anyhow::Result<()> {
                 let default_templates = templates.get(&ComposableAppGroupName::default()).unwrap();
                 for (name, component_template) in &default_templates.components {
                     for _ in 1..=2 {
-                        let component_name =
-                            format!("app:comp-{}-{}", name, nanoid!(10, &alphabet));
+                        let component_name = format!(
+                            "app:comp-{}-{}-{}",
+                            nanoid!(10, &alphabet),
+                            language.id(),
+                            name,
+                        );
                         println!(
                             "Adding component {} ({})",
                             component_name.bright_blue(),
@@ -157,25 +166,37 @@ pub fn main() -> anyhow::Result<()> {
                 }
             }
 
-            if used_languages.contains(&GuestLanguage::JavaScript)
-                || used_languages.contains(&GuestLanguage::TypeScript)
-            {
+            if used_languages.contains(&GuestLanguage::JavaScript) {
                 println!("Installing npm packages with golem-ci");
-                std::process::Command::new("golem-cli")
-                    .args(["app", "npm-install"])
-                    .current_dir(&target_path)
-                    .status()?;
+                golem_cli(&target_path, ["app", "js-npm-install"])?;
+            }
+
+            if used_languages.contains(&GuestLanguage::TypeScript) {
+                println!("Installing npm packages with golem-ci");
+                golem_cli(&target_path, ["app", "ts-npm-install"])?;
             }
 
             println!("Building with default profile");
-            std::process::Command::new("golem-cli")
-                .args(["app", "build"])
-                .current_dir(&target_path)
-                .status()?;
+            golem_cli(&target_path, ["app", "build"])?;
 
             Ok(())
         }
     }
+}
+
+pub fn golem_cli<I, S>(dir: &Path, args: I) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let status = std::process::Command::new("golem-cli")
+        .args(args)
+        .current_dir(dir)
+        .status()?;
+    if !status.success() {
+        bail!("golem-cli exited with status: {}", status)
+    }
+    Ok(())
 }
 
 fn test_template(

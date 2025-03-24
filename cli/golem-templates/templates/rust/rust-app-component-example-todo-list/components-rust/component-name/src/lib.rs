@@ -1,8 +1,16 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::Guest;
+use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::Item;
+use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::NewItem;
+use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::Priority;
+use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::Query;
+use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::QuerySort;
+use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::Status;
+use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::UpdateItem;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
 use std::{cmp, collections::HashMap, num::TryFromIntError};
@@ -49,7 +57,7 @@ fn unix_time_from_option_string(s: Option<String>) -> Result<Option<i64>, String
 
         Ok(unix_time) as Result<i64, String>
     })
-        .transpose()
+    .transpose()
 }
 
 #[inline]
@@ -199,22 +207,22 @@ impl Guest for Component {
                         .map(|keyword| item.title.contains(keyword))
                         .unwrap_or(true)
                         && query
-                        .priority
-                        .map(|priority| item.priority == priority)
-                        .unwrap_or(true)
+                            .priority
+                            .map(|priority| item.priority == priority)
+                            .unwrap_or(true)
                         && query
-                        .status
-                        .map(|status| item.status == status)
-                        .unwrap_or(true)
+                            .status
+                            .map(|status| item.status == status)
+                            .unwrap_or(true)
                         && deadline
-                        .map(|deadline| {
-                            if let Some(before) = item.deadline {
-                                before <= deadline
-                            } else {
-                                true
-                            }
-                        })
-                        .unwrap_or(true)
+                            .map(|deadline| {
+                                if let Some(before) = item.deadline {
+                                    before <= deadline
+                                } else {
+                                    true
+                                }
+                            })
+                            .unwrap_or(true)
                 })
                 .cloned()
                 .collect();
@@ -241,12 +249,8 @@ impl Guest for Component {
                 result.iter().for_each(|item| {
                     let deadline = item
                         .deadline
-                        .and_then(|i: i64| NaiveDateTime::from_timestamp_opt(i, 0))
-                        .map(|utc| {
-                            DateTime::<Utc>::from_naive_utc_and_offset(utc, Utc)
-                                .format(DATE_TIME_FORMAT)
-                                .to_string()
-                        })
+                        .and_then(|i: i64| DateTime::from_timestamp(i, 0))
+                        .map(|datetime| datetime.to_string())
                         .unwrap_or("<No deadline set>".to_string());
 
                     println!("{:?} {}", item, deadline);

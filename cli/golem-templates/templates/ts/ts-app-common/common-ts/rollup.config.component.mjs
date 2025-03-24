@@ -3,8 +3,10 @@ import alias from '@rollup/plugin-alias';
 import nodeResolve from "@rollup/plugin-node-resolve";
 import path from "node:path";
 import typescript from "@rollup/plugin-typescript";
+import url from "node:url";
 
 export default function componentRollupConfig() {
+    const dir = path.dirname(url.fileURLToPath(import.meta.url));
     const moduleRegex = /declare\s+module\s+"([^"]+)"/g;
     const generated_interfaces_dir = "src/generated/interfaces";
 
@@ -41,7 +43,7 @@ export default function componentRollupConfig() {
         plugins: [
             alias({
                 entries: [
-                    {find: 'common', replacement: path.resolve(import.meta.dirname, "../common-ts/src")}
+                    {find: 'common', replacement: path.resolve(dir, "../common-ts/src")}
                 ]
             }),
             nodeResolve({
@@ -49,6 +51,7 @@ export default function componentRollupConfig() {
             }),
             typescript({
                 noEmitOnError: true,
+                include: ["./src/**/*.ts", "../../common-ts/src/**/*.ts"]
             })
         ],
     };

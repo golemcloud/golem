@@ -2,8 +2,10 @@ import * as fs from "node:fs";
 import alias from '@rollup/plugin-alias';
 import nodeResolve from "@rollup/plugin-node-resolve";
 import path from "node:path";
+import url from "node:url";
 
 export default function componentRollupConfig() {
+    const dir = path.dirname(url.fileURLToPath(import.meta.url));
     const moduleRegex = /declare\s+module\s+"([^"]+)"/g;
     const generated_interfaces_dir = "src/generated/interfaces";
 
@@ -40,7 +42,7 @@ export default function componentRollupConfig() {
         plugins: [
             alias({
                 entries: [
-                    {find: 'common', replacement: path.resolve(import.meta.dirname, "../common-js/src")}
+                    {find: 'common', replacement: path.resolve(dir, "../common-js/src")}
                 ]
             }),
             nodeResolve({

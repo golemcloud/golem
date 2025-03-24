@@ -1,7 +1,8 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::*;
-// Import for using common lib:
+// Import for using common lib (also see Cargo.toml for adding the dependency):
 // use common_lib::example_common_function;
 use std::cell::RefCell;
 

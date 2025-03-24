@@ -34,6 +34,7 @@ use golem_cloud_client::{CloudPluginScope, ProjectPluginScope};
 use golem_common::model::plugin::ComponentPluginScope;
 use golem_common::model::{ComponentId, Empty};
 use golem_wasm_rpc_stubgen::log::{log_action, log_warn_action, LogColorize, LogIndent};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
 
@@ -110,6 +111,12 @@ impl PluginCommandHandler {
         scope: PluginScopeArgs,
         manifest: PathBufOrStdin,
     ) -> anyhow::Result<()> {
+        enum Specs {
+            ComponentTransformerOrOplogProcessor(PluginTypeSpecificCreation),
+            App(PathBuf),
+            Library(PathBuf),
+        }
+
         let (scope_project, scope_component_id) = self.resolve_scope(&scope).await?;
         let manifest = manifest.read_to_string()?;
         let manifest: PluginManifest = serde_yaml::from_str(&manifest)
@@ -120,12 +127,16 @@ impl PluginCommandHandler {
 
         let specs = match &manifest.specs {
             PluginTypeSpecificManifest::ComponentTransformer(spec) => {
-                PluginTypeSpecificCreation::ComponentTransformer(ComponentTransformerDefinition {
-                    provided_wit_package: spec.provided_wit_package.clone(),
-                    json_schema: spec.json_schema.clone(),
-                    validate_url: spec.validate_url.clone(),
-                    transform_url: spec.transform_url.clone(),
-                })
+                Specs::ComponentTransformerOrOplogProcessor(
+                    PluginTypeSpecificCreation::ComponentTransformer(
+                        ComponentTransformerDefinition {
+                            provided_wit_package: spec.provided_wit_package.clone(),
+                            json_schema: spec.json_schema.clone(),
+                            validate_url: spec.validate_url.clone(),
+                            transform_url: spec.transform_url.clone(),
+                        },
+                    ),
+                )
             }
             PluginTypeSpecificManifest::OplogProcessor(spec) => {
                 let component_name = ComponentName(format!(
@@ -198,11 +209,15 @@ impl PluginCommandHandler {
                     component
                 };
 
-                PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
-                    component_id: component.versioned_component_id.component_id,
-                    component_version: component.versioned_component_id.version,
-                })
+                Specs::ComponentTransformerOrOplogProcessor(
+                    PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
+                        component_id: component.versioned_component_id.component_id,
+                        component_version: component.versioned_component_id.version,
+                    }),
+                )
             }
+            PluginTypeSpecificManifest::App(specs) => Specs::App(specs.component.clone()),
+            PluginTypeSpecificManifest::Library(specs) => Specs::Library(specs.component.clone()),
         };
 
         {
@@ -217,40 +232,129 @@ impl PluginCommandHandler {
 
             let _indent = LogIndent::new();
 
-            match self.ctx.golem_clients().await? {
-                GolemClients::Oss(clients) => {
-                    clients
-                        .plugin
-                        .create_plugin(&PluginDefinitionCreationDefaultPluginScope {
-                            name: manifest.name,
-                            version: manifest.version,
-                            description: manifest.description,
-                            icon,
-                            homepage: manifest.homepage,
-                            specs,
-                            scope: default_plugin_scope(scope_component_id.as_ref()),
-                        })
-                        .await
-                        .map(|_| ())
-                        .map_service_error()?;
+            match specs {
+                Specs::ComponentTransformerOrOplogProcessor(specs) => {
+                    match self.ctx.golem_clients().await? {
+                        GolemClients::Oss(clients) => {
+                            clients
+                                .plugin
+                                .create_plugin(&PluginDefinitionCreationDefaultPluginScope {
+                                    name: manifest.name,
+                                    version: manifest.version,
+                                    description: manifest.description,
+                                    icon,
+                                    homepage: manifest.homepage,
+                                    specs,
+                                    scope: default_plugin_scope(scope_component_id.as_ref()),
+                                })
+                                .await
+                                .map(|_| ())
+                                .map_service_error()?;
+                        }
+                        GolemClients::Cloud(clients) => clients
+                            .plugin
+                            .create_plugin(&PluginDefinitionCreationCloudPluginScope {
+                                name: manifest.name,
+                                version: manifest.version,
+                                description: manifest.description,
+                                icon,
+                                homepage: manifest.homepage,
+                                specs,
+                                scope: cloud_plugin_scope(
+                                    scope_project.as_ref(),
+                                    scope_component_id.as_ref(),
+                                ),
+                            })
+                            .await
+                            .map(|_| ())
+                            .map_service_error()?,
+                    }
                 }
-                GolemClients::Cloud(clients) => clients
-                    .plugin
-                    .create_plugin(&PluginDefinitionCreationCloudPluginScope {
-                        name: manifest.name,
-                        version: manifest.version,
-                        description: manifest.description,
-                        icon,
-                        homepage: manifest.homepage,
-                        specs,
-                        scope: cloud_plugin_scope(
-                            scope_project.as_ref(),
-                            scope_component_id.as_ref(),
-                        ),
-                    })
-                    .await
-                    .map(|_| ())
-                    .map_service_error()?,
+                Specs::App(wasm) => {
+                    let wasm = File::open(&wasm).await.with_context(|| {
+                        anyhow!("Failed to open app plugin component: {}", wasm.display())
+                    })?;
+
+                    match self.ctx.golem_clients().await? {
+                        GolemClients::Oss(clients) => {
+                            clients
+                                .plugin
+                                .create_app_plugin(
+                                    &manifest.name,
+                                    &manifest.version,
+                                    &manifest.description,
+                                    icon,
+                                    &manifest.homepage,
+                                    &default_plugin_scope(scope_component_id.as_ref()),
+                                    wasm,
+                                )
+                                .await
+                                .map(|_| ())
+                                .map_service_error()?;
+                        }
+                        GolemClients::Cloud(clients) => clients
+                            .plugin
+                            .create_app_plugin(
+                                &manifest.name,
+                                &manifest.version,
+                                &manifest.description,
+                                icon,
+                                &manifest.homepage,
+                                &cloud_plugin_scope(
+                                    scope_project.as_ref(),
+                                    scope_component_id.as_ref(),
+                                ),
+                                wasm,
+                            )
+                            .await
+                            .map(|_| ())
+                            .map_service_error()?,
+                    }
+                }
+                Specs::Library(wasm) => {
+                    let wasm = File::open(&wasm).await.with_context(|| {
+                        anyhow!(
+                            "Failed to open library plugin component: {}",
+                            wasm.display()
+                        )
+                    })?;
+
+                    match self.ctx.golem_clients().await? {
+                        GolemClients::Oss(clients) => {
+                            clients
+                                .plugin
+                                .create_library_plugin(
+                                    &manifest.name,
+                                    &manifest.version,
+                                    &manifest.description,
+                                    icon,
+                                    &manifest.homepage,
+                                    &default_plugin_scope(scope_component_id.as_ref()),
+                                    wasm,
+                                )
+                                .await
+                                .map(|_| ())
+                                .map_service_error()?;
+                        }
+                        GolemClients::Cloud(clients) => clients
+                            .plugin
+                            .create_library_plugin(
+                                &manifest.name,
+                                &manifest.version,
+                                &manifest.description,
+                                icon,
+                                &manifest.homepage,
+                                &cloud_plugin_scope(
+                                    scope_project.as_ref(),
+                                    scope_component_id.as_ref(),
+                                ),
+                                wasm,
+                            )
+                            .await
+                            .map(|_| ())
+                            .map_service_error()?,
+                    }
+                }
             }
         }
 
@@ -314,7 +418,7 @@ impl PluginCommandHandler {
             Some(project) => Some(
                 self.ctx
                     .cloud_project_handler()
-                    .select_project(scope.account.as_ref(), project)
+                    .select_project(scope.account_id.as_ref(), project)
                     .await?,
             ),
             None => None,

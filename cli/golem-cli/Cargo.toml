@@ -7,6 +7,7 @@ homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem-cli"
 description = "Command line interface for Golem."
 autotests = false
+build = "build.rs"
 
 [features]
 default = []
@@ -69,6 +70,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+shadow-rs = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
@@ -95,3 +97,6 @@ reqwest = { workspace = true }
 serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
+
+[build-dependencies]
+shadow-rs = { workspace = true }

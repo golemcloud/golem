@@ -21,6 +21,7 @@ use crate::command::profile::ProfileSubcommand;
 use crate::command::worker::WorkerSubcommand;
 use crate::config::{BuildProfileName, ProfileName};
 use crate::model::{Format, WorkerName};
+use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -40,6 +41,7 @@ use crate::command::server::ServerSubcommand;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
+#[command(bin_name = command_name(), display_name = command_name(), long_version = version())]
 pub struct GolemCliCommand {
     #[command(flatten)]
     pub global_flags: GolemCliGlobalFlags,
@@ -578,11 +580,11 @@ pub mod shared_args {
     #[derive(clap::Args, Debug, Clone)]
     pub struct PluginScopeArgs {
         /// Global scope (plugin available for all components)
-        #[arg(long, conflicts_with_all=["account_id", "project_name", "component_name"])]
+        #[arg(long, conflicts_with_all=["account_id", "project", "component"])]
         pub global: bool,
         /// Account id, optionally specifies the account id for the project name
         #[arg(long, conflicts_with_all = ["global"])]
-        pub account: Option<AccountId>,
+        pub account_id: Option<AccountId>,
         /// Project name; Required when component name is used. Without a given component, it defines a project scope.
         #[arg(long, conflicts_with_all = ["global"])]
         pub project: Option<ProjectName>,
@@ -594,7 +596,7 @@ pub mod shared_args {
     impl PluginScopeArgs {
         pub fn is_global(&self) -> bool {
             self.global
-                || (self.account.is_none() && self.project.is_none() && self.component.is_none())
+                || (self.account_id.is_none() && self.project.is_none() && self.component.is_none())
         }
     }
 }
@@ -752,15 +754,18 @@ pub mod component {
 
         #[derive(Debug, Subcommand)]
         pub enum ComponentPluginSubcommand {
-            /// Install a plugin for this component
+            /// Install a plugin for selected component
             Install {
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
                 /// The plugin to install
+                #[arg(long)]
                 plugin_name: String,
                 /// The version of the plugin to install
+                #[arg(long)]
                 plugin_version: String,
                 /// Priority of the plugin - largest priority is applied first
+                #[arg(long)]
                 priority: i32,
                 /// List of parameters (key-value pairs) passed to the plugin
                 #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
@@ -773,12 +778,13 @@ pub mod component {
                 /// The version of the component
                 version: Option<u64>,
             },
-            /// Uninstall a plugin for this component
+            /// Uninstall a plugin for selected component
             Uninstall {
                 /// The component to install the plugin for
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
                 /// The plugin to uninstall
+                #[arg(long)]
                 installation_id: PluginInstallationId,
             },
         }
@@ -1589,6 +1595,11 @@ mod test {
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
+
+    #[test]
+    fn command_debug_assert() {
+        GolemCliCommand::command().debug_assert();
+    }
 
     #[test]
     fn all_commands_and_args_has_doc() {

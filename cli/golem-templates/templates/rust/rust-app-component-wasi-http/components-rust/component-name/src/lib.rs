@@ -1,3 +1,4 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use bindings::wasi::http::types::{

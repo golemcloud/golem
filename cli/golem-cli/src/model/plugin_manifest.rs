@@ -26,6 +26,8 @@ use std::path::PathBuf;
 pub enum PluginTypeSpecificManifest {
     ComponentTransformer(ComponentTransformerManifest),
     OplogProcessor(OplogProcessorManifest),
+    App(AppManifest),
+    Library(LibraryManifest),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,6 +42,18 @@ pub struct ComponentTransformerManifest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OplogProcessorManifest {
+    pub component: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppManifest {
+    pub component: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryManifest {
     pub component: PathBuf,
 }
 

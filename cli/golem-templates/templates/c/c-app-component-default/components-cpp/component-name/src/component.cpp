@@ -1,5 +1,5 @@
 #include <iostream>
-// Include this for using the common_lib
+// Include this for using the common_lib, also see CMakeLists.txt to add the lib code
 // #include "common_lib.h"
 #include "component_name.h"
 

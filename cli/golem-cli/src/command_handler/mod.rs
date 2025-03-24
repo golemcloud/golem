@@ -44,8 +44,8 @@ use crate::command_handler::worker::WorkerCommandHandler;
 use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit};
-use crate::init_tracing;
 use crate::model::text::fmt::log_error;
+use crate::{command_name, init_tracing};
 use clap::CommandFactory;
 use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
@@ -240,13 +240,7 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
 
     fn cmd_completion(&self, shell: Shell) -> anyhow::Result<()> {
         let mut command = GolemCliCommand::command();
-        let command_name = std::env::current_exe()
-            .ok()
-            .and_then(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
-            .unwrap_or("golem-cli".to_string());
+        let command_name = command_name();
         debug!(command_name, shell=%shell, "completion");
         clap_complete::generate(shell, &mut command, command_name, &mut std::io::stdout());
         Ok(())
