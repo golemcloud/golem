@@ -1390,7 +1390,7 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
 }
 
 #[test]
-async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
+async fn test_api_def_with_path_and_query_params_1() {
     let empty_headers = HeaderMap::new();
     let api_request =
         get_gateway_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
@@ -1437,7 +1437,7 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
 
 // A test where input requirement of path and query is a string, but the actual inputs are numbers
 #[test]
-async fn test_api_def_with_path_and_query_params_lookup_for_valid_input_2() {
+async fn test_api_def_with_path_and_query_2() {
     let empty_headers = HeaderMap::new();
     let api_request =
         get_gateway_request("/foo/1", Some("token-id=2"), &empty_headers, Value::Null);
@@ -1478,6 +1478,68 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input_2() {
         Value::Array(vec![
             Value::String("1".to_string()),
             Value::String("2".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+// Test that ensures that the input requirement of path and query is a number, but the actual inputs are strings
+// Also both request.header.value and request.headers.value works
+// Along with these, it also makes use of parameters from request body
+#[test]
+async fn test_api_def_with_path_and_query_and_header_and_body() {
+    let mut headers = HeaderMap::new();
+    headers.insert("baz", HeaderValue::from_static("42"));
+    headers.insert("qux", HeaderValue::from_static("qux_value"));
+
+    let body = serde_json::json!({
+        "quux": "quux_value"
+    });
+
+    let api_request = get_gateway_request("/foo/1", Some("bar=2"), &headers, body);
+
+    // Default types for path and query parameters are string
+    let response_mapping = r#"
+        let path_foo = request.path.foo;
+        let query_bar = request.query.bar;
+        let header_baz = request.headers.baz;
+        let header_qux = request.header.qux;
+        let body_quux: string = request.body.quux;
+        let arg1 = "${path_foo}-${query_bar}";
+        let arg2 = "${header_baz}-${header_qux}-${body_quux}";
+        let my-instance = instance("shopping-cart-${path_foo}");
+        let response = my-instance.get-cart-contents(arg1, arg2);
+        response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{foo}?{bar}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1".to_string(),
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("1-2".to_string()),
+            Value::String("42-qux_value-quux_value".to_string()),
         ]),
     );
 
