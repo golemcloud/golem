@@ -302,7 +302,7 @@ pub struct GatewayBindingComponent {
     name: String,
     /// Version of the component. If not provided the latest version is used.
     /// Note that the version is only used to typecheck the various rib scripts and prevent component updates.
-    /// During runtime, the actual version of the worker or the latest version (in case no was found) is used.
+    /// During runtime, the actual version of the worker or the latest version (in case no worker was found) is used.
     version: Option<u64>,
 }
 
