@@ -146,6 +146,8 @@ jobs:
     runs-on: ${{ matrix.cfg.os }}
     permissions:
       contents: write
+    env:
+      CARGO_BUILD_JOBS: 10
     steps:
       - uses: actions/checkout@v4
       - name: Checkout

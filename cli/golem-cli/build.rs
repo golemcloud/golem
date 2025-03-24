@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use shadow_rs::{BuildPattern, SdResult, ShadowBuilder, ShadowError};
+use shadow_rs::{BuildPattern, SdResult, ShadowBuilder};
 use std::fs::File;
 use std::io::Write;
 use std::process::Command;
@@ -34,19 +34,24 @@ fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
     let output = Command::new("git")
         .args(["describe", "--tags", "--always"])
         .output()?;
-    if !output.status.success() {
-        println!("cargo::error=git describe failed:");
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            println!("cargo::error=stdout: {}", line);
-        }
-        for line in String::from_utf8_lossy(&output.stderr).lines() {
-            println!("cargo::error=stderr: {}", line);
-        }
 
-        return Err(ShadowError::from("git describe failed"));
-    }
-    let version = String::from_utf8(output.stdout)?.trim().to_string();
-    println!("cargo::warning=git describe result: {}", version);
+    let version = {
+        if !output.status.success() {
+            println!("cargo::warn=git describe failed, using fallback version 0.0.0");
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                println!("cargo::warn=git stdout: {}", line);
+            }
+            for line in String::from_utf8_lossy(&output.stderr).lines() {
+                println!("cargo::warn=git stderr: {}", line);
+            }
+
+            "0.0.0".to_string()
+        } else {
+            let version = String::from_utf8(output.stdout)?.trim().to_string();
+            println!("cargo::warning=git describe result: {}", version);
+            version
+        }
+    };
 
     let git_describe_tags = format!(
         r#"#[allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
