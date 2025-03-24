@@ -518,7 +518,7 @@ fn get_record(
 
                     vals.push((name.clone(), TypeAnnotatedValue::Option(Box::new(option))))
                 }
-                _ => errors.push(format!("Key '{}' not found in json_map", name)),
+                _ => errors.push(format!("Key '{}' not found", name)),
             }
         }
     }

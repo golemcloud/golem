@@ -36,6 +36,10 @@ pub struct RichRequest {
 }
 
 impl RichRequest {
+    pub fn headers(&self) -> &HeaderMap {
+        self.underlying.headers()
+    }
+
     pub fn query_params(&self) -> HashMap<String, String> {
         self.underlying
             .uri()
@@ -67,38 +71,39 @@ impl RichRequest {
             .ok_or("No path and query provided".to_string())
     }
 
-    fn request_path_values(&self) -> RequestPathValues {
+    pub fn request_path_values(&self) -> RequestPathValues {
         use crate::gateway_request::http_request::router;
 
-        let path_param_values: HashMap<VarInfo, String> = self
+        let path_param_values: HashMap<String, String> = self
             .path_param_extractors
             .iter()
             .map(|param| match param {
-                router::PathParamExtractor::Single { var_info, index } => {
-                    (var_info.clone(), self.path_segments[*index].clone())
-                }
+                router::PathParamExtractor::Single { var_info, index } => (
+                    var_info.key_name.clone(),
+                    self.path_segments[*index].clone(),
+                ),
                 router::PathParamExtractor::AllFollowing { var_info, index } => {
                     let value = self.path_segments[*index..].join("/");
-                    (var_info.clone(), value)
+                    (var_info.key_name.clone(), value)
                 }
             })
             .collect();
 
-        RequestPathValues::from(path_param_values)
+        RequestPathValues(path_param_values)
     }
 
-    fn request_query_values(&self) -> Result<RequestQueryValues, String> {
+    pub fn request_query_values(&self) -> Result<RequestQueryValues, String> {
         RequestQueryValues::from(&self.query_params(), &self.query_info)
             .map_err(|e| format!("Failed to extract query values, missing: [{}]", e.join(",")))
     }
 
-    fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
+    pub fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
         RequestHeaderValues::from(self.underlying.headers())
             .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
     /// consumes the body of the underlying request
-    async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
+    pub async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
         let body = self.underlying.take_body();
 
         let json_request_body: Value = if body.is_empty() {
@@ -287,7 +292,7 @@ pub fn authority_from_request(request: &poem::Request) -> Result<String, String>
 }
 
 #[derive(Debug, Clone)]
-pub struct RequestQueryValues(pub JsonKeyValues);
+pub struct RequestQueryValues(pub HashMap<String, String>);
 
 impl RequestQueryValues {
     pub fn from(
@@ -295,13 +300,12 @@ impl RequestQueryValues {
         query_keys: &[QueryInfo],
     ) -> Result<RequestQueryValues, Vec<String>> {
         let mut unavailable_query_variables: Vec<String> = vec![];
-        let mut query_variable_map: JsonKeyValues = JsonKeyValues::default();
+        let mut query_variable_map: HashMap<String, String> = HashMap::new();
 
         for spec_query_variable in query_keys.iter() {
             let key = &spec_query_variable.key_name;
             if let Some(query_value) = query_key_values.get(key) {
-                let typed_value = internal::refine_json_str_value(query_value);
-                query_variable_map.push(key.clone(), typed_value);
+                query_variable_map.push(key.clone(), query_value);
             } else {
                 unavailable_query_variables.push(spec_query_variable.to_string());
             }
@@ -316,18 +320,16 @@ impl RequestQueryValues {
 }
 
 #[derive(Debug, Clone)]
-pub struct RequestHeaderValues(pub JsonKeyValues);
+pub struct RequestHeaderValues(pub HashMap<String, String>);
 
 impl RequestHeaderValues {
     pub fn from(headers: &HeaderMap) -> Result<RequestHeaderValues, Vec<String>> {
-        let mut headers_map: JsonKeyValues = JsonKeyValues::default();
+        let mut headers_map: HashMap<String, String> = HashMap::new();
 
         for (header_name, header_value) in headers {
             let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
 
-            let typed_header_value = internal::refine_json_str_value(header_value_str);
-
-            headers_map.push(header_name.to_string(), typed_header_value);
+            headers_map.push(header_name.to_string(), header_value_str);
         }
 
         Ok(RequestHeaderValues(headers_map))
@@ -379,7 +381,7 @@ mod internal {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct RequestPathValues(pub JsonKeyValues);
+pub struct RequestPathValues(pub HashMap<String, String>);
 
 impl RequestPathValues {
     pub fn get(&self, key: &str) -> Option<&Value> {
