@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_service_base::migration::{Migrations, MigrationsDir};
-use golem_worker_service_base::service::gateway::ConversionContext;
+use golem_worker_service_base::service::gateway::{ComponentView, ConversionContext};
 use std::collections::HashMap;
 use test_r::test;
 
@@ -1128,17 +1128,21 @@ async fn get_api_definition(
 
     #[async_trait]
     impl ConversionContext for TestConversionContext {
-        async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+        async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
             if name.0 == "test-component" {
-                Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
+                Ok(ComponentView {
+                    name: ComponentName("test-component".to_string()),
+                    id: ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")),
+                    latest_version: 0,
+                })
             } else {
                 Err("component not found".to_string())
             }
         }
-        async fn get_component_name(
+        async fn component_by_id(
             &self,
             _component_id: &ComponentId,
-        ) -> Result<ComponentName, String> {
+        ) -> Result<ComponentView, String> {
             unimplemented!()
         }
     }

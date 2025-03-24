@@ -300,6 +300,17 @@ impl RouteResponseData {
 #[oai(rename_all = "camelCase")]
 pub struct GatewayBindingComponent {
     name: String,
+    /// Version of the component. If not provided the latest version is used.
+    /// Note that the version is only used to typecheck the various rib scripts and prevent component updates.
+    /// During runtime, the actual version of the worker or the latest version (in case no was found) is used.
+    version: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ResolvedGatewayBindingComponent {
+    name: String,
     version: u64,
 }
 
@@ -357,7 +368,7 @@ impl GatewayBindingData {
                 let component = self.component.ok_or("Missing component field in binding")?;
                 let component_name = ComponentName(component.name);
 
-                let component_id = conversion_ctx.resolve_component_id(&component_name).await?;
+                let component_view = conversion_ctx.component_by_name(&component_name).await?;
 
                 let response: crate::gateway_binding::ResponseMapping = {
                     let r = rib::from_string(response.as_str()).map_err(|e| e.to_string())?;
@@ -383,8 +394,8 @@ impl GatewayBindingData {
 
                 let worker_binding = WorkerBinding {
                     component_id: VersionedComponentId {
-                        component_id,
-                        version: component.version,
+                        component_id: component_view.id,
+                        version: component.version.unwrap_or(component_view.latest_version),
                     },
                     worker_name,
                     idempotency_key,
@@ -403,7 +414,7 @@ impl GatewayBindingData {
                 let component = self.component.ok_or("Missing component field in binding")?;
                 let component_name = ComponentName(component.name);
 
-                let component_id = conversion_ctx.resolve_component_id(&component_name).await?;
+                let component_view = conversion_ctx.component_by_name(&component_name).await?;
 
                 let worker_name = self
                     .worker_name
@@ -418,8 +429,8 @@ impl GatewayBindingData {
 
                 let binding = HttpHandlerBinding {
                     component_id: VersionedComponentId {
-                        component_id,
-                        version: component.version,
+                        component_id: component_view.id,
+                        version: component.version.unwrap_or(component_view.latest_version),
                     },
                     worker_name,
                     idempotency_key,
@@ -525,9 +536,9 @@ impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GatewayBindingResponseData {
-    pub component: Option<GatewayBindingComponent>, // Optional to keep it backward compatible
-    pub worker_name: Option<String>,                // If bindingType is Default or FileServer
-    pub idempotency_key: Option<String>,            // If bindingType is Default or FileServer
+    pub component: Option<ResolvedGatewayBindingComponent>, // Optional to keep it backward compatible
+    pub worker_name: Option<String>, // If bindingType is Default or FileServer
+    pub idempotency_key: Option<String>, // If bindingType is Default or FileServer
     pub response: Option<String>, // Optional to keep it backward compatible. If bindingType is Default or FileServer
     #[oai(rename = "bindingType")]
     pub binding_type: Option<GatewayBindingType>,
@@ -601,13 +612,13 @@ impl GatewayBindingResponseData {
         binding_type: GatewayBindingType,
         conversion_ctx: &BoxConversionContext<'_>,
     ) -> Result<Self, String> {
-        let component_name = conversion_ctx
-            .get_component_name(&worker_binding.component_id.component_id)
+        let component_view = conversion_ctx
+            .component_by_id(&worker_binding.component_id.component_id)
             .await?;
 
         Ok(GatewayBindingResponseData {
-            component: Some(GatewayBindingComponent {
-                name: component_name.0,
+            component: Some(ResolvedGatewayBindingComponent {
+                name: component_view.name.0,
                 version: worker_binding.component_id.version,
             }),
             worker_name: worker_binding
@@ -641,13 +652,13 @@ impl GatewayBindingResponseData {
         binding_type: GatewayBindingType,
         conversion_ctx: &BoxConversionContext<'_>,
     ) -> Result<Self, String> {
-        let component_name = conversion_ctx
-            .get_component_name(&http_handler_binding.component_id.component_id)
+        let component_view = conversion_ctx
+            .component_by_id(&http_handler_binding.component_id.component_id)
             .await?;
 
         Ok(GatewayBindingResponseData {
-            component: Some(GatewayBindingComponent {
-                name: component_name.0,
+            component: Some(ResolvedGatewayBindingComponent {
+                name: component_view.name.0,
                 version: http_handler_binding.component_id.version,
             }),
             worker_name: http_handler_binding
@@ -693,7 +704,10 @@ impl<N> From<crate::gateway_api_deployment::ApiDeployment<N>> for ApiDeployment 
 
 #[cfg(test)]
 mod tests {
-    use crate::{gateway_api_definition::http::MethodPattern, service::gateway::ConversionContext};
+    use crate::{
+        gateway_api_definition::http::MethodPattern,
+        service::gateway::{ComponentView, ConversionContext},
+    };
     use assert2::check;
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
@@ -701,6 +715,29 @@ mod tests {
     use golem_service_base::model::ComponentName;
     use test_r::test;
     use uuid::uuid;
+
+    struct TestConversionContext;
+
+    #[async_trait]
+    impl ConversionContext for TestConversionContext {
+        async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
+            if name.0 == "test-component" {
+                Ok(ComponentView {
+                    name: ComponentName("test-component".to_string()),
+                    id: ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")),
+                    latest_version: 1,
+                })
+            } else {
+                Err("unknown component name".to_string())
+            }
+        }
+        async fn component_by_id(
+            &self,
+            _component_id: &ComponentId,
+        ) -> Result<ComponentView, String> {
+            unimplemented!()
+        }
+    }
 
     #[test]
     fn test_method_pattern() {
@@ -735,28 +772,6 @@ mod tests {
               response: |
                   { status: 200, body: "x" }
         "#;
-
-        struct TestConversionContext;
-
-        #[async_trait]
-        impl ConversionContext for TestConversionContext {
-            async fn resolve_component_id(
-                &self,
-                name: &ComponentName,
-            ) -> Result<ComponentId, String> {
-                if name.0 == "test-component" {
-                    Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
-                } else {
-                    Err("unknown component name".to_string())
-                }
-            }
-            async fn get_component_name(
-                &self,
-                _component_id: &ComponentId,
-            ) -> Result<ComponentName, String> {
-                unimplemented!()
-            }
-        }
 
         let api: super::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string).unwrap();
         let result: Result<crate::gateway_api_definition::http::HttpApiDefinitionRequest, String> =
@@ -796,28 +811,6 @@ mod tests {
                   { status: 200, body: user }
         "#;
 
-        struct TestConversionContext;
-
-        #[async_trait]
-        impl ConversionContext for TestConversionContext {
-            async fn resolve_component_id(
-                &self,
-                name: &ComponentName,
-            ) -> Result<ComponentId, String> {
-                if name.0 == "test-component" {
-                    Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
-                } else {
-                    Err("unknown component name".to_string())
-                }
-            }
-            async fn get_component_name(
-                &self,
-                _component_id: &ComponentId,
-            ) -> Result<ComponentName, String> {
-                unimplemented!()
-            }
-        }
-
         let api: super::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string).unwrap();
         let result: Result<crate::gateway_api_definition::http::HttpApiDefinitionRequest, String> =
             api.into_core(&TestConversionContext.boxed()).await;
@@ -840,5 +833,41 @@ mod tests {
             !err.contains("/good/syntax"),
             "Error does not contain the correct endpoint's path"
         );
+    }
+
+    #[test]
+    async fn test_version_is_optional() {
+        let yaml_string = r#"
+          id: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+          version: 0.0.1
+          draft: true
+          routes:
+          - method: post
+            path: /good/syntax
+            binding:
+              component:
+                name: test-component
+              response: |
+                  { status: 200, body: "x" }
+          - method: GET
+            path: /bad/syntax
+            binding:
+              component:
+                name: test-component
+                version: 0
+              response: |
+                  { status: 200, body: "x" }
+        "#;
+
+        let api: super::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string).unwrap();
+        let result = api.into_core(&TestConversionContext.boxed()).await.unwrap();
+
+        let post_route = result
+            .routes
+            .iter()
+            .find(|r| r.method == MethodPattern::Post)
+            .unwrap();
+        let post_route_component_version = post_route.binding.get_component_id().unwrap().version;
+        assert_eq!(post_route_component_version, 1)
     }
 }

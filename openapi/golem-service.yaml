@@ -4521,11 +4521,14 @@ components:
         name:
           type: string
         version:
+          description: |-
+            Version of the component. If not provided the latest version is used.
+            Note that the version is only used to typecheck the various rib scripts and prevent component updates.
+            During runtime, the actual version of the worker or the latest version (in case no was found) is used.
           type: integer
           format: uint64
       required:
       - name
-      - version
     GatewayBindingData:
       type: object
       properties:
@@ -4558,7 +4561,7 @@ components:
       type: object
       properties:
         component:
-          $ref: '#/components/schemas/GatewayBindingComponent'
+          $ref: '#/components/schemas/ResolvedGatewayBindingComponent'
         workerName:
           type: string
         idempotencyKey:
@@ -6061,6 +6064,17 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ManualUpdateParameters'
+    ResolvedGatewayBindingComponent:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+          format: uint64
+      required:
+      - name
+      - version
     ResourceMetadata:
       type: object
       properties:

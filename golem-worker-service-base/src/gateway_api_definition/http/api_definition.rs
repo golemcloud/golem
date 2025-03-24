@@ -865,7 +865,7 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use crate::api;
-    use crate::service::gateway::ConversionContext;
+    use crate::service::gateway::{ComponentView, ConversionContext};
     use async_trait::async_trait;
     use golem_common::model::ComponentId;
     use golem_service_base::model::ComponentName;
@@ -1089,17 +1089,21 @@ mod tests {
 
     #[async_trait]
     impl ConversionContext for TestConversionContext {
-        async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+        async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
             if name.0 == "foobar" {
-                Ok(ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")))
+                Ok(ComponentView {
+                    name: ComponentName("foobar".to_string()),
+                    id: ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")),
+                    latest_version: 0,
+                })
             } else {
                 Err("unknown component name".to_string())
             }
         }
-        async fn get_component_name(
+        async fn component_by_id(
             &self,
             _component_id: &ComponentId,
-        ) -> Result<ComponentName, String> {
+        ) -> Result<ComponentView, String> {
             unimplemented!()
         }
     }
