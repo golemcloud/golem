@@ -613,7 +613,14 @@ async fn resolve_rib_input(
     match request_analysed_type {
         Some(AnalysedType::Record(type_record)) => {
             for record in type_record.fields.iter() {
-                match record.name.as_str() {
+                let field_name = record.name.as_str();
+
+                types.push(NameTypePair {
+                    name: field_name.to_string(),
+                    typ: record.typ.clone(),
+                });
+
+                match field_name {
                     "body" => {
                         let body = rich_request
                             .request_body_value()
@@ -641,14 +648,9 @@ async fn resolve_rib_input(
                                 )
                             })?;
 
-                        types.push(NameTypePair {
-                            name: "body".to_string(),
-                            typ: record.typ.clone(),
-                        });
-
                         values.push(converted_value.value);
                     }
-                    "header" => {
+                    "headers" | "header" => {
                         let header_values = get_wasm_rpc_value_for_primitives(
                             &record.typ,
                             &rich_request,
@@ -657,7 +659,7 @@ async fn resolve_rib_input(
                                     .headers()
                                     .get(key)
                                     .map(|x| x.to_str().unwrap().to_string())
-                                    .ok_or(format!("Missing header: {}", &key))
+                                    .ok_or(format!("missing header: {}", &key))
                             },
                         )
                         .map_err(|err| {
@@ -666,11 +668,6 @@ async fn resolve_rib_input(
                                 err
                             ))
                         })?;
-
-                        types.push(NameTypePair {
-                            name: "header".to_string(),
-                            typ: record.typ.clone(),
-                        });
 
                         values.push(header_values);
                     }
@@ -693,11 +690,6 @@ async fn resolve_rib_input(
                             ))
                         })?;
 
-                        types.push(NameTypePair {
-                            name: "query".to_string(),
-                            typ: record.typ.clone(),
-                        });
-
                         values.push(query_value);
                     }
                     "path" => {
@@ -719,12 +711,30 @@ async fn resolve_rib_input(
                             ))
                         })?;
 
-                        types.push(NameTypePair {
-                            name: "path".to_string(),
-                            typ: record.typ.clone(),
-                        });
-
                         values.push(path_values);
+                    }
+
+                    "auth" => {
+                        let auth_values = get_wasm_rpc_value_for_primitives(
+                            &record.typ,
+                            &rich_request,
+                            &|request, key| {
+                                request
+                                    .auth_data
+                                    .get("auth")
+                                    .map(|x| x.to_str().unwrap().to_string())
+                                    .ok_or(format!("missing auth parameter: {}", key))
+                            },
+                        )
+                        .map_err(|err| {
+                            GatewayHttpError::BadRequest(format!(
+                                "invalid http request auth. {}",
+                                err
+                            ))
+                        })?;
+
+                        values.push(auth_values);
+
                     }
                     field_name => {
                         // This is already type checked during API registration,
