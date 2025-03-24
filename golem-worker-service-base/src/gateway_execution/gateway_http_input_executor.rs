@@ -715,26 +715,35 @@ async fn resolve_rib_input(
                     }
 
                     "auth" => {
-                        let auth_values = get_wasm_rpc_value_for_primitives(
-                            &record.typ,
-                            &rich_request,
-                            &|request, key| {
-                                request
-                                    .auth_data
-                                    .get("auth")
-                                    .map(|x| x.to_str().unwrap().to_string())
-                                    .ok_or(format!("missing auth parameter: {}", key))
-                            },
-                        )
-                        .map_err(|err| {
-                            GatewayHttpError::BadRequest(format!(
-                                "invalid http request auth. {}",
-                                err
-                            ))
-                        })?;
+                        let auth_data =
+                            rich_request
+                                .auth_data()
+                                .ok_or(GatewayHttpError::BadRequest(
+                                    "missing auth data".to_string(),
+                                ))?;
 
-                        values.push(auth_values);
+                        let auth_value =
+                            TypeAnnotatedValue::parse_with_type(auth_data, &record.typ).map_err(
+                                |err| {
+                                    GatewayHttpError::BadRequest(format!(
+                                        "invalid auth data\n{}\nexpected auth: {}",
+                                        err.join("\n"),
+                                        TypeName::try_from(record.typ.clone())
+                                            .map(|x| x.to_string())
+                                            .unwrap_or_else(|_| format!("{:?}", &record.typ))
+                                    ))
+                                },
+                            )?;
 
+                        let converted_value =
+                            ValueAndType::try_from(auth_value).map_err(|err| {
+                                error!("internal value conversion error: {}", err);
+                                GatewayHttpError::InternalError(
+                                    "internal value conversion error".to_string(),
+                                )
+                            })?;
+
+                        values.push(converted_value.value);
                     }
                     field_name => {
                         // This is already type checked during API registration,

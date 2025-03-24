@@ -36,6 +36,10 @@ pub struct RichRequest {
 }
 
 impl RichRequest {
+    pub fn auth_data(&self) -> Option<&Value> {
+        self.auth_data.as_ref()
+    }
+
     pub fn headers(&self) -> &HeaderMap {
         self.underlying.headers()
     }
