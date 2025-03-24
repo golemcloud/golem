@@ -607,7 +607,6 @@ async fn resolve_rib_input(
     let mut values: Vec<golem_wasm_rpc::Value> = vec![];
     let mut types: Vec<NameTypePair> = vec![];
 
-    // API Gateway allows only "request" as input
     let request_analysed_type = required_types.types.get("request");
 
     match request_analysed_type {
@@ -627,8 +626,6 @@ async fn resolve_rib_input(
                             .await
                             .map_err(GatewayHttpError::BadRequest)?;
 
-                        // Ideally there is no need to go from TypeAnnotatedValue and then to ValueAndType
-                        // because these are in hot path, and we should remove as much as possible
                         let body_value = TypeAnnotatedValue::parse_with_type(&body.0, &record.typ)
                             .map_err(|err| {
                                 GatewayHttpError::BadRequest(format!(
