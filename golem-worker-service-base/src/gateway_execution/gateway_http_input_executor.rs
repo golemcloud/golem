@@ -653,7 +653,7 @@ async fn resolve_rib_input(
                     "headers" | "header" => {
                         let header_values = get_wasm_rpc_value_for_primitives(
                             &record.typ,
-                            &rich_request,
+                            rich_request,
                             &|request, key| {
                                 request
                                     .headers()
@@ -674,7 +674,7 @@ async fn resolve_rib_input(
                     "query" => {
                         let query_value = get_wasm_rpc_value_for_primitives(
                             &record.typ,
-                            &rich_request,
+                            rich_request,
                             &|request, key| {
                                 request
                                     .query_params()
@@ -695,7 +695,7 @@ async fn resolve_rib_input(
                     "path" => {
                         let path_values = get_wasm_rpc_value_for_primitives(
                             &record.typ,
-                            &rich_request,
+                            rich_request,
                             &|request, key| {
                                 request
                                     .path_params()
@@ -770,11 +770,9 @@ async fn resolve_rib_input(
             Ok(RibInput { input: result_map })
         }
 
-        Some(_) => {
-            return Err(GatewayHttpError::InternalError(
-                "invalid rib script with unsupported type for `request`".to_string(),
-            ));
-        }
+        Some(_) => Err(GatewayHttpError::InternalError(
+            "invalid rib script with unsupported type for `request`".to_string(),
+        )),
 
         None => Ok(RibInput::default()),
     }
@@ -855,59 +853,56 @@ where
 {
     let mut header_values: Vec<golem_wasm_rpc::Value> = vec![];
 
-    match &required_type {
-        AnalysedType::Record(record_type) => {
-            for field in record_type.fields.iter() {
-                let typ = &field.typ;
+    if let AnalysedType::Record(record_type) = required_type {
+        for field in record_type.fields.iter() {
+            let typ = &field.typ;
 
-                let header_value = fetch_key_value(request, &field.name)?;
+            let header_value = fetch_key_value(request, &field.name)?;
 
-                let value_and_type = match typ {
-                    AnalysedType::Str(_) => {
-                        parse_to_value::<String>(field.name.clone(), header_value, "string")?
-                    }
-                    AnalysedType::Bool(_) => {
-                        parse_to_value::<bool>(field.name.clone(), header_value, "bool")?
-                    }
-                    AnalysedType::U8(_) => {
-                        parse_to_value::<u8>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::U16(_) => {
-                        parse_to_value::<u16>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::U32(_) => {
-                        parse_to_value::<u32>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::U64(_) => {
-                        parse_to_value::<u64>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::S8(_) => {
-                        parse_to_value::<i8>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::S16(_) => {
-                        parse_to_value::<i16>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::S32(_) => {
-                        parse_to_value::<i32>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::S64(_) => {
-                        parse_to_value::<i64>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::F32(_) => {
-                        parse_to_value::<f32>(field.name.clone(), header_value, "number")?
-                    }
-                    AnalysedType::F64(_) => {
-                        parse_to_value::<f64>(field.name.clone(), header_value, "number")?
-                    }
-                    _ => {
-                        return Err(format!("Invalid header type: {}", field.name));
-                    }
-                };
+            let value_and_type = match typ {
+                AnalysedType::Str(_) => {
+                    parse_to_value::<String>(field.name.clone(), header_value, "string")?
+                }
+                AnalysedType::Bool(_) => {
+                    parse_to_value::<bool>(field.name.clone(), header_value, "bool")?
+                }
+                AnalysedType::U8(_) => {
+                    parse_to_value::<u8>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::U16(_) => {
+                    parse_to_value::<u16>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::U32(_) => {
+                    parse_to_value::<u32>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::U64(_) => {
+                    parse_to_value::<u64>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S8(_) => {
+                    parse_to_value::<i8>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S16(_) => {
+                    parse_to_value::<i16>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S32(_) => {
+                    parse_to_value::<i32>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S64(_) => {
+                    parse_to_value::<i64>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::F32(_) => {
+                    parse_to_value::<f32>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::F64(_) => {
+                    parse_to_value::<f64>(field.name.clone(), header_value, "number")?
+                }
+                _ => {
+                    return Err(format!("Invalid type: {}", field.name));
+                }
+            };
 
-                header_values.push(value_and_type);
-            }
+            header_values.push(value_and_type);
         }
-        _ => {}
     }
 
     Ok(golem_wasm_rpc::Value::Record(header_values))
