@@ -178,10 +178,7 @@ fn get_bool(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         JsonValue::Bool(bool_val) => Ok(TypeAnnotatedValue::Bool(*bool_val)),
         _ => {
             let type_description = type_description(json);
-            Err(vec![format!(
-                "expected bool, found {}",
-                type_description
-            )])
+            Err(vec![format!("expected bool, found {}", type_description)])
         }
     }
 }
@@ -275,10 +272,7 @@ fn get_string(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
     } else {
         // If the JSON value is not a string, return an error with type information
         let type_description = type_description(json);
-        Err(vec![format!(
-            "expected string, found {}",
-            type_description
-        )])
+        Err(vec![format!("expected string, found {}", type_description)])
     }
 }
 
@@ -295,10 +289,7 @@ fn get_char(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
     } else {
         let type_description = type_description(json);
 
-        Err(vec![format!(
-            "expected char, found {}",
-            type_description
-        )])
+        Err(vec![format!("expected char, found {}", type_description)])
     }
 }
 
@@ -684,13 +675,14 @@ fn get_handle(
                                 },
                             }),
                             uri,
-                            resource_id
+                            resource_id,
                         };
                         Ok(TypeAnnotatedValue::Handle(handle))
                     }
-                    Err(err) => {
-                        Err(vec![format!("Failed to parse resource-id section of the handle value: {}", err)])
-                    }
+                    Err(err) => Err(vec![format!(
+                        "Failed to parse resource-id section of the handle value: {}",
+                        err
+                    )]),
                 }
             } else {
                 Err(vec![format!(
@@ -744,10 +736,7 @@ fn get_big_decimal(value: &JsonValue) -> Result<BigDecimal, Vec<String>> {
         }
         _ => {
             let type_description = type_description(value);
-            Err(vec![format!(
-                "expected number, found {}",
-                type_description
-            )])
+            Err(vec![format!("expected number, found {}", type_description)])
         }
     }
 }
@@ -763,10 +752,7 @@ fn get_u64(value: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         }
         _ => {
             let type_description = type_description(value);
-            Err(vec![format!(
-                "expected u64, found {}",
-                type_description
-            )])
+            Err(vec![format!("expected u64, found {}", type_description)])
         }
     }
 }
