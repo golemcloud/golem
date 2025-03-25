@@ -161,6 +161,69 @@ async fn test_legacy_api_def_for_valid_input() {
     assert_eq!(result, expected);
 }
 
+// This ensures that request body can be looked up multiple times
+// from the same http request in multiple rib script that exists in API definition
+// In this case, one for worker name and the other for response mapping.
+// This hardly occurs in practice when it comes to first class worker support,
+// where worker name is part of response mapping
+#[test]
+async fn test_legacy_api_def_for_valid_input_2() {
+    let body = serde_json::json!({
+        "foo_key": "foo_value",
+        "bar_key": "bar_value"
+    });
+
+    let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), body);
+
+    // In legacy API definitions, we have worker name outside API definitions
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      let foo_key: string = request.body.foo_key;
+      let bar_key: string = request.body.bar_key;
+      "shopping-cart-${id}-${foo_key}-${bar_key}"
+    "#;
+
+    let response_mapping = r#"
+      let foo_key: string = request.body.foo_key;
+      let bar_key: string = request.body.bar_key;
+      let response = golem:it/api.{get-cart-contents}(foo_key, bar_key);
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1-foo_value-bar_value".to_string(),
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("foo_value".to_string()),
+            Value::String("bar_value".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
 #[test]
 async fn test_first_class_worker_api_with_resource() {
     let api_request = get_gateway_request(

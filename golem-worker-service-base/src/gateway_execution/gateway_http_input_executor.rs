@@ -621,12 +621,14 @@ async fn resolve_rib_input(
 
                 match field_name {
                     "body" => {
-                        let body = rich_request
-                            .request_body_value()
-                            .await
-                            .map_err(GatewayHttpError::BadRequest)?;
+                        let body = rich_request.request_body().await.map_err(|err| {
+                            GatewayHttpError::BadRequest(format!(
+                                "invalid http request body. {}",
+                                err
+                            ))
+                        })?;
 
-                        let body_value = TypeAnnotatedValue::parse_with_type(&body.0, &record.typ)
+                        let body_value = TypeAnnotatedValue::parse_with_type(body, &record.typ)
                             .map_err(|err| {
                                 GatewayHttpError::BadRequest(format!(
                                     "invalid http request body\n{}\nexpected request body: {}",

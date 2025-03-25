@@ -29,13 +29,25 @@ const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
 /// Thin wrapper around a poem::Request that is used to evaluate all binding types when coming from an http gateway.
 pub struct RichRequest {
     pub underlying: poem::Request,
-    pub path_segments: Vec<String>,
-    pub path_param_extractors: Vec<PathParamExtractor>,
-    pub query_info: Vec<QueryInfo>,
-    pub auth_data: Option<Value>,
+    path_segments: Vec<String>,
+    path_param_extractors: Vec<PathParamExtractor>,
+    query_info: Vec<QueryInfo>,
+    auth_data: Option<Value>,
+    cached_request_body: Value,
 }
 
 impl RichRequest {
+    pub fn new(underlying: poem::Request) -> RichRequest {
+        RichRequest {
+            underlying,
+            path_segments: vec![],
+            path_param_extractors: vec![],
+            query_info: vec![],
+            auth_data: None,
+            cached_request_body: serde_json::Value::Null,
+        }
+    }
+
     pub fn auth_data(&self) -> Option<&Value> {
         self.auth_data.as_ref()
     }
@@ -103,23 +115,10 @@ impl RichRequest {
             .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
-    /// consumes the body of the underlying request
-    pub async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
-        let body = self.underlying.take_body();
+    pub async fn request_body(&mut self) -> Result<&Value, String> {
+        self.take_request_body().await?;
 
-        let json_request_body: Value = if body.is_empty() {
-            Value::Null
-        } else {
-            match body.into_json().await {
-                Ok(json_request_body) => json_request_body,
-                Err(err) => {
-                    tracing::error!("Failed reading http request body as json: {}", err);
-                    Err(format!("Request body parse error: {err}"))?
-                }
-            }
-        };
-
-        Ok(RequestBodyValue(json_request_body))
+        Ok(self.cached_request_body())
     }
 
     /// consumes the body of the underlying request
@@ -181,6 +180,35 @@ impl RichRequest {
 
         result
     }
+
+    fn cached_request_body(&self) -> &Value {
+        &self.cached_request_body
+    }
+
+    /// Consumes the body of the underlying request, and make it as part of RichRequest as `cached_request_body`.
+    /// The following logic is subtle enough that it takes the following into consideration:
+    /// 99% of the time, number of separate rib scripts in API definition that needs to look up request body is 1,
+    /// and for that rib-script, there will be no extra logic to read the request body in the hot path.
+    /// At the same, if by any chance, multiple rib scripts exist (within a request) that require to lookup the request body, `take_request_body`
+    /// is idempotent, that it doesn't affect correctness.
+    /// We intentionally don't consume the body if its not required in any Rib script.
+    async fn take_request_body(&mut self) -> Result<(), String> {
+        let body = self.underlying.take_body();
+
+        if !body.is_empty() {
+            match body.into_json().await {
+                Ok(json_request_body) => {
+                    self.cached_request_body = json_request_body;
+                }
+                Err(err) => {
+                    tracing::error!("Failed reading http request body as json: {}", err);
+                    return Err(format!("Request body parse error: {err}"))?;
+                }
+            }
+        };
+
+        Ok(())
+    }
 }
 
 pub struct SplitResolvedRouteEntryResult<Namespace> {
@@ -206,6 +234,7 @@ pub fn split_resolved_route_entry<Namespace>(
         path_param_extractors: entry.route_entry.path_params,
         query_info: entry.route_entry.query_params,
         auth_data: None,
+        cached_request_body: Value::Null,
     };
 
     SplitResolvedRouteEntryResult {
@@ -286,6 +315,3 @@ impl RequestHeaderValues {
         Ok(RequestHeaderValues(headers_map))
     }
 }
-
-#[derive(Debug, Clone)]
-pub struct RequestBodyValue(pub Value);
