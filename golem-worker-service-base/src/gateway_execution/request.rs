@@ -33,6 +33,7 @@ pub struct RichRequest {
     pub path_param_extractors: Vec<PathParamExtractor>,
     pub query_info: Vec<QueryInfo>,
     pub auth_data: Option<Value>,
+    pub cached_request_body: Value
 }
 
 impl RichRequest {
@@ -103,23 +104,25 @@ impl RichRequest {
             .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
+
     /// consumes the body of the underlying request
-    pub async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
+    /// take_request_body is idempotent that is, it can be called multiple times without worrying about mutability
+    pub async fn take_request_body(&mut self) -> Result<(), String> {
         let body = self.underlying.take_body();
 
-        let json_request_body: Value = if body.is_empty() {
-            Value::Null
-        } else {
+        if !body.is_empty(){
             match body.into_json().await {
-                Ok(json_request_body) => json_request_body,
+                Ok(json_request_body) =>  {
+                    self.cached_request_body = json_request_body;
+                }
                 Err(err) => {
                     tracing::error!("Failed reading http request body as json: {}", err);
-                    Err(format!("Request body parse error: {err}"))?
+                    return Err(format!("Request body parse error: {err}"))?
                 }
             }
         };
 
-        Ok(RequestBodyValue(json_request_body))
+        Ok(())
     }
 
     /// consumes the body of the underlying request
@@ -206,6 +209,7 @@ pub fn split_resolved_route_entry<Namespace>(
         path_param_extractors: entry.route_entry.path_params,
         query_info: entry.route_entry.query_params,
         auth_data: None,
+        cached_request_body: Value::Null
     };
 
     SplitResolvedRouteEntryResult {
@@ -287,5 +291,3 @@ impl RequestHeaderValues {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RequestBodyValue(pub Value);

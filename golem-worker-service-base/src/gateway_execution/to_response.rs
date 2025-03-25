@@ -440,6 +440,7 @@ mod test {
             path_param_extractors: vec![],
             query_info: vec![],
             auth_data: None,
+            cached_request_body: serde_json::Value:: Null
         }
     }
 
