@@ -29,16 +29,31 @@ const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
 /// Thin wrapper around a poem::Request that is used to evaluate all binding types when coming from an http gateway.
 pub struct RichRequest {
     pub underlying: poem::Request,
-    pub path_segments: Vec<String>,
-    pub path_param_extractors: Vec<PathParamExtractor>,
-    pub query_info: Vec<QueryInfo>,
-    pub auth_data: Option<Value>,
-    pub cached_request_body: Value
+    path_segments: Vec<String>,
+    path_param_extractors: Vec<PathParamExtractor>,
+    query_info: Vec<QueryInfo>,
+    auth_data: Option<Value>,
+    cached_request_body: Value,
 }
 
 impl RichRequest {
+    pub fn new(underlying: poem::Request) -> RichRequest {
+        RichRequest {
+            underlying,
+            path_segments: vec![],
+            path_param_extractors: vec![],
+            query_info: vec![],
+            auth_data: None,
+            cached_request_body: serde_json::Value::Null,
+        }
+    }
+
     pub fn auth_data(&self) -> Option<&Value> {
         self.auth_data.as_ref()
+    }
+
+    pub fn cached_request_body(&self) -> &Value {
+        &self.cached_request_body
     }
 
     pub fn headers(&self) -> &HeaderMap {
@@ -104,20 +119,25 @@ impl RichRequest {
             .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
-
-    /// consumes the body of the underlying request
-    /// take_request_body is idempotent that is, it can be called multiple times without worrying about mutability
+    /// Consumes the body of the underlying request, and make it as part of RichRequest as `cached_request_body`.
+    /// The following logic is subtle enough that it takes the following into consideration:
+    /// 99% of the time, number of separate rib scripts in API definition that needs to look up request body is 1,
+    /// and for that rib-script, there will be no extra logic to read the request body in the hot path.
+    /// At the same, if by any chance, multiple rib scripts exist (within a request) that require to lookup the request body, `take_request_body`
+    /// is idempotent, that it doesn't affect correctness.
+    /// We intentionally don't consume the body if its not required in any Rib script. This is explained
+    /// in the construction of `RichRequest`
     pub async fn take_request_body(&mut self) -> Result<(), String> {
         let body = self.underlying.take_body();
 
-        if !body.is_empty(){
+        if !body.is_empty() {
             match body.into_json().await {
-                Ok(json_request_body) =>  {
+                Ok(json_request_body) => {
                     self.cached_request_body = json_request_body;
                 }
                 Err(err) => {
                     tracing::error!("Failed reading http request body as json: {}", err);
-                    return Err(format!("Request body parse error: {err}"))?
+                    return Err(format!("Request body parse error: {err}"))?;
                 }
             }
         };
@@ -209,7 +229,7 @@ pub fn split_resolved_route_entry<Namespace>(
         path_param_extractors: entry.route_entry.path_params,
         query_info: entry.route_entry.query_params,
         auth_data: None,
-        cached_request_body: Value::Null
+        cached_request_body: Value::Null,
     };
 
     SplitResolvedRouteEntryResult {
@@ -290,4 +310,3 @@ impl RequestHeaderValues {
         Ok(RequestHeaderValues(headers_map))
     }
 }
-

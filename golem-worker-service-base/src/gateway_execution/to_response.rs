@@ -434,14 +434,7 @@ mod test {
     }
 
     fn test_request() -> RichRequest {
-        RichRequest {
-            underlying: poem::Request::default(),
-            path_segments: vec![],
-            path_param_extractors: vec![],
-            query_info: vec![],
-            auth_data: None,
-            cached_request_body: serde_json::Value:: Null
-        }
+        RichRequest::new(poem::Request::default())
     }
 
     #[test]
