@@ -624,7 +624,7 @@ async fn resolve_rib_input(
                         let body = rich_request.request_body().await.map_err(|err| {
                             GatewayHttpError::BadRequest(format!(
                                 "invalid http request body. {}",
-                                err.to_string()
+                                err
                             ))
                         })?;
 
