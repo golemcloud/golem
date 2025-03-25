@@ -52,10 +52,6 @@ impl RichRequest {
         self.auth_data.as_ref()
     }
 
-    pub fn cached_request_body(&self) -> &Value {
-        &self.cached_request_body
-    }
-
     pub fn headers(&self) -> &HeaderMap {
         self.underlying.headers()
     }
@@ -119,30 +115,10 @@ impl RichRequest {
             .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
-    /// Consumes the body of the underlying request, and make it as part of RichRequest as `cached_request_body`.
-    /// The following logic is subtle enough that it takes the following into consideration:
-    /// 99% of the time, number of separate rib scripts in API definition that needs to look up request body is 1,
-    /// and for that rib-script, there will be no extra logic to read the request body in the hot path.
-    /// At the same, if by any chance, multiple rib scripts exist (within a request) that require to lookup the request body, `take_request_body`
-    /// is idempotent, that it doesn't affect correctness.
-    /// We intentionally don't consume the body if its not required in any Rib script. This is explained
-    /// in the construction of `RichRequest`
-    pub async fn take_request_body(&mut self) -> Result<(), String> {
-        let body = self.underlying.take_body();
+    pub async fn request_body(&mut self) -> Result<&Value, String> {
+        self.take_request_body().await?;
 
-        if !body.is_empty() {
-            match body.into_json().await {
-                Ok(json_request_body) => {
-                    self.cached_request_body = json_request_body;
-                }
-                Err(err) => {
-                    tracing::error!("Failed reading http request body as json: {}", err);
-                    return Err(format!("Request body parse error: {err}"))?;
-                }
-            }
-        };
-
-        Ok(())
+        Ok(self.cached_request_body())
     }
 
     /// consumes the body of the underlying request
@@ -203,6 +179,36 @@ impl RichRequest {
         }
 
         result
+    }
+
+    fn cached_request_body(&self) -> &Value {
+        &self.cached_request_body
+    }
+
+    /// Consumes the body of the underlying request, and make it as part of RichRequest as `cached_request_body`.
+    /// The following logic is subtle enough that it takes the following into consideration:
+    /// 99% of the time, number of separate rib scripts in API definition that needs to look up request body is 1,
+    /// and for that rib-script, there will be no extra logic to read the request body in the hot path.
+    /// At the same, if by any chance, multiple rib scripts exist (within a request) that require to lookup the request body, `take_request_body`
+    /// is idempotent, that it doesn't affect correctness.
+    /// We intentionally don't consume the body if its not required in any Rib script. This is explained
+    /// in the construction of `RichRequest`
+    async fn take_request_body(&mut self) -> Result<(), String> {
+        let body = self.underlying.take_body();
+
+        if !body.is_empty() {
+            match body.into_json().await {
+                Ok(json_request_body) => {
+                    self.cached_request_body = json_request_body;
+                }
+                Err(err) => {
+                    tracing::error!("Failed reading http request body as json: {}", err);
+                    return Err(format!("Request body parse error: {err}"))?;
+                }
+            }
+        };
+
+        Ok(())
     }
 }
 
