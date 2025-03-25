@@ -47,14 +47,15 @@ use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_service_base::model::VersionedComponentId;
+use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use http::StatusCode;
 use poem::Body;
 use rib::{RibInput, RibInputTypeInfo, RibResult, TypeName};
-use serde_json::Value;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::error;
 
@@ -100,21 +101,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         request: &mut RichRequest,
         binding: &WorkerBindingCompiled,
     ) -> GatewayHttpResult<RibResult> {
-        let mut rib_input: serde_json::Map<String, Value> = serde_json::Map::new();
-
-        // phase 1. we only have the request details available
-        {
-            let request_value = request
-                .as_json_with_body()
-                .await
-                .map_err(GatewayHttpError::BadRequest)?;
-            rib_input.insert("request".to_string(), request_value);
-        }
-
         let worker_detail = self
             .get_worker_details(
                 request,
-                &rib_input,
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
@@ -122,16 +111,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             )
             .await?;
 
-        // phase 2. we have both the request and the worker details available
-        {
-            let worker_value: Value = worker_detail.as_json();
-            rib_input.insert("worker".to_string(), worker_value);
-        }
-
         self.get_response_script_result(
             namespace,
             &binding.response_compiled,
-            &rib_input,
+            request,
             &worker_detail,
         )
         .await
@@ -143,17 +126,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         request: &mut RichRequest,
         binding: &HttpHandlerBindingCompiled,
     ) -> GatewayHttpResult<HttpHandlerBindingResult> {
-        let mut rib_input: serde_json::Map<String, Value> = serde_json::Map::new();
-
-        {
-            let request_value = request.as_json().map_err(GatewayHttpError::BadRequest)?;
-            rib_input.insert("request".to_string(), request_value);
-        }
-
         let worker_detail = self
             .get_worker_details(
                 request,
-                &rib_input,
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
@@ -185,21 +160,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         request: &mut RichRequest,
         binding: &WorkerBindingCompiled, // TODO make separate type
     ) -> GatewayHttpResult<FileServerBindingSuccess> {
-        let mut rib_input: serde_json::Map<String, Value> = serde_json::Map::new();
-
-        // phase 1. we only have the request details available
-        {
-            let request_value = request
-                .as_json_with_body()
-                .await
-                .map_err(GatewayHttpError::BadRequest)?;
-            rib_input.insert("request".to_string(), request_value);
-        }
-
         let worker_detail = self
             .get_worker_details(
                 request,
-                &rib_input,
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
@@ -207,17 +170,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             )
             .await?;
 
-        // phase 2. we have both the request and the worker details available
-        {
-            let worker_value: Value = worker_detail.as_json();
-            rib_input.insert("worker".to_string(), worker_value);
-        }
-
         let response_script_result = self
             .get_response_script_result(
                 namespace,
                 &binding.response_compiled,
-                &rib_input,
+                request,
                 &worker_detail,
             )
             .await?;
@@ -247,10 +204,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn evaluate_worker_name_rib_script(
         &self,
         script: &WorkerNameCompiled,
-        request_value: &serde_json::Map<String, Value>,
+        request: &mut RichRequest,
     ) -> GatewayHttpResult<String> {
-        let rib_input: RibInput =
-            resolve_rib_input(request_value, &script.rib_input_type_info).await?;
+        let rib_input: RibInput = resolve_rib_input(request, &script.rib_input_type_info).await?;
 
         let result = rib::interpret_pure(&script.compiled_worker_name, &rib_input)
             .await
@@ -267,9 +223,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn evaluate_idempotency_key_rib_script(
         &self,
         script: &IdempotencyKeyCompiled,
-        request_value: &serde_json::Map<String, Value>,
+        request: &mut RichRequest,
     ) -> GatewayHttpResult<IdempotencyKey> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input).await?;
+        let rib_input: RibInput = resolve_rib_input(request, &script.rib_input).await?;
 
         let value = rib::interpret_pure(&script.compiled_idempotency_key, &rib_input)
             .await
@@ -286,9 +242,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn evaluate_invocation_context_rib_script(
         &self,
         script: &InvocationContextCompiled,
-        request_value: &serde_json::Map<String, Value>,
+        request: &mut RichRequest,
     ) -> GatewayHttpResult<(Option<TraceId>, HashMap<String, ValueAndType>)> {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input).await?;
+        let rib_input: RibInput = resolve_rib_input(request, &script.rib_input).await?;
 
         let value = rib::interpret_pure(&script.compiled_invocation_context, &rib_input)
             .await
@@ -342,8 +298,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn get_worker_details(
         &self,
-        request: &RichRequest,
-        request_value: &serde_json::Map<String, Value>,
+        request: &mut RichRequest,
         worker_name_compiled: &Option<WorkerNameCompiled>,
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
         component_id: &VersionedComponentId,
@@ -351,7 +306,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     ) -> GatewayHttpResult<WorkerDetails> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
             let result = self
-                .evaluate_worker_name_rib_script(worker_name_compiled, request_value)
+                .evaluate_worker_name_rib_script(worker_name_compiled, request)
                 .await?;
             Some(result)
         } else {
@@ -363,7 +318,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         // If neither are available, the worker-executor will later generate an idempotency key.
         let idempotency_key = if let Some(idempotency_key_compiled) = idempotency_key_compiled {
             let result = self
-                .evaluate_idempotency_key_rib_script(idempotency_key_compiled, request_value)
+                .evaluate_idempotency_key_rib_script(idempotency_key_compiled, request)
                 .await?;
             Some(result)
         } else {
@@ -383,7 +338,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             let trace_context_headers = TraceContextHeaders::parse(request.underlying.headers());
 
             let (user_defined_trace_id, user_defined_span) = self
-                .evaluate_invocation_context_rib_script(invocation_context_compiled, request_value)
+                .evaluate_invocation_context_rib_script(invocation_context_compiled, request)
                 .await?;
 
             match (trace_context_headers, &user_defined_trace_id) {
@@ -441,11 +396,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         &self,
         namespace: &Namespace,
         compiled_response_mapping: &ResponseMappingCompiled,
-        request_value: &serde_json::Map<String, Value>,
+        request: &mut RichRequest,
         worker_detail: &WorkerDetails,
     ) -> GatewayHttpResult<RibResult> {
-        let rib_input =
-            resolve_rib_input(request_value, &compiled_response_mapping.rib_input).await?;
+        let rib_input = resolve_rib_input(request, &compiled_response_mapping.rib_input).await?;
 
         self.evaluator
             .evaluate(
@@ -647,36 +601,178 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 }
 
 async fn resolve_rib_input(
-    input: &serde_json::Map<String, Value>,
+    rich_request: &mut RichRequest,
     required_types: &RibInputTypeInfo,
 ) -> Result<RibInput, GatewayHttpError> {
-    let mut result_map: HashMap<String, ValueAndType> = HashMap::new();
+    let mut values: Vec<golem_wasm_rpc::Value> = vec![];
+    let mut types: Vec<NameTypePair> = vec![];
 
-    for (key, analysed_type) in required_types.types.iter() {
-        let input_value = input.get(key).ok_or(GatewayHttpError::BadRequest(format!(
-            "Missing `{}` in http request",
-            key
-        )))?;
+    let request_analysed_type = required_types.types.get("request");
 
-        let parsed_value = TypeAnnotatedValue::parse_with_type(input_value, analysed_type)
-            .map_err(|_| {
-                GatewayHttpError::BadRequest(format!(
-                    "Invalid http request. Available types in request: {}",
-                    TypeName::try_from(analysed_type.clone())
-                        .map(|x| x.to_string())
-                        .unwrap_or_else(|_| format!("{:?}", analysed_type))
-                ))
-            })?;
+    match request_analysed_type {
+        Some(AnalysedType::Record(type_record)) => {
+            for record in type_record.fields.iter() {
+                let field_name = record.name.as_str();
 
-        let converted_value = parsed_value.try_into().map_err(|err| {
-            error!("internal value conversion error: {}", err);
-            GatewayHttpError::InternalError("internal value conversion error".to_string())
-        })?;
+                types.push(NameTypePair {
+                    name: field_name.to_string(),
+                    typ: record.typ.clone(),
+                });
 
-        result_map.insert(key.clone(), converted_value);
+                match field_name {
+                    "body" => {
+                        let body = rich_request
+                            .request_body_value()
+                            .await
+                            .map_err(GatewayHttpError::BadRequest)?;
+
+                        let body_value = TypeAnnotatedValue::parse_with_type(&body.0, &record.typ)
+                            .map_err(|err| {
+                                GatewayHttpError::BadRequest(format!(
+                                    "invalid http request body\n{}\nexpected request body: {}",
+                                    err.join("\n"),
+                                    TypeName::try_from(record.typ.clone())
+                                        .map(|x| x.to_string())
+                                        .unwrap_or_else(|_| format!("{:?}", &record.typ))
+                                ))
+                            })?;
+
+                        let converted_value =
+                            ValueAndType::try_from(body_value).map_err(|err| {
+                                error!("internal value conversion error: {}", err);
+                                GatewayHttpError::InternalError(
+                                    "internal value conversion error".to_string(),
+                                )
+                            })?;
+
+                        values.push(converted_value.value);
+                    }
+                    "headers" | "header" => {
+                        let header_values = get_wasm_rpc_value_for_primitives(
+                            &record.typ,
+                            rich_request,
+                            &|request, key| {
+                                request
+                                    .headers()
+                                    .get(key)
+                                    .map(|x| x.to_str().unwrap().to_string())
+                                    .ok_or(format!("missing header: {}", &key))
+                            },
+                        )
+                        .map_err(|err| {
+                            GatewayHttpError::BadRequest(format!(
+                                "invalid http request header. {}",
+                                err
+                            ))
+                        })?;
+
+                        values.push(header_values);
+                    }
+                    "query" => {
+                        let query_value = get_wasm_rpc_value_for_primitives(
+                            &record.typ,
+                            rich_request,
+                            &|request, key| {
+                                request
+                                    .query_params()
+                                    .get(key)
+                                    .map(|x| x.to_string())
+                                    .ok_or(format!("Missing query parameter: {}", key))
+                            },
+                        )
+                        .map_err(|err| {
+                            GatewayHttpError::BadRequest(format!(
+                                "invalid http request query. {}",
+                                err
+                            ))
+                        })?;
+
+                        values.push(query_value);
+                    }
+                    "path" => {
+                        let path_values = get_wasm_rpc_value_for_primitives(
+                            &record.typ,
+                            rich_request,
+                            &|request, key| {
+                                request
+                                    .path_params()
+                                    .get(key)
+                                    .map(|x| x.to_string())
+                                    .ok_or(format!("Missing path parameter: {}", key))
+                            },
+                        )
+                        .map_err(|err| {
+                            GatewayHttpError::BadRequest(format!(
+                                "invalid http request path. {}",
+                                err
+                            ))
+                        })?;
+
+                        values.push(path_values);
+                    }
+
+                    "auth" => {
+                        let auth_data =
+                            rich_request
+                                .auth_data()
+                                .ok_or(GatewayHttpError::BadRequest(
+                                    "missing auth data".to_string(),
+                                ))?;
+
+                        let auth_value =
+                            TypeAnnotatedValue::parse_with_type(auth_data, &record.typ).map_err(
+                                |err| {
+                                    GatewayHttpError::BadRequest(format!(
+                                        "invalid auth data\n{}\nexpected auth: {}",
+                                        err.join("\n"),
+                                        TypeName::try_from(record.typ.clone())
+                                            .map(|x| x.to_string())
+                                            .unwrap_or_else(|_| format!("{:?}", &record.typ))
+                                    ))
+                                },
+                            )?;
+
+                        let converted_value =
+                            ValueAndType::try_from(auth_value).map_err(|err| {
+                                error!("internal value conversion error: {}", err);
+                                GatewayHttpError::InternalError(
+                                    "internal value conversion error".to_string(),
+                                )
+                            })?;
+
+                        values.push(converted_value.value);
+                    }
+                    field_name => {
+                        // This is already type checked during API registration,
+                        // however we still fail if we happen to have other inputs
+                        // at this stage instead of silently ignoring them.
+                        return Err(GatewayHttpError::InternalError(format!(
+                            "invalid rib script with unknown input: request.{}",
+                            field_name
+                        )));
+                    }
+                }
+            }
+
+            let mut result_map: HashMap<String, ValueAndType> = HashMap::new();
+
+            result_map.insert(
+                "request".to_string(),
+                ValueAndType::new(
+                    golem_wasm_rpc::Value::Record(values),
+                    AnalysedType::Record(TypeRecord { fields: types }),
+                ),
+            );
+
+            Ok(RibInput { input: result_map })
+        }
+
+        Some(_) => Err(GatewayHttpError::InternalError(
+            "invalid rib script with unsupported type for `request`".to_string(),
+        )),
+
+        None => Ok(RibInput::default()),
     }
-
-    Ok(RibInput { input: result_map })
 }
 
 async fn maybe_apply_middlewares_out(
@@ -731,4 +827,94 @@ fn get_status_code_from_api_lookup_error<Namespace>(
         }
         ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
     }
+}
+
+/// Map against the required types and get `wasm_rpc::Value` from http request
+/// # Parameters
+/// - `analysed_type: &AnalysedType`
+///   - RibInput requirement follows a pseudo form like `{request : {headers: record-type, query: record-type, path: record-type, body: analysed-type}}`).
+///   - The `analysed_type` here is the type of headers, query, or path (and not body). i.e, `record-type` in the above pseudo form.
+///   - This `record-type` is expected to have primitive field types. Example for a Rib `request.path.user-id` `user-id` is some primitive and `path` should be hence a record.
+///   - This analysed doesn't handle (or shouldn't correspond to) the `body` field because it can be anything and not a record of primitives
+/// - `request: RichRequest`
+///   - The incoming request from the client
+///   - `fetch_input: &FnOnce(RichRequest) -> String`, making sure we fetch anything out of the request only if it is needed
+///
+fn get_wasm_rpc_value_for_primitives<F>(
+    required_type: &AnalysedType,
+    request: &RichRequest,
+    fetch_key_value: &F,
+) -> Result<golem_wasm_rpc::Value, String>
+where
+    F: Fn(&RichRequest, &String) -> Result<String, String>,
+{
+    let mut header_values: Vec<golem_wasm_rpc::Value> = vec![];
+
+    if let AnalysedType::Record(record_type) = required_type {
+        for field in record_type.fields.iter() {
+            let typ = &field.typ;
+
+            let header_value = fetch_key_value(request, &field.name)?;
+
+            let value_and_type = match typ {
+                AnalysedType::Str(_) => {
+                    parse_to_value::<String>(field.name.clone(), header_value, "string")?
+                }
+                AnalysedType::Bool(_) => {
+                    parse_to_value::<bool>(field.name.clone(), header_value, "bool")?
+                }
+                AnalysedType::U8(_) => {
+                    parse_to_value::<u8>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::U16(_) => {
+                    parse_to_value::<u16>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::U32(_) => {
+                    parse_to_value::<u32>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::U64(_) => {
+                    parse_to_value::<u64>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S8(_) => {
+                    parse_to_value::<i8>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S16(_) => {
+                    parse_to_value::<i16>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S32(_) => {
+                    parse_to_value::<i32>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::S64(_) => {
+                    parse_to_value::<i64>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::F32(_) => {
+                    parse_to_value::<f32>(field.name.clone(), header_value, "number")?
+                }
+                AnalysedType::F64(_) => {
+                    parse_to_value::<f64>(field.name.clone(), header_value, "number")?
+                }
+                _ => {
+                    return Err(format!("Invalid type: {}", field.name));
+                }
+            };
+
+            header_values.push(value_and_type);
+        }
+    }
+
+    Ok(golem_wasm_rpc::Value::Record(header_values))
+}
+
+fn parse_to_value<T: FromStr + IntoValue + Sized>(
+    field_name: String,
+    field_value: String,
+    type_name: &str,
+) -> Result<golem_wasm_rpc::Value, String> {
+    let value = field_value.parse::<T>().map_err(|_| {
+        format!(
+            "Invalid value for key {}. Expected {}, Found {}",
+            field_name, type_name, field_value
+        )
+    })?;
+    Ok(value.into_value_and_type().value)
 }

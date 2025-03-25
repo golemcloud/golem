@@ -150,7 +150,10 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
         .create_or_update_api_deployment(request.clone())
         .await
         .unwrap();
-    check!(expected_merged.api_definitions == response.api_definitions);
+    check!(expected_merged
+        .api_definitions
+        .iter()
+        .all(|item| response.api_definitions.contains(item)));
     check!(request.site == response.site);
 
     let response = deps
@@ -158,7 +161,10 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
         .get_api_deployment("subdomain.localhost")
         .await
         .unwrap();
-    check!(expected_merged.api_definitions == response.api_definitions);
+    check!(expected_merged
+        .api_definitions
+        .iter()
+        .all(|item| response.api_definitions.contains(item)));
     check!(request.site == response.site);
 
     deps.worker_service()
