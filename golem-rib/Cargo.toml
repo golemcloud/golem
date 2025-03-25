@@ -7,6 +7,11 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Parser for Golem's Rib language"
 
+[[bin]]
+name = "golem-rib"
+path = "src/main.rs"
+
+
 [features]
 default = ["json_in_errors", "protobuf", "poem"]
 json_in_errors = ["protobuf", "golem-wasm-rpc/json"]
@@ -43,6 +48,9 @@ poem-openapi-derive = { workspace = true, optional = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rustyline = "15"
+tokio = { version = "1", features = ["full"] }
+
 
 [dev-dependencies]
 test-r = { workspace = true }
