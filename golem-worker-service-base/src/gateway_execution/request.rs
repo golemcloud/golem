@@ -191,8 +191,7 @@ impl RichRequest {
     /// and for that rib-script, there will be no extra logic to read the request body in the hot path.
     /// At the same, if by any chance, multiple rib scripts exist (within a request) that require to lookup the request body, `take_request_body`
     /// is idempotent, that it doesn't affect correctness.
-    /// We intentionally don't consume the body if its not required in any Rib script. This is explained
-    /// in the construction of `RichRequest`
+    /// We intentionally don't consume the body if its not required in any Rib script.
     async fn take_request_body(&mut self) -> Result<(), String> {
         let body = self.underlying.take_body();
 
