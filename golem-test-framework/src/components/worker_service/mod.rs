@@ -1822,7 +1822,7 @@ async fn grpc_api_definition_request_to_http(
                                             .unwrap();
                                         GatewayBindingComponent {
                                             name: component.component_name,
-                                            version: versioned_component_id.version,
+                                            version: Some(versioned_component_id.version),
                                         }
                                     },
                                 ))

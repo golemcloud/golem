@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_service_base::model::ComponentName;
-use golem_worker_service_base::service::gateway::ConversionContext;
+use golem_worker_service_base::service::gateway::{ComponentView, ConversionContext};
 use std::sync::Arc;
 use test_r::test;
 
@@ -88,17 +88,18 @@ struct TestConversionContext;
 
 #[async_trait]
 impl ConversionContext for TestConversionContext {
-    async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+    async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
         if name.0 == "test-component" {
-            Ok(ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")))
+            Ok(ComponentView {
+                name: ComponentName("test-component".to_string()),
+                id: ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")),
+                latest_version: 0,
+            })
         } else {
             Err("component not found".to_string())
         }
     }
-    async fn get_component_name(
-        &self,
-        _component_id: &ComponentId,
-    ) -> Result<ComponentName, String> {
+    async fn component_by_id(&self, _component_id: &ComponentId) -> Result<ComponentView, String> {
         unimplemented!()
     }
 }
@@ -107,13 +108,10 @@ struct EmptyTestConversionContext;
 
 #[async_trait]
 impl ConversionContext for EmptyTestConversionContext {
-    async fn resolve_component_id(&self, _name: &ComponentName) -> Result<ComponentId, String> {
+    async fn component_by_name(&self, _name: &ComponentName) -> Result<ComponentView, String> {
         unimplemented!()
     }
-    async fn get_component_name(
-        &self,
-        _component_id: &ComponentId,
-    ) -> Result<ComponentName, String> {
+    async fn component_by_id(&self, _component_id: &ComponentId) -> Result<ComponentView, String> {
         unimplemented!()
     }
 }

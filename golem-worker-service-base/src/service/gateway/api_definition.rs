@@ -40,7 +40,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use super::{BoxConversionContext, ConversionContext};
+use super::{BoxConversionContext, ComponentView, ConversionContext};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
@@ -215,9 +215,9 @@ impl Default for ApiDefinitionServiceConfig {
     }
 }
 
-type ComponentByNameCache = Cache<ComponentId, (), Option<Component>, String>;
+type ComponentByNameCache = Cache<ComponentName, (), Option<ComponentView>, String>;
 
-type ComponentByIdCache = Cache<ComponentName, (), Option<Component>, String>;
+type ComponentByIdCache = Cache<ComponentId, (), Option<ComponentView>, String>;
 
 struct ConversionContextImpl<'a, AuthCtx> {
     component_service: &'a Arc<dyn ComponentService<AuthCtx>>,
@@ -228,10 +228,10 @@ struct ConversionContextImpl<'a, AuthCtx> {
 
 #[async_trait]
 impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthCtx> {
-    async fn resolve_component_id(&self, name: &ComponentName) -> Result<ComponentId, String> {
+    async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
         let name = name.clone();
         let component = self
-            .component_id_cache
+            .component_name_cache
             .get_or_insert_simple(&name, async || {
                 let result = self
                     .component_service
@@ -239,7 +239,7 @@ impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthC
                     .await;
 
                 match result {
-                    Ok(inner) => Ok(Some(inner)),
+                    Ok(inner) => Ok(Some(inner.into())),
                     Err(ComponentServiceError::NotFound(_)) => Ok(None),
                     Err(e) => Err(format!("Failed to lookup component by name: {e}")),
                 }
@@ -247,25 +247,20 @@ impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthC
             .await?;
 
         if let Some(component) = component {
-            let component_id = component.versioned_component_id.component_id.clone();
-
             // put component into the other cache to save lookups
             let _ = self
-                .component_name_cache
-                .get_or_insert_simple(&component_id, async || Ok(Some(component)))
+                .component_id_cache
+                .get_or_insert_simple(&component.id, async || Ok(Some(component.clone())))
                 .await;
 
-            Ok(component_id)
+            Ok(component)
         } else {
             Err(format!("Did not find component for name {name}"))
         }
     }
-    async fn get_component_name(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<ComponentName, String> {
+    async fn component_by_id(&self, component_id: &ComponentId) -> Result<ComponentView, String> {
         let component = self
-            .component_name_cache
+            .component_id_cache
             .get_or_insert_simple(component_id, async || {
                 let result = self
                     .component_service
@@ -273,7 +268,7 @@ impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthC
                     .await;
 
                 match result {
-                    Ok(inner) => Ok(Some(inner)),
+                    Ok(inner) => Ok(Some(inner.into())),
                     Err(ComponentServiceError::NotFound(_)) => Ok(None),
                     Err(e) => Err(format!("Failed to lookup component by id: {e}")),
                 }
@@ -281,15 +276,13 @@ impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthC
             .await?;
 
         if let Some(component) = component {
-            let component_name = component.component_name.clone();
-
             // put component into the other cache to save lookups
             let _ = self
-                .component_id_cache
-                .get_or_insert_simple(&component_name, async || Ok(Some(component)))
+                .component_name_cache
+                .get_or_insert_simple(&component.name, async || Ok(Some(component.clone())))
                 .await;
 
-            Ok(component_name)
+            Ok(component)
         } else {
             Err(format!("Did not find component for id {component_id}"))
         }

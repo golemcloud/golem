@@ -338,13 +338,13 @@ mod internal {
         let component_name = get_component_name(gateway_binding_value)?;
         let component_version = get_component_version(gateway_binding_value)?;
 
-        let component_id = ctx.resolve_component_id(&component_name).await?;
+        let component_view = ctx.component_by_name(&component_name).await?;
 
         let binding = WorkerBinding {
             worker_name: get_worker_id_expr(gateway_binding_value)?,
             component_id: VersionedComponentId {
-                component_id,
-                version: component_version,
+                component_id: component_view.id,
+                version: component_version.unwrap_or(component_view.latest_version),
             },
             idempotency_key: get_idempotency_key(gateway_binding_value)?,
             response_mapping: get_response_mapping(gateway_binding_value)?,
@@ -361,13 +361,13 @@ mod internal {
         let component_name = get_component_name(gateway_binding_value)?;
         let component_version = get_component_version(gateway_binding_value)?;
 
-        let component_id = ctx.resolve_component_id(&component_name).await?;
+        let component_view = ctx.component_by_name(&component_name).await?;
 
         let binding = HttpHandlerBinding {
             worker_name: get_worker_id_expr(gateway_binding_value)?,
             component_id: VersionedComponentId {
-                component_id,
-                version: component_version,
+                component_id: component_view.id,
+                version: component_version.unwrap_or(component_view.latest_version),
             },
             idempotency_key: get_idempotency_key(gateway_binding_value)?,
         };
@@ -411,14 +411,17 @@ mod internal {
         Ok(ComponentName(result.to_string()))
     }
 
-    pub(super) fn get_component_version(gateway_binding_value: &Value) -> Result<u64, String> {
-        let result = gateway_binding_value
-            .get("component-version")
-            .ok_or("No component-version found")?
-            .as_u64()
-            .ok_or("component-version is not a u64")?;
-
-        Ok(result)
+    pub(super) fn get_component_version(
+        gateway_binding_value: &Value,
+    ) -> Result<Option<u64>, String> {
+        if let Some(component_version) = gateway_binding_value.get("component-version") {
+            let converted = component_version
+                .as_u64()
+                .ok_or("component-version is not a u64")?;
+            Ok(Some(converted))
+        } else {
+            Ok(None)
+        }
     }
 
     pub(super) fn get_binding_type(
@@ -503,35 +506,40 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use golem_common::model::ComponentId;
-    use golem_service_base::model::ComponentName;
+    use golem_service_base::model::{ComponentName, VersionedComponentId};
     use test_r::test;
 
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use crate::gateway_binding::{GatewayBinding, StaticBinding};
     use crate::gateway_middleware::HttpCors;
-    use crate::service::gateway::ConversionContext;
+    use crate::service::gateway::{ComponentView, ConversionContext};
     use async_trait::async_trait;
     use openapiv3::Operation;
     use serde_json::json;
+    use uuid::uuid;
 
-    struct DummyConversionCtx;
+    struct TestConversionCtx;
 
     #[async_trait]
-    impl ConversionContext for DummyConversionCtx {
-        async fn resolve_component_id(&self, _name: &ComponentName) -> Result<ComponentId, String> {
-            unimplemented!()
+    impl ConversionContext for TestConversionCtx {
+        async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
+            if name.0 == "foobar" {
+                Ok(ComponentView {
+                    name: ComponentName("foobar".to_string()),
+                    id: ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")),
+                    latest_version: 1,
+                })
+            } else {
+                Err("unknown component name".to_string())
+            }
         }
-        async fn get_component_name(
+        async fn component_by_id(
             &self,
             _component_id: &ComponentId,
-        ) -> Result<ComponentName, String> {
+        ) -> Result<ComponentView, String> {
             unimplemented!()
         }
-    }
-
-    fn make_dummy_conversion_context() -> BoxConversionContext<'static> {
-        Box::new(DummyConversionCtx)
     }
 
     #[test]
@@ -555,7 +563,7 @@ mod tests {
             "options",
             &path_item,
             &path_pattern,
-            &make_dummy_conversion_context(),
+            &TestConversionCtx.boxed(),
         )
         .await;
 
@@ -583,7 +591,7 @@ mod tests {
             "options",
             &path_item,
             &path_pattern,
-            &make_dummy_conversion_context(),
+            &TestConversionCtx.boxed(),
         )
         .await;
 
@@ -601,7 +609,7 @@ mod tests {
             "options",
             &path_item,
             &path_pattern,
-            &make_dummy_conversion_context(),
+            &TestConversionCtx.boxed(),
         )
         .await;
 
@@ -633,5 +641,39 @@ mod tests {
             security: None,
             cors: None,
         }
+    }
+
+    #[test]
+    async fn test_optional_component_version() {
+        let path_item = Operation {
+            extensions: vec![(
+                "x-golem-api-gateway-binding".to_string(),
+                json!({
+                    "binding-type": "default",
+                    "response" : "{}",
+                    "workerName": "{}",
+                    "component-name": "foobar"
+                }),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let path_pattern = AllPathPatterns::parse("/test").unwrap();
+
+        let result =
+            get_route_from_path_item("get", &path_item, &path_pattern, &TestConversionCtx.boxed())
+                .await
+                .unwrap();
+
+        let component_id = result.binding.get_component_id().unwrap();
+        assert_eq!(
+            component_id,
+            VersionedComponentId {
+                component_id: ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")),
+                version: 1
+            }
+        )
     }
 }
