@@ -43,15 +43,14 @@ impl ApiCertificateApi {
             domain_name = payload.0.domain_name.to_string(),
             project_id = payload.0.project_id.to_string()
         );
-        let response = {
-            let certificate = self
-                .certificate_service
-                .create(&payload.0, &CloudAuthCtx::new(token))
-                .instrument(record.span.clone())
-                .await?;
+        let response = self
+            .certificate_service
+            .create(&payload.0, &CloudAuthCtx::new(token))
+            .instrument(record.span.clone())
+            .await
+            .map(Json)
+            .map_err(|err| err.into());
 
-            Ok(Json(certificate))
-        };
         record.result(response)
     }
 
@@ -72,21 +71,18 @@ impl ApiCertificateApi {
             certificate_id = certificate_id_query.0.as_ref().map(|id| id.to_string()),
             project_id = project_id_query.0.to_string()
         );
-        let response = {
-            let project_id = project_id_query.0;
-            let certificate_id_optional = certificate_id_query.0;
-            let values = self
-                .certificate_service
-                .get(
-                    project_id.clone(),
-                    certificate_id_optional,
-                    &CloudAuthCtx::new(token),
-                )
-                .instrument(record.span.clone())
-                .await?;
+        let response = self
+            .certificate_service
+            .get(
+                project_id_query.0.clone(),
+                certificate_id_query.0,
+                &CloudAuthCtx::new(token),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map(Json)
+            .map_err(|err| err.into());
 
-            Ok(Json(values))
-        };
         record.result(response)
     }
 
@@ -106,16 +102,17 @@ impl ApiCertificateApi {
             certificate_id = certificate_id_query.0.to_string(),
             project_id = project_id_query.0.to_string()
         );
-        let response = {
-            let project_id = project_id_query.0;
-            let certificate_id = certificate_id_query.0;
-
-            self.certificate_service
-                .delete(&project_id, &certificate_id, &CloudAuthCtx::new(token))
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json("ok".to_string()))
-        };
+        let response = self
+            .certificate_service
+            .delete(
+                &project_id_query.0,
+                &certificate_id_query.0,
+                &CloudAuthCtx::new(token),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map(|_| Json("ok".to_string()))
+            .map_err(|err| err.into());
         record.result(response)
     }
 }

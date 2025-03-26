@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::api::common::ApiTags;
+use crate::model;
 use crate::service::auth::AuthService;
 use crate::service::worker::{
     ConnectWorkerStream, WorkerError as WorkerServiceError, WorkerService,
@@ -274,62 +275,65 @@ impl WorkerApi {
         request: Json<WorkerCreationRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "launch_new_worker",
             component_id = component_id.0.to_string(),
             name = request.name
         );
 
-        let response = {
-            let component_id = component_id.0;
-            let latest_component = self
-                .component_service
-                .get_latest(&component_id, &auth)
-                .instrument(record.span.clone())
-                .await
-                .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-                .map_err(|error| {
-                    WorkerError::NotFound(Json(ErrorBody {
-                        error: format!(
-                            "Couldn't retrieve the component: {}. error: {}",
-                            &component_id, error
-                        ),
-                    }))
-                })?;
-
-            let WorkerCreationRequest { name, args, env } = request.0;
-
-            let worker_id = validated_worker_id(component_id, name)?;
-
-            let namespace = self
-                .worker_auth_service
-                .is_authorized_by_component(
-                    &worker_id.component_id,
-                    ProjectAction::CreateWorker,
-                    &auth,
-                )
-                .await?;
-
-            let _worker = self
-                .worker_service
-                .create(
-                    &worker_id,
-                    latest_component.versioned_component_id.version,
-                    args,
-                    env,
-                    namespace,
-                )
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json(WorkerCreationResponse {
-                worker_id,
-                component_version: latest_component.versioned_component_id.version,
-            }))
-        };
+        let response = self
+            .launch_new_worker_internal(component_id.0, request.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn launch_new_worker_internal(
+        &self,
+        component_id: ComponentId,
+        request: WorkerCreationRequest,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<WorkerCreationResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let latest_component = self
+            .component_service
+            .get_latest(&component_id, &auth)
+            .await
+            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+            .map_err(|error| {
+                WorkerError::NotFound(Json(ErrorBody {
+                    error: format!(
+                        "Couldn't retrieve the component: {}. error: {}",
+                        &component_id, error
+                    ),
+                }))
+            })?;
+
+        let WorkerCreationRequest { name, args, env } = request;
+
+        let worker_id = validated_worker_id(component_id, name)?;
+
+        let namespace = self
+            .worker_auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::CreateWorker, &auth)
+            .await?;
+
+        let _worker = self
+            .worker_service
+            .create(
+                &worker_id,
+                latest_component.versioned_component_id.version,
+                args,
+                env,
+                namespace,
+            )
+            .await?;
+
+        Ok(Json(WorkerCreationResponse {
+            worker_id,
+            component_version: latest_component.versioned_component_id.version,
+        }))
     }
 
     /// Delete a worker
@@ -346,25 +350,31 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
 
+        let response = self
+            .delete_worker_internal(worker_id, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn delete_worker_internal(
+        &self,
+        worker_id: WorkerId,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<DeleteWorkerResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, &auth)
             .await?;
-        let response = self
-            .worker_service
-            .delete(&worker_id, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(DeleteWorkerResponse {}));
-
-        record.result(response)
+        self.worker_service.delete(&worker_id, namespace).await?;
+        Ok(Json(DeleteWorkerResponse {}))
     }
 
     /// Invoke a function and await its resolution
@@ -384,7 +394,6 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!(
@@ -394,22 +403,49 @@ impl WorkerApi {
             function = function.0
         );
 
+        let response = self
+            .invoke_and_await_function_internal(
+                worker_id.into_target_worker_id(),
+                idempotency_key.0,
+                function.0,
+                params.0,
+                token,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn invoke_and_await_function_internal(
+        &self,
+        target_worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        params: InvokeParameters,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<InvokeResult>> {
+        let auth = CloudAuthCtx::new(token.secret());
+
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(
+                &target_worker_id.component_id,
+                ProjectAction::UpdateWorker,
+                &auth,
+            )
             .await?;
 
         let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
 
-        let target_worker_id = worker_id.into_target_worker_id();
-        let response = match params {
+        let result = match params {
             InvocationParameters::TypedProtoVals(vals) => {
                 self.worker_service.validate_and_invoke_and_await_typed(
                     &target_worker_id,
-                    idempotency_key.0,
-                    function.0,
+                    idempotency_key,
+                    function,
                     vals,
                     None,
                     namespace,
@@ -418,20 +454,17 @@ impl WorkerApi {
             InvocationParameters::RawJsonStrings(jsons) => {
                 self.worker_service.invoke_and_await_json(
                     &target_worker_id,
-                    idempotency_key.0,
-                    function.0,
+                    idempotency_key,
+                    function,
                     jsons,
                     None,
                     namespace,
                 )
             }
         }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|result| Json(InvokeResult { result }));
+        .await?;
 
-        record.result(response)
+        Ok(Json(InvokeResult { result }))
     }
 
     /// Invoke a function and await its resolution on a new worker with a random generated name
@@ -451,7 +484,6 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let target_worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
@@ -461,45 +493,16 @@ impl WorkerApi {
             function = function.0
         );
 
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(
-                &target_worker_id.component_id,
-                ProjectAction::UpdateWorker,
-                &auth,
+        let response = self
+            .invoke_and_await_function_internal(
+                target_worker_id,
+                idempotency_key.0,
+                function.0,
+                params.0,
+                token,
             )
-            .await?;
-
-        let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
-                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
-
-        let response = match params {
-            InvocationParameters::TypedProtoVals(vals) => {
-                self.worker_service.validate_and_invoke_and_await_typed(
-                    &target_worker_id,
-                    idempotency_key.0,
-                    function.0,
-                    vals,
-                    None,
-                    namespace,
-                )
-            }
-            InvocationParameters::RawJsonStrings(jsons) => {
-                self.worker_service.invoke_and_await_json(
-                    &target_worker_id,
-                    idempotency_key.0,
-                    function.0,
-                    jsons,
-                    None,
-                    namespace,
-                )
-            }
-        }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|result| Json(InvokeResult { result }));
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
     }
@@ -522,7 +525,6 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!(
@@ -532,40 +534,62 @@ impl WorkerApi {
             function = function.0
         );
 
+        let response = self
+            .invoke_function_internal(
+                worker_id.into_target_worker_id(),
+                idempotency_key.0,
+                function.0,
+                params.0,
+                token,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn invoke_function_internal(
+        &self,
+        target_worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        params: InvokeParameters,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<InvokeResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(
+                &target_worker_id.component_id,
+                ProjectAction::UpdateWorker,
+                &auth,
+            )
             .await?;
 
         let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
 
-        let target_worker_id = worker_id.into_target_worker_id();
-        let response = match params {
+        match params {
             InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
                 &target_worker_id,
-                idempotency_key.0,
-                function.0,
+                idempotency_key,
+                function,
                 vals,
                 None,
                 namespace,
             ),
             InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
                 &target_worker_id,
-                idempotency_key.0,
-                function.0,
+                idempotency_key,
+                function,
                 jsons,
                 None,
                 namespace,
             ),
         }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|()| Json(InvokeResponse {}));
-
-        record.result(response)
+        .await?;
+        Ok(Json(InvokeResponse {}))
     }
 
     /// Invoke a function on a new worker with a random generated name
@@ -586,7 +610,6 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let target_worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
@@ -596,41 +619,16 @@ impl WorkerApi {
             function = function.0
         );
 
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(
-                &target_worker_id.component_id,
-                ProjectAction::UpdateWorker,
-                &auth,
+        let response = self
+            .invoke_function_internal(
+                target_worker_id,
+                idempotency_key.0,
+                function.0,
+                params.0,
+                token,
             )
-            .await?;
-
-        let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
-                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
-
-        let response = match params {
-            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
-                &target_worker_id,
-                idempotency_key.0,
-                function.0,
-                vals,
-                None,
-                namespace,
-            ),
-            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
-                &target_worker_id,
-                idempotency_key.0,
-                function.0,
-                jsons,
-                None,
-                namespace,
-            ),
-        }
-        .instrument(record.span.clone())
-        .await
-        .map_err(|e| e.into())
-        .map(|()| Json(InvokeResponse {}));
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
     }
@@ -652,13 +650,27 @@ impl WorkerApi {
         params: Json<CompleteParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("complete_promise", worker_id = worker_id.to_string());
 
-        let CompleteParameters { oplog_idx, data } = params.0;
+        let response = self
+            .complete_promise_internal(worker_id, params.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn complete_promise_internal(
+        &self,
+        worker_id: WorkerId,
+        params: CompleteParameters,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<bool>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let CompleteParameters { oplog_idx, data } = params;
 
         let namespace = self
             .worker_auth_service
@@ -667,12 +679,9 @@ impl WorkerApi {
         let response = self
             .worker_service
             .complete_promise(&worker_id, oplog_idx, data, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .await?;
 
-        record.result(response)
+        Ok(Json(response))
     }
 
     /// Interrupt a worker
@@ -695,29 +704,35 @@ impl WorkerApi {
         recover_immediately: Query<Option<bool>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InterruptResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
 
+        let response = self
+            .interrupt_worker_internal(worker_id, recover_immediately.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn interrupt_worker_internal(
+        &self,
+        worker_id: WorkerId,
+        recover_immediately: Option<bool>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<InterruptResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
-        let response = self
-            .worker_service
-            .interrupt(
-                &worker_id,
-                recover_immediately.0.unwrap_or(false),
-                namespace,
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(InterruptResponse {}));
+        self.worker_service
+            .interrupt(&worker_id, recover_immediately.unwrap_or(false), namespace)
+            .await?;
 
-        record.result(response)
+        Ok(Json(InterruptResponse {}))
     }
 
     /// Get metadata of a worker
@@ -748,12 +763,25 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkerMetadata>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
 
+        let response = self
+            .get_worker_metadata_internal(worker_id, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_worker_metadata_internal(
+        &self,
+        worker_id: WorkerId,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<model::WorkerMetadata>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
@@ -761,12 +789,9 @@ impl WorkerApi {
         let response = self
             .worker_service
             .get_metadata(&worker_id, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .await?;
 
-        record.result(response)
+        Ok(Json(response))
     }
 
     /// Get metadata of multiple workers
@@ -808,52 +833,73 @@ impl WorkerApi {
         precise: Query<Option<bool>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_workers_metadata",
             component_id = component_id.0.to_string()
         );
 
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(&component_id.0, ProjectAction::ViewWorker, &auth)
-            .await?;
-        let response = {
-            let filter = match filter.0 {
-                Some(filters) if !filters.is_empty() => {
-                    Some(WorkerFilter::from(filters).map_err(|e| {
-                        WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                    })?)
-                }
-                _ => None,
-            };
-
-            let cursor =
-                match cursor.0 {
-                    Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
-                        WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                    })?),
-                    None => None,
-                };
-
-            self.worker_service
-                .find_metadata(
-                    &component_id.0,
-                    filter,
-                    cursor.unwrap_or_default(),
-                    count.0.unwrap_or(50),
-                    precise.0.unwrap_or(false),
-                    namespace,
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(|(cursor, workers)| {
-                    Json(crate::model::WorkersMetadataResponse { workers, cursor })
-                })
-        };
+        let response = self
+            .get_workers_metadata_internal(
+                component_id.0,
+                filter.0,
+                cursor.0,
+                count.0,
+                precise.0,
+                token,
+            )
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_workers_metadata_internal(
+        &self,
+        component_id: ComponentId,
+        filter: Option<Vec<String>>,
+        cursor: Option<String>,
+        count: Option<u64>,
+        precise: Option<bool>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let namespace = self
+            .worker_auth_service
+            .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+
+        let filter = match filter {
+            Some(filters) if !filters.is_empty() => Some(
+                WorkerFilter::from(filters)
+                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
+            ),
+            _ => None,
+        };
+
+        let cursor = match cursor {
+            Some(cursor) => Some(
+                ScanCursor::from_str(&cursor)
+                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
+            ),
+            None => None,
+        };
+
+        let (cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &component_id,
+                filter,
+                cursor.unwrap_or_default(),
+                count.unwrap_or(50),
+                precise.unwrap_or(false),
+                namespace,
+            )
+            .await?;
+
+        Ok(Json(crate::model::WorkersMetadataResponse {
+            workers,
+            cursor,
+        }))
     }
 
     /// Advanced search for workers
@@ -888,34 +934,46 @@ impl WorkerApi {
         params: Json<WorkersMetadataRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "find_workers_metadata",
             component_id = component_id.0.to_string()
         );
 
+        let response = self
+            .find_workers_metadata_internal(component_id.0, params.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn find_workers_metadata_internal(
+        &self,
+        component_id: ComponentId,
+        params: WorkersMetadataRequest,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&component_id.0, ProjectAction::ViewWorker, &auth)
+            .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
             .await?;
-        let response = self
+        let (cursor, workers) = self
             .worker_service
             .find_metadata(
-                &component_id.0,
+                &component_id,
                 params.filter.clone(),
                 params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
                 namespace,
             )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|(cursor, workers)| {
-                Json(crate::model::WorkersMetadataResponse { workers, cursor })
-            });
+            .await?;
 
-        record.result(response)
+        Ok(Json(crate::model::WorkersMetadataResponse {
+            workers,
+            cursor,
+        }))
     }
 
     /// Resume a worker
@@ -930,24 +988,33 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
 
+        let response = self
+            .resume_worker_internal(worker_id, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn resume_worker_internal(
+        &self,
+        worker_id: WorkerId,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<ResumeResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
-        let response = self
-            .worker_service
+        self.worker_service
             .resume(&worker_id, namespace, false)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(ResumeResponse {}));
+            .await?;
 
-        record.result(response)
+        Ok(Json(ResumeResponse {}))
     }
 
     /// Update a worker
@@ -963,29 +1030,39 @@ impl WorkerApi {
         params: Json<UpdateWorkerRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateWorkerResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
 
+        let response = self
+            .update_worker_internal(worker_id, params.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn update_worker_internal(
+        &self,
+        worker_id: WorkerId,
+        params: UpdateWorkerRequest,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<UpdateWorkerResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
-        let response = self
-            .worker_service
+        self.worker_service
             .update(
                 &worker_id,
                 params.mode.clone().into(),
                 params.target_version,
                 namespace,
             )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(UpdateWorkerResponse {}));
+            .await?;
 
-        record.result(response)
+        Ok(Json(UpdateWorkerResponse {}))
     }
 
     /// Get the oplog of a worker
@@ -1004,17 +1081,34 @@ impl WorkerApi {
         query: Query<Option<String>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
 
+        let response = self
+            .get_oplog_internal(worker_id, from.0, count.0, cursor.0, query.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_oplog_internal(
+        &self,
+        worker_id: WorkerId,
+        from: Option<u64>,
+        count: u64,
+        cursor: Option<OplogCursor>,
+        query: Option<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<GetOplogResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await?;
 
-        match (from.0, query.0) {
+        match (from, query) {
             (Some(_), Some(_)) => Err(WorkerError::BadRequest(Json(ErrorsBody {
                 errors: vec![
                     "Cannot specify both the 'from' and the 'query' parameters".to_string()
@@ -1026,44 +1120,29 @@ impl WorkerApi {
                     .get_oplog(
                         &worker_id,
                         OplogIndex::from_u64(from),
-                        cursor.0,
-                        count.0,
+                        cursor,
+                        count,
                         namespace,
                     )
-                    .instrument(record.span.clone())
-                    .await
-                    .map_err(|e| e.into())
-                    .map(Json);
+                    .await?;
 
-                record.result(response)
+                Ok(Json(response))
             }
             (None, Some(query)) => {
                 let response = self
                     .worker_service
-                    .search_oplog(&worker_id, cursor.0, count.0, query, namespace)
-                    .instrument(record.span.clone())
-                    .await
-                    .map_err(|e| e.into())
-                    .map(Json);
+                    .search_oplog(&worker_id, cursor, count, query, namespace)
+                    .await?;
 
-                record.result(response)
+                Ok(Json(response))
             }
             (None, None) => {
                 let response = self
                     .worker_service
-                    .get_oplog(
-                        &worker_id,
-                        OplogIndex::INITIAL,
-                        cursor.0,
-                        count.0,
-                        namespace,
-                    )
-                    .instrument(record.span.clone())
-                    .await
-                    .map_err(|e| e.into())
-                    .map(Json);
+                    .get_oplog(&worker_id, OplogIndex::INITIAL, cursor, count, namespace)
+                    .await?;
 
-                record.result(response)
+                Ok(Json(response))
             }
         }
     }
@@ -1081,30 +1160,39 @@ impl WorkerApi {
         file_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetFilesResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
         let record = recorded_http_api_request!("get_file", worker_id = worker_id.to_string());
 
-        let path = make_component_file_path(file_name.0)?;
+        let response = self
+            .get_file_internal(worker_id, file_name.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_file_internal(
+        &self,
+        worker_id: WorkerId,
+        file_name: String,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<GetFilesResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let path = make_component_file_path(file_name)?;
 
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await?;
 
-        let response = self
+        let nodes = self
             .worker_service
             .list_directory(&worker_id.into_target_worker_id(), path, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map(|s| {
-                Json(GetFilesResponse {
-                    nodes: s.into_iter().map(|n| n.into()).collect(),
-                })
-            })
-            .map_err(|e| e.into());
+            .await?;
 
-        record.result(response)
+        Ok(Json(GetFilesResponse {
+            nodes: nodes.into_iter().map(|n| n.into()).collect(),
+        }))
     }
 
     /// Get contents of a file in a worker
@@ -1120,30 +1208,39 @@ impl WorkerApi {
         file_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
         let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
 
-        let path = make_component_file_path(file_name.0)?;
+        let response = self
+            .get_file_content_internal(worker_id, file_name.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_file_content_internal(
+        &self,
+        worker_id: WorkerId,
+        file_name: String,
+        token: GolemSecurityScheme,
+    ) -> Result<Binary<Body>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let path = make_component_file_path(file_name)?;
 
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await?;
 
-        let response = self
+        let bytes = self
             .worker_service
             .get_file_contents(&worker_id.into_target_worker_id(), path, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|bytes| {
-                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                })))
-            });
+            .await?;
 
-        record.result(response)
+        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        }))))
     }
 
     /// Activate a plugin
@@ -1161,7 +1258,6 @@ impl WorkerApi {
         #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ActivatePluginResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!(
@@ -1170,20 +1266,31 @@ impl WorkerApi {
             plugin_installation_id = plugin_installation_id.to_string()
         );
 
+        let response = self
+            .activate_plugin_internal(worker_id, plugin_installation_id.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn activate_plugin_internal(
+        &self,
+        worker_id: WorkerId,
+        plugin_installation_id: PluginInstallationId,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<ActivatePluginResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
 
-        let response = self
-            .worker_service
-            .activate_plugin(&worker_id, &plugin_installation_id.0, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(ActivatePluginResponse {}));
+        self.worker_service
+            .activate_plugin(&worker_id, &plugin_installation_id, namespace)
+            .await?;
 
-        record.result(response)
+        Ok(Json(ActivatePluginResponse {}))
     }
 
     /// Deactivate a plugin
@@ -1201,7 +1308,6 @@ impl WorkerApi {
         #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeactivatePluginResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!(
@@ -1210,20 +1316,31 @@ impl WorkerApi {
             plugin_installation_id = plugin_installation_id.to_string()
         );
 
+        let response = self
+            .deactivate_plugin_internal(worker_id, plugin_installation_id.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn deactivate_plugin_internal(
+        &self,
+        worker_id: WorkerId,
+        plugin_installation_id: PluginInstallationId,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<DeactivatePluginResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
 
-        let response = self
-            .worker_service
-            .deactivate_plugin(&worker_id, &plugin_installation_id.0, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(DeactivatePluginResponse {}));
+        self.worker_service
+            .deactivate_plugin(&worker_id, &plugin_installation_id, namespace)
+            .await?;
 
-        record.result(response)
+        Ok(Json(DeactivatePluginResponse {}))
     }
 
     /// Revert a worker
@@ -1241,26 +1358,36 @@ impl WorkerApi {
         target: Json<RevertWorkerTarget>,
         token: GolemSecurityScheme,
     ) -> Result<Json<RevertWorkerResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("revert_worker", worker_id = worker_id.to_string(),);
 
+        let response = self
+            .revert_worker_internal(worker_id, target.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn revert_worker_internal(
+        &self,
+        worker_id: WorkerId,
+        target: RevertWorkerTarget,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<RevertWorkerResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
 
-        let response = self
-            .worker_service
-            .revert_worker(&worker_id, target.0, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(RevertWorkerResponse {}));
+        self.worker_service
+            .revert_worker(&worker_id, target, namespace)
+            .await?;
 
-        record.result(response)
+        Ok(Json(RevertWorkerResponse {}))
     }
 
     /// Cancels a pending invocation if it has not started yet
@@ -1278,7 +1405,6 @@ impl WorkerApi {
         idempotency_key: Path<IdempotencyKey>,
         token: GolemSecurityScheme,
     ) -> Result<Json<CancelInvocationResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!(
@@ -1287,20 +1413,32 @@ impl WorkerApi {
             idempotency_key = idempotency_key.0.to_string(),
         );
 
+        let response = self
+            .cancel_invocation_internal(worker_id, idempotency_key.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn cancel_invocation_internal(
+        &self,
+        worker_id: WorkerId,
+        idempotency_key: IdempotencyKey,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<CancelInvocationResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
 
-        let response = self
+        let canceled = self
             .worker_service
-            .cancel_invocation(&worker_id, &idempotency_key.0, namespace)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|canceled| Json(CancelInvocationResponse { canceled }));
+            .cancel_invocation(&worker_id, &idempotency_key, namespace)
+            .await?;
 
-        record.result(response)
+        Ok(Json(CancelInvocationResponse { canceled }))
     }
 
     /// Connect to a worker using a websocket and stream events
@@ -1316,8 +1454,6 @@ impl WorkerApi {
         websocket: WebSocket,
         token: WrappedGolemSecuritySchema,
     ) -> Result<BoxWebSocketUpgraded> {
-        tracing::info!("Connect worker {}/{}", component_id.0, worker_name.0);
-
         let (worker_id, worker_stream) = self
             .connect_to_worker(component_id.0, worker_name.0, token.0.secret())
             .await?;
@@ -1346,24 +1482,29 @@ impl WorkerApi {
         worker_name: String,
         token: TokenSecret,
     ) -> Result<(WorkerId, ConnectWorkerStream)> {
-        WorkerId::validate_worker_name(&worker_name).map_err(|e| {
-            WorkerError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Invalid worker name: {e}")],
-            }))
-        })?;
-
-        let worker_id = WorkerId {
-            component_id: component_id.clone(),
-            worker_name: worker_name.clone(),
-        };
+        let worker_id = validated_worker_id(component_id, worker_name)?;
 
         let record =
             recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
 
+        let response = self
+            .connect_to_worker_internal(worker_id.clone(), token)
+            .instrument(record.span.clone())
+            .await
+            .map(|stream| (worker_id, stream));
+
+        record.result(response)
+    }
+
+    async fn connect_to_worker_internal(
+        &self,
+        worker_id: WorkerId,
+        token: TokenSecret,
+    ) -> Result<ConnectWorkerStream> {
         let auth = CloudAuthCtx::new(token);
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await
             .map_err(|e| {
                 WorkerError::Unauthorized(Json(ErrorBody {
@@ -1371,21 +1512,8 @@ impl WorkerApi {
                 }))
             })?;
 
-        let result = self
-            .worker_service
-            .connect(&worker_id, namespace)
-            .instrument(record.span.clone())
-            .await;
-
-        match result {
-            Ok(worker_stream) => record.succeed(Ok((worker_id, worker_stream))),
-            Err(error) => {
-                tracing::error!("Error connecting to worker: {error}");
-                let error = WorkerError::from(error);
-                let error = record.fail(error.clone(), &error);
-                Err(error)
-            }
-        }
+        let stream = self.worker_service.connect(&worker_id, namespace).await?;
+        Ok(stream)
     }
 }
 

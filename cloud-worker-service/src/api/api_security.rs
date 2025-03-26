@@ -69,21 +69,33 @@ impl SecuritySchemeApi {
         payload: Json<SecuritySchemeData>,
         token: GolemSecurityScheme,
     ) -> Result<Json<SecuritySchemeData>, ApiEndpointError> {
-        let project_id = &project_id.0;
-        let token = token.secret();
-
         let record = recorded_http_api_request!(
             "create",
             security_scheme_identifier = payload.0.scheme_identifier
         );
-        let security_scheme = SecurityScheme::try_from(payload.0).map_err(|err| {
+
+        let response = self
+            .create_internal(project_id.0, payload.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_internal(
+        &self,
+        project_id: ProjectId,
+        payload: SecuritySchemeData,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<SecuritySchemeData>, ApiEndpointError> {
+        let token = token.secret();
+        let security_scheme = SecurityScheme::try_from(payload).map_err(|err| {
             ApiEndpointError::bad_request(safe(format!("Invalid security scheme {}", err)))
         })?;
 
         let security_scheme_with_metadata = self
             .security_scheme_service
-            .create(&security_scheme, project_id, &CloudAuthCtx::new(token))
-            .instrument(record.span.clone())
+            .create(&security_scheme, &project_id, &CloudAuthCtx::new(token))
             .await?;
 
         Ok(Json(SecuritySchemeData::from(

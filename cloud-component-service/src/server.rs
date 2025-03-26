@@ -24,7 +24,7 @@ use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::endpoint::PrometheusExporter;
 use poem::listener::TcpListener;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
+use poem::middleware::{CookieJarManager, Cors};
 use poem::EndpointExt;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -120,8 +120,6 @@ async fn async_main(
 
         let app = api::combined_routes(&http_services)
             .nest("/metrics", PrometheusExporter::new(prometheus_registry))
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing)
             .with(CookieJarManager::new())
             .with(cors);
 

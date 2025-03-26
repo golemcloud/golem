@@ -50,65 +50,71 @@ impl ApiDeploymentApi {
         payload: Json<ApiDeploymentRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
-        let token = token.secret();
-        let project_id = &payload.0.project_id;
         let record = recorded_http_api_request!(
             "deploy",
             site = payload.0.site.to_string(),
             project_id = payload.0.project_id.to_string()
         );
-        let response = {
-            let auth_ctx = CloudAuthCtx::new(token);
-
-            let namespace = self
-                .auth_service
-                .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
-                .instrument(record.span.clone())
-                .await?;
-
-            let api_definition_infos = payload
-                .api_definitions
-                .iter()
-                .map(|k| ApiDefinitionIdWithVersion {
-                    id: k.id.clone(),
-                    version: k.version.clone(),
-                })
-                .collect::<Vec<ApiDefinitionIdWithVersion>>();
-
-            let payload_deployment = &payload.0;
-
-            let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
-                namespace: namespace.clone(),
-                api_definition_keys: api_definition_infos.clone(),
-                site: payload_deployment.site.clone(),
-            };
-
-            self.deployment_service
-                .deploy(&api_deployment, &auth_ctx)
-                .instrument(record.span.clone())
-                .await?;
-
-            self.domain_route
-                .register(&payload.site.host, payload.site.subdomain.as_deref())
-                .instrument(record.span.clone())
-                .await?;
-
-            let data = self
-                .deployment_service
-                .get_by_site(&ApiSiteString(payload.site.to_string()))
-                .instrument(record.span.clone())
-                .await?;
-
-            let deployment = data
-                .map(|d| d.into())
-                .ok_or(ApiEndpointError::not_found(safe(
-                    "API Deployment not found".to_string(),
-                )))?;
-
-            Ok(Json(deployment))
-        };
+        let response = self
+            .create_or_update_internal(payload.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn create_or_update_internal(
+        &self,
+        payload: ApiDeploymentRequest,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
+        let token = token.secret();
+        let auth_ctx = CloudAuthCtx::new(token);
+
+        let namespace = self
+            .auth_service
+            .authorize_project_action(
+                &payload.project_id,
+                ProjectAction::ViewApiDefinition,
+                &auth_ctx,
+            )
+            .await?;
+
+        let api_definition_infos = payload
+            .api_definitions
+            .iter()
+            .map(|k| ApiDefinitionIdWithVersion {
+                id: k.id.clone(),
+                version: k.version.clone(),
+            })
+            .collect::<Vec<ApiDefinitionIdWithVersion>>();
+
+        let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
+            namespace: namespace.clone(),
+            api_definition_keys: api_definition_infos.clone(),
+            site: payload.site.clone(),
+        };
+
+        self.deployment_service
+            .deploy(&api_deployment, &auth_ctx)
+            .await?;
+
+        self.domain_route
+            .register(&payload.site.host, payload.site.subdomain.as_deref())
+            .await?;
+
+        let data = self
+            .deployment_service
+            .get_by_site(&ApiSiteString(payload.site.to_string()))
+            .await?;
+
+        let deployment = data
+            .map(|d| d.into())
+            .ok_or(ApiEndpointError::not_found(safe(
+                "API Deployment not found".to_string(),
+            )))?;
+
+        Ok(Json(deployment))
     }
 
     /// Get one or more API deployments
@@ -122,37 +128,41 @@ impl ApiDeploymentApi {
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
-        let token = token.secret();
         let project_id = project_id.0;
         let record = recorded_http_api_request!(
             "list_deployments",
             api_definition_id = api_definition_id_query.0.to_string(),
             project_id = project_id.0.to_string()
         );
-        let response = {
-            let api_definition_id = api_definition_id_query.0;
-
-            let auth_ctx = CloudAuthCtx::new(token);
-
-            let namespace = self
-                .auth_service
-                .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
-                .instrument(record.span.clone())
-                .await?;
-
-            let api_deployments = self
-                .deployment_service
-                .get_by_id(&namespace, Some(api_definition_id))
-                .instrument(record.span.clone())
-                .await?;
-
-            let values: Vec<ApiDeployment> =
-                api_deployments.iter().map(|d| d.clone().into()).collect();
-
-            Ok(Json(values))
-        };
+        let response = self
+            .list_internal(project_id, api_definition_id_query.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn list_internal(
+        &self,
+        project_id: ProjectId,
+        api_definition_id: ApiDefinitionId,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
+        let token = token.secret();
+        let auth_ctx = CloudAuthCtx::new(token);
+
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .await?;
+
+        let api_deployments = self
+            .deployment_service
+            .get_by_id(&namespace, Some(api_definition_id))
+            .await?;
+
+        let values: Vec<ApiDeployment> = api_deployments.into_iter().map(|d| d.into()).collect();
+        Ok(Json(values))
     }
 
     /// Get API deployment by site
@@ -164,33 +174,36 @@ impl ApiDeploymentApi {
         site: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
-        let token = token.secret();
         let record = recorded_http_api_request!("get_deployment", site = site.0);
-        let response = {
-            let site = ApiSiteString(site.0);
-            let auth_ctx = CloudAuthCtx::new(token);
-
-            let api_deployment = self
-                .deployment_service
-                .get_by_site(&site)
-                .instrument(record.span.clone())
-                .await?
-                .ok_or(ApiEndpointError::not_found(safe(
-                    "API deployment not found".to_string(),
-                )))?;
-
-            let project_id = &api_deployment.namespace.project_id;
-
-            let _ = self
-                .auth_service
-                .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json(api_deployment.into()))
-        };
+        let response = self
+            .get_internal(site.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_internal(
+        &self,
+        site: String,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
+        let token = token.secret();
+        let site = ApiSiteString(site);
+        let auth_ctx = CloudAuthCtx::new(token);
+
+        let api_deployment = self.deployment_service.get_by_site(&site).await?.ok_or(
+            ApiEndpointError::not_found(safe("API deployment not found".to_string())),
+        )?;
+
+        let project_id = &api_deployment.namespace.project_id;
+
+        let _ = self
+            .auth_service
+            .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .await?;
+
+        Ok(Json(api_deployment.into()))
     }
 
     /// Delete API deployment by site
@@ -202,45 +215,45 @@ impl ApiDeploymentApi {
         site: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<String>, ApiEndpointError> {
-        let token = token.secret();
         let record = recorded_http_api_request!("delete_deployment", site = site.0);
-        let response = {
-            let site = ApiSiteString(site.0);
-            let auth_ctx = CloudAuthCtx::new(token);
-
-            let api_deployment = self
-                .deployment_service
-                .get_by_site(&site)
-                .instrument(record.span.clone())
-                .await?
-                .ok_or(ApiEndpointError::not_found(safe(
-                    "API deployment not found".to_string(),
-                )))?;
-
-            let project_id = &api_deployment.namespace.project_id;
-
-            let namespace = self
-                .auth_service
-                .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
-                .instrument(record.span.clone())
-                .await?;
-
-            self.deployment_service
-                .delete(&namespace, &site)
-                .instrument(record.span.clone())
-                .await?;
-
-            self.domain_route
-                .unregister(
-                    &api_deployment.site.host,
-                    api_deployment.site.subdomain.as_deref(),
-                )
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json("API deployment deleted".to_string()))
-        };
+        let response = self
+            .delete_internal(site.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn delete_internal(
+        &self,
+        site: String,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<String>, ApiEndpointError> {
+        let token = token.secret();
+
+        let site = ApiSiteString(site);
+        let auth_ctx = CloudAuthCtx::new(token);
+
+        let api_deployment = self.deployment_service.get_by_site(&site).await?.ok_or(
+            ApiEndpointError::not_found(safe("API deployment not found".to_string())),
+        )?;
+
+        let project_id = &api_deployment.namespace.project_id;
+
+        let namespace = self
+            .auth_service
+            .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .await?;
+
+        self.deployment_service.delete(&namespace, &site).await?;
+
+        self.domain_route
+            .unregister(
+                &api_deployment.site.host,
+                api_deployment.site.subdomain.as_deref(),
+            )
+            .await?;
+
+        Ok(Json("API deployment deleted".to_string()))
     }
 }

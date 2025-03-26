@@ -40,21 +40,21 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> LimitedApiResult<Json<Project>> {
         let record = recorded_http_api_request!("get_default_project",);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let project = self
-                .project_service
-                .get_own_default(&auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(project))
-        };
+        let response = self
+            .get_default_project_internal(token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_default_project_internal(
+        &self,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Project>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let project = self.project_service.get_own_default(&auth).await?;
+        Ok(Json(project))
     }
 
     /// List all projects
@@ -72,34 +72,34 @@ impl ProjectApi {
     ) -> LimitedApiResult<Json<Vec<Project>>> {
         let record =
             recorded_http_api_request!("get_projects", project_name = project_name.0.as_ref(),);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-
-            match project_name.0 {
-                Some(project_name) => {
-                    let projects = self
-                        .project_service
-                        .get_own_by_name(&project_name, &auth)
-                        .instrument(record.span.clone())
-                        .await?;
-                    Ok(Json(projects))
-                }
-                None => {
-                    let projects = self
-                        .project_service
-                        .get_own(&auth)
-                        .instrument(record.span.clone())
-                        .await?;
-                    Ok(Json(projects))
-                }
-            }
-        };
+        let response = self
+            .get_projects_internal(project_name.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_projects_internal(
+        &self,
+        project_name: Option<String>,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Vec<Project>>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        match project_name {
+            Some(project_name) => {
+                let projects = self
+                    .project_service
+                    .get_own_by_name(&project_name, &auth)
+                    .await?;
+                Ok(Json(projects))
+            }
+            None => {
+                let projects = self.project_service.get_own(&auth).await?;
+                Ok(Json(projects))
+            }
+        }
     }
 
     /// Create project
@@ -112,32 +112,34 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> LimitedApiResult<Json<Project>> {
         let record = recorded_http_api_request!("create_project", project_name = request.0.name,);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-
-            let project = Project {
-                project_id: ProjectId::new_v4(),
-                project_data: ProjectData {
-                    name: request.0.name,
-                    owner_account_id: request.0.owner_account_id,
-                    description: request.0.description,
-                    default_environment_id: "default".to_string(),
-                    project_type: ProjectType::NonDefault,
-                },
-            };
-
-            self.project_service
-                .create(&project, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(project))
-        };
+        let response = self
+            .create_project_internal(request.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn create_project_internal(
+        &self,
+        request: ProjectDataRequest,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Project>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        let project = Project {
+            project_id: ProjectId::new_v4(),
+            project_data: ProjectData {
+                name: request.name,
+                owner_account_id: request.owner_account_id,
+                description: request.description,
+                default_environment_id: "default".to_string(),
+                project_type: ProjectType::NonDefault,
+            },
+        };
+
+        self.project_service.create(&project, &auth).await?;
+        Ok(Json(project))
     }
 
     /// Get project by ID
@@ -151,26 +153,27 @@ impl ProjectApi {
     ) -> LimitedApiResult<Json<Project>> {
         let record =
             recorded_http_api_request!("get_project", project_id = project_id.0.to_string(),);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let project = self
-                .project_service
-                .get(&project_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            match project {
-                Some(p) => Ok(Json(p)),
-                None => Err(LimitedApiError::NotFound(Json(ErrorBody {
-                    error: "Project not found".to_string(),
-                }))),
-            }
-        };
+        let response = self
+            .get_project_internal(project_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_project_internal(
+        &self,
+        project_id: ProjectId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Project>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let project = self.project_service.get(&project_id, &auth).await?;
+        match project {
+            Some(p) => Ok(Json(p)),
+            None => Err(LimitedApiError::NotFound(Json(ErrorBody {
+                error: "Project not found".to_string(),
+            }))),
+        }
     }
 
     /// Delete project
@@ -188,20 +191,22 @@ impl ProjectApi {
     ) -> LimitedApiResult<Json<DeleteProjectResponse>> {
         let record =
             recorded_http_api_request!("delete_project", project_id = project_id.0.to_string(),);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            self.project_service
-                .delete(&project_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(DeleteProjectResponse {}))
-        };
+        let response = self
+            .delete_project_internal(project_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn delete_project_internal(
+        &self,
+        project_id: ProjectId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<DeleteProjectResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.project_service.delete(&project_id, &auth).await?;
+        Ok(Json(DeleteProjectResponse {}))
     }
 
     /// Get project actions
@@ -221,21 +226,25 @@ impl ProjectApi {
             "get_project_actions",
             project_id = project_id.0.to_string(),
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let result = self
-                .project_auth_service
-                .get_by_project(&project_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(Vec::from_iter(result.actions.actions)))
-        };
+        let response = self
+            .get_project_actions_internal(project_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_project_actions_internal(
+        &self,
+        project_id: ProjectId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Vec<ProjectAction>>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let result = self
+            .project_auth_service
+            .get_by_project(&project_id, &auth)
+            .await?;
+        Ok(Json(Vec::from_iter(result.actions.actions)))
     }
 
     /// Gets the list of plugins installed for the given project
@@ -253,20 +262,27 @@ impl ProjectApi {
             "get_installed_plugins_of_project",
             project_id = project_id.0.to_string(),
         );
-        let auth = self
-            .auth_service
-            .authorization(token.as_ref())
-            .instrument(record.span.clone())
-            .await?;
 
         let response = self
-            .project_service
+            .get_installed_plugins_internal(project_id.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_installed_plugins_internal(
+        &self,
+        project_id: ProjectId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Vec<PluginInstallation>>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        self.project_service
             .get_plugin_installations_for_project(&project_id, &auth)
             .await
             .map_err(|e| e.into())
-            .map(Json);
-
-        record.result(response)
+            .map(Json)
     }
 
     /// Installs a new plugin for this project
@@ -287,20 +303,28 @@ impl ProjectApi {
             plugin_name = plugin.name.clone(),
             plugin_version = plugin.version.clone()
         );
-        let auth = self
-            .auth_service
-            .authorization(token.as_ref())
-            .instrument(record.span.clone())
-            .await?;
 
         let response = self
-            .project_service
-            .create_plugin_installation_for_project(&project_id, plugin.0, &auth)
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .install_plugin_internal(project_id.0, plugin.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn install_plugin_internal(
+        &self,
+        project_id: ProjectId,
+        plugin: PluginInstallationCreation,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<PluginInstallation>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        self.project_service
+            .create_plugin_installation_for_project(&project_id, plugin, &auth)
+            .await
+            .map_err(|e| e.into())
+            .map(Json)
     }
 
     /// Updates the priority or parameters of a plugin installation
@@ -321,25 +345,29 @@ impl ProjectApi {
             project_id = project_id.0.to_string(),
             installation_id = installation_id.0.to_string()
         );
-        let auth = self
-            .auth_service
-            .authorization(token.as_ref())
-            .instrument(record.span.clone())
-            .await?;
 
         let response = self
-            .project_service
-            .update_plugin_installation_for_project(
-                &project_id.0,
-                &installation_id.0,
-                update.0,
-                &auth,
-            )
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(Empty {}));
+            .update_installed_plugins_internal(project_id.0, installation_id.0, update.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn update_installed_plugins_internal(
+        &self,
+        project_id: ProjectId,
+        installation_id: PluginInstallationId,
+        update: PluginInstallationUpdate,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Empty>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        self.project_service
+            .update_plugin_installation_for_project(&project_id, &installation_id, update, &auth)
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}))
     }
 
     /// Uninstalls a plugin from this project
@@ -359,19 +387,27 @@ impl ProjectApi {
             project_id = project_id.0.to_string(),
             installation_id = installation_id.0.to_string()
         );
-        let auth = self
-            .auth_service
-            .authorization(token.as_ref())
-            .instrument(record.span.clone())
-            .await?;
 
         let response = self
-            .project_service
-            .delete_plugin_installation_for_project(&installation_id.0, &project_id.0, &auth)
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(Empty {}));
+            .uninstall_plugin_internal(project_id.0, installation_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn uninstall_plugin_internal(
+        &self,
+        project_id: ProjectId,
+        installation_id: PluginInstallationId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Empty>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        self.project_service
+            .delete_plugin_installation_for_project(&installation_id, &project_id, &auth)
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}))
     }
 }

@@ -63,8 +63,6 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
         let app = Route::new()
             .nest("/", api::management_routes(http_service2))
             .nest("/metrics", PrometheusExporter::new(prometheus_registry))
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing)
             .with(CookieJarManager::new())
             .with(cors);
 

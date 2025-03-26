@@ -45,21 +45,25 @@ impl ProjectGrantApi {
             "get_project_grants",
             project_id = project_id.0.to_string(),
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let grants = self
-                .project_grant_service
-                .get_by_project(&project_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(grants))
-        };
+        let response = self
+            .get_project_grants_internal(project_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_project_grants_internal(
+        &self,
+        project_id: ProjectId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Vec<ProjectGrant>>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let grants = self
+            .project_grant_service
+            .get_by_project(&project_id, &auth)
+            .await?;
+        Ok(Json(grants))
     }
 
     /// Get a specific grant of a project
@@ -81,26 +85,31 @@ impl ProjectGrantApi {
             project_id = project_id.0.to_string(),
             project_grant_id = grant_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let grant = self
-                .project_grant_service
-                .get(&project_id.0, &grant_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            match grant {
-                Some(grant) => Ok(Json(grant)),
-                None => Err(LimitedApiError::NotFound(Json(ErrorBody {
-                    error: "Project grant not found".to_string(),
-                }))),
-            }
-        };
+        let response = self
+            .get_project_grant_internal(project_id.0, grant_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_project_grant_internal(
+        &self,
+        project_id: ProjectId,
+        grant_id: ProjectGrantId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<ProjectGrant>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let grant = self
+            .project_grant_service
+            .get(&project_id, &grant_id, &auth)
+            .await?;
+        match grant {
+            Some(grant) => Ok(Json(grant)),
+            None => Err(LimitedApiError::NotFound(Json(ErrorBody {
+                error: "Project grant not found".to_string(),
+            }))),
+        }
     }
 
     /// Create a project grant
@@ -125,51 +134,54 @@ impl ProjectGrantApi {
             "create_project_grant",
             project_id = project_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-
-            let data = match request.0.project_policy_id {
-                Some(project_policy_id) => ProjectGrantData {
-                    grantee_account_id: request.0.grantee_account_id,
-                    grantor_project_id: project_id.0,
-                    project_policy_id,
-                },
-                None => {
-                    let policy = ProjectPolicy {
-                        id: ProjectPolicyId::new_v4(),
-                        name: request.0.project_policy_name.unwrap_or("".to_string()),
-                        project_actions: ProjectActions {
-                            actions: request.0.project_actions.into_iter().collect(),
-                        },
-                    };
-
-                    self.project_policy_service.create(&policy).await?;
-
-                    ProjectGrantData {
-                        grantee_account_id: request.0.grantee_account_id,
-                        grantor_project_id: project_id.0,
-                        project_policy_id: policy.id,
-                    }
-                }
-            };
-
-            let grant = ProjectGrant {
-                id: ProjectGrantId::new_v4(),
-                data,
-            };
-
-            self.project_grant_service
-                .create(&grant, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(grant))
-        };
+        let response = self
+            .post_project_grant_internal(project_id.0, request.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn post_project_grant_internal(
+        &self,
+        project_id: ProjectId,
+        request: ProjectGrantDataRequest,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<ProjectGrant>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        let data = match request.project_policy_id {
+            Some(project_policy_id) => ProjectGrantData {
+                grantee_account_id: request.grantee_account_id,
+                grantor_project_id: project_id,
+                project_policy_id,
+            },
+            None => {
+                let policy = ProjectPolicy {
+                    id: ProjectPolicyId::new_v4(),
+                    name: request.project_policy_name.unwrap_or("".to_string()),
+                    project_actions: ProjectActions {
+                        actions: request.project_actions.into_iter().collect(),
+                    },
+                };
+
+                self.project_policy_service.create(&policy).await?;
+
+                ProjectGrantData {
+                    grantee_account_id: request.grantee_account_id,
+                    grantor_project_id: project_id,
+                    project_policy_id: policy.id,
+                }
+            }
+        };
+
+        let grant = ProjectGrant {
+            id: ProjectGrantId::new_v4(),
+            data,
+        };
+
+        self.project_grant_service.create(&grant, &auth).await?;
+        Ok(Json(grant))
     }
 
     /// Delete a project grant
@@ -191,20 +203,25 @@ impl ProjectGrantApi {
             project_id = project_id.0.to_string(),
             project_grant_id = grant_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-
-            self.project_grant_service
-                .delete(&project_id.0, &grant_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(DeleteProjectGrantResponse {}))
-        };
+        let response = self
+            .delete_project_grant_internal(project_id.0, grant_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn delete_project_grant_internal(
+        &self,
+        project_id: ProjectId,
+        grant_id: ProjectGrantId,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<DeleteProjectGrantResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        self.project_grant_service
+            .delete(&project_id, &grant_id, &auth)
+            .await?;
+        Ok(Json(DeleteProjectGrantResponse {}))
     }
 }

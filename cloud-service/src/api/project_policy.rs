@@ -36,27 +36,28 @@ impl ProjectPolicyApi {
             "get_project_policies",
             project_policy_id = project_policy_id.0.to_string(),
         );
-        let response = {
-            // FIXME auth check
-            let _ = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let policy = self
-                .project_policy_service
-                .get(&project_policy_id.0)
-                .instrument(record.span.clone())
-                .await?;
-            match policy {
-                Some(policy) => Ok(Json(policy)),
-                None => Err(ApiError::NotFound(Json(ErrorBody {
-                    error: "Project policy not found".to_string(),
-                }))),
-            }
-        };
+        let response = self
+            .get_project_policies_internal(project_policy_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_project_policies_internal(
+        &self,
+        project_policy_id: ProjectPolicyId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<ProjectPolicy>> {
+        // FIXME auth check
+        let _ = self.auth_service.authorization(token.as_ref()).await?;
+        let policy = self.project_policy_service.get(&project_policy_id).await?;
+        match policy {
+            Some(policy) => Ok(Json(policy)),
+            None => Err(ApiError::NotFound(Json(ErrorBody {
+                error: "Project policy not found".to_string(),
+            }))),
+        }
     }
 
     /// Create a project policy
@@ -72,27 +73,28 @@ impl ProjectPolicyApi {
             "create_project_policy",
             project_policy_name = request.0.name.to_string(),
         );
-        let response = {
-            // FIXME auth check
-            let _ = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-
-            let policy = ProjectPolicy {
-                id: ProjectPolicyId::new_v4(),
-                name: request.0.name,
-                project_actions: request.0.project_actions,
-            };
-            self.project_policy_service
-                .create(&policy)
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json(policy))
-        };
-
+        let response = self
+            .post_project_policy_internal(request.0, token)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn post_project_policy_internal(
+        &self,
+        request: ProjectPolicyData,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<ProjectPolicy>> {
+        // FIXME auth check
+        let _ = self.auth_service.authorization(token.as_ref()).await?;
+
+        let policy = ProjectPolicy {
+            id: ProjectPolicyId::new_v4(),
+            name: request.name,
+            project_actions: request.project_actions,
+        };
+        self.project_policy_service.create(&policy).await?;
+
+        Ok(Json(policy))
     }
 }

@@ -92,23 +92,33 @@ impl ComponentApi {
             "upload_component",
             component_id = component_id.0.to_string()
         );
-        let response = {
-            let data = wasm.0.into_vec().await?;
-            self.component_service
-                .update(
-                    &component_id.0,
-                    component_type.0,
-                    data,
-                    None,
-                    HashMap::new(),
-                    &auth,
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(Json)
-        };
+        let response = self
+            .upload_component_internal(component_id.0, wasm.0, component_type.0, auth)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn upload_component_internal(
+        &self,
+        component_id: ComponentId,
+        wasm: Body,
+        component_type: Option<ComponentType>,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Component>> {
+        let data = wasm.into_vec().await?;
+        self.component_service
+            .update(
+                &component_id,
+                component_type,
+                data,
+                None,
+                HashMap::new(),
+                &auth,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(Json)
     }
 
     /// Update a component
@@ -128,38 +138,47 @@ impl ComponentApi {
             "update_component",
             component_id = component_id.0.to_string()
         );
-        let response = {
-            let data = payload.component.into_vec().await?;
-            let files_file = payload.files.map(|f| f.into_file());
-
-            let files = files_file
-                .zip(payload.files_permissions)
-                .map(
-                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
-                        archive,
-                        files: permissions.values,
-                    },
-                );
-
-            self.component_service
-                .update(
-                    &component_id.0,
-                    payload.component_type,
-                    data,
-                    files,
-                    payload
-                        .dynamic_linking
-                        .unwrap_or_default()
-                        .0
-                        .dynamic_linking,
-                    &auth,
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(Json)
-        };
+        let response = self
+            .update_component_internal(component_id.0, payload, auth)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn update_component_internal(
+        &self,
+        component_id: ComponentId,
+        payload: UpdatePayload,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Component>> {
+        let data = payload.component.into_vec().await?;
+        let files_file = payload.files.map(|f| f.into_file());
+
+        let files = files_file
+            .zip(payload.files_permissions)
+            .map(
+                |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                    archive,
+                    files: permissions.values,
+                },
+            );
+
+        self.component_service
+            .update(
+                &component_id,
+                payload.component_type,
+                data,
+                files,
+                payload
+                    .dynamic_linking
+                    .unwrap_or_default()
+                    .0
+                    .dynamic_linking,
+                &auth,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(Json)
     }
 
     /// Create a new component
@@ -178,42 +197,50 @@ impl ComponentApi {
             component_name = payload.query.0.component_name.to_string(),
             project_id = payload.query.0.project_id.as_ref().map(|v| v.to_string()),
         );
-        let response = {
-            let data = payload.component.into_vec().await?;
-            let component_name = payload.query.0.component_name;
-            let project_id = payload.query.0.project_id;
-
-            let files_file = payload.files.map(|f| f.into_file());
-
-            let files = files_file
-                .zip(payload.files_permissions)
-                .map(
-                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
-                        archive,
-                        files: permissions.values,
-                    },
-                );
-
-            self.component_service
-                .create(
-                    project_id,
-                    &component_name,
-                    payload.component_type.unwrap_or(ComponentType::Durable),
-                    data,
-                    files,
-                    payload
-                        .dynamic_linking
-                        .unwrap_or_default()
-                        .0
-                        .dynamic_linking,
-                    &auth,
-                )
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(Json)
-        };
+        let response = self
+            .create_component_internal(payload, auth)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn create_component_internal(
+        &self,
+        payload: UploadPayload,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Component>> {
+        let data = payload.component.into_vec().await?;
+        let component_name = payload.query.0.component_name;
+        let project_id = payload.query.0.project_id;
+
+        let files_file = payload.files.map(|f| f.into_file());
+
+        let files = files_file
+            .zip(payload.files_permissions)
+            .map(
+                |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                    archive,
+                    files: permissions.values,
+                },
+            );
+
+        self.component_service
+            .create(
+                project_id,
+                &component_name,
+                payload.component_type.unwrap_or(ComponentType::Durable),
+                data,
+                files,
+                payload
+                    .dynamic_linking
+                    .unwrap_or_default()
+                    .0
+                    .dynamic_linking,
+                &auth,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(Json)
     }
 
     /// Download a component
@@ -271,23 +298,32 @@ impl ComponentApi {
             version = version.0,
         );
 
-        let response = {
-            let version_int = Self::parse_version_path_segment(&version.0)?;
-
-            let versioned_component_id = VersionedComponentId {
-                component_id: component_id.0,
-                version: version_int,
-            };
-
-            self.component_service
-                .get_by_version(&versioned_component_id, &auth)
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .and_then(Self::handle_not_found)
-        };
+        let response = self
+            .get_component_metadata_internal(component_id.0, version.0, auth)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_component_metadata_internal(
+        &self,
+        component_id: ComponentId,
+        version: String,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Component>> {
+        let version_int = Self::parse_version_path_segment(&version)?;
+
+        let versioned_component_id = VersionedComponentId {
+            component_id,
+            version: version_int,
+        };
+
+        self.component_service
+            .get_by_version(&versioned_component_id, &auth)
+            .await
+            .map_err(|e| e.into())
+            .and_then(Self::handle_not_found)
     }
 
     /// Get the latest version of a given component
@@ -371,16 +407,27 @@ impl ComponentApi {
             version = version.0,
         );
 
-        let version_int = Self::parse_version_path_segment(&version.0)?;
-
         let response = self
-            .component_service
-            .get_plugin_installations_for_component(&auth, &component_id.0, version_int)
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .get_installed_plugins_internal(component_id.0, version.0, auth)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_installed_plugins_internal(
+        &self,
+        component_id: ComponentId,
+        version: String,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Vec<PluginInstallation>>> {
+        let version_int = Self::parse_version_path_segment(&version)?;
+
+        self.component_service
+            .get_plugin_installations_for_component(&auth, &component_id, version_int)
+            .await
+            .map_err(|e| e.into())
+            .map(Json)
     }
 
     /// Installs a new plugin for this component
@@ -407,6 +454,7 @@ impl ComponentApi {
         let response = self
             .component_service
             .create_plugin_installation_for_component(&auth, &component_id.0, plugin.0)
+            .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
             .map(Json);
@@ -443,6 +491,7 @@ impl ComponentApi {
                 &component_id.0,
                 update.0,
             )
+            .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
             .map(|_| Json(Empty {}));
@@ -473,6 +522,7 @@ impl ComponentApi {
         let response = self
             .component_service
             .delete_plugin_installation_for_component(&auth, &installation_id.0, &component_id.0)
+            .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
             .map(|_| Json(Empty {}));
@@ -502,20 +552,31 @@ impl ComponentApi {
             file_path = file_path.0.as_str()
         );
 
-        let version_int = Self::parse_version_path_segment(&version.0)?;
-
         let response = self
-            .component_service
-            .get_file_contents(&auth, &component_id.0, version_int, file_path.0.as_str())
+            .download_component_file_internal(component_id.0, version.0, file_path.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn download_component_file_internal(
+        &self,
+        component_id: ComponentId,
+        version: String,
+        file_path: String,
+        auth: CloudAuthCtx,
+    ) -> Result<Binary<Body>> {
+        let version_int = Self::parse_version_path_segment(&version)?;
+
+        self.component_service
+            .get_file_contents(&auth, &component_id, version_int, file_path.as_str())
             .await
             .map_err(|e| e.into())
             .map(|bytes| {
                 Binary(Body::from_bytes_stream(bytes.map_err(|e| {
                     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
                 })))
-            });
-
-        record.result(response)
+            })
     }
 
     fn handle_not_found(response: Option<Component>) -> Result<Json<Component>> {

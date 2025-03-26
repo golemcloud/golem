@@ -34,14 +34,14 @@ impl ApiDomainApi {
             domain_name = payload.0.domain_name.to_string(),
             project_id = payload.0.project_id.to_string()
         );
-        let response = {
-            let domain = self
-                .domain_service
-                .create_or_update(&payload.0, &CloudAuthCtx::new(token))
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(domain))
-        };
+        let response = self
+            .domain_service
+            .create_or_update(&payload.0, &CloudAuthCtx::new(token))
+            .instrument(record.span.clone())
+            .await
+            .map(Json)
+            .map_err(|err| err.into());
+
         record.result(response)
     }
 
@@ -57,15 +57,14 @@ impl ApiDomainApi {
         let token = token.secret();
         let record =
             recorded_http_api_request!("get_domains", project_id = project_id_query.0.to_string());
-        let response = {
-            let project_id = project_id_query.0;
-            let values = self
-                .domain_service
-                .get(&project_id, &CloudAuthCtx::new(token))
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(values))
-        };
+        let response = self
+            .domain_service
+            .get(&project_id_query.0, &CloudAuthCtx::new(token))
+            .instrument(record.span.clone())
+            .await
+            .map(Json)
+            .map_err(|err| err.into());
+
         record.result(response)
     }
 
@@ -83,15 +82,18 @@ impl ApiDomainApi {
             domain_name = domain_query.0,
             project_id = project_id_query.0.to_string()
         );
-        let response = {
-            let project_id = project_id_query.0;
-            let domain_name = domain_query.0;
-            self.domain_service
-                .delete(&project_id, &domain_name, &CloudAuthCtx::new(token))
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json("API domain deleted".to_string()))
-        };
+        let response = self
+            .domain_service
+            .delete(
+                &project_id_query.0,
+                &domain_query.0,
+                &CloudAuthCtx::new(token),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map(|_| Json("API domain deleted".to_string()))
+            .map_err(|err| err.into());
+
         record.result(response)
     }
 }

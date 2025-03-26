@@ -112,23 +112,25 @@ impl LimitsApi {
             "get_resource_limits",
             account_id = account_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-
-            let result = self
-                .plan_limit_service
-                .get_resource_limits(&account_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json(result))
-        };
+        let response = self
+            .get_resource_limits_internal(account_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_resource_limits_internal(
+        &self,
+        account_id: AccountId,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<ResourceLimits>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let result = self
+            .plan_limit_service
+            .get_resource_limits(&account_id, &auth)
+            .await?;
+        Ok(Json(result))
     }
 
     /// Update resource limits for a given account.
@@ -139,27 +141,31 @@ impl LimitsApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateResourceLimitsResponse>> {
         let record = recorded_http_api_request!("update_resource_limits",);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-
-            let mut updates: HashMap<AccountId, i64> = HashMap::new();
-
-            for (k, v) in limits.0.updates.iter() {
-                updates.insert(AccountId::from(k.as_str()), *v);
-            }
-
-            self.plan_limit_service
-                .record_fuel_consumption(updates, &auth)
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json(UpdateResourceLimitsResponse {}))
-        };
+        let response = self
+            .update_resource_limits_internal(limits.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn update_resource_limits_internal(
+        &self,
+        limits: BatchUpdateResourceLimits,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<UpdateResourceLimitsResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        let mut updates: HashMap<AccountId, i64> = HashMap::new();
+
+        for (k, v) in limits.updates.iter() {
+            updates.insert(AccountId::from(k.as_str()), *v);
+        }
+
+        self.plan_limit_service
+            .record_fuel_consumption(updates, &auth)
+            .await?;
+
+        Ok(Json(UpdateResourceLimitsResponse {}))
     }
 }

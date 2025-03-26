@@ -35,21 +35,22 @@ impl TokenApi {
     ) -> ApiResult<Json<Vec<Token>>> {
         let record =
             recorded_http_api_request!("get_tokens", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let result = self
-                .token_service
-                .find(&account_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(result))
-        };
+        let response = self
+            .get_tokens_internal(account_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_tokens_internal(
+        &self,
+        account_id: AccountId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Vec<Token>>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let result = self.token_service.find(&account_id, &auth).await?;
+        Ok(Json(result))
     }
 
     #[allow(unused_variables)]
@@ -60,7 +61,7 @@ impl TokenApi {
     )]
     /// Get a specific token
     ///
-    /// Gets information about a token given by it's identifier.
+    /// Gets information about a token given by its identifier.
     /// The JSON is the same as the data object in the oauth2 endpoint's response.
     async fn get_token(
         &self,
@@ -73,21 +74,22 @@ impl TokenApi {
             account_id = account_id.0.to_string(),
             token_id = token_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let result = self
-                .token_service
-                .get(&token_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(result))
-        };
+        let response = self
+            .get_token_internal(token_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_token_internal(
+        &self,
+        token_id: TokenId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Token>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let result = self.token_service.get(&token_id, &auth).await?;
+        Ok(Json(result))
     }
 
     #[oai(
@@ -109,21 +111,26 @@ impl TokenApi {
     ) -> ApiResult<Json<UnsafeToken>> {
         let record =
             recorded_http_api_request!("create_token", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let response = self
-                .token_service
-                .create(&account_id.0, &request.0.expires_at, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(response))
-        };
+        let response = self
+            .post_token_internal(account_id.0, request.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn post_token_internal(
+        &self,
+        account_id: AccountId,
+        request: CreateTokenDTO,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<UnsafeToken>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self
+            .token_service
+            .create(&account_id, &request.expires_at, &auth)
+            .await?;
+        Ok(Json(response))
     }
 
     #[allow(unused_variables)]
@@ -134,7 +141,7 @@ impl TokenApi {
     )]
     /// Delete a token
     ///
-    /// Deletes a previously created token given by it's identifier.
+    /// Deletes a previously created token given by its identifier.
     async fn delete_token(
         &self,
         account_id: Path<AccountId>,
@@ -146,20 +153,22 @@ impl TokenApi {
             account_id = account_id.0.to_string(),
             token_id = token_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            // FIXME account_id check
-            self.token_service
-                .delete(&token_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(DeleteTokenResponse {}))
-        };
+        let response = self
+            .delete_token_internal(token_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn delete_token_internal(
+        &self,
+        token_id: TokenId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<DeleteTokenResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        // FIXME account_id check
+        self.token_service.delete(&token_id, &auth).await?;
+        Ok(Json(DeleteTokenResponse {}))
     }
 }

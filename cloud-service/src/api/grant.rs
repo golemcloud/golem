@@ -32,21 +32,22 @@ impl GrantApi {
     ) -> ApiResult<Json<Vec<Role>>> {
         let record =
             recorded_http_api_request!("get_account_grants", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let roles = self
-                .account_grant_service
-                .get(&account_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(roles))
-        };
+        let response = self
+            .get_grants_internal(account_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_grants_internal(
+        &self,
+        account_id: AccountId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Vec<Role>>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self.account_grant_service.get(&account_id, &auth).await?;
+        Ok(Json(response))
     }
 
     #[oai(
@@ -62,27 +63,29 @@ impl GrantApi {
     ) -> ApiResult<Json<Role>> {
         let record =
             recorded_http_api_request!("get_account_grant", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let roles = self
-                .account_grant_service
-                .get(&account_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            if roles.contains(&role.0) {
-                Ok(Json(role.0))
-            } else {
-                Err(ApiError::NotFound(Json(ErrorBody {
-                    error: "Role not found".to_string(),
-                })))
-            }
-        };
+        let response = self
+            .get_grant_internal(account_id.0, role.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_grant_internal(
+        &self,
+        account_id: AccountId,
+        role: Role,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Role>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let roles = self.account_grant_service.get(&account_id, &auth).await?;
+        if roles.contains(&role) {
+            Ok(Json(role))
+        } else {
+            Err(ApiError::NotFound(Json(ErrorBody {
+                error: "Role not found".to_string(),
+            })))
+        }
     }
 
     #[oai(
@@ -100,20 +103,25 @@ impl GrantApi {
             "create_account_grant",
             account_id = account_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            self.account_grant_service
-                .add(&account_id.0, &role.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(role.0))
-        };
+        let response = self
+            .put_grant_internal(account_id.0, role.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn put_grant_internal(
+        &self,
+        account_id: AccountId,
+        role: Role,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Role>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.account_grant_service
+            .add(&account_id, &role, &auth)
+            .await?;
+        Ok(Json(role))
     }
 
     #[oai(
@@ -131,20 +139,24 @@ impl GrantApi {
             "delete_account_grant",
             account_id = account_id.0.to_string()
         );
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            self.account_grant_service
-                .remove(&account_id.0, &role.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json(DeleteGrantResponse {}))
-        };
+        let response = self
+            .delete_grant_internal(account_id.0, role.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn delete_grant_internal(
+        &self,
+        account_id: AccountId,
+        role: Role,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<DeleteGrantResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.account_grant_service
+            .remove(&account_id, &role, &auth)
+            .await?;
+        Ok(Json(DeleteGrantResponse {}))
     }
 }

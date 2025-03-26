@@ -29,21 +29,22 @@ impl AccountApi {
     ) -> ApiResult<Json<Account>> {
         let record =
             recorded_http_api_request!("get_account", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let response = self
-                .account_service
-                .get(&account_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(response))
-        };
+        let response = self
+            .get_account_internal(account_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_account_internal(
+        &self,
+        account_id: AccountId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Account>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self.account_service.get(&account_id, &auth).await?;
+        Ok(Json(response))
     }
 
     /// Get account's plan
@@ -59,21 +60,22 @@ impl AccountApi {
     ) -> ApiResult<Json<Plan>> {
         let record =
             recorded_http_api_request!("get_account_plan", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let response = self
-                .account_service
-                .get_plan(&account_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(response))
-        };
+        let response = self
+            .get_account_plan_internal(account_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_account_plan_internal(
+        &self,
+        account_id: AccountId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Plan>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self.account_service.get_plan(&account_id, &auth).await?;
+        Ok(Json(response))
     }
 
     /// Update account
@@ -91,21 +93,26 @@ impl AccountApi {
     ) -> ApiResult<Json<Account>> {
         let record =
             recorded_http_api_request!("update_account", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let response = self
-                .account_service
-                .update(&account_id.0, &data.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(response))
-        };
+        let response = self
+            .put_account_internal(account_id.0, data.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn put_account_internal(
+        &self,
+        account_id: AccountId,
+        data: AccountData,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Account>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self
+            .account_service
+            .update(&account_id, &data, &auth)
+            .await?;
+        Ok(Json(response))
     }
 
     /// Create account
@@ -118,21 +125,25 @@ impl AccountApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record = recorded_http_api_request!("create_account", account_name = data.name.clone());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let response = self
-                .account_service
-                .create(&AccountId::generate(), &data.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(response))
-        };
+        let response = self
+            .post_account_internal(data.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn post_account_internal(
+        &self,
+        data: AccountData,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Account>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self
+            .account_service
+            .create(&AccountId::generate(), &data, &auth)
+            .await?;
+        Ok(Json(response))
     }
 
     /// Delete account
@@ -150,19 +161,21 @@ impl AccountApi {
     ) -> ApiResult<Json<DeleteAccountResponse>> {
         let record =
             recorded_http_api_request!("delete_account", account_id = account_id.0.to_string());
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            self.account_service
-                .delete(&account_id.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(DeleteAccountResponse {}))
-        };
+        let response = self
+            .delete_account_internal(account_id.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn delete_account_internal(
+        &self,
+        account_id: AccountId,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<DeleteAccountResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.account_service.delete(&account_id, &auth).await?;
+        Ok(Json(DeleteAccountResponse {}))
     }
 }

@@ -9,7 +9,7 @@ use golem_service_base::migration::{Migrations, MigrationsDir};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::listener::TcpListener;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
+use poem::middleware::{CookieJarManager, Cors};
 use poem::EndpointExt;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -120,8 +120,6 @@ async fn async_main(
     let http_server = tokio::spawn(async move {
         let prometheus_registry = Arc::new(prometheus_registry);
         let app = api::combined_routes(prometheus_registry, &http_services)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing)
             .with(CookieJarManager::new())
             .with(cors);
 

@@ -89,40 +89,39 @@ impl AccountSummaryApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<AccountSummary>>> {
         let record = recorded_http_api_request!("get_account_summary",);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let result = self
-                .account_summary_service
-                .get(skip.0, limit.0, &auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(result))
-        };
+        let response = self
+            .get_account_summary_internal(skip.0, limit.0, token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_account_summary_internal(
+        &self,
+        skip: i32,
+        limit: i32,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Vec<AccountSummary>>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self.account_summary_service.get(skip, limit, &auth).await?;
+        Ok(Json(response))
     }
 
     #[oai(path = "/count", method = "get", operation_id = "get_account_count")]
     async fn get_account_count(&self, token: GolemSecurityScheme) -> Result<Json<i64>> {
         let record = recorded_http_api_request!("get_account_count",);
-        let response = {
-            let auth = self
-                .auth_service
-                .authorization(token.as_ref())
-                .instrument(record.span.clone())
-                .await?;
-            let result = self
-                .account_summary_service
-                .count(&auth)
-                .instrument(record.span.clone())
-                .await?;
-            Ok(Json(result as i64))
-        };
+        let response = self
+            .get_account_count_internal(token)
+            .instrument(record.span.clone())
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_account_count_internal(&self, token: GolemSecurityScheme) -> Result<Json<i64>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let response = self.account_summary_service.count(&auth).await?;
+        Ok(Json(response as i64))
     }
 }
