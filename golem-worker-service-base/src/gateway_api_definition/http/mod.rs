@@ -15,9 +15,13 @@
 pub use api_definition::*;
 pub use api_definition_request::*;
 pub use oas_api_definition::*;
+pub use api_oas_convert::*;
 
 mod api_definition;
 mod api_definition_request;
-mod oas_api_definition;
+pub mod oas_api_definition;
 mod path_pattern_parser;
 mod place_holder_parser;
+pub mod api_oas_convert;
+#[cfg(test)]
+mod http_api_oas_test;

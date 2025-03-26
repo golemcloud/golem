@@ -310,8 +310,8 @@ pub struct GatewayBindingComponent {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ResolvedGatewayBindingComponent {
-    name: String,
-    version: u64,
+    pub name: String,
+    pub version: u64,
 }
 
 // GatewayBindingData is a user exposed structure of GatewayBinding
@@ -442,6 +442,10 @@ impl GatewayBindingData {
                         ))
                     }
                 }
+            }
+
+            Some(GatewayBindingType::SwaggerUi) => {
+                Ok(GatewayBinding::SwaggerUi)
             }
         }
     }
@@ -587,6 +591,20 @@ impl GatewayBindingResponseData {
                     worker_name_input: None,
                     idempotency_key_input: None,
                     cors_preflight: static_binding.get_cors_preflight(),
+                    response_mapping_output: None,
+                })
+            }
+            GatewayBindingCompiled::SwaggerUi => {
+                Ok(GatewayBindingResponseData {
+                    component: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    response: None,
+                    binding_type: Some(GatewayBindingType::SwaggerUi),
+                    response_mapping_input: None,
+                    worker_name_input: None,
+                    idempotency_key_input: None,
+                    cors_preflight: None,
                     response_mapping_output: None,
                 })
             }
