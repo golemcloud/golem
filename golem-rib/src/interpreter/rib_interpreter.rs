@@ -21,6 +21,7 @@ use std::sync::Arc;
 pub struct Interpreter {
     pub input: RibInput,
     pub invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+    pub custom_stack: Option<InterpreterStack>,
 }
 
 impl Default for Interpreter {
@@ -28,30 +29,41 @@ impl Default for Interpreter {
         Interpreter {
             input: RibInput::default(),
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            custom_stack: None,
         }
     }
 }
 
 impl Interpreter {
-    pub fn new(input: &RibInput, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>) -> Self {
+    pub fn new(
+        input: &RibInput,
+        invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+        custom_stack: Option<InterpreterStack>,
+    ) -> Self {
         Interpreter {
             input: input.clone(),
             invoke,
+            custom_stack,
         }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
-    pub fn pure(input: &RibInput) -> Self {
+    pub fn pure(input: &RibInput, custom_stack: Option<InterpreterStack>) -> Self {
         Interpreter {
             input: input.clone(),
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            custom_stack,
         }
     }
 
     pub async fn run(&mut self, instructions0: RibByteCode) -> Result<RibResult, String> {
         let mut byte_code_cursor = RibByteCodeCursor::from_rib_byte_code(instructions0);
-        let mut stack = InterpreterStack::new();
+        let mut stack = match &mut self.custom_stack {
+            Some(custom) => custom,
+            None => &mut InterpreterStack::default(),
+        };
+
         let mut interpreter_env = InterpreterEnv::from(&self.input, &self.invoke);
 
         while let Some(instruction) = byte_code_cursor.get_instruction() {
@@ -4583,6 +4595,7 @@ mod tests {
             Interpreter {
                 input: input.unwrap_or_default(),
                 invoke,
+                custom_stack: None,
             }
         }
 
@@ -4599,6 +4612,7 @@ mod tests {
             Interpreter {
                 input: rib_input.unwrap_or_default(),
                 invoke,
+                custom_stack: None,
             }
         }
 

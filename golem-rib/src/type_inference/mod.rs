@@ -2588,7 +2588,7 @@ mod tests {
                 variable_id,
                 type_annotation,
                 expr: Box::new(expr),
-                inferred_type,
+                inferred_type: InferredType::Tuple(vec![]),
                 source_span: SourceSpan::default(),
             }
         }

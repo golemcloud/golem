@@ -37,7 +37,7 @@ pub async fn interpret(
     rib_input: &RibInput,
     function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
 ) -> Result<RibResult, String> {
-    let mut interpreter = Interpreter::new(rib_input, function_invoke);
+    let mut interpreter = Interpreter::new(rib_input, function_invoke, None);
     interpreter.run(rib.clone()).await
 }
 
@@ -45,6 +45,6 @@ pub async fn interpret(
 // where there are no side effecting function calls.
 // It is recommended to use `interpret` over `interpret_pure` if you are unsure.
 pub async fn interpret_pure(rib: &RibByteCode, rib_input: &RibInput) -> Result<RibResult, String> {
-    let mut interpreter = Interpreter::pure(rib_input);
+    let mut interpreter = Interpreter::pure(rib_input, None);
     interpreter.run(rib.clone()).await
 }
