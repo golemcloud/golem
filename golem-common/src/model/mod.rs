@@ -2081,6 +2081,7 @@ pub enum GatewayBindingType {
     FileServer,
     HttpHandler,
     CorsPreflight,
+    SwaggerUi,
 }
 
 // To keep backward compatibility as we documented wit-worker to be default
@@ -2106,6 +2107,7 @@ impl<'de> Deserialize<'de> for GatewayBindingType {
                     "default" | "wit-worker" => Ok(GatewayBindingType::Default),
                     "file-server" => Ok(GatewayBindingType::FileServer),
                     "cors-preflight" => Ok(GatewayBindingType::CorsPreflight),
+                    "swagger-ui" => Ok(GatewayBindingType::SwaggerUi),
                     _ => Err(de::Error::invalid_value(Unexpected::Str(value), &self)),
                 }
             }
@@ -2122,7 +2124,10 @@ impl TryFrom<String> for GatewayBindingType {
         match value.as_str() {
             "default" => Ok(GatewayBindingType::Default),
             "file-server" => Ok(GatewayBindingType::FileServer),
-            _ => Err(format!("Invalid WorkerBindingType: {}", value)),
+            "http-handler" => Ok(GatewayBindingType::HttpHandler),
+            "cors-preflight" => Ok(GatewayBindingType::CorsPreflight),
+            "swagger-ui" => Ok(GatewayBindingType::SwaggerUi),
+            _ => Err(format!("Invalid GatewayBindingType: {}", value)),
         }
     }
 }

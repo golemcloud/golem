@@ -18,10 +18,12 @@ use crate::service::gateway::BoxConversionContext;
 use internal::*;
 use openapiv3::OpenAPI;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
-use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
+use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult, ToJSON};
 use serde_json::Value;
 use std::borrow::Cow;
+use serde::Serialize;
 
+#[derive(Serialize)]
 pub struct OpenApiHttpApiDefinition(pub OpenAPI);
 
 impl OpenApiHttpApiDefinition {
@@ -117,6 +119,12 @@ impl poem_openapi::types::Type for OpenApiHttpApiDefinition {
         &'a self,
     ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
         Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl ToJSON for OpenApiHttpApiDefinition {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(&self.0).ok()
     }
 }
 
@@ -277,6 +285,15 @@ mod internal {
                             method,
                             binding: GatewayBinding::HttpHandler(binding),
                             security,
+                        })
+                    }
+                    (GatewayBindingType::SwaggerUi, _) => {
+                        Ok(RouteRequest {
+                            path: path_pattern.clone(),
+                            method,
+                            binding: GatewayBinding::SwaggerUi,
+                            security,
+                            cors: None,
                         })
                     }
                     (GatewayBindingType::CorsPreflight, method) => {

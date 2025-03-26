@@ -41,6 +41,7 @@ pub enum GatewayBinding {
     FileServer(WorkerBinding),
     Static(StaticBinding),
     HttpHandler(HttpHandlerBinding),
+    SwaggerUi,
 }
 
 impl GatewayBinding {
@@ -49,6 +50,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
+            Self::SwaggerUi => false,
             Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => true,
                 StaticBinding::HttpAuthCallBack(_) => false,
@@ -61,6 +63,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
+            Self::SwaggerUi => false,
             Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
@@ -79,6 +82,7 @@ impl GatewayBinding {
             Self::HttpHandler(http_handler_binding) => {
                 Some(http_handler_binding.component_id.clone())
             }
+            Self::SwaggerUi => None,
             Self::Static(_) => None,
         }
     }
@@ -145,6 +149,17 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
                     response: None,
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
+                    static_binding: None,
+                    invocation_context: None,
+                },
+            ),
+            GatewayBinding::SwaggerUi => Ok(
+                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
+                    binding_type: Some(GatewayBindingType::SwaggerUi.into()),
+                    component: None,
+                    worker_name: None,
+                    response: None,
+                    idempotency_key: None,
                     static_binding: None,
                     invocation_context: None,
                 },
@@ -229,6 +244,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 Ok(GatewayBinding::static_binding(StaticBinding::try_from(
                     static_binding,
                 )?))
+            }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::SwaggerUi => {
+                Ok(GatewayBinding::SwaggerUi)
             }
         }
     }
