@@ -19,7 +19,7 @@ pub use error::*;
 pub use healthcheck::*;
 
 // Components and request data that can be reused for implementing server API endpoints
-mod api_definition;
+pub mod api_definition;
 mod common;
 mod custom_http_request;
 mod error;

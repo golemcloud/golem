@@ -32,6 +32,7 @@ pub enum GatewayBindingCompiled {
     Static(StaticBinding),
     FileServer(WorkerBindingCompiled),
     HttpHandler(HttpHandlerBindingCompiled),
+    SwaggerUi,
 }
 
 impl GatewayBindingCompiled {
@@ -40,6 +41,7 @@ impl GatewayBindingCompiled {
             GatewayBindingCompiled::Worker(_) => false,
             GatewayBindingCompiled::FileServer(_) => false,
             GatewayBindingCompiled::HttpHandler(_) => false,
+            GatewayBindingCompiled::SwaggerUi => false,
             GatewayBindingCompiled::Static(static_binding) => match static_binding {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
@@ -75,6 +77,7 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
 
                 GatewayBinding::HttpHandler(worker_binding)
             }
+            GatewayBindingCompiled::SwaggerUi => GatewayBinding::SwaggerUi,
         }
     }
 }
@@ -137,6 +140,27 @@ impl TryFrom<GatewayBindingCompiled>
                         invocation_context_rib_input: None,
                     },
                 )
+            }
+            GatewayBindingCompiled::SwaggerUi => {
+                Ok(golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+                    component: None,
+                    worker_name: None,
+                    compiled_worker_name_expr: None,
+                    worker_name_rib_input: None,
+                    idempotency_key: None,
+                    compiled_idempotency_key_expr: None,
+                    idempotency_key_rib_input: None,
+                    response: None,
+                    compiled_response_expr: None,
+                    response_rib_input: None,
+                    worker_functions_in_response: None,
+                    binding_type: Some(ProtoGatewayBindingType::SwaggerUi.into()),
+                    static_binding: None,
+                    response_rib_output: None,
+                    invocation_context: None,
+                    compiled_invocation_context_expr: None,
+                    invocation_context_rib_input: None,
+                })
             }
         }
     }
@@ -320,6 +344,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
                 Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }
+            ProtoGatewayBindingType::SwaggerUi => {
+                Ok(GatewayBindingCompiled::SwaggerUi)
+            }
         }
     }
 }
@@ -394,6 +421,7 @@ mod internal {
             GatewayBindingType::FileServer => 1,
             GatewayBindingType::CorsPreflight => 2,
             GatewayBindingType::HttpHandler => 4,
+            GatewayBindingType::SwaggerUi => 5,
         };
 
         Ok(
@@ -450,6 +478,7 @@ mod internal {
             GatewayBindingType::FileServer => 1,
             GatewayBindingType::CorsPreflight => 2,
             GatewayBindingType::HttpHandler => 4,
+            GatewayBindingType::SwaggerUi => 5,
         };
 
         Ok(
