@@ -63,3 +63,5 @@ impl Display for ApiVersion {
 pub trait HasGolemBindings {
     fn get_bindings(&self) -> Vec<GatewayBinding>;
 }
+
+pub use http::api_oas_convert::OpenApiHttpApiDefinitionResponse;

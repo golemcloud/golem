@@ -54,6 +54,7 @@ pub fn custom_request_route(services: &Services) -> Route {
         services.fileserver_binding_handler.clone(),
         services.http_handler_binding_handler.clone(),
         services.gateway_session_store.clone(),
+        Some(services.definition_service.clone()),
     );
 
     Route::new().nest("/", custom_request_executor)
