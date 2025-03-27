@@ -28,6 +28,7 @@ mod http_content_type_mapper;
 pub mod http_handler_binding_handler;
 pub mod request;
 pub mod router;
+pub mod swagger_binding_handler;
 pub mod to_response;
 pub mod to_response_failure;
 pub use gateway_worker_request_executor::*;

@@ -36,6 +36,7 @@ use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
 use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, GatewaySessionStore,
 };
+
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::ApiInputPath;
 use golem_worker_service_base::gateway_security::{
@@ -43,7 +44,7 @@ use golem_worker_service_base::gateway_security::{
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ValidationErrors;
 use golem_worker_service_base::{api, gateway_api_definition};
-use http::header::{LOCATION, ORIGIN};
+use http::header::LOCATION. ORIGIN, HOST;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
@@ -78,6 +79,7 @@ async fn execute(
         internal::get_test_file_server_binding_handler(),
         Arc::new(DefaultAuthCallBack),
         internal::get_test_http_handler_binding_handler(),
+        internal::get_test_swagger_binding_handler(),
         Arc::new(internal::TestApiDefinitionLookup::new(compiled)),
         Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
@@ -2619,6 +2621,10 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, RibRuntimeError, WorkerServiceRibInterpreter,
     };
+    use golem_worker_service_base::gateway_execution::swagger_binding_handler::{
+        SwaggerBindingHandler, SwaggerBindingResult, SwaggerBindingSuccess,
+    };
+    use golem_worker_service_base::gateway_execution::request::RichRequest;
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -3246,6 +3252,28 @@ mod internal {
 
     pub fn get_session_store_with_zero_ttl() -> GatewaySessionStore {
         Arc::new(NoopTestSessionBackend)
+    }
+
+    struct TestSwaggerBindingHandler {}
+
+    #[async_trait]
+    impl<Namespace> SwaggerBindingHandler<Namespace> for TestSwaggerBindingHandler {
+        // Remove the explicit lifetime parameter
+        async fn handle_swagger_binding_request(
+            &self,
+            _namespace: &Namespace,
+            _authority: &str,
+            _request: &RichRequest,
+        ) -> SwaggerBindingResult {
+            Ok(SwaggerBindingSuccess {
+                html_content: "<html><body>Test Swagger UI</body></html>".to_string(),
+            })
+        }
+    }
+
+    pub fn get_test_swagger_binding_handler<Namespace>(
+    ) -> Arc<dyn SwaggerBindingHandler<Namespace> + Sync + Send> {
+        Arc::new(TestSwaggerBindingHandler {})
     }
 }
 
@@ -3899,4 +3927,115 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
 
         cookies
     }
+}
+
+#[test]
+async fn test_swagger_ui_binding() {
+    // Create a Swagger UI API definition
+    let api_specification = get_api_def_with_swagger_ui("/swagger-ui").await;
+
+    // Create a request to the Swagger UI endpoint
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("localhost:8080"));
+    let api_request = get_gateway_request("/swagger-ui", None, &headers, Value::Null);
+
+    // Create a session store
+    let session_store = internal::get_session_store();
+
+    // Execute the request
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    // Verify response status code
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Get response body
+    let body = match response.into_body().into_bytes().await {
+        Ok(b) => b,
+        Err(_) => panic!("Failed to read body"),
+    };
+    let html_content = String::from_utf8(body.to_vec()).unwrap();
+
+    // Verify the HTML contains the expected Swagger UI content
+    assert!(html_content.contains("<html><body>Test Swagger UI</body></html>"));
+}
+
+// Helper function to create an API definition with a Swagger UI binding
+async fn get_api_def_with_swagger_ui(path_pattern: &str) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: api-docs
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          routes:
+          - method: Get
+            path: {}
+            binding:
+              bindingType: swagger-ui
+        "#,
+        path_pattern,
+    );
+
+    // Parse the YAML into an API definition request
+    let http_api_definition_request: api::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    // Convert to core request
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        http_api_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
+
+    // Create the API definition
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
+    )
+    .await
+    .unwrap()
+}
+
+#[test]
+async fn test_swagger_ui_integration() {
+    // Create a Swagger UI API definition
+    let api_specification = get_api_def_with_swagger_ui("/swagger-ui").await;
+
+    // Create a request to the Swagger UI endpoint
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("localhost:8080"));
+    let api_request = get_gateway_request("/swagger-ui", None, &headers, Value::Null);
+
+    // Create a session store
+    let session_store = internal::get_session_store();
+
+    // Execute the request
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    // Verify response status code
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Get response body
+    let body = match response.into_body().into_bytes().await {
+        Ok(b) => b,
+        Err(_) => panic!("Failed to read body"),
+    };
+    let html_content = String::from_utf8(body.to_vec()).unwrap();
+
+    // Verify the HTML contains the expected Swagger UI content
+    assert!(html_content.contains("<html><body>Test Swagger UI</body></html>"));
 }
