@@ -141,8 +141,8 @@ impl TryFrom<GatewayBindingCompiled>
                     },
                 )
             }
-            GatewayBindingCompiled::SwaggerUi => {
-                Ok(golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+            GatewayBindingCompiled::SwaggerUi => Ok(
+                golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
                     component: None,
                     worker_name: None,
                     compiled_worker_name_expr: None,
@@ -160,8 +160,8 @@ impl TryFrom<GatewayBindingCompiled>
                     invocation_context: None,
                     compiled_invocation_context_expr: None,
                     invocation_context_rib_input: None,
-                })
-            }
+                },
+            ),
         }
     }
 }
@@ -344,9 +344,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
                 Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }
-            ProtoGatewayBindingType::SwaggerUi => {
-                Ok(GatewayBindingCompiled::SwaggerUi)
-            }
+            ProtoGatewayBindingType::SwaggerUi => Ok(GatewayBindingCompiled::SwaggerUi),
         }
     }
 }

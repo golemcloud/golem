@@ -114,7 +114,7 @@ impl ResponseMapping {
         // Convert the Rib expression to a string for pattern matching
         self.0.to_string()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.expression_str().is_empty()
     }
