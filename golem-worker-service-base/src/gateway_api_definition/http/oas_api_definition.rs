@@ -19,9 +19,9 @@ use internal::*;
 use openapiv3::OpenAPI;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult, ToJSON};
+use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
-use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct OpenApiHttpApiDefinition(pub OpenAPI);

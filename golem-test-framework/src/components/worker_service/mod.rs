@@ -1727,6 +1727,9 @@ async fn http_api_definition_to_grpc(
                                 golem_client::model::GatewayBindingType::CorsPreflight => {
                                     GatewayBindingType::CorsPreflight
                                 }
+                                golem_client::model::GatewayBindingType::SwaggerUi => {
+                                    GatewayBindingType::SwaggerUi
+                                }
                             } as i32,
                         ),
                         static_binding: route.binding.cors_preflight.map(|cors_preflight| {
@@ -1806,6 +1809,9 @@ async fn grpc_api_definition_request_to_http(
                                         }
                                         GatewayBindingType::HttpHandler => {
                                             golem_client::model::GatewayBindingType::HttpHandler
+                                        }
+                                        GatewayBindingType::SwaggerUi => {
+                                            golem_client::model::GatewayBindingType::SwaggerUi
                                         }
                                     }
                                 }),
