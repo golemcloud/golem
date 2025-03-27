@@ -18,7 +18,7 @@ pub mod fmt {
     use cli_table::{Row, Title, WithTitle};
     use colored::control::SHOULD_COLORIZE;
     use colored::Colorize;
-    use golem_client::model::WorkerStatus;
+    use golem_client::model::{InitialComponentFile, WorkerStatus};
     use golem_wasm_rpc_stubgen::log::{log_warn_action, logln, LogColorize, LogIndent};
     use itertools::Itertools;
     use regex::Regex;
@@ -270,6 +270,20 @@ pub mod fmt {
                             format_export(interface)
                         ))
                         .join("\n")
+                )
+            })
+            .join("\n")
+    }
+
+    pub fn format_ifs_entry(files: &[InitialComponentFile]) -> String {
+        files
+            .iter()
+            .map(|file| {
+                format!(
+                    "{} {} {}",
+                    file.permissions.as_compact_str(),
+                    file.path.as_path().as_str().log_color_highlight(),
+                    file.key.0.as_str().black()
                 )
             })
             .join("\n")
@@ -720,6 +734,12 @@ pub mod component {
                 &view.dynamic_linking,
                 !view.dynamic_linking.is_empty(),
                 format_dynamic_links,
+            )
+            .fmt_field_optional(
+                "Initial file system",
+                view.files.as_slice(),
+                !view.files.is_empty(),
+                format_ifs_entry,
             );
 
         fields.build()

@@ -180,7 +180,6 @@ impl PluginCommandHandler {
                                 .component
                                 .create_component(
                                     &ComponentQuery {
-                                        // TODO: check if it's okay that we are using the scope project here
                                         project_id: scope_project.as_ref().map(|p| p.project_id.0),
                                         component_name: component_name.0.clone(),
                                     },

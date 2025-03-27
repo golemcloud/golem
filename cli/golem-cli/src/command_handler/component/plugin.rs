@@ -21,7 +21,9 @@ use crate::model::text::fmt::log_warn;
 use crate::model::ComponentName;
 use anyhow::bail;
 use golem_client::api::ComponentClient as ComponentClientOss;
-use golem_client::model::{PluginInstallation, PluginInstallationCreation};
+use golem_client::model::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
 use golem_cloud_client::api::ComponentClient as ComponentClientCloud;
 use golem_common::base_model::PluginInstallationId;
 use golem_wasm_rpc_stubgen::log::{log_action, log_error_action, log_warn_action, LogIndent};
@@ -48,7 +50,7 @@ impl ComponentPluginCommandHandler {
                 priority,
                 param,
             } => {
-                self.cmd_new(
+                self.cmd_install(
                     component_name.component_name,
                     plugin_name,
                     plugin_version,
@@ -61,17 +63,31 @@ impl ComponentPluginCommandHandler {
                 component_name,
                 version,
             } => self.cmd_get(component_name.component_name, version).await,
+            ComponentPluginSubcommand::Update {
+                component_name,
+                installation_id,
+                priority,
+                param,
+            } => {
+                self.cmd_update(
+                    component_name.component_name,
+                    installation_id,
+                    priority,
+                    param,
+                )
+                .await
+            }
             ComponentPluginSubcommand::Uninstall {
                 component_name,
                 installation_id,
             } => {
-                self.cmd_delete(component_name.component_name, installation_id)
+                self.cmd_uninstall(component_name.component_name, installation_id)
                     .await
             }
         }
     }
 
-    async fn cmd_new(
+    async fn cmd_install(
         &self,
         component_name: Option<ComponentName>,
         plugin_name: String,
@@ -86,17 +102,19 @@ impl ComponentPluginCommandHandler {
             .await?;
 
         let mut installations = Vec::<PluginInstallation>::new();
+        let mut any_error = false;
         for component_name in &selected_components.component_names {
+            log_action(
+                "Installing",
+                format!("plugin {} from component {}", plugin_name, component_name),
+            );
+            let _indent = LogIndent::new();
+
             let component = self
                 .ctx
                 .component_handler()
                 .component_by_name(selected_components.project.as_ref(), component_name)
                 .await?;
-
-            log_action(
-                "Installing",
-                format!("plugin {} from component {}", plugin_name, component_name),
-            );
 
             let result = match component {
                 Some(component) => match self.ctx.golem_clients().await? {
@@ -133,6 +151,7 @@ impl ComponentPluginCommandHandler {
                 },
                 None => {
                     log_warn(format!("Component {} not found", component_name));
+                    any_error = true;
                     None
                 }
             };
@@ -143,6 +162,10 @@ impl ComponentPluginCommandHandler {
         }
 
         self.ctx.log_handler().log_view(&installations);
+
+        if any_error {
+            bail!(NonSuccessfulExit)
+        }
 
         Ok(())
     }
@@ -202,7 +225,83 @@ impl ComponentPluginCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(
+    async fn cmd_update(
+        &self,
+        component_name: Option<ComponentName>,
+        plugin_installation_id: PluginInstallationId,
+        priority: i32,
+        parameters: Vec<(String, String)>,
+    ) -> anyhow::Result<()> {
+        let selected_components = self
+            .ctx
+            .component_handler()
+            .must_select_components_by_app_or_name(component_name.as_ref())
+            .await?;
+
+        let mut any_error = false;
+        for component_name in &selected_components.component_names {
+            log_action(
+                "Updating",
+                format!(
+                    "plugin {} for component {}",
+                    plugin_installation_id, component_name
+                ),
+            );
+            let _indent = LogIndent::new();
+
+            let component = self
+                .ctx
+                .component_handler()
+                .component_by_name(selected_components.project.as_ref(), component_name)
+                .await?;
+
+            match component {
+                Some(component) => {
+                    match self.ctx.golem_clients().await? {
+                        GolemClients::Oss(clients) => clients
+                            .component
+                            .update_installed_plugin(
+                                &component.versioned_component_id.component_id,
+                                &plugin_installation_id.0,
+                                &PluginInstallationUpdate {
+                                    priority,
+                                    parameters: parameters.clone().into_iter().collect(),
+                                },
+                            )
+                            .await
+                            .map(|_| ())
+                            .map_service_error()?,
+                        GolemClients::Cloud(clients) => clients
+                            .component
+                            .update_installed_plugin(
+                                &component.versioned_component_id.component_id,
+                                &plugin_installation_id.0,
+                                &PluginInstallationUpdate {
+                                    priority,
+                                    parameters: parameters.clone().into_iter().collect(),
+                                },
+                            )
+                            .await
+                            .map(|_| ())
+                            .map_service_error()?,
+                    }
+                    log_action("Updated", "plugin");
+                }
+                None => {
+                    log_warn(format!("Component {} not found", component_name));
+                    any_error = true;
+                }
+            };
+        }
+
+        if any_error {
+            bail!(NonSuccessfulExit)
+        }
+
+        Ok(())
+    }
+
+    async fn cmd_uninstall(
         &self,
         component_name: Option<ComponentName>,
         plugin_installation_id: PluginInstallationId,
@@ -215,12 +314,6 @@ impl ComponentPluginCommandHandler {
 
         let mut any_error = false;
         for component_name in &selected_components.component_names {
-            let component = self
-                .ctx
-                .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name)
-                .await?;
-
             log_warn_action(
                 "Uninstalling",
                 format!(
@@ -229,6 +322,12 @@ impl ComponentPluginCommandHandler {
                 ),
             );
             let _ident = LogIndent::new();
+
+            let component = self
+                .ctx
+                .component_handler()
+                .component_by_name(selected_components.project.as_ref(), component_name)
+                .await?;
 
             let result = match component {
                 Some(component) => match self.ctx.golem_clients().await? {

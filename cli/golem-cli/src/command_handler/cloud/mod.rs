@@ -18,7 +18,6 @@ use crate::context::Context;
 use std::sync::Arc;
 
 pub mod account;
-pub mod policy;
 pub mod project;
 pub mod token;
 

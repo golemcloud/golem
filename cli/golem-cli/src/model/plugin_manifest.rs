@@ -112,8 +112,8 @@ impl FromPluginManifest for PluginDefinitionCreationDefaultPluginScope {
                 PluginTypeSpecificDefinition::OplogProcessor(params) => {
                     PluginTypeSpecificCreation::OplogProcessor(params)
                 }
-                PluginTypeSpecificDefinition::Library(_) => unimplemented!(), // TODO
-                PluginTypeSpecificDefinition::App(_) => unimplemented!(),     // TODO
+                PluginTypeSpecificDefinition::Library(_) => unreachable!(),
+                PluginTypeSpecificDefinition::App(_) => unreachable!(),
             },
             scope,
         }

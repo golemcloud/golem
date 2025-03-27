@@ -57,6 +57,7 @@ use golem_wasm_rpc_stubgen::stub::RustDependencyOverride;
 use std::collections::{BTreeMap, HashSet};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -496,7 +497,8 @@ pub struct ApplicationContextState {
     pub build_steps_filter: HashSet<AppBuildStep>,
     build_steps_filter_was_set: bool,
 
-    app_context: Option<anyhow::Result<Option<ApplicationContext<GolemComponentExtensions>>>>,
+    app_context:
+        Option<Result<Option<ApplicationContext<GolemComponentExtensions>>, Arc<anyhow::Error>>>,
 }
 
 impl ApplicationContextState {
@@ -512,7 +514,7 @@ impl ApplicationContextState {
         let config = golem_wasm_rpc_stubgen::commands::app::Config {
             app_source_mode: {
                 match &config.app_manifest_path {
-                    Some(path) => ApplicationSourceMode::Explicit(vec![path.clone()]),
+                    Some(path) => ApplicationSourceMode::Explicit(path.clone()),
                     None => {
                         if config.disable_app_manifest_discovery {
                             ApplicationSourceMode::None
@@ -532,15 +534,15 @@ impl ApplicationContextState {
 
         debug!(config = ?config, "Initializing application context");
 
-        self.app_context = Some(ApplicationContext::new(config))
+        self.app_context = Some(ApplicationContext::new(config).map_err(Arc::new))
     }
 
     pub fn opt(&self) -> anyhow::Result<Option<&ApplicationContext<GolemComponentExtensions>>> {
         match &self.app_context {
             Some(Ok(None)) => Ok(None),
             Some(Ok(Some(app_ctx))) => Ok(Some(app_ctx)),
-            Some(Err(err)) => Err(anyhow!("{err}")),
-            None => panic!("Uninitialized application context"),
+            Some(Err(err)) => Err(anyhow!(err.clone())),
+            None => unreachable!("Uninitialized application context"),
         }
     }
 
@@ -550,8 +552,8 @@ impl ApplicationContextState {
         match &mut self.app_context {
             Some(Ok(None)) => Ok(None),
             Some(Ok(Some(app_ctx))) => Ok(Some(app_ctx)),
-            Some(Err(err)) => Err(anyhow!("{err}")),
-            None => panic!("Uninitialized application context"),
+            Some(Err(err)) => Err(anyhow!(err.clone())),
+            None => unreachable!("Uninitialized application context"),
         }
     }
 
@@ -559,8 +561,8 @@ impl ApplicationContextState {
         match &self.app_context {
             Some(Ok(None)) => Err(anyhow!(HintError::NoApplicationManifestFound)),
             Some(Ok(Some(app_ctx))) => Ok(app_ctx),
-            Some(Err(err)) => Err(anyhow!("{err}")),
-            None => panic!("Uninitialized application context"),
+            Some(Err(err)) => Err(anyhow!(err.clone())),
+            None => unreachable!("Uninitialized application context"),
         }
     }
 
@@ -570,8 +572,8 @@ impl ApplicationContextState {
         match &mut self.app_context {
             Some(Ok(None)) => Err(anyhow!(HintError::NoApplicationManifestFound)),
             Some(Ok(Some(app_ctx))) => Ok(app_ctx),
-            Some(Err(err)) => Err(anyhow!("{err}")),
-            None => panic!("Uninitialized application context"),
+            Some(Err(err)) => Err(anyhow!(err.clone())),
+            None => unreachable!("Uninitialized application context"),
         }
     }
 }

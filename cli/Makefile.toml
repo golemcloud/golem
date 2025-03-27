@@ -90,22 +90,43 @@ install_crate = "clippy"
 command = "cargo"
 args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "--no-deps", "-Dwarnings"]
 
-## ** INSTALL **
-[tasks.install]
-dependencies = ["install-golem-cli", "install-golem"]
+## ** INSTALL - DEBUG **
+[tasks.install-debug]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-debug", "install-golem-debug"]
 
-[tasks.install-golem-cli]
-description = "Install golem-cli"
+[tasks.install-golem-cli-debug]
+description = "Install golem-cli (debug)"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --path golem-cli --bin golem-cli --target-dir target --locked --offline
+exec --fail-on-error cargo install --debug --path golem-cli --bin golem-cli --target-dir target --locked --offline
 '''
 
-[tasks.install-golem]
-description = "Install golem"
+[tasks.install-golem-debug]
+description = "Install golem (debug)"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --path golem --bin golem --target-dir target --locked --offline
+exec --fail-on-error cargo install --debug --path golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** INSTALL - RELEASE **
+
+[tasks.install-release]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-release", "install-golem-release"]
+
+[tasks.install-golem-cli-release]
+description = "Install golem-cli (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --release --path golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem-release]
+description = "Install golem (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --release --path golem --bin golem --target-dir target --locked --offline
 '''
 
 ## ** TEST **
@@ -139,7 +160,7 @@ exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag:uses_cargo
 '''
 
 [tasks.template-integration-tests]
-dependencies = ["install-golem-cli"]
+dependencies = ["install-golem-cli-debug"]
 description = "Run template integration tests"
 script_runner = "@duckscript"
 script = '''

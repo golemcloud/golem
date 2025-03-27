@@ -27,7 +27,7 @@ use itertools::Itertools;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fmt::Write;
+use std::fmt::{Display, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -61,9 +61,7 @@ impl<CPE: ComponentPropertiesExtensions> Config<CPE> {
 #[derive(Debug, Clone)]
 pub enum ApplicationSourceMode {
     Automatic,
-    // TODO: change to only accept the root document with include handling, and switch to that at start
-    // TODO: (and maybe change validation to only allow include in root doc)
-    Explicit(Vec<PathBuf>),
+    Explicit(PathBuf),
     None,
 }
 
@@ -1119,51 +1117,39 @@ fn collect_sources(
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
 
+    fn collect_by_main_source(source: &Path) -> Option<ValidatedResult<BTreeSet<PathBuf>>> {
+        let source_ext = PathExtra::new(&source);
+        let source_dir = source_ext.parent().unwrap();
+        std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
+
+        let includes = includes_from_yaml_file(source);
+        if includes.is_empty() {
+            Some(ValidatedResult::Ok(BTreeSet::from([source.to_path_buf()])))
+        } else {
+            Some(
+                ValidatedResult::from_result(compile_and_collect_globs(source_dir, &includes)).map(
+                    |mut sources| {
+                        sources.insert(0, source.to_path_buf());
+                        sources.into_iter().collect()
+                    },
+                ),
+            )
+        }
+    }
+
     let sources = match mode {
         ApplicationSourceMode::Automatic => match find_main_source() {
-            Some(source) => {
-                let source_ext = PathExtra::new(&source);
-                let source_dir = source_ext.parent().unwrap();
-                std::env::set_current_dir(source_dir)
-                    .expect("Failed to set current dir for config parent");
-
-                let includes = includes_from_yaml_file(source.as_path());
-                if includes.is_empty() {
-                    Some(ValidatedResult::Ok(BTreeSet::from([source])))
-                } else {
-                    Some(
-                        ValidatedResult::from_result(compile_and_collect_globs(
-                            source_dir, &includes,
-                        ))
-                        .map(|mut sources| {
-                            sources.insert(0, source);
-                            sources.into_iter().collect()
-                        }),
-                    )
-                }
-            }
+            Some(source) => collect_by_main_source(&source),
             None => None,
         },
-        ApplicationSourceMode::Explicit(sources) => {
-            let non_unique_source_warns: Vec<_> = sources
-                .iter()
-                .counts()
-                .into_iter()
-                .filter(|(_, count)| *count > 1)
-                .map(|(source, count)| {
-                    format!(
-                        "Source added multiple times, source: {}, count: {}",
-                        source.display(),
-                        count
-                    )
-                })
-                .collect();
-
-            Some(ValidatedResult::from_value_and_warns(
-                sources.iter().cloned().collect(),
-                non_unique_source_warns,
-            ))
-        }
+        ApplicationSourceMode::Explicit(source) => match source.canonicalize() {
+            Ok(source) => collect_by_main_source(&source),
+            Err(err) => Some(ValidatedResult::from_error(format!(
+                "Cannot resolve requested application manifest source {}: {}",
+                source.log_color_highlight(),
+                err
+            ))),
+        },
         ApplicationSourceMode::None => None,
     };
 
@@ -1207,46 +1193,6 @@ fn find_main_source() -> Option<PathBuf> {
     }
 
     last_source
-}
-
-fn to_anyhow<T>(message: &str, result: ValidatedResult<T>) -> anyhow::Result<T> {
-    // TODO: review formatting here
-    fn format_warns(warns: Vec<String>) -> String {
-        let label = "Warning".yellow();
-        warns
-            .into_iter()
-            .map(|warn| format!("{}: {}", label, warn))
-            .join("\n")
-    }
-
-    fn format_errors(errors: Vec<String>) -> String {
-        let label = "Error".red();
-        errors
-            .into_iter()
-            .map(|error| format!("{}: {}", label, error))
-            .join("\n")
-    }
-
-    match result {
-        ValidatedResult::Ok(value) => Ok(value),
-        ValidatedResult::OkWithWarns(components, warns) => {
-            log_warn_action("Found warnings:\n", format_warns(warns));
-            Ok(components)
-        }
-        ValidatedResult::WarnsAndErrors(warns, errors) => {
-            fn with_new_line_if_not_empty(mut str: String) -> String {
-                if !str.is_empty() {
-                    str.write_char('\n').unwrap()
-                }
-                str
-            }
-            let warns = with_new_line_if_not_empty(format_warns(warns));
-            let errors = with_new_line_if_not_empty(format_errors(errors));
-            let message = format!("\n{}{}\n{}", warns, errors, message);
-
-            Err(anyhow!(message))
-        }
-    }
 }
 
 fn is_up_to_date<S, T, FS, FT>(skip_check: bool, sources: FS, targets: FT) -> bool
@@ -2036,4 +1982,60 @@ fn env_var_flag(name: &str) -> bool {
             flag.starts_with("t") || flag == "1"
         })
         .unwrap_or_default()
+}
+
+#[derive(Debug, Clone)]
+pub struct AppValidationError {
+    message: String,
+    warns: Vec<String>,
+    errors: Vec<String>,
+}
+
+impl Display for AppValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn with_new_line_if_not_empty(mut str: String) -> String {
+            if !str.is_empty() {
+                str.write_char('\n').unwrap()
+            }
+            str
+        }
+
+        let warns = with_new_line_if_not_empty(format_warns(&self.warns));
+        let errors = with_new_line_if_not_empty(format_errors(&self.errors));
+
+        write!(f, "\n{}{}\n{}", warns, errors, &self.message)
+    }
+}
+
+impl std::error::Error for AppValidationError {}
+
+fn format_warns(warns: &[String]) -> String {
+    let label = "warning".yellow();
+    warns
+        .iter()
+        .map(|warn| format!("{}: {}", label, warn))
+        .join("\n")
+}
+
+fn format_errors(errors: &[String]) -> String {
+    let label = "error".red();
+    errors
+        .iter()
+        .map(|error| format!("{}: {}", label, error))
+        .join("\n")
+}
+
+fn to_anyhow<T>(message: &str, result: ValidatedResult<T>) -> anyhow::Result<T> {
+    match result {
+        ValidatedResult::Ok(value) => Ok(value),
+        ValidatedResult::OkWithWarns(components, warns) => {
+            log_warn_action("App validation warnings:\n", format_warns(&warns));
+            Ok(components)
+        }
+        ValidatedResult::WarnsAndErrors(warns, errors) => Err(anyhow!(AppValidationError {
+            message: message.to_string(),
+            warns,
+            errors,
+        })),
+    }
 }

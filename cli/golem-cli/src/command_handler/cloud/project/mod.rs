@@ -33,6 +33,9 @@ use golem_cloud_client::model::{Project, ProjectDataRequest, ProjectGrantDataReq
 use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
 use std::sync::Arc;
 
+pub mod plugin;
+pub mod policy;
+
 pub struct CloudProjectCommandHandler {
     ctx: Arc<Context>,
 }
@@ -66,6 +69,12 @@ impl CloudProjectCommandHandler {
                 self.ctx
                     .cloud_project_policy_handler()
                     .handler_command(subcommand)
+                    .await
+            }
+            ProjectSubcommand::Plugin { subcommand } => {
+                self.ctx
+                    .cloud_project_plugin_handler()
+                    .handle_command(subcommand)
                     .await
             }
         }

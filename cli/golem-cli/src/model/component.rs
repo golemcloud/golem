@@ -105,6 +105,7 @@ pub struct ComponentView {
     pub project_id: Option<ProjectId>,
     pub exports: Vec<String>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl TrimDateTime for ComponentView {
@@ -152,6 +153,7 @@ impl From<&Component> for ComponentView {
                     )
                 })
                 .collect(),
+            files: value.files.clone(),
         }
     }
 }

@@ -28,7 +28,8 @@ use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::cloud::account::grant::CloudAccountGrantCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
-use crate::command_handler::cloud::policy::CloudProjectPolicyCommandHandler;
+use crate::command_handler::cloud::project::plugin::CloudProjectPluginCommandHandler;
+use crate::command_handler::cloud::project::policy::CloudProjectPolicyCommandHandler;
 use crate::command_handler::cloud::project::CloudProjectCommandHandler;
 use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::cloud::CloudCommandHandler;
@@ -50,6 +51,7 @@ use clap::CommandFactory;
 use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
+use golem_wasm_rpc_stubgen::commands::app::AppValidationError;
 use golem_wasm_rpc_stubgen::log::{logln, set_log_output, Output};
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -193,8 +195,18 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
         };
 
         result.unwrap_or_else(|error| {
-            if error.downcast_ref::<NonSuccessfulExit>().is_none() {
-                // TODO: check if this should be display or debug
+            if error.downcast_ref::<NonSuccessfulExit>().is_some() {
+                // NOP
+            } else if error
+                .downcast_ref::<Arc<anyhow::Error>>()
+                .and_then(|err| err.downcast_ref::<AppValidationError>())
+                .is_some()
+            {
+                // App validation errors are already formatted and usually contain multiple
+                // errors (and warns)
+                logln("");
+                logln(format!("{:#}", error));
+            } else {
                 logln("");
                 log_error(format!("{:#}", error));
             }
@@ -263,6 +275,7 @@ trait Handlers {
     fn cloud_account_handler(&self) -> CloudAccountCommandHandler;
     fn cloud_handler(&self) -> CloudCommandHandler;
     fn cloud_project_handler(&self) -> CloudProjectCommandHandler;
+    fn cloud_project_plugin_handler(&self) -> CloudProjectPluginCommandHandler;
     fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler;
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
@@ -323,6 +336,10 @@ impl Handlers for Arc<Context> {
 
     fn cloud_project_handler(&self) -> CloudProjectCommandHandler {
         CloudProjectCommandHandler::new(self.clone())
+    }
+
+    fn cloud_project_plugin_handler(&self) -> CloudProjectPluginCommandHandler {
+        CloudProjectPluginCommandHandler::new(self.clone())
     }
 
     fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler {
