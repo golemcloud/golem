@@ -20,15 +20,15 @@ use super::request::{
 };
 use super::to_response::GatewayHttpResult;
 use super::WorkerDetails;
+use crate::api::api_definition::HttpApiDefinitionResponseData;
+use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
     resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled,
     IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_execution::api_definition_lookup::{
-    HttpApiDefinitionsLookup,
-};
+use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -38,6 +38,7 @@ use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSucc
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
+use crate::service::gateway::api_definition::ApiDefinitionService;
 use async_trait::async_trait;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::invocation_context::{
@@ -50,18 +51,15 @@ use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
-use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
-use crate::api::api_definition::HttpApiDefinitionResponseData;
-use crate::service::gateway::api_definition::ApiDefinitionService;
 use http::StatusCode;
+use openapiv3;
 use poem::Body;
 use rib::{RibInput, RibInputTypeInfo, RibResult, TypeName};
+use serde_json;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::error;
-use openapiv3;
-use serde_json;
 
 const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
@@ -78,7 +76,8 @@ pub struct DefaultGatewayInputExecutor<Namespace> {
     pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
     pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
-    pub definition_service: Option<Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>>,
+    pub definition_service:
+        Option<Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>>,
 }
 
 impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
@@ -90,7 +89,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
         gateway_session_store: GatewaySessionStore,
         identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
-        definition_service: Option<Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>>,
+        definition_service: Option<
+            Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>,
+        >,
     ) -> Self {
         Self {
             evaluator,
@@ -554,7 +555,11 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             }
         };
 
-        let possible_api_definitions = match self.api_definition_lookup_service.get(&ApiSiteString(authority.clone())).await {
+        let possible_api_definitions = match self
+            .api_definition_lookup_service
+            .get(&ApiSiteString(authority.clone()))
+            .await
+        {
             Ok(defs) => defs,
             Err(_) => {
                 return poem::Response::builder()
@@ -661,7 +666,11 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                 let request_path = rich_request.underlying.uri().path().to_string();
 
                 // Get the API definitions
-                let api_definitions = match self.api_definition_lookup_service.get(&ApiSiteString(authority.clone())).await {
+                let api_definitions = match self
+                    .api_definition_lookup_service
+                    .get(&ApiSiteString(authority.clone()))
+                    .await
+                {
                     Ok(defs) => defs,
                     Err(_) => {
                         return poem::Response::builder()
@@ -673,8 +682,8 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                 // Find the API definition that matches the Swagger UI path
                 let api_def = api_definitions.iter().find(|def| {
                     def.routes.iter().any(|route| {
-                        route.path.to_string() == request_path && 
-                        matches!(route.binding, GatewayBindingCompiled::SwaggerUi)
+                        route.path.to_string() == request_path
+                            && matches!(route.binding, GatewayBindingCompiled::SwaggerUi)
                     })
                 });
 
@@ -683,7 +692,9 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     None => {
                         return poem::Response::builder()
                             .status(StatusCode::NOT_FOUND)
-                            .body(Body::from_string("Swagger UI Cannot have variable path".to_string()));
+                            .body(Body::from_string(
+                                "Swagger UI Cannot have variable path".to_string(),
+                            ));
                     }
                 };
 
@@ -693,7 +704,9 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     None => {
                         return poem::Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from_string("Definition service not available".to_string()));
+                            .body(Body::from_string(
+                                "Definition service not available".to_string(),
+                            ));
                     }
                 };
 
@@ -704,18 +717,23 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                         &namespace,
                         &EmptyAuthCtx::default(),
                     )
-                    .await {
+                    .await
+                {
                     Ok(Some(compiled_def)) => {
                         match HttpApiDefinitionResponseData::from_compiled_http_api_definition(
                             compiled_def,
                             &definition_service.conversion_context(&EmptyAuthCtx::default()),
                         )
-                        .await {
+                        .await
+                        {
                             Ok(response_data) => response_data,
                             Err(e) => {
                                 return poem::Response::builder()
                                     .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                    .body(Body::from_string(format!("Error converting to response data: {}", e)));
+                                    .body(Body::from_string(format!(
+                                        "Error converting to response data: {}",
+                                        e
+                                    )));
                             }
                         }
                     }
@@ -727,19 +745,28 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     Err(e) => {
                         return poem::Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from_string(format!("Error getting API definition: {}", e)));
+                            .body(Body::from_string(format!(
+                                "Error getting API definition: {}",
+                                e
+                            )));
                     }
                 };
 
                 // Convert to OpenAPI spec
-                let openapi_req = match OpenApiHttpApiDefinition::from_http_api_definition_response_data(&response_data) {
-                    Ok(req) => req,
-                    Err(e) => {
-                        return poem::Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from_string(format!("Error converting to OpenAPI: {}", e)));
-                    }
-                };
+                let openapi_req =
+                    match OpenApiHttpApiDefinition::from_http_api_definition_response_data(
+                        &response_data,
+                    ) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            return poem::Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::from_string(format!(
+                                    "Error converting to OpenAPI: {}",
+                                    e
+                                )));
+                        }
+                    };
 
                 // Add server information
                 let mut spec = openapi_req.0;
@@ -772,7 +799,8 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                         // Process each operation
                         for operation in operations {
                             if let Some(op) = operation {
-                                if let Some(binding) = op.extensions.get(GOLEM_API_GATEWAY_BINDING) {
+                                if let Some(binding) = op.extensions.get(GOLEM_API_GATEWAY_BINDING)
+                                {
                                     if let Some(binding_type) = binding.get("binding-type") {
                                         if binding_type != "default" {
                                             // Set the operation to None by taking the value
@@ -784,12 +812,13 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                         }
 
                         // Check if the path has no operations left
-                        if path_item.get.is_none() &&
-                           path_item.post.is_none() &&
-                           path_item.put.is_none() &&
-                           path_item.delete.is_none() &&
-                           path_item.patch.is_none() &&
-                           path_item.options.is_none() {
+                        if path_item.get.is_none()
+                            && path_item.post.is_none()
+                            && path_item.put.is_none()
+                            && path_item.delete.is_none()
+                            && path_item.patch.is_none()
+                            && path_item.options.is_none()
+                        {
                             // Mark this path for removal
                             paths_to_remove.push(path.clone());
                         }
@@ -813,7 +842,8 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                 };
 
                 // Serve the Swagger UI HTML with the JSON embedded
-                let html = format!(r#"
+                let html = format!(
+                    r#"
                     <!DOCTYPE html>
                     <html lang="en">
                     <head>
@@ -840,7 +870,9 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                         </script>
                     </body>
                     </html>
-                "#, spec_json);
+                "#,
+                    spec_json
+                );
 
                 let response = poem::Response::builder()
                     .content_type("text/html")
