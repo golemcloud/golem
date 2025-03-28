@@ -3,7 +3,6 @@ use rib::RibInput;
 use rustyline::history::DefaultHistory;
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
-use std::fs;
 use tokio;
 
 // Import Rib evaluation function
@@ -34,8 +33,8 @@ impl RibRepl {
         loop {
             let readline = rl.readline("> ");
             match readline {
-                Ok(line) => {
-                    rl.add_history_entry(line.as_str());
+                Ok(line) if !line.is_empty() => {
+                    let _ = rl.add_history_entry(line.as_str());
 
                     if line.starts_with(":load ") {
                         let files: Vec<String> = line[6..]
@@ -55,6 +54,7 @@ impl RibRepl {
                         }
                     }
                 }
+                Ok(_) => continue,
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,
             }
