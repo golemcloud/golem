@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use fancy_regex::{Match, Regex};
-use inflector::Inflector;
+use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase, ToTitleCase};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::Formatter;
@@ -73,7 +73,7 @@ impl ComponentName {
     }
 
     pub fn to_camel_case(&self) -> String {
-        self.to_pascal_case().to_camel_case()
+        self.to_pascal_case().to_lower_camel_case()
     }
 }
 
@@ -462,6 +462,7 @@ pub(crate) struct TemplateMetadata {
 #[cfg(test)]
 mod tests {
     use crate::model::{ComponentName, PackageName};
+    use test_r::test;
 
     #[allow(dead_code)]
     fn n1() -> ComponentName {
@@ -529,5 +530,15 @@ mod tests {
     pub fn package_name_to_pascal_case() {
         assert_eq!(p1().to_pascal_case(), "FooBar");
         assert_eq!(p2().to_pascal_case(), "FooBarBaz");
+    }
+
+    #[test]
+    pub fn package_name_with_number() {
+        assert_eq!(
+            PackageName::from_string("example:demo1")
+                .unwrap()
+                .to_rust_binding(),
+            "example::demo1"
+        )
     }
 }

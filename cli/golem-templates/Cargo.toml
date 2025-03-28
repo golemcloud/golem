@@ -10,7 +10,6 @@ default-run = "golem-templates-test-cli"
 autotests = false
 
 [dependencies]
-Inflector = { workspace = true }
 anyhow = { workspace = true }
 assert2 = { workspace = true }
 clap = { workspace = true }
@@ -18,6 +17,7 @@ colored = { workspace = true }
 fancy-regex = { workspace = true }
 fs_extra = { workspace = true }
 golem-wit = { workspace = true }
+heck = { workspace = true }
 include_dir = { workspace = true }
 itertools = { workspace = true }
 nanoid = { workspace = true }
