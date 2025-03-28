@@ -1,20 +1,20 @@
-use std::result::Result;
-use std::sync::Arc;
-
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::service::api_definition::ApiDefinitionService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use futures_util::future::try_join_all;
 use golem_common::json_yaml::JsonOrYaml;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::result::Result;
+use std::sync::Arc;
 use tracing::{error, Instrument};
 
 pub struct ApiDefinitionApi {
@@ -39,7 +39,7 @@ impl ApiDefinitionApi {
     async fn create_or_update_open_api(
         &self,
         project_id: Path<ProjectId>,
-        openapi: JsonOrYaml<OpenApiHttpApiDefinitionRequest>,
+        openapi: JsonOrYaml<OpenApiHttpApiDefinition>,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record =
@@ -56,23 +56,32 @@ impl ApiDefinitionApi {
     async fn create_or_update_open_api_internal(
         &self,
         project_id: ProjectId,
-        openapi: OpenApiHttpApiDefinitionRequest,
+        openapi: OpenApiHttpApiDefinition,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
-        let definition = openapi.to_http_api_definition_request().map_err(|e| {
-            error!("Invalid Spec {}", e);
-            ApiEndpointError::bad_request(safe(e))
-        })?;
+        let auth_ctx = CloudAuthCtx::new(token.secret());
+        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+
+        let definition = openapi
+            .to_http_api_definition_request(&conversion_context)
+            .await
+            .map_err(|e| {
+                error!("Invalid Spec {}", e);
+                ApiEndpointError::bad_request(safe(e))
+            })?;
 
         let (result, _) = self
             .definition_service
-            .create(&project_id, &definition, &CloudAuthCtx::new(token.secret()))
+            .create(&project_id, &definition, &auth_ctx)
             .await?;
 
-        result
-            .try_into()
-            .map_err(|err| ApiEndpointError::internal(safe(err)))
-            .map(Json)
+        HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+            result,
+            &conversion_context,
+        )
+        .await
+        .map_err(|err| ApiEndpointError::internal(safe(err)))
+        .map(Json)
     }
 
     /// Create a new API definition
@@ -113,20 +122,27 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
+        let auth_ctx = CloudAuthCtx::new(token);
+        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+
         let definition: CoreHttpApiDefinitionRequest = payload
             .clone()
-            .try_into()
+            .into_core(&conversion_context)
+            .await
             .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
 
         let (result, _) = self
             .definition_service
-            .create(&project_id, &definition, &CloudAuthCtx::new(token))
+            .create(&project_id, &definition, &auth_ctx)
             .await?;
 
-        result
-            .try_into()
-            .map_err(|err| ApiEndpointError::internal(safe(err)))
-            .map(Json)
+        HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+            result,
+            &conversion_context,
+        )
+        .await
+        .map_err(|err| ApiEndpointError::internal(safe(err)))
+        .map(Json)
     }
 
     /// Update an existing API definition.
@@ -170,9 +186,14 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
+
+        let auth_ctx = CloudAuthCtx::new(token);
+        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+
         let definition: CoreHttpApiDefinitionRequest = payload
             .clone()
-            .try_into()
+            .into_core(&conversion_context)
+            .await
             .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
 
         if id != definition.id {
@@ -186,13 +207,16 @@ impl ApiDefinitionApi {
         } else {
             let (result, _) = self
                 .definition_service
-                .update(&project_id, &definition, &CloudAuthCtx::new(token))
+                .update(&project_id, &definition, &auth_ctx)
                 .await?;
 
-            result
-                .try_into()
-                .map_err(|err| ApiEndpointError::internal(safe(err)))
-                .map(Json)
+            HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+                result,
+                &conversion_context,
+            )
+            .await
+            .map_err(|err| ApiEndpointError::internal(safe(err)))
+            .map(Json)
         }
     }
 
@@ -235,6 +259,7 @@ impl ApiDefinitionApi {
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
         let auth_ctx = CloudAuthCtx::new(token);
+        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
 
         let (data, _) = self
             .definition_service
@@ -245,7 +270,8 @@ impl ApiDefinitionApi {
             "Can't find api definition with id {id}, and version {version} in project {project_id}"
         ))))?;
 
-        data.try_into()
+        HttpApiDefinitionResponseData::from_compiled_http_api_definition(data, &conversion_context)
+            .await
             .map_err(|err| ApiEndpointError::internal(safe(err)))
             .map(Json)
     }
@@ -296,11 +322,18 @@ impl ApiDefinitionApi {
                 .get_all(&project_id, &auth_ctx)
                 .await?
         };
-        let values = data
-            .into_iter()
-            .map(|d| d.try_into())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| ApiEndpointError::internal(safe(err)))?;
+
+        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+
+        let converted = data.into_iter().map(|d| {
+            HttpApiDefinitionResponseData::from_compiled_http_api_definition(d, &conversion_context)
+        });
+
+        let values = try_join_all(converted).await.map_err(|e| {
+            error!("Failed to convert to response data {}", e);
+            ApiEndpointError::internal(safe(e))
+        })?;
+
         Ok(Json(values))
     }
 

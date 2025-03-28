@@ -4,6 +4,10 @@ environment = "local"
 port = 9005
 worker_grpc_port = 9007
 
+[api_definition]
+component_by_id_cache_size = 1024
+component_by_name_cache_size = 1024
+
 [blob_storage]
 type = "LocalFileSystem"
 
@@ -107,6 +111,10 @@ multiplier = 10.0
 # environment = "local"
 # port = 9005
 # worker_grpc_port = 9007
+# 
+# [api_definition]
+# component_by_id_cache_size = 1024
+# component_by_name_cache_size = 1024
 # 
 # [blob_storage]
 # type = "LocalFileSystem"
@@ -214,6 +222,10 @@ multiplier = 10.0
 # environment = "local"
 # port = 9005
 # worker_grpc_port = 9007
+# 
+# [api_definition]
+# component_by_id_cache_size = 1024
+# component_by_name_cache_size = 1024
 # 
 # [blob_storage]
 # type = "S3"
@@ -333,6 +345,10 @@ multiplier = 10.0
 # multiplier = 10.0
 ## Generated from default config
 workspace = "release"
+
+[cloud_api_definition]
+component_by_id_cache_size = 1024
+component_by_name_cache_size = 1024
 
 [cloud_service]
 access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"

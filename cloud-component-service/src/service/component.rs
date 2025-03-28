@@ -7,7 +7,7 @@ use cloud_common::clients::limit::LimitService;
 use cloud_common::clients::project::ProjectService;
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, ProjectAction};
 use futures_util::stream::BoxStream;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
@@ -348,7 +348,7 @@ impl CloudComponentService {
     pub async fn create_or_update_constraint(
         &self,
         component_id: ComponentId,
-        constraints: FunctionConstraintCollection,
+        constraints: FunctionConstraints,
         auth: &CloudAuthCtx,
     ) -> Result<ComponentConstraints<CloudComponentOwner>, CloudComponentError> {
         let owner = self
@@ -364,6 +364,34 @@ impl CloudComponentService {
         let result = self
             .base_component_service
             .create_or_update_constraint(&component_constraints)
+            .await?;
+
+        Ok(result)
+    }
+
+    pub async fn delete_constraints(
+        &self,
+        component_id: ComponentId,
+        constraints: FunctionConstraints,
+        auth: &CloudAuthCtx,
+    ) -> Result<ComponentConstraints<CloudComponentOwner>, CloudComponentError> {
+        let owner = self
+            .is_authorized_by_component(auth, &component_id, &ProjectAction::UpdateComponent)
+            .await?;
+
+        let constraints = ComponentConstraints {
+            owner: owner.clone(),
+            component_id,
+            constraints,
+        };
+
+        let result = self
+            .base_component_service
+            .delete_constraints(
+                &owner,
+                &constraints.component_id,
+                &constraints.function_signatures(),
+            )
             .await?;
 
         Ok(result)

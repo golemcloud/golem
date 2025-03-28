@@ -245,7 +245,9 @@ impl ApiDeploymentApi {
             .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
             .await?;
 
-        self.deployment_service.delete(&namespace, &site).await?;
+        self.deployment_service
+            .delete(&namespace, &auth_ctx, &site)
+            .await?;
 
         self.domain_route
             .unregister(

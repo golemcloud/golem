@@ -1,3 +1,4 @@
+use crate::service::api_definition::ApiDefinitionServiceConfig;
 use cloud_common::config::RemoteCloudServiceConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_service_base::config::MergedConfigLoaderOrDumper;
@@ -16,6 +17,7 @@ pub struct CloudSpecificWorkerServiceConfig {
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
     pub cloud_service: RemoteCloudServiceConfig,
+    pub cloud_api_definition: ApiDefinitionServiceConfig,
 }
 
 impl Default for CloudSpecificWorkerServiceConfig {
@@ -24,6 +26,7 @@ impl Default for CloudSpecificWorkerServiceConfig {
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
             cloud_service: RemoteCloudServiceConfig::default(),
+            cloud_api_definition: ApiDefinitionServiceConfig::default(),
         }
     }
 }

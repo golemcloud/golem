@@ -5,7 +5,13 @@ use async_trait::async_trait;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::ProjectAction;
-use golem_common::model::ProjectId;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::{ComponentId, ProjectId};
+use golem_service_base::model::ComponentName;
+use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
+use golem_worker_service_base::service::gateway::{
+    BoxConversionContext, ComponentView, ConversionContext,
+};
 use golem_worker_service_base::{
     gateway_api_definition::{
         http::CompiledHttpApiDefinition, http::HttpApiDefinitionRequest, ApiDefinitionId,
@@ -16,11 +22,12 @@ use golem_worker_service_base::{
         ApiDefinitionService as BaseApiDefinitionService,
     },
 };
+use serde::{Deserialize, Serialize};
 
 pub type ApiDefResult<T> = Result<(T, CloudNamespace), ApiDefinitionError>;
 
 #[async_trait]
-pub trait ApiDefinitionService {
+pub trait ApiDefinitionService: Send + Sync {
     async fn create(
         &self,
         project_id: &ProjectId,
@@ -63,6 +70,8 @@ pub trait ApiDefinitionService {
         api_id: &ApiDefinitionId,
         ctx: &CloudAuthCtx,
     ) -> ApiDefResult<Vec<CompiledHttpApiDefinition<CloudNamespace>>>;
+
+    fn conversion_context<'a>(&'a self, auth_ctx: &'a CloudAuthCtx) -> BoxConversionContext<'a>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,6 +86,9 @@ pub enum ApiDefinitionError {
 pub struct ApiDefinitionServiceDefault {
     auth_service: Arc<dyn AuthService + Sync + Send>,
     api_definition_service: BaseService,
+    component_name_cache: ComponentByNameCache,
+    component_id_cache: ComponentByIdCache,
+    component_service: Arc<dyn ComponentService<CloudAuthCtx>>,
 }
 
 type BaseService = Arc<dyn BaseApiDefinitionService<CloudAuthCtx, CloudNamespace> + Sync + Send>;
@@ -85,10 +97,40 @@ impl ApiDefinitionServiceDefault {
     pub fn new(
         auth_service: Arc<dyn AuthService + Sync + Send>,
         api_definition_service: BaseService,
+        config: &ApiDefinitionServiceConfig,
+        component_service: Arc<dyn ComponentService<CloudAuthCtx>>,
     ) -> Self {
         Self {
             auth_service,
             api_definition_service,
+            component_name_cache: Cache::new(
+                Some(config.component_by_name_cache_size),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_name",
+            ),
+            component_id_cache: Cache::new(
+                Some(config.component_by_id_cache_size),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_id",
+            ),
+            component_service,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApiDefinitionServiceConfig {
+    component_by_name_cache_size: usize,
+    component_by_id_cache_size: usize,
+}
+
+impl Default for ApiDefinitionServiceConfig {
+    fn default() -> Self {
+        Self {
+            component_by_name_cache_size: 1024,
+            component_by_id_cache_size: 1024,
         }
     }
 }
@@ -208,5 +250,89 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
             .await?;
 
         Ok((api_definitions, namespace))
+    }
+
+    fn conversion_context<'a>(&'a self, auth_ctx: &'a CloudAuthCtx) -> BoxConversionContext<'a> {
+        ConversionContextImpl {
+            component_service: &self.component_service,
+            auth_ctx,
+            component_name_cache: &self.component_name_cache,
+            component_id_cache: &self.component_id_cache,
+        }
+        .boxed()
+    }
+}
+
+type ComponentByNameCache = Cache<ComponentName, (), Option<ComponentView>, String>;
+
+type ComponentByIdCache = Cache<ComponentId, (), Option<ComponentView>, String>;
+
+struct ConversionContextImpl<'a> {
+    component_service: &'a Arc<dyn ComponentService<CloudAuthCtx>>,
+    auth_ctx: &'a CloudAuthCtx,
+    component_name_cache: &'a ComponentByNameCache,
+    component_id_cache: &'a ComponentByIdCache,
+}
+
+#[async_trait]
+impl ConversionContext for ConversionContextImpl<'_> {
+    async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
+        let name = name.clone();
+        let component = self
+            .component_name_cache
+            .get_or_insert_simple(&name, async || {
+                let result = self
+                    .component_service
+                    .get_by_name(&name, self.auth_ctx)
+                    .await;
+
+                match result {
+                    Ok(inner) => Ok(Some(inner.into())),
+                    Err(ComponentServiceError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(format!("Failed to lookup component by name: {e}")),
+                }
+            })
+            .await?;
+
+        if let Some(component) = component {
+            // put component into the other cache to save lookups
+            let _ = self
+                .component_id_cache
+                .get_or_insert_simple(&component.id, async || Ok(Some(component.clone())))
+                .await;
+
+            Ok(component)
+        } else {
+            Err(format!("Did not find component for name {name}"))
+        }
+    }
+    async fn component_by_id(&self, component_id: &ComponentId) -> Result<ComponentView, String> {
+        let component = self
+            .component_id_cache
+            .get_or_insert_simple(component_id, async || {
+                let result = self
+                    .component_service
+                    .get_latest(component_id, self.auth_ctx)
+                    .await;
+
+                match result {
+                    Ok(inner) => Ok(Some(inner.into())),
+                    Err(ComponentServiceError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(format!("Failed to lookup component by id: {e}")),
+                }
+            })
+            .await?;
+
+        if let Some(component) = component {
+            // put component into the other cache to save lookups
+            let _ = self
+                .component_name_cache
+                .get_or_insert_simple(&component.name, async || Ok(Some(component.clone())))
+                .await;
+
+            Ok(component)
+        } else {
+            Err(format!("Did not find component for id {component_id}"))
+        }
     }
 }

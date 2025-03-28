@@ -61,7 +61,7 @@ use golem_worker_service_base::repo::api_deployment::{ApiDeploymentRepo, DbApiDe
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::component::{ComponentService, RemoteComponentService};
 use golem_worker_service_base::service::gateway::api_definition::{
-    ApiDefinitionService as BaseApiDefinitionService,
+    ApiDefinitionService as BaseApiDefinitionService, ApiDefinitionServiceConfig,
     ApiDefinitionServiceDefault as BaseApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
@@ -257,11 +257,16 @@ impl ApiServices {
             api_deployment_repo.clone(),
             base_security_scheme_service.clone(),
             api_definition_validator,
+            ApiDefinitionServiceConfig::default(),
         ));
 
-        let definition_service: Arc<dyn ApiDefinitionService + Send + Sync> = Arc::new(
-            ApiDefinitionServiceDefault::new(auth_service.clone(), base_definition_service),
-        );
+        let definition_service: Arc<dyn ApiDefinitionService + Send + Sync> =
+            Arc::new(ApiDefinitionServiceDefault::new(
+                auth_service.clone(),
+                base_definition_service,
+                &config.cloud_specific_config.cloud_api_definition,
+                component_service.clone(),
+            ));
 
         let deployment_service: Arc<
             dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Send + Sync,
