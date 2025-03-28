@@ -1,0 +1,215 @@
+import { Callout, Card, Cards, Tabs } from "nextra/components"
+
+# Quickstart
+
+This guide will get you up and running in Golem in minutes.
+
+### Install Golem CLI
+
+Golem CLI is a command-line application that allows you to deploy components,
+create and invoke workers, and otherwise manage your Golem applications.
+
+There are **precompiled binaries** of `golem` (and its other variants) for
+various platforms. Alternatively, you can [build Golem CLI for yourself](/cli/install-from-source).
+
+#### Precompiled binaries
+
+You can download the full version of `golem` from the following page:
+
+<Cards num={1}>
+  <Card
+    title="Golem CLI Releases"
+    href="https://github.com/golemcloud/golem-cli/releases"
+  />
+</Cards>
+
+There are precompiled binaries of two variants of the CLI here:
+
+- `golem` is the full version of the command line interface, including a locally runnable version of Golem itself.
+- `golem-cli` is a lightweight version of the command line interface, requiring a running Golem cluster
+
+In this documentation we will use the `golem` command in the snippets. The available commands of (except the one for starting up the local Golem cluster) are the same in both variants.
+
+### Running Golem
+
+It is possible to test Golem locally without installing anything else than the above described `golem` executable. To use it, start the local Golem cluster by running the following command:
+
+```shell copy
+golem server run
+```
+
+To use the open source version of Golem in production you will need to deploy it in your own infrastructure. See the [deployment](deploy) page for available deployment options.
+
+It is also possible to use our _hosted version_ of Golem, available at [https://console.golem.cloud].
+
+### Creating a Profile
+
+To specify the Golem service location, run the following command:
+
+```shell copy
+golem init
+```
+
+This command starts an interactive configuration process. For non-interactive options - see [Golem CLI](cli) page.
+
+On the first step you'll see 3 options:
+
+- Golem Default. Use this options if you have started Golem locally using `golem server run`.
+- Golem. Use this option in case of a customised Golem installation in your own infrastructure.
+- Golem Cloud. Use this option for a hosted version of Golem.
+
+### Building an Example
+
+Golem runs components that are WebAssembly programs. Components are like
+applications, except they may expose functions that can be called externally.
+
+To deploy to Golem, you must first build a [component](concepts/components)
+using any programming language and toolchain that can build WebAssembly
+components.
+
+The `golem` command line interface provides integrates a set of commands to create, build, and deploy components.
+
+To get started, you create an application and a single component using your chosen programming language with the `golem app new` and `golem component new` commands.
+
+<Tabs items={["Rust", "TypeScript", "Go", "Python", "C", "JavaScript", "Zig", "MoonBit", "Scala.js"]}>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example rust
+  cd example
+  golem component new rust example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example ts
+  cd example
+  golem component new ts example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example go
+  cd example
+  golem component new go example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example python
+  cd example
+  golem component new python example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example c
+  cd example
+  golem component new c example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example js
+  cd example
+  golem component new js example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example zig
+  cd example
+  golem component new zig example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example moonbit
+  cd example
+  golem component new moonbit example:component
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```shell copy
+  golem app new example scalajs
+  cd example
+  golem component new scalajs example:component
+  ```
+  </Tabs.Tab>
+</Tabs>
+
+This will generate a new component in the current, ready to be compiled and deployed to Golem.
+
+<Callout type="warning">
+    Each supported programming language may require additional setup before you can build your component. Refer to the [language specific guides](/develop-overview) for more information.
+</Callout>
+
+To **build** the newly created component, use the following command:
+
+```shell copy
+golem app build
+```
+
+This compiles the newly created application, which consists of a _single Golem component_ at the moment. An application can have multiple components and they can depend on each other. New components can be added to the application by using the `golem component new` command.
+
+### Uploading Your Component
+
+To upload your component to Golem, you can use the `component deploy` command.
+
+```shell copy
+golem component deploy
+```
+
+When you add a component you will see some basic information about the component such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the public API of your worker and can be used to call it with the CLI or REST API, as we will see below.
+
+Uploading a component to Golem does not actually execute the component. Instead, it only makes it available for execution to Golem.
+
+Every separate execution of your component is referred to as a _worker_ based on that component.
+
+### Create Workers
+
+In Golem, every worker has a unique id, which is arbitrary text that you define. If you don't need a meaningful id for workers, you can generate a UUID.
+
+Once you have chosen a worker id, you can launch the worker either explicitly, or by invoking any function on the worker (for example, a “main” function).
+
+Here, we creating a new worker `test-1` :
+
+```shell copy
+golem worker new test-1
+```
+
+We don't have to specify _which_ component to use, because `golem` detects that the current directory belongs to a Golem application consisting of a single component.
+
+### Invoking Workers
+
+Thanks to the WebAssembly component model, your Golem applications are not just an executable. Rather, they may export functions that can be called from the outside. Exported functions allow your workers to be given instructions or queried for their state.
+
+The default template used by the above commands for each language creates a component that exports a simple _counter_ interface. To use it, we can invoke the `add` and `get` functions, using their fully quialified names:
+
+```shell copy
+golem worker invoke test-1 'example:component/api.{add}' 2
+golem worker invoke test-1 'example:component/api.{add}' 3
+golem worker invoke test-1 'example:component/api.{get}'
+```
+
+If a worker of the specified name has not been created, then when you attempt to invoke a function on the worker, it will first be created.
+
+<Callout type="info">
+The parameters are either listed one by one and are using the [WAVE format](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave)
+</Callout>
+
+Check the [Invoke section](invoke) to learn about more about where the fully qualified **function names** are coming from and what other ways you have to interact with workers.
+
+### Next Steps
+
+In this guide, you have learned how to build and deploy invincible serverless workers on Golem, and seen how you can interact with them as they execute.
+
+Take your next steps with Golem by exploring the following resources:
+
+- Read about the [fundamentals of Golem](fundamentals)
+- Learn about the [main concepts](concepts)
+- Read one of the [language-specific guides](develop-overview) to learn how to develop Golem components
+- Check out how to [deploy](deploy) Golem to your infrastructure
+- Read the details of how to [invoke workers](invoke)
+- Learn more about the [Golem CLI](cli)
+- Explore operational aspects such as [how worker state is persisted](operate/persistence), what [metrics](operate/metrics) and [logs](operate/logs) are available
+- Check the **References** section for detailed information on APIs and syntaxes

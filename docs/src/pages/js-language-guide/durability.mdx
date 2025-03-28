@@ -1,0 +1,69 @@
+# Control durability guarantees from JavaScript
+
+Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in JavaScript the [Golem JavaScript SDK](/js-language-guide/golem-js-sdk) provides a set of JavaScript wrappers for these functions.
+
+### Setting up the Golem JavaScript SDK
+
+If the project was created with `golem new`, it already has the Golem JavaScript SDK set up, otherwise follow the step at [Setting up the Golem JavaScript SDK](/js-language-guide/golem-js-sdk)
+
+### General concepts
+
+The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/js-language-guide/retries)).
+
+All these features are regional - they can be changed for a section of the code within a single exported function. To make this easy to use in JavaScript, the library provides functions starting with `with`, they take a closure parameter which will be executed with the requested mode, and then they restore the previous settings.
+
+### Persistence level
+
+The persistence level can be one of the following:
+
+| Level                    | Description                                                                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PersistNothing           | Turns off persistence for a section. In case the worker is recovered or restarted, all the side-effecting functions will be reexecuted                               |
+| PersistRemoteSideEffects | Persists all the side-effects that are affecting the outside world. In case of recovery the side-effects won't be reexecuted and the persisted results will be used. |
+| Smart                    | The default setting; Let Golem decide what to persist to optimize performance                                                                                        |
+
+To change the persistence level for a section of the code, use the `withPersistenceLevel` function:
+
+```javascript
+import { withPersistenceLevel } from "@golemcloud/golem-ts"
+
+const result = withPersistenceLevel({ tag: "persist-nothing" }, () => {
+  // this closure runs in PersistNothing mode
+  return "hello"
+})
+```
+
+### Idempotence mode
+
+Golem assumes that HTTP requests are idempotent by default. This means that in case of a failure, if the system cannot determine whether the request successfully reached the target or not, it will be retried. This behavior can be changed using the `withIdempotenceMode` function:
+
+```javascript
+import { withIdempotenceMode } from "@golemcloud/golem-ts"
+
+const result = withIdempotenceMode(false, () => {
+  // this closure runs with idempotence mode disabled
+  return "hello"
+})
+```
+
+With disabled idempotence mode, in case Golem cannot determine if the request was sent or not, it won't retry it but the worker will fail.
+
+### Atomic regions
+
+By default, side effects are persisted and retried one by one. It is possible to group them together into atomic regions, in which case the execution is retried for some reason (the worker failed or interrupted within the region), all the side effects will be reexecuted.
+
+The `golem-ts` library exports the `atomically` function for using atomic regions:
+
+```javascript
+import { atomically } from "@golemcloud/golem-ts"
+
+const result = atomically(() => {
+  const firstResult = firstSideEffect()
+  const secondResult = secondSideEffect(firstResult)
+  return [firstResult, secondResult]
+})
+```
+
+### Commit oplog
+
+The `oplogCommit` function in `"@golemcloud/golem-ts` waits until the oplog is committed to its persistent storage. The function takes a single argument, `replicas`, with the desired number of storage replicas the worker's journal is replicated to. The function will block until the oplog is committed to the specified number of replicas, or, if this number is larger than the available number of replicas, until it is written to all the replicas.

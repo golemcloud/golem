@@ -1,0 +1,158 @@
+import { Callout } from "nextra/components"
+
+# Golem Application Manifest
+
+The _Golem Application Manifest_ document format is used by `golem`, usually stored in files named `golem.yaml`, which can help working with components. Currently, the Application Manifest covers:
+
+- defining components and their metadata, including:
+  - component type
+  - location of user defined and generated WIT folders
+  - location of built and composed WASM binaries
+  - build commands
+  - Initial File System
+- defining component dependencies for using Worker to Worker communication
+- building components
+- deploying components
+
+The Application Manifest uses _YAML_ format, see the [reference](/app-manifest) for more information on the schema and for the field reference.
+
+# Application Manifest Quickstart
+
+Application manifest documents can be explicitly passed as `golem` arguments, but the recommended way to use them is with _auto discovery_ mode: when `golem` is called with an application manifest compatible command it keeps searching for `golem.yaml` documents in current working directory and parent directories. Once it found the top level `golem.yaml` document, more documents are searched using the [includes](/app-manifest#fields_includes) field.
+
+Once all manifest documents are found, the paths in them are resolved based on their directory, and then the documents are merged. For the field specific merge rules see the [field reference](/app-manifest#field-reference).
+
+## Using composable templates
+
+Golem projects can be created with `golem app new` command. This creates a new application that may consist of multiple components. To add a new component to an existing application, use `golem component new`. E.g.: let's add a new _c_ and _ts_ component in a new and empty directory:
+
+```shell
+golem app new app:component-a c
+cd app:component-a
+golem component new ts app:component-b
+```
+
+When using the `app new` command, it will create:
+
+- common directory for the given language (`common-cpp` and `common-ts`):
+  - this directory contains the languages specific _Application Manifest Template_, which defines how to
+    build the components
+  - can be used for shared subprojects
+  - might contain other shared configurations
+- directory for components for the given language (`components-cpp` and `components-ts`)
+- directory called `wit/deps` for common WIT dependencies, and populates it with WASI and Golem packages
+- depending on the language it might add `common-adapters`.
+
+Now that we added our components, let's use the `app` command list our project metadata:
+
+```shell
+$ golem app
+
+Build, deploy application
+
+Usage: golem app [OPTIONS] <COMMAND>
+
+Commands:
+  new     Create new application
+  build   Build all or selected components in the application
+  deploy  Deploy all or selected components in the application, includes building
+  clean   Clean all components in the application or by selection
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -f, --format <FORMAT>
+          Output format, defaults to text, unless specified by the selected profile
+  -p, --profile <PROFILE>
+          Select Golem profile by name
+  -l, --local
+          Select builtin "local" profile, to use services provided by the "golem server" command
+  -c, --cloud
+          Select builtin "cloud" profile to use Golem Cloud
+  -a, --app-manifest-path <APP_MANIFEST_PATH>
+          Custom path to the root application manifest (golem.yaml)
+  -A, --disable-app-manifest-discovery
+          Disable automatic searching for application manifests
+  -b, --build-profile <BUILD_PROFILE>
+          Select build profile
+      --config-dir <CONFIG_DIR>
+          Custom path to the config directory (defaults to $HOME/.golem)
+  -v, --verbose...
+          Increase logging verbosity
+  -q, --quiet...
+          Decrease logging verbosity
+  -h, --help
+          Print help
+
+Components:
+  app:component-a
+    Selected:     yes
+    Source:       /Users/<...>/app-demo/components-cpp/app-component-a/golem.yaml
+    Template:     cpp
+    Profiles:     debug, release
+  app:component-b
+    Selected:     yes
+    Source:       /Users/<...>/app-demo/components-ts/app-component-b/golem.yaml
+    Template:     ts
+
+Custom commands:
+  npm-install
+```
+
+Because the _ts_ components use npm, we have to use `npm install` before building the components. We can also see that this has a wrapper custom command in the manifest called `npm-install`. Let's use that, then build our components:
+
+```sh
+$ golem app npm-install
+<..>
+$ golem app build
+Collecting sources
+  Found sources: /Users/<...>/app-demo/common-cpp/golem.yaml, /Users/<...>/app-demo/common-ts/golem.yaml, /Users/<...>/app-demo/components-cpp/app-component-a/golem.yaml, /Users/<...>/app-demo/components-ts/app-component-b/golem.yaml, /Users/<...>/app-demo/golem.yaml
+Collecting components
+  Found components: app:component-a, app:component-b
+Resolving application wit directories
+  Resolving component wit dirs for app:component-a (/Users/<...>/app-demo/components-cpp/app-component-a/wit, /Users/<...>/app-demo/components-cpp/app-component-a/wit-generated)
+  Resolving component wit dirs for app:component-b (/Users/<...>/app-demo/components-ts/app-component-b/wit, /Users/<...>/app-demo/components-ts/app-component-b/wit-generated)
+Selecting profiles, no profile was requested
+  Selected default profile debug for app:component-a using template cpp
+  Selected default build for app:component-b using template ts
+<...>
+Linking RPC
+  Copying app:component-a without linking, no static WASM RPC dependencies were found
+  Copying app:component-b without linking, no static WASM RPC dependencies were found
+```
+
+Then we can check that the components are built:
+
+```sh
+$ ls golem-temp/components
+app_component_a_debug.wasm app_component_b.wasm
+```
+
+To deploy (add or update) or components we can use
+
+```sh copy
+golem component deploy
+```
+
+in the project root folder, and the CLI will add or update all or components.
+
+If we want to only update some components, we can do so by explicitly selecting them with the `--component-name` flag, or we can implicitly select them by changing our current working directory, e.g.:
+
+```shell
+$ cd components-cpp
+$ golem app
+<...>
+Components:
+  app:component-a
+    Selected:     yes
+    Source:       /Users/noise64/workspace/examples/app-demo/components-cpp/app-component-a/golem.yaml
+    Template:     cpp
+    Profiles:     debug, release
+  app:component-b
+    Selected:     no
+    Source:       /Users/noise64/workspace/examples/app-demo/components-ts/app-component-b/golem.yaml
+    Template:     ts
+<...>
+```
+
+Notice, how only app:component-a is selected in the above example, the same selection logic is used when
+adding or updating components.

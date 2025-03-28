@@ -1,0 +1,16 @@
+## Use the deployed API
+
+Given, you have successfully deployed, now you can try to invoke the following:
+
+```shell copy
+curl -H "Accept: application/json" -X GET http://localhost:9006/v4/100/get-cart-contents
+[]
+```
+
+Here the worker-gateway identifies the user to be `100`
+and evaluates the worker-name expr to be `my-worker-100`
+by evaluating `workerName` Rib expression.
+
+Once it identifies the worker-name, it goes on evaluating the `response` Rib expression which internally invokes the worker function function `golem:it/api.{get-cart-contents}`
+with empty parameters, and simply get the worker-response (which is a WASM value)
+and converts it to a proper Http Response.

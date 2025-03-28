@@ -1,0 +1,36 @@
+import { Callout } from "nextra/components"
+
+# Defining Golem Components in MoonBit
+
+## Creating a project
+
+Golem's **command line interface** provides a set of predefined, Golem-specific **templates** to choose from as a starting point.
+
+To get started from scratch, first create a new application using the `MoonBit` template:
+
+```shell copy
+golem app new my-app moonbit
+cd my-app
+```
+
+An application can consist of multiple components. Add a new component by choosing from one of the available templates. To see the list of available templates, run:
+
+```shell copy
+golem component new
+```
+
+Then create a new component using the chosen template:
+
+```shell copy
+golem component new moonbit my-component
+```
+
+## Specification-first approach
+
+Golem and the MoonBit toolchain currently requires defining the component's interface using the **WebAssembly Interface Type (WIT)** format. See [the official documentation of this format](https://component-model.bytecodealliance.org/design/wit.html) for reference.
+
+Each new project generated with `golem` contains a `wit` directory with at least one `.wit` file defining a `world`. This world can contain **exports** (exported functions and interfaces) and these exports will be the compiled Golem component's public API.
+
+The first time a component is compiled (see the [Building Components page](/experimental-languages/moonbit-language-guide/building-components) for details), a couple of files get generated in the `ffi`, `gen`, `interface` and `world`  directories. This module contains the MoonBit definitions of all the data types and interfaces defined in the `WIT` file(s).
+
+To **implement** the specification written in WIT, the MoonBit code must implement some of these generated exported functions defined in the generated files.

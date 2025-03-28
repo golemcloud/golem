@@ -18,6 +18,13 @@ const withNextra = nextra({
               // this is relative path from node_modules/shiki/index.js
               path: "../../wit-grammar.json",
             },
+            {
+              id: "rib",
+              scopeName: "source.rib",
+              aliases: [""], // Along with id, aliases will be included in the allowed names you can use when writing markdown.
+              // this is relative path from node_modules/shiki/index.js
+              path: "../../rib-grammar.json",
+            },
           ],
         }),
     },

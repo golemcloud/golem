@@ -1,0 +1,825 @@
+# Worker API
+
+## Get metadata of multiple workers
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers`|GET|No
+
+### Filters
+
+| Property    | Comparator             | Description                    | Example                         |
+|-------------|------------------------|--------------------------------|----------------------------------|
+| name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+| version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+| status      | FilterComparator       | Status of worker               | `status = Running`               |
+| env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+| createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+
+
+### Comparators
+
+- StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+- FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+Returns metadata about an existing component workers:
+- `workers` list of workers metadata
+- `cursor` cursor for next request, if cursor is empty/null, there are no other values
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+filter|array|No|-
+cursor|string|No|-
+count|integer|No|-
+precise|boolean|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "workers": [
+    {
+      "workerId": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string"
+      },
+      "args": [
+        "string"
+      ],
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "status": "Running",
+      "componentVersion": 0,
+      "retryCount": 0,
+      "pendingInvocationCount": 0,
+      "updates": [
+        {
+          "type": "pendingUpdate",
+          "timestamp": "2019-08-24T14:15:22Z",
+          "targetVersion": 0
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "lastError": "string",
+      "componentSize": 0,
+      "totalLinearMemorySize": 0,
+      "ownedResources": {
+        "property1": {
+          "createdAt": "2019-08-24T14:15:22Z",
+          "indexed": {
+            "resourceName": "string",
+            "resourceParams": [
+              "string"
+            ]
+          }
+        },
+        "property2": {
+          "createdAt": "2019-08-24T14:15:22Z",
+          "indexed": {
+            "resourceName": "string",
+            "resourceParams": [
+              "string"
+            ]
+          }
+        }
+      },
+      "activePlugins": [
+        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+      ]
+    }
+  ],
+  "cursor": {
+    "cursor": 0,
+    "layer": 0
+  }
+}
+```
+
+## Launch a new worker.
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers`|POST|No
+
+Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
+
+The parameters in the request are the following:
+- `name` is the name of the created worker. This has to be unique, but only for a given component
+- `args` is a list of strings which appear as command line arguments for the worker
+- `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "name": "string",
+  "args": [
+    "string"
+  ],
+  "env": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "workerId": {
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "workerName": "string"
+  },
+  "componentVersion": 0
+}
+```
+
+## Get metadata of a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}`|GET|No
+
+Returns metadata about an existing worker:
+- `workerId` is a combination of the used component and the worker's user specified name
+- `accountId` the account the worker is created by
+- `args` is the provided command line arguments passed to the worker
+- `env` is the provided map of environment variables passed to the worker
+- `componentVersion` is the version of the component used by the worker
+- `retryCount` is the number of retries the worker did in case of a failure
+- `status` is the worker's current status, one of the following:
+- `Running` if the worker is currently executing
+- `Idle` if the worker is waiting for an invocation
+- `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+- `Interrupted` if the worker was interrupted by the user
+- `Retrying` if the worker failed, and an automatic retry was scheduled for it
+- `Failed` if the worker failed and there are no more retries scheduled for it
+- `Exited` if the worker explicitly exited using the exit WASI function
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "workerId": {
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "workerName": "string"
+  },
+  "args": [
+    "string"
+  ],
+  "env": {
+    "property1": "string",
+    "property2": "string"
+  },
+  "status": "Running",
+  "componentVersion": 0,
+  "retryCount": 0,
+  "pendingInvocationCount": 0,
+  "updates": [
+    {
+      "type": "pendingUpdate",
+      "timestamp": "2019-08-24T14:15:22Z",
+      "targetVersion": 0
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "lastError": "string",
+  "componentSize": 0,
+  "totalLinearMemorySize": 0,
+  "ownedResources": {
+    "property1": {
+      "createdAt": "2019-08-24T14:15:22Z",
+      "indexed": {
+        "resourceName": "string",
+        "resourceParams": [
+          "string"
+        ]
+      }
+    },
+    "property2": {
+      "createdAt": "2019-08-24T14:15:22Z",
+      "indexed": {
+        "resourceName": "string",
+        "resourceParams": [
+          "string"
+        ]
+      }
+    }
+  },
+  "activePlugins": [
+    "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+  ]
+}
+```
+
+## Delete a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}`|DELETE|No
+
+Interrupts and deletes an existing worker.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Invoke a function and await its resolution on a new worker with a random generated name
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/invoke-and-await`|POST|No
+
+Ideal for invoking ephemeral components, but works with durable ones as well.
+Supply the parameters in the request body as JSON.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+function|string|Yes|-
+
+**Example Request JSON**
+```json copy
+{
+  "params": [
+    {
+      "typ": {
+        "type": "Variant",
+        "cases": [
+          {
+            "name": "string",
+            "typ": {}
+          }
+        ]
+      },
+      "value": null
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "result": {
+    "typ": {
+      "type": "Variant",
+      "cases": [
+        {
+          "name": "string",
+          "typ": {}
+        }
+      ]
+    },
+    "value": null
+  }
+}
+```
+
+## Invoke a function and await its resolution
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/invoke-and-await`|POST|No
+
+Supply the parameters in the request body as JSON.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+function|string|Yes|-
+
+**Example Request JSON**
+```json copy
+{
+  "params": [
+    {
+      "typ": {
+        "type": "Variant",
+        "cases": [
+          {
+            "name": "string",
+            "typ": {}
+          }
+        ]
+      },
+      "value": null
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "result": {
+    "typ": {
+      "type": "Variant",
+      "cases": [
+        {
+          "name": "string",
+          "typ": {}
+        }
+      ]
+    },
+    "value": null
+  }
+}
+```
+
+## Invoke a function
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/invoke`|POST|No
+
+Ideal for invoking ephemeral components, but works with durable ones as well.
+Triggers the execution of a function and immediately returns.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+function|string|Yes|-
+
+**Example Request JSON**
+```json copy
+{
+  "params": [
+    {
+      "typ": {
+        "type": "Variant",
+        "cases": [
+          {
+            "name": "string",
+            "typ": {}
+          }
+        ]
+      },
+      "value": null
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Invoke a function
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/invoke`|POST|No
+
+Triggers the execution of a function and immediately returns.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+function|string|Yes|-
+
+**Example Request JSON**
+```json copy
+{
+  "params": [
+    {
+      "typ": {
+        "type": "Variant",
+        "cases": [
+          {
+            "name": "string",
+            "typ": {}
+          }
+        ]
+      },
+      "value": null
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Complete a promise
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/complete`|POST|No
+
+Completes a promise with a given custom array of bytes.
+The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+The data field is sent back to the worker, and it has no predefined meaning.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "oplogIdx": 0,
+  "data": [
+    0
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+true
+```
+
+## Interrupt a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/interrupt`|POST|No
+
+Interrupts the execution of a worker.
+The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+recovery-immediately|boolean|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Advanced search for workers
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/find`|POST|No
+
+### Filter types
+| Type      | Comparator             | Description                    | Example                                                                                       |
+|-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+| Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+| Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+| Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+| Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+| CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+| And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+| Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+| Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+
+### Comparators
+- StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+- FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+Returns metadata about an existing component workers:
+- `workers` list of workers metadata
+- `cursor` cursor for next request, if cursor is empty/null, there are no other values
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "filter": {
+    "type": "Name",
+    "comparator": "Equal",
+    "value": "string"
+  },
+  "cursor": {
+    "cursor": 0,
+    "layer": 0
+  },
+  "count": 0,
+  "precise": true
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "workers": [
+    {
+      "workerId": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string"
+      },
+      "args": [
+        "string"
+      ],
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "status": "Running",
+      "componentVersion": 0,
+      "retryCount": 0,
+      "pendingInvocationCount": 0,
+      "updates": [
+        {
+          "type": "pendingUpdate",
+          "timestamp": "2019-08-24T14:15:22Z",
+          "targetVersion": 0
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "lastError": "string",
+      "componentSize": 0,
+      "totalLinearMemorySize": 0,
+      "ownedResources": {
+        "property1": {
+          "createdAt": "2019-08-24T14:15:22Z",
+          "indexed": {
+            "resourceName": "string",
+            "resourceParams": [
+              "string"
+            ]
+          }
+        },
+        "property2": {
+          "createdAt": "2019-08-24T14:15:22Z",
+          "indexed": {
+            "resourceName": "string",
+            "resourceParams": [
+              "string"
+            ]
+          }
+        }
+      },
+      "activePlugins": [
+        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+      ]
+    }
+  ],
+  "cursor": {
+    "cursor": 0,
+    "layer": 0
+  }
+}
+```
+
+## Resume a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/resume`|POST|No
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Update a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/update`|POST|No
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "mode": "Automatic",
+  "targetVersion": 0
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Get or search the oplog of a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/oplog`|GET|No
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+from|integer|No|-
+count|integer|Yes|-
+cursor|#/components/schemas/OplogCursor|No|-
+query|string|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "entries": [
+    {
+      "oplogIndex": 0,
+      "entry": {
+        "type": "Create",
+        "timestamp": "2019-08-24T14:15:22Z",
+        "worker_id": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "workerName": "string"
+        },
+        "component_version": 0,
+        "args": [
+          "string"
+        ],
+        "env": {
+          "property1": "string",
+          "property2": "string"
+        },
+        "account_id": "string",
+        "parent": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "workerName": "string"
+        },
+        "component_size": 0,
+        "initial_total_linear_memory_size": 0,
+        "initial_active_plugins": [
+          {
+            "installation_id": "91166175-c6a9-4caf-88e9-3147ffc9c934",
+            "plugin_name": "string",
+            "plugin_version": "string",
+            "parameters": {
+              "property1": "string",
+              "property2": "string"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "next": {
+    "next_oplog_index": 0,
+    "current_component_version": 0
+  },
+  "firstIndexInChunk": 0,
+  "lastIndex": 0
+}
+```
+
+## List files in a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/files/{file_name}`|GET|No
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "nodes": [
+    {
+      "name": "string",
+      "lastModified": 0,
+      "kind": "directory",
+      "permissions": "read-only",
+      "size": 0
+    }
+  ]
+}
+```
+
+## Get contents of a file in a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/file-contents/{file_name}`|GET|No
+
+
+
+
+
+
+
+**Response Body:** `WASM Binary File`
+
+## Activate a plugin
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/activate-plugin`|POST|No
+
+The plugin must be one of the installed plugins for the worker's current component version.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+plugin-installation-id|string|Yes|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Deactivate a plugin
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/deactivate-plugin`|POST|No
+
+The plugin must be one of the installed plugins for the worker's current component version.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+plugin-installation-id|string|Yes|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Revert a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/revert`|POST|No
+
+Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "type": "revertToOplogIndex",
+  "lastOplogIndex": 0
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Cancels a pending invocation if it has not started yet
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}`|DELETE|No
+
+The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "canceled": true
+}
+```
+## Worker API Errors
+Status Code|Description|Body
+---|---|---
+400||`{"errors":["string"]}`
+401||`{"error":"string"}`
+403||`{"error":"string"}`
+404||`{"error":"string"}`
+409||`{"error":"string"}`
+500||`{"golemError":{"type":"InvalidRequest","details":"string"}}`

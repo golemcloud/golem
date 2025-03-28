@@ -1,0 +1,18 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Building Golem Components in Scala.js
+
+Building Golem components having an [application manifest](/app-manifest) is straightforward, just use the `golem` command line interface:
+
+```shell copy
+golem app build
+```
+
+If the project was created using `golem app new` as recommended, the `golem app build` command will always work as expected.
+
+The result of the `golem app build` command is a WebAssembly component file ready to be uploaded to Golem. It does not have to be specified explicitly, as the `golem` tool will automatically find the correct file when doing for example:
+
+```shell copy
+golem component add
+```

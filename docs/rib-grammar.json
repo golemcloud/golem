@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Rib",
+  "scopeName": "source.rib",
+  "patterns": [
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#literals" },
+    { "include": "#types" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(let|if|then|else|for|in|yield|reduce|from|some|none|ok|error|instance)\\b",
+          "name": "keyword.control.rib"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "match": "\\b(>=|<=|==|<|>|&&|\\|\\||\\+|\\-|\\*|/)\\b", "name": "keyword.operator.rib" },
+        { "match": "\\.{2,3}=?", "name": "keyword.operator.range.rib" }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        { "match": "\\b(true|false)\\b", "name": "constant.language.boolean.rib" },
+        { "match": "\\d+", "name": "constant.numeric.rib" },
+        { "match": "\"(\\\\.|[^\"])*\"", "name": "string.quoted.double.rib" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "match": "\\b(bool|s8|u8|s16|u16|s32|u32|s64|u64|f32|f64|char|string|list|tuple|option|result)\\b",
+          "name": "storage.type.rib"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [{ "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.rib" }]
+    }
+  }
+}

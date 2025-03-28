@@ -1,0 +1,178 @@
+import { Callout } from "nextra/components"
+
+# Golem CLI Components
+
+[Golem components](/concepts/components) are WASM components deployed to Golem for execution.
+
+To create, list, build and deploy components you can use `golem component` command.
+
+## Creating a new component
+
+To create a new component in an application directory (previously created with `golem app new`) use the `component new` command in the following way:
+
+```shell copy
+golem component new <template-name> <component-name>
+```
+
+To see all the available component templates, just run the command without providing one.
+
+This command only modifies the source code of the application, does not create anything on the server.
+
+## Building a component
+
+To build a component, use the `component build` command in the following way:
+
+```shell copy
+golem component build <component-name>
+```
+
+To build the whole application, use the `app build` command in the following way:
+
+```shell copy
+golem app build
+```
+
+Both commands accept a `--build-profile <BUILD_PROFILE>` argument. Some of the built-in templates define a separate `release` profile which creates a more optimized version of the components. Build profiles can be fully customized by editing the _application manifest files_.
+
+## Deploying a component
+
+To deploy a component, use the `component deploy` or `app deploy` commands in the following way:
+
+```shell copy
+golem component deploy <component-name>
+```
+or
+
+```shell copy
+golem app deploy <component-name>
+```
+
+to deploy a specific component only.
+
+The output of the command will be something like the following:
+```
+New component created with URN urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799, version 0, and size of 89735 bytes.
+Component name: my-component.
+Exports:
+        rpc:counters/api.{[constructor]counter}(name: string) -> handle<0>
+        rpc:counters/api.{[method]counter.inc-by}(self: &handle<0>, value: u64)
+        rpc:counters/api.{[method]counter.get-value}(self: &handle<0>) -> u64
+        rpc:counters/api.{[method]counter.get-args}(self: &handle<0>) -> list<string>
+        rpc:counters/api.{[method]counter.get-env}(self: &handle<0>) -> list<tuple<string, string>>
+        rpc:counters/api.{inc-global-by}(value: u64)
+        rpc:counters/api.{get-global-value}() -> u64
+        rpc:counters/api.{get-all-dropped}() -> list<tuple<string, u64>>
+        rpc:counters/api.{bug-wasm-rpc-i32}(in: variant { leaf }) -> variant { leaf }
+        rpc:counters/api.{[drop]counter}(self: handle<0>)
+```
+
+The returned output contains the following information:
+
+- **Component URN** - URN for the new component. You can use this URN whenever you want to specify the component instead of component name.
+- **Component version** - incremental component version - used for updating the workers.
+- **Component size** - size of the `wasm` file - it is important for the storage limit in the hosted Golem Cloud.
+- **Exports** - exported function you can call. You can copy function name (the part before parameters) to call the function. All Golem API expect function names in exactly this format. See the [function name reference page](/function-names) for more details.
+
+To deploy **all components** of an application, use:
+
+```shell copy
+golem app deploy
+```
+
+To deploy the **component** based on the current directory, use:
+
+```shell copy
+golem component deploy
+```
+
+### Ephemeral components
+
+Components created are **durable** by default. To create an **ephemeral component** instead, change the component's application manifest (`golem.yaml`) to contain:
+
+```yaml
+components:
+  example:component:
+    componentType: ephemeral
+```
+
+## Component search
+
+### Using component name and the latest version
+
+If you want to get the latest version of the component using its name you can you can use the `component get` command.
+
+```shell copy
+golem get example:component
+```
+
+### Using component name and specific version
+
+To get a specific version of a component, just pass the desired version number as well:
+
+```shell copy
+golem get example:component 2
+```
+
+### Getting component list
+
+To get all component versions for specific component name you can use `component list` command with a given component name. Note if you are in a component's source directory, the command will automatically list that component's versions.
+
+```shell copy
+golem component list example:component
+```
+
+To get all component available you can use `component list` command this way:
+
+```shell copy
+golem component list
+```
+
+<Callout>
+  If you want to restrict component search to some specific project on Golem Cloud you can specify
+  project via `--project` or `--project-name` option. It works for all commands that accept
+  `--component-name` parameter.
+</Callout>
+
+## Updating component
+
+To update a component just run the `component deploy` (or `app deploy`) command again.
+
+If you want to trigger an update all worker to the new latest version right after creating this version you can use `--try-update-workers` option.
+
+It is possible to change the **component's type** (from durable to ephemeral, or from ephemeral to durable) when
+updating the component by changing the manifest file.
+
+## Updating workers
+
+If you want to update all workers you can use `component try-update-workers` command.
+
+This command gets all workers for the component that are not using the latest version and triggers an update for them one by one:
+
+```shell copy
+golem component try-update-workers example:component
+```
+
+The update request is enqueued and processed by the workers asynchronously, `golem` cannot await for the update to finish.
+
+<Callout type="warning">
+  Note that automatic worker update is not guaranteed to succeed, if the updated component differs
+  too much from the previous one.
+</Callout>
+
+<Callout>You can use URL or `--component-name` instead.</Callout>
+
+## Redeploying workers
+
+During the development of a Golem Component, it is often necessary to quickly rebuild the code, update the component and just restart all the test workers from scratch to test the changes.
+
+This is different from updating the workers as they will loose their state, but it can speed up the feedback loop during development.
+
+This workflow is supported by the `component redeploy` command:
+
+```shell copy
+golem component redeploy example:component
+```
+
+This command deletes all workers that are not using the latest version of component and re-creates them with the same name, parameters and environment variables.
+
+<Callout>You can use URL or `--component-name` instead.</Callout>

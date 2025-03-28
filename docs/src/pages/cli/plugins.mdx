@@ -1,0 +1,180 @@
+# Golem CLI Plugins
+
+## Manage the available plugins
+
+To manage the plugins available for installation, use the `golem plugin` commands.
+
+See the [Plugins page](/concepts/plugins) for general information about Golem plugins.
+
+### List the available plugins
+
+To list the available plugins, use the `golem plugin list` command.
+
+```shell copy
+golem plugin list
+```
+
+Plugins can be installed to different **scopes**. By default the command lists the plugins installed in the **global scope**.
+
+Use the following options to list plugins in other scopes:
+
+- `--project <PROJECT_NAME>`: List plugins installed in the given project's scope
+- `--component <COMPONENT_NAME>`: List plugins installed in the given component's scope.
+
+### Get information about a registered plugin
+
+To get more information about one of the available plugins, use the `golem plugin get` command:
+
+```shell copy
+golem plugin get <PLUGIN_NAME> <PLUGIN_VERSION>
+```
+
+### Register a new plugin
+
+Plugins are identified by their name and version. To register a new plugin, use the `golem plugin register` command:
+
+```shell copy
+golem plugin register <MANIFEST_PATH>
+```
+
+The parameter should point to a **plugin manifest YAML** describing all the properties of the plugin.
+
+#### The plugin manifest
+
+The plugin manifest consists of the following required global fields:
+
+| field name | description |
+|------------|-------------|
+| `name`     | The name of the plugin |
+| `version`  | The version of the plugin |
+| `description` | A short description of the plugin |
+| `icon`     | Path to the plugin's icon |
+| `homepage` | URL to the plugin's homepage |
+
+The details of the plugin are specified in the `specs` field, which is an object.
+
+The `specs.type` field specifies the type of the plugin. It can be one of the following:
+
+- `ComponentTransformer`: The plugin is a component transformer plugin.
+- `OplogProcessor`: The plugin is an oplog processor plugin.
+- `App`: The plugin is an application plugin.
+- `Library`: The plugin is a library plugin.
+
+The rest of the fields of the `spec` object depend on the plugin type.
+
+**ComponentTransformer fields**
+
+| field name | required | description |
+|------------|-------------|-------------|
+| `providedWitPackage` | No | The path to the WIT file describing the extra provided interfaces the plugin adds |
+| `jsonSchema` | No | The path to the JSON schema file describing the plugin's configuration fields |
+| `validateUrl`| Yes| URL to the external component transformation service's validate endpoint |
+| `transformUrl`| Yes| URL to the external component transformation service's transform endpoint |
+
+**OplogProcessor fields**
+
+| field name | required | description |
+|------------|-------------|-------------|
+| `component` | Yes | The path to the oplog processor component (WASM) |
+
+**App fields**
+
+| field name | required | description |
+|------------|-------------|-------------|
+| `component` | Yes | The path to the application component (WASM) |
+
+**Library fields**
+
+| field name | required | description |
+|------------|-------------|-------------|
+| `component` | Yes | The path to the library component (WASM) |
+
+### Unregister a plugin
+
+To unregister an available plugin, use the following command:
+
+```shell copy
+golem plugin unregister --plugin-name <PLUGIN-NAME> --version <PLUGIN-VERSION>
+```
+
+## Manage a component's plugins
+
+A subset of the registered plugins can be installed for a component using te `golem component plugin` commands.
+
+### Get the installed plugins
+
+To get the list of installed plugins for a component, use the following command:
+
+```shell copy
+golem component plugin get <COMPONENT-NAME> <VERSION>
+```
+
+### Install a plugin
+
+To install a plugin for a component, use the following command:
+
+```shell copy
+golem component plugin install --plugin-name <PLUGIN_NAME> --plugin-version <PLUGIN_VERSION> --priority <PRIORITY> [COMPONENT_NAME]
+```
+
+Many plugins require per-installation **configuration**. These are key-value pairs that can be passed as arguments to the `install` command as `--param <KEY=VAL>`.
+
+The **priority** is a number that determines the order in which plugins are applied.
+
+### Uninstall a plugin
+
+To uninstall a plugin from a component, use the following command:
+
+```shell copy
+golem component plugin uninstall --installation-id <INSTALLATION_ID> [COMPONENT_NAME]
+```
+
+The **installation ID** is a unique identifier assigned every time a plugin is installed for a component. It is not enough to use the plugin name and version here, because one plugin can be installed multiple times (for exampel with different configuration) for a component.
+
+### Updating a plugin's priority or configuration
+
+TODO
+
+## Manage a project's plugins
+
+In _Golem Cloud_ it is also possible to install plugins for a **project**. Every component created in the project will get the installed plugins from the project.
+
+### Get the installed plugins
+
+To get the list of installed plugins for a project, use the following command:
+
+TODO
+
+### Install a plugin
+
+To install a plugin for a project, use the following command:
+
+TODO
+
+Many plugins require per-installation **configuration**. These are key-value pairs that can be passed as arguments to the `install` command as `--param <KEY=VAL>`.
+
+The **priority** is a number that determines the order in which plugins are applied.
+
+### Uninstall a plugin
+
+To uninstall a plugin from a project, use the following command:
+
+TODO
+
+The **installation ID** is a unique identifier assigned every time a plugin is installed for a component. It is not enough to use the plugin name and version here, because one plugin can be installed multiple times (for exampel with different configuration) for a component.
+
+### Updating a plugin's priority or configuration
+
+TODO
+
+## Controlling oplog processor plugins per worker
+
+If a component has **oplog processors plugins** installed, they can be dynamically activated or deactivated for each worker.
+
+### Activating a plugin on a worker
+
+TODO
+
+### Deactivating a plugin on a worker
+
+TODO

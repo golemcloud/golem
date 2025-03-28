@@ -1,0 +1,898 @@
+# Rib
+
+**Rib** is the language used by the [API Gateway](concepts/worker-gateway) that enables users to write programs capable of manipulating worker responses, which are WebAssembly (WASM) values.
+
+Rib uses the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) syntax for encoding values.
+
+## Rib Grammar
+
+`rib-expr` below defines the grammar of **Rib**.
+
+```grammar
+rib_expr          ::= rib_expr_untyped (":" type_name)?
+
+rib_expr_untyped  ::= simple_expr rib_expr_rest
+
+simple_expr       ::= simple_expr_untyped (":" type_name)?
+
+simple_expr_untyped ::=
+      list_comprehension
+    | list_reduce
+    | pattern_match
+    | let_binding
+    | conditional
+    | flag
+    | record
+    | code_block
+    | tuple
+    | sequence
+    | boolean_literal
+    | literal
+    | not
+    | option
+    | result
+    | identifier
+    | call
+    | signed_num
+
+
+rib_expr_rest       ::= binary_rest | method_invocation | select_field_rest | select_index_res | number_rest  |  range_rest
+
+select_field_rest   ::=  ("." select_field)*
+
+binary_rest         ::=  (binary_op simple_expr)*
+
+number_rest         ::=  "." fraction
+
+method_invocation   ::= "." call
+
+call                ::= function_name ("(" argument ("," argument)* ")")?
+
+function_name       ::= variant | enum | worker_function_call
+
+select_index_rest   ::= ("[" select_index "]")*
+
+binary_op           ::=  ">=" | "<=" | "==" | "<" | ">" | "&&" | "||" | "+" | "-" | "*" | "/"
+
+range_rest          ::= ".." ("="? pos_num | pos_num? )
+
+fraction            ::= digits (('e' | 'E') ('+' | '-')? digits)?
+
+let_binding         ::= "let" let_variable (":" type_name)? "=" rib_expr
+
+conditional         ::= "if" rib_expr "then" rib_expr "else" rib_expr
+
+selection_expr      ::= select_field | select_index
+
+select_field        ::= selection_base_expr "." identifier
+
+select_index        ::= pos_num
+
+nested_indices      ::= "[" pos_num "]" ("," "[" pos_num "]")*
+
+flag                ::= "{" flag_names "}"
+
+flag_names          ::= flag_name ("," flag_name)*
+
+flag_name           ::= (letter | "_" | digit | "-")+
+
+record              ::= "{" record_fields "}"
+
+record_fields       ::= field ("," field)*
+
+field               ::= field_key ":" rib_expr
+
+field_key           ::= (letter | "_" | digit | "-")+
+
+code_block          ::= rib_expr (";" rib_expr)*
+
+code_block_unit     ::= code_block ";"
+
+selection_base_expr ::= select_index | select_field | identifier | sequence | tuple
+
+tuple               ::= "("  ib_expr ("," rib_expr)* ")"
+
+sequence            ::= "["  rib_expr ("," rib_expr)* "]"
+
+enum                ::= identifier
+
+variant             ::= identifier ( "(" rib_expr ")" )   ?
+
+argument            ::= rib_expr
+
+list_comprehension  ::= "for" identifier_text "in" expr "{"
+                           code_block_unit?
+                           "yield" expr ";"
+                         "}"
+
+list_reduce         ::= "reduce" identifier_text"," identifier_text "in" expr "from" expr "{"
+                       code_block_unit?
+                       "yield" expr ";"
+                     "}"
+
+text                ::= letter (letter | digit | "_" | "-")*
+
+pos_num             ::= digit+
+
+digits              ::= [0-9]+
+
+signed_num          ::= ("+" | "-")? pos_num
+
+literal             ::= "\"" (static_term | dynamic_term)* "\""
+
+static_term         ::= (letter | space | digit | "_" | "-" | "." | "/" | ":" | "@")+
+
+dynamic_term        ::= "${" rib_expr "}"
+
+boolean_literal     ::= "true" | "false"
+
+not                 ::= "!" rib_expr
+
+option              ::= "some" "(" rib_expr ")" | "none"
+
+result              ::= "ok" "(" rib_expr ")" | "error" "(" rib_expr ")"
+
+identifier          ::= any_text
+
+function_name       ::= variant | enum | instance | text
+
+instance            ::= "instance"
+
+any_text            ::= letter (letter | digit | "_" | "-")*
+
+type_name           := basic_type | list_type | tuple_type | option_type | result_type
+
+basic_type          ::= "bool" | "s8" | "u8" | "s16" | "u16" | "s32" | "u32" | "s64" | "u64" | "f32" | "f64" | "char" | "string"
+
+list_type           ::= "list" "<" (basic_type | list_type | tuple_type | option_type | result_type) ">"
+
+tuple_type          ::= "tuple" "<" (basic_type | list_type | tuple_type | option_type | result_type) ("," (basic_type | list_type | tuple_type | option_type | result_type))* ">"
+
+option_type         ::= "option" "<" (basic_type | list_type | tuple_type | option_type | result_type) ">"
+
+result_type         ::= "result" "<" (basic_type | list_type | tuple_type | option_type | result_type) "," (basic_type | list_type | tuple_type | option_type | result_type) ">"
+
+```
+
+The grammar is mainly to give a high level overview of the syntax of Rib.
+
+The following sections show some examples of each construct.
+
+## Examples
+
+Rib scripts can be multiline, and it should be separated by `;`.
+
+### Return type of a Rib script
+
+The last expression in the Rib script is the return value of the script. The last line in Rib script
+shouldn't end with a `;`, as this is a syntax error.
+
+### Numbers
+
+```rib copy
+1
+```
+
+You can annotate a type to Rib expression to make it specific, otherwise, it will get inferred as u64
+for a positive integer, s64 for a signed integer, and f64 for a floating point number.
+
+```rib copy
+1: u64
+```
+
+### Assign to a variable
+
+```rib copy
+let x = 1;
+```
+
+We can annotate the type of the variable as well.
+
+
+```rib copy
+let x: u64 = 1;
+```
+
+If you are passing this variable to a worker function, then you may not need to specify the type of the variable.
+
+### String
+
+```rib copy
+"foo"
+```
+
+### String Interpolation (concatenation)
+
+This is similar to languages like `scala` where you start with `${` and end with `}`
+
+```rib copy
+let x = "foo";
+let y = "bar";
+let z = "${x}-and-${y}";
+```
+
+Evaluating this Rib will result in "foo-and-bar". The type of `z` is a string.
+
+### Identifier
+
+```rib copy
+foo
+```
+
+Here `foo` is an identifier. Note that identifiers are not wrapped with quotes.
+
+Such an expression can fail if the value of this variable is not available in the context of evaluation.
+This implies, if you are running Rib specifying a wasm `component` through `api-gateway` in `golem`, then `Rib` has the access to look at component metadata.
+If `Rib` finds this variable `foo` in the component metadata,then it tries to infer its types.
+
+If such a variable is not present in the wasm component (i.e, you can cross check this in WIT file of the component),
+then technically there are two possibilities. Rib will choose to fail the compilation or consider it as a global variable input.
+A global input is nothing but `Rib` expects `foo` to be passed in to the evaluator of Rib script (somehow).
+Since you are using `Rib` from the api-gateway part of `golem` the only valid global variable supported is `request` and nothing else.
+This would mean, it will fail compilation.
+
+More on global inputs to follow.
+
+### Boolean
+
+```rib copy
+true
+```
+
+```rib copy
+false
+```
+
+### Sequence
+
+```rib copy
+# Sequence of numbers
+[1, 2, 3]
+```
+
+You can annotate the type of the sequence as well.
+
+
+
+```rib copy
+let x: list<s32> = [1, 2, 3];
+```
+
+```rib copy
+["foo", "bar", "baz"]
+```
+
+```rib copy
+# Sequence of record
+[{a: "foo"}, {b : "bar"}]
+```
+
+This is parsed as a sequence of values. While the values can be of any type, similar to any dynamic language, evaluation may fail with error if we mix different types in a sequence.
+In other words, `Rib` evaluator do expect the values in a sequence to be of the same type.
+
+### Record
+
+```rib copy
+{ name: "John", age: 30 }
+
+{ city: "New York", population: 8000000 }
+
+{ name: "John", age: 30, { country: "France", capital: "Paris" } }
+```
+
+This is parsed as a `WASM` Record. The syntax is inspired from `WASM-WAVE`.
+
+Note that, sometimes you will need to annotate the type of the number. It depends on the compilation context.
+
+Note that keys are not considered as variables. Also note that keys in a WASM record don't have quotes. Example: `{"foo" : "bar"}` is wrong.
+
+### Tuple
+
+```rib copy
+(1, 20.1, "foo")
+```
+
+This is also equivalent to the following in Rib.
+You can be specific about the types just like in any rib expression.
+
+```rib copy
+let k: (u64, f64, string) = (1, 20.1, "foo");
+k
+```
+
+Unlike `sequence`, the values in a tuple can be of different types.
+
+Here is another example:
+
+```rib copy
+("foo", 1, {a: "bar"})
+```
+
+### Flags
+
+```rib copy
+{ Foo, Bar, Baz }
+```
+
+This is of a flag type.
+
+### Selection of Field
+
+A field can be selected from an `Rib` expression if it is a `Record` type. For example, `foo.user`
+is a valid selection given `foo` is a variable that gets evaluated to a record value.
+
+```rib copy
+let foo = { name: "John", age: 30 };
+foo.name
+```
+
+### Selection of Index
+
+This is selecting an index from a sequence value.
+
+```rib copy
+let x = [1, 2, 3];
+x[0]
+```
+
+You can also inline as given below
+
+```rib copy
+[1, 2, 3][0]
+```
+
+### Result
+
+`Result`in `Rib` is WASM Result, which can take the shape of `ok` or `err`. This is similar to `Result` type in std `Rust`.
+
+A `Result` can be `Ok` of a value, or an `Err` of a value.
+
+```rib copy
+ ok(1)
+```
+
+```rib copy
+ err("error")
+```
+
+```rib copy
+
+{
+  "user": "ok(Alice)",
+  "age": 30u32
+}
+```
+
+### Option
+
+`Option` in corresponding to WASM , which can take the shape of `Some` or `None`. This is similar to `Option` type in std `Rust`.
+
+An `Option` can be `Some` of a value, or `None`.
+
+```rib copy
+ some(1)
+```
+
+```rib copy
+ none
+```
+
+The syntax is inspired from wasm wave.
+
+### Comparison (Boolean)
+
+```rib copy
+let x: u8 = 1;
+let y: u8 = 2;
+x == y
+
+```
+
+Similarly, we can use other comparison operators like `>=`, `<=`, `==`, `<` etc.
+Both operands should be a valid Rib code that points/evaluated to a number or string.
+
+### Arithmetic
+
+```rib copy
+let x: u8 = 1;
+let y: u8 = 2;
+x + y
+```
+
+`+`, `-`, `/` and `*` are supported.
+
+### Conditional Statement
+
+```rib copy
+ let id: u32 = 10;
+ if id > 3 then "higher" else "lower"
+```
+
+The structure of the conditional statement is `if <condition> then <then-rib-expr> else <else-rib-expr>`,
+where `condition-expr` is an expr that should get evaluated to boolean.
+The `then-rib-expr` or `else-rib-expr` can be an any valid rib code, which could be another `if else` itself
+
+```rib copy
+ let id: u32 = request.user.id;
+ if id > 3 then "higher" else if id == 3 then "equal" else "lower"
+```
+
+You must ensure that the branches (then branch and else branch) resolve to the same type. Otherwise, Rib
+will fail to compile.
+
+### Pattern Matching
+
+```rib copy
+let res: result<str, str> = ok("foo");
+
+match res {
+    ok(v) => v,
+    err(msg) => msg
+}
+```
+
+This would probably be your go-to construct when you are dealing with complex data structures like `result` or `option` or other custom `variant` (WASM Variant)
+that comes out as the response of a worker function
+
+```rib copy
+  let worker_result = my_worker_function_name(1, "jon");
+  match worker_result {
+     ok(x) => "foo",
+     err(msg) => "error"
+  }
+```
+
+#### Exhaustive pattern matching
+
+If the pattern match is not exhaustive, then it will throw compilation errors
+
+Example: The following pattern matching is invalid
+
+```rib copy
+  match worker_result {
+    some(x) => "found",
+  }
+```
+
+This will result in following error:
+
+```
+Error: Non-exhaustive pattern match. The following patterns are not covered: `none`.
+To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.
+```
+
+Now, let's say your worker responded with a `variant`.
+Note on variant: A variant statement defines a new type where instances of the type match exactly one of the variants listed for the type.
+This is similar to a "sum" type in algebraic datatype (or an enum in Rust if you're familiar with it).
+Variants can be thought of as tagged unions as well.
+
+### Pattern Match on Variants
+
+Given you are using Rib through worker bridge, which knows about component metadata,
+then, let's say we have a variant of type as given below responded from the `worker`, when invoking a function called `foo`:
+
+```rib copy
+variant my_variant {
+    bar( {a: u32,b: string }),
+    foo(list<string>),
+}
+```
+
+then, the following will work:
+
+```rib copy
+let x = foo("abc");
+
+match x {
+  bar({a: _, b: _}) => "success",
+  foo(some_list) => some_list[0]
+}
+
+```
+
+#### Variables in the context of pattern matching
+
+In all of the above, there exist a variable in the context of pattern.
+Example `x` in `ok(x)` or `msg` in `err(msg)` or `x` in `some(x)` or `x` in `bar(x)` or `x` in `foo(x)`.
+
+These variables are bound to the value that is being matched.
+
+Example, given the worker response is ok(1), the following match expression will result in `2`.
+
+```rib copy
+   let result = my-worker-function("foo");
+
+   match result {
+    ok(x) => x + 1,
+    err(msg) => 0
+  }
+```
+
+The following match expression will result in "c", if the worker response was variant value `foo(["a", "b", "c"])`,
+and will result in "a" if the `worker.response` was variant value `bar({a: 1, b: "a"})`.
+
+```rib copy
+  let result = my-worker-function();
+
+  match result {
+    bar(x) => x.b,
+    foo(x) => x[1]
+  }
+
+```
+
+#### Wild card patterns
+
+In some of the above examples, the binding variables are unused. We can use `_` as a wildcard pattern to indicate that we don't care about the value.
+
+```rib copy
+  match worker.response {
+    bar(_) => "bar",
+    foo(_) => "foo"
+  }
+```
+
+
+### List Comprehension
+
+```rib copy
+ let x = ["foo", "bar"];
+
+ for p in x {
+   yield p;
+ }
+```
+
+### List Aggregation
+
+```rib copy
+ let ages: list<u16> = [1, 2, 3];
+
+ reduce z, a in ages from 0 {
+   yield z + a;
+ }
+```
+
+### Ranges
+
+Ranges can be right exclusive or right inclusive. The right exclusive range is denoted by `..` and right inclusive range is denoted by `..=`.
+
+
+```rib copy
+1..10;
+```
+
+```rib copy
+let initial: u32 = 1;
+let final: u32 = 10;
+
+let x = initial..final;
+
+for i in x {
+  yield i
+}
+```
+
+Similarly, you can use `..=` to include the last number in the range.
+
+
+
+```rib copy
+1..=10;
+```
+
+
+```rib copy
+let initial: u32 = 1;
+let final: u32 = 10;
+
+let x = initial..=final;
+
+for i in x {
+  yield i
+}
+```
+
+Please note that, you may need to help Rib compiler with type annotations for the numbers involved in the range.
+This depends on the context. We will improve these aspects as we go.
+
+You can also create infinite range, where you skip the right side of `..`
+
+```rib copy
+1..;
+```
+
+However, note that as of now Rib interpreter (runtime) will spot any infinite loop and will throw an error.
+Example: The following will throw an error.
+
+```rib copy
+let x = 1:u8..;
+
+for i in x {
+  yield i
+}
+```
+
+However, you can use infinite ranges to select a segment of the list without worrying about the end index.
+
+```rib copy
+let x: list<u32> = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+for i in x[1..] {
+  yield i
+}
+```
+
+
+## Http Request Input and Field Selection
+
+If you are using [worker-gateway](/invoke/making-custom-apis) to write through http APIs,
+you can use the variable `request` in your Rib script, and that will be considered as a global input.
+`worker-gateway` will ensure to pass the value of `request` to the rib evaluator internally.
+
+Please refer to worker-gateway documents for more details.
+
+```rib copy
+request
+```
+
+To select the body field in request,
+
+```rib copy
+request.body
+```
+
+To select a header from the request
+
+```rib copy
+request.headers
+```
+
+To select the value of a path or query variable in your http request.
+
+```rib copy
+request.path.user
+```
+
+The `request.path.*` and `request.headers.*` will be inferred as `string` unless you specify it using type annotation.
+
+Please note that Rib by itself don't support a keyword such as `request`, or `path` or `body` or `headers`.
+However, if you are using Rib through worker-gateway, then these values are available in the context of the Rib evaluator. Currently, in golem,
+worker-gateway is the only way to use Rib. But this will change soon. Example: We may be able to fire up a REPL and write Rib and invoke worker functions.
+
+`request.body` will not be inferred properly, unless you pass it as it is to a worker function, as Rib knows the component metadata,
+and can infer the types automatically.
+
+
+## Type Inference
+
+Rib is mainly used to write script to manipulate the input and call worker functions. In this case, for the most part, most of the types
+will be automatically inferred. Otherwise, there will be a compilation error, asking the developer to annotate the types and help the compiler.
+
+
+```rib copy
+let x: string = request.body;
+x
+```
+
+Say the request body is a `record` in Json, as given below. `Rib` sees it as a `WASM` Record type.
+
+```rib copy
+{
+  "user": "Alice",
+  "age": 30u32
+}
+```
+
+Then we can use Rib language to select the field `user`, as it considers this request's body as a `WASM` Record type.
+
+```rib copy
+let x: string = request.body.user;
+x
+```
+
+
+## Invoke worker functions
+
+Rib is mainly used to write scripts to manipulate the input and call worker functions.
+Refer to the [worker-gateway](/invoke/making-custom-apis) documentation for more on how you use Rib to invoke worker functions.
+This is useful to expose some http APIs on top of these worker functions running in golem platform, and you don't want to keep
+updating or change the components and expose additional APIs, as you can write a simple Rib script to do the necessary changes to the input
+and pass it to the worker functions. Invoking functions is similar to any other languages.
+
+### Durable worker function invocation
+
+```rib copy
+let my_worker = instance("my-worker");
+let result = my_worker.get-cart-contents();
+
+result
+```
+
+Rib is evaluated in the context of a particular component (this is taken care by worker-gateway that it evaluates Rib in the context of a wasm component).
+
+In this script, first you create an instance (instance of a component) using `instance` function. `instance` function takes
+worker name as the argument. Once you created the instance, the functions in the component will be available to call.
+
+### Ephemeral Worker function invocation
+
+The only difference here is that you don't need to pass an argument to the `instance` function.
+
+```rib copy
+let my_worker_instance = instance();
+let result = my_worker.get-cart-contents();
+result
+```
+
+You can avoid an unnecessary let-binding here too.
+
+```rib copy
+let my_worker_instance = instance();
+my_worker.get-cart-contents();
+```
+
+In this case the return value of the script is the last expression in the script, and in this case, it is of the result type of `get-cart-contents`.
+
+
+### Worker function invocation with arguments
+
+Let's say there exists a  function `add-to-cart` which takes a product as the argument, where product is a wasm record
+
+```rib copy
+let my_worker_instance = instance("my-worker");
+
+let product = {product-id: 1, quantity: 2, name: "mac"};
+my_worker.add-to-cart(input);
+```
+
+Similarly you can pass multiple arguments to the worker function and they should be separated by `,`.
+
+Say you need to pass the username along with with the product details.
+
+```rib copy
+let my_worker_instance = instance("my-worker");
+
+let product = {product-id: 1, quantity: 2, name: "mac"};
+let username = "foo";
+
+my_worker.add-to-cart(username, product);
+```
+
+You can inline the arguments as well.
+
+```rib copy
+let my_worker_instance = instance("my-worker");
+
+let product = {product-id: 1, quantity: 2, name: "mac"};
+my_worker.add-to-cart("foo", {product-id: 1, quantity: 2, name: "mac"});
+```
+
+### Invoke functions in a Resource
+
+Here is a relatively complex example where Rib is used to invoke functions in a resource `cart`
+Here the first step is to define the worker by calling instance function. Then you create a resource
+similar to a method invocation which is `worker.cart`. Here the only difference is `cart` is a resource
+rather than a function. Now you have the resource available to call methods on it such as `add-item`, `remove-item` etc.
+
+Please note that, everything prior to a real function call is lazy. i.e, you are not reusing the same resource at runtime
+to call these functions.
+
+```rib copy
+  let worker = instance("my-worker");
+  let cart = worker.cart("bar");
+  cart.add-item({product-id: "mac", name: "apple", quantity: 1, price: 1});
+  cart.remove-item(a);
+  cart.update-item-quantity(a, 2);
+  let result = cart.get-cart-contents();
+  cart.drop();
+  result
+```
+
+### Handle conflicting function names using type parameters
+
+Let's say a function name `add-to-cart` exists in multiple interfaces (say api1, api2) in the same component.
+In this case, you can specify the interface as a type parameter when invoking method in the instance.
+
+Example:
+
+```rib copy
+let my_worker_instance = instance("my-worker");
+
+let product = {product-id: 1, quantity: 2, name: "mac"};
+
+let result = my_worker.add-to-cart[api1](product);
+
+result
+```
+
+If you are not specifying type parameter that narrows down the context, then compiler will return an error similar to the below one:
+
+```
+error in the following rib found at line 3, column 30
+`my_worker.add-to-cart(product)`
+cause: invalid function call `qux`
+function 'add-to-cart' exists in multiple interfaces. specify an interface name as type parameter from: api1, api2
+```
+
+### Handle conflicting packages using type parameters
+
+Let's say a function name `add-to-cart` exists in multiple packages. In this case, you can specify the package name too
+as a type parameter. Let's say you care only about the package `amazon:shopping-cart`.
+
+
+```rib copy
+let my_worker_instance = instance("my-worker");
+
+let product = {product-id: 1, quantity: 2, name: "mac"};
+
+let result = my_worker.add-to-cart[amazon:shopping-cart](product);
+
+result
+```
+
+### Handle conflicts at instance level
+
+You can also include this type parameter at instance level such that every method invocation will be resolved to that package or interface.
+
+```rib copy
+let my_worker_instance = instance[amazon:shopping-cart]("my-worker");
+
+let product = {product-id: 1, quantity: 2, name: "mac"};
+
+let result = my_worker.add-to-cart(product);
+```
+
+### Conflict resolution using fully qualified type parameter
+
+If there exist a function `add-to-cart` in multiple interfaces within multiple packages, then you can specify
+fully qualified package name and interface as given below. As mentioned above, this can be either at instance level
+(which will get applied to all method calls on that instance) or at method level
+
+```rib copy
+let my_worker_instance = instance[amazon:shopping-cart/api]("my-worker");
+
+let product = {product-id: 1, quantity: 2, name: "mac"};
+
+let result = my_worker.add-to-cart(product);
+```
+
+### Multiple invocations
+
+Rib allows you to invoke a function multiple times, or invoke multiple functions across multiple workers in a single script.
+That said, it is important to note that Rib by itself is not durable and is stateless. The next time you invoke Rib (through worker-gateway for example),
+these functions will get executed against the worker again and doesn't cache any result in anyway.
+
+Let's say we want to accumulate the contents of a shopping cart from user-id 1 to user-id 5.
+
+```rib copy
+  let worker = instance("my-worker");
+  let cart = worker.cart[golem:it/api]("bar");
+
+  let initial = 1: u64;
+  let final = 5: u64;
+  let range = initial..final;
+
+  let result = for i in range {
+     yield cart.get-cart-contents("user-id-${i}");
+  };
+
+  result
+
+```
+
+Currently Rib is not durable. Also it hasn't been tested with complex use-cases such as invoking multiple functions,
+or invoke functions against multiple workers. This is because, Rib's primary use-case in golem platform is for users to write reasonably simple
+scripts in the context of [worker-gateway](/invoke/making-custom-apis) to manipulate the http input and call worker functions.
+
+## Limitations
+
+We recommend the users of golem to not rely on Rib for complex business logic as of now.
+It's better to write it in standard languages that works with golem such as Rust, Python etc,
+making sure your logic or workflow is durable. We will be expanding the usability and reliability of Rib as we go.
+
+## Issues and Trouble Shooting
+
+If you bump into compilation errors, annotating the types will help the compiler to infer the types properly.
+If you bump into internal runtime errors, please report to us and we will try to fix it as soon as possible.
+
+We are making improvements in this space continuously.

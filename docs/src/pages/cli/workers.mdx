@@ -1,0 +1,249 @@
+import { Callout } from "nextra/components"
+
+# Golem CLI Workers
+
+Using `golem worker` command you can:
+
+- Start and stop worker
+- Interrupt and resume workers
+- Invoke worker function
+- Get worker stdout, stderr and logs
+- Update workers
+- Search workers, get metadata, etc.
+- Revert a worker to a previous state
+
+<Callout>
+  In all examples we are using component URN. You can use component URL or `--component-name`
+  instead.
+</Callout>
+
+## Start new worker
+
+Even though workers can automatically start on the first invocation, it is possible to explicitly start a worker.
+This allows specifying command line arguments and environment variables for the worker.
+
+```shell copy
+golem worker new example:counter/counter1 --env A=1 --env B=2 arg1 arg2
+```
+
+You can see the URN for your new worker in command output. You can use URN whenever you want to specify worker instead of component and worker name.
+
+## Get worker metadata
+
+### Using worker name
+
+You can get worker metadata using worker name and (optionally prefixed by the component name, if it is not inferrable from the current context):
+
+```shell copy
+golem worker get counter1
+golem worker get example:counter/counter1
+```
+
+## Search workers
+
+You can search for workers of some components using `worker list` command with repeated `--filter` argument.
+
+For instance lets find idle workers with component version older than 2 of the component `example:counter`:
+
+```shell copy
+golem worker list --filter "status = Idle" --filter "version < 2" example:counter
+```
+
+<Callout type="warning">
+  Enumerating workers is a slow operation and should only be used for debugging an administrative
+  tasks.
+</Callout>
+
+## Invoke functions
+
+The folowig section shows the basics of invoking workers through the CLI. See the [dedicated invocation with CLI page](/invoke/cli) for more details.
+
+### Without waiting for result
+
+You can invoke worker function without waiting for function result using `worker invoke --enqueue` command:
+
+```shell copy
+golem worker invoke --enqueue counter1 'rpc:counters/api.{inc-global-by}' 5
+```
+
+Function parameters can be specified using repeated `--arg` parameters.
+
+### Waiting for result
+
+You can invoke worker function and wait for result using `worker invoke` command:
+
+```shell copy
+golem worker invoke counter1 'rpc:counters/api.{get-global-value}'
+```
+
+```
+Invocation results in WAVE format:
+- '5'
+```
+
+### Ephemeral workers
+
+Invoking **ephemeral components** does not require specifying the worker name, as Golem creates a new instance for each invocation. In this case only the **component** must be selected (if it is not inferred by the context), and the worker name must be `-`:
+
+```shell copy
+golem worker invoke example:ephemeral-component/- 'demo:worker/api.{test}'
+```
+
+### Using idempotency key
+
+If you want to make sure function was called only once even if you called CLI multiple times (for instance due to retries on network errors) you can use `--idempotency-key` parameter for both `invoke` and `invoke-and-await` commands.
+
+You can use any string as idempotency key.
+
+## Live streaming worker logs
+
+You can connect to your running worker and get logs using `worker connect` command this way:
+
+```shell copy
+golem worker connect counter1
+```
+
+You can also use `--connect` option on `invoke` command to connect to worker right after invoking the command.
+
+## Worker update
+
+To update worker to some specific version of worker component you can use `worker update` this way:
+
+```shell copy
+golem worker update counter1 --target-version 2 --mode auto
+```
+
+You can also use `worker update-many` with the same `--filter` parameters as in `worker list` command to update multiple workers:
+
+```shell copy
+golem worker update-many example:counter --filter 'version < 2' --target-version 2 --mode auto
+```
+
+## Interrupt and resume workers
+
+If you want to interrupt and later resume a long-running worker you can use `interrupt` and `resume` commands:
+
+```shell copy
+golem worker interrupt counter1
+golem worker resume counter1
+```
+
+## Testing worker crash recovery
+
+There is a special command to simulate unexpected worker crush and recovery - `worker simulated-crash`. This command can be used for tests:
+
+```shell copy
+golem worker simulated-crash counter1
+```
+
+## Stopping workers
+
+Idle worker are not actively consuming resources but they take storage as their state is persisted. A worker can be deleted using the `worker delete` command:
+
+```shell copy
+golem worker delete counter1
+```
+
+This command deletes worker state.
+
+Please note that even though the worker can be deleted this way it would be started again (with the fresh state) if used:
+
+```shell
+golem worker delete counter1
+golem worker invoke counter1 'rpc:counters/api.{get-global-value}'
+```
+
+```
+Invocation results in WAVE format:
+- '0'
+```
+
+## Oplog query
+
+It is possible to **query** an existing worker's oplog for debugging purposes. To get the **full oplog** of a worker, use the `worker oplog` command the worker must be specified just like in other `golem-cli worker` commands:
+
+```shell copy
+golem worker oplog counter1
+```
+
+Any other form of identifying a worker can be used (URL syntax, separate component-id and worker name, etc).
+
+With the optional `--from` parameter it is possible to only get oplog entries _after_ a certain oplog index:
+
+```shell copy
+golem worker oplog counter1
+```
+
+Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the worker.
+
+### Searching for oplog entries
+
+The same command can also be used to **search** for oplog entries, using the `--query` parameter. This parameter requries a query using **lucene query syntax**. The following syntax elements are supported:
+
+- `search terms` looks for `search` AND `terms`
+- `AND`, `OR` and `NOT`
+- grouping using parentheses `()`
+- `"quoted terms"`
+- regular expression matches using `/regex/`
+- `field:value` to search for a specific information
+
+The terms and fields are interpreted in the following way:
+
+| Oplog entry                 | Matching queries                                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Create`                    | `create`                                                                                                                                      |
+| `ImportedFunctionInvoked`   | `imported-function-invoked`, match on invoked function's name, match on function arguments(_), match on result value(_)                       |
+| `ExportedFunctionInvoked`   | `exported-function-invoked`, `exported-function`, match on invoked function's name, match on idempotency key, match on function arguments(\*) |
+| `ExportedFunctionCompleted` | `exported-function-completed`, `exported-function`, match on response value(\*)                                                               |
+| `Suspend`                   | `suspend`                                                                                                                                     |
+| `Error`                     | `error`, match on error message                                                                                                               |
+| `NoOp`                      | `noop`                                                                                                                                        |
+| `Jump`                      | `jump`                                                                                                                                        |
+| `Interrupted`               | `interrupted`                                                                                                                                 |
+| `Exited`                    | `exited`                                                                                                                                      |
+| `ChangeRetryPolicy`         | `change-retry-policy`                                                                                                                         |
+| `BeginAtomicRegion`         | `begin-atomic-region`                                                                                                                         |
+| `EndAtomicRegion`           | `end-atomic-region`                                                                                                                           |
+| `BeginRemoteWrite`          | `begin-remote-write`                                                                                                                          |
+| `EndRemoteWrite`            | `end-remote-write`                                                                                                                            |
+| `PendingWorkerInvocation`   | `pending-worker-invocation`, match on invoked function's name, match on idempotency key, match on function arguments(\*)                      |
+| `PendingUpdate`             | `pending-update`, `update`, match on target version                                                                                           |
+| `SuccessfulUpdate`          | `successful-update`, `update`, match on target version                                                                                        |
+| `FailedUpdate`              | `failed-update`, `update`, match on target version, match on error details                                                                    |
+| `GrowMemory`                | `grow-memory`                                                                                                                                 |
+| `CreateResource`            | `create-resource`                                                                                                                             |
+| `DropResource`              | `drop-resource`                                                                                                                               |
+| `DescribeResource`          | `describe-resource`, match on resource name, match on resource parameters(\*)                                                                 |
+| `Log`                       | `log`, match on context, match on message                                                                                                     |
+| `Restart`                   | `restart`                                                                                                                                     |
+| `ActivatePlugin`            | `activate-plugin`                                                                                                                             |
+| `DeactivatePlugin`          | `deactivate-plugin`                                                                                                                           |
+
+The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured parameter and result values.
+
+For example to look for oplog entries that contain parameters or return values of **exported functions** where any of these input/output values is a **record** having a field `product-id` with either value `123` or `456`, we can use the following query:
+
+```shell
+golem worker oplog --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1 --query 'exported-function AND (product-id:123 OR product-id:456)'
+```
+
+## Reverting a worker
+
+It is possible to revert a worker to its previous state. This can be useful if a worker got into a **failed** state to make it usable again, or to undo some accidental invocations or updates.
+
+There are two possible ways to specify which state to revert to:
+
+- **By index**: The index of the oplog entry to revert to. Use the **oplog query** command to check the worker's oplog and find the index of the desired state.
+- **By undoing the last invocations**: The given number is the number of invocations to revert.
+
+To revert to a given oplog, use the `worker revert` command:
+
+```shell copy
+golem worker revert counter1 --last-oplog-index 42
+```
+
+To revert some of the last invocations, use the `--number-of-invocations` parameter instead:
+
+```shell copy
+golem worker revert counter1 --number-of-invocations 3
+```

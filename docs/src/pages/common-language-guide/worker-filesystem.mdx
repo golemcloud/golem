@@ -1,0 +1,309 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+import { Tabs } from "nextra/components"
+
+# Worker Filesystem
+
+Each worker runs in a sandboxed filesystem. Both the `/` path and the current working directory of a worker point to the root of this sandboxed filesystem.
+There is no way for a worker to access files outside its own filesystem.
+
+To interact with the worker filesytem, you normally just need to use your regular filesystem apis. The language specific tooling will take
+care of translating these to invocations of the [wasi:filesystem](https://wa.dev/wasi:filesystem) api which is implemented by Golem.
+
+## Example
+
+<Callout type="info">
+    This section assumes that you have a Golem project with an app manifest. If you don't have one yet, please follow the [guide](/quickstart)
+    and then continue here.
+</Callout>
+
+This example will walk you through creating a worker that will interact with its sandboxed filesystem.
+
+### Defining the component
+We begin by adding a new component to our application:
+
+<Tabs items={["Rust", "TypeScript", "Go", "Python", "C", "JavaScript", "Zig", "MoonBit", "Scala.js"]}>
+  <Tabs.Tab>
+  {/* Rust */}
+  ```shell copy
+  golem component new rust example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Typescript */}
+  ```shell copy
+  golem component new ts example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Go */}
+  ```shell copy
+  golem component new go example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Python */}
+  ```shell copy
+  golem component new python example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* C */}
+  ```shell copy
+  golem component new c example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Javascript */}
+  ```shell copy
+  golem component new js example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Zig */}
+  ```shell copy
+  golem component new zig example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Moonbit */}
+  ```shell copy
+  golem component new moonbit example:filesystem
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Scala */}
+  ```shell copy
+  golem component new scala example:filesystem
+  ```
+  </Tabs.Tab>
+</Tabs>
+
+Adjust the wit file defining the component so we have a convenient entrypoint. This will just be used to invoke the component, so feel free to name
+the functions as you like.
+```diff
+diff --git a/components-rust/example-filesystem/wit/example-filesystem.wit b/components-rust/example-filesystem/wit/example-filesystem.wit
+index 65b5dda..e56b6e8 100644
+--- a/components-rust/example-filesystem/wit/example-filesystem.wit
++++ b/components-rust/example-filesystem/wit/example-filesystem.wit
+@@ -3,8 +3,7 @@ package example:filesystem;
+ // See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+ interface example-filesystem-api {
+-  add: func(value: u64);
+-  get: func() -> u64;
++  run: func();
++  get-contents: func() -> string;
+ }
+
+ world example-filesystem {
+```
+
+Finally we need to adjust the implementation of the component to write a file when invoked:
+<Tabs items={["Rust", "TypeScript", "Go", "Python", "C", "JavaScript", "Zig", "MoonBit", "Scala.js"]}>
+  <Tabs.Tab>
+  {/* Rust */}
+  ```rust
+  mod bindings;
+
+  use crate::bindings::exports::example::filesystem_exports::example_filesystem_api::Guest;
+
+  struct Component;
+
+  impl Guest for Component {
+      fn run() {
+          std::fs::write("/foobar.txt", "Hello, World!").unwrap()
+      }
+      fn get_contents() -> String {
+          std::fs::read_to_string("/foobar.txt").unwrap()
+      }
+  }
+
+  bindings::export!(Component with_types_in bindings);
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Typescript */}
+  <Callout type="info">
+    This area is under construction. Please refer to guides for other languages for now and try to translate. We apologize for the inconvenience!
+  </Callout>
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Go */}
+  ```go
+  package main
+
+  import (
+		"app/components-go/example-filesystem/binding"
+		"os"
+  )
+
+  func init() {
+  	binding.SetExportsExampleFilesystemExportsExampleFilesystemApi(&Impl{})
+  }
+
+  type Impl struct { }
+
+  func (i *Impl) Run() {
+  	os.WriteFile("/foobar.txt", []byte("Hello, World!"), 0644)
+  }
+
+  func (i *Impl) GetContents() string {
+  	content, _ := os.ReadFile("file.txt")
+		return string(content)
+  }
+
+  func main() {}
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Python */}
+  ```python
+  from binding.example_filesystem import exports
+
+  class ExampleFilesystemApi(exports.ExampleFilesystemApi):
+      def run(self):
+          with open("/foobar.txt", "w") as file:
+              file.write("Hello, World!")
+
+      def get_contents(self) -> str:
+          with open("/foobar.txt", "r") as file:
+              content = file.read()
+          return content
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* C */}
+  ```c
+  #include <iostream>
+  #include <string>
+  #include "example_filesystem.h"
+
+  void exports_example_filesystem_exports_example_filesystem_api_get_contents(example_filesystem_string_t *ret) {
+      std::ifstream file("/foobar.txt");
+      std::ostringstream ss;
+      ss << file.rdbuf();
+      example_filesystem_string_set(ret, ss.str().c_str());
+  }
+
+  void exports_example_filesystem_exports_example_filesystem_api_run() {
+      std::ofstream out("/foobar.txt");
+      out << "Hello, World!";
+      out.close();
+  }
+
+  int32_t main(void) {
+      return 0;
+  }
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Javascript */}
+  <Callout type="info">
+    This area is under construction. Please refer to guides for other languages for now and try to translate. We apologize for the inconvenience!
+  </Callout>
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Zig */}
+  <Callout type="info">
+    This area is under construction. Please refer to guides for other languages for now and try to translate. We apologize for the inconvenience!
+  </Callout>
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Moonbit */}
+  <Callout type="info">
+    This area is under construction. Please refer to guides for other languages for now and try to translate. We apologize for the inconvenience!
+  </Callout>
+  </Tabs.Tab>
+  <Tabs.Tab>
+  {/* Scala */}
+  <Callout type="info">
+    This area is under construction. Please refer to guides for other languages for now and try to translate. We apologize for the inconvenience!
+  </Callout>
+  </Tabs.Tab>
+</Tabs>
+
+### Invoking the worker
+
+Once we have defined the component, we can the deploy the component and invoke a worker using the Golem cli:
+```shell copy
+golem app deploy example:filesystem
+golem worker invoke example:filesystem/test-worker 'example:filesystem-exports/example-filesystem-api.{run}()'
+```
+
+As part of the invocation, the worker performed the side effect of writing a file in its sandboxed filesystem. This file will persist and can be used
+in all future invocations. For example:
+```shell copy
+golem worker invoke example:filesystem/test-worker 'example:filesystem-exports/example-filesystem-api.{get-contents}()'
+```
+```
+Invocation results in WAVE format:
+  - "Hello, World!"
+```
+
+## Initial File System
+
+<Callout type="info">
+    This section builds on the project and Golem state created in the [example project](example).
+</Callout>
+
+The Initial File System (IFS) refers to all files that are present in the worker filesystem _before_ the worker is started.
+These can include configuration files, static assets and other things that you want to include with your worker.
+
+The IFS is configured on the level of a component, meaning that all workers created from a given component + version will always start with the
+same filesystem. To configure the IFS, include a `files` section in your golem.yaml
+
+<Callout type="warning">
+    If you are using profiles in your golem.yaml, you currently have to include the files section in each of your profiles when overriding.
+</Callout>
+
+```yaml
+components:
+  example:filesystem:
+    template: rust
+    profiles:
+      debug:
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /foobar.txt
+          permissions: read-write
+        - sourcePath: ./files/bar.txt
+          targetPath: /bar.txt
+          permissions: read-only
+      release:
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /foobar.txt
+          permissions: read-write
+        - sourcePath: ./files/bar.txt
+          targetPath: /bar.txt
+          permissions: read-only
+```
+
+After deploying the component, any new workers created will have the file `/foobar.txt` (and `./foobar.txt` as the worker is starting the root) available to them.
+The file `/bar.txt` on the other hand is only available for reading. Trying to open the file for writing will fail with a language-dependent error.
+
+```shell copy
+echo "I'm already here" > ./files/foobar.txt
+golem app deploy example:filesystem
+golem worker invoke example:filesystem/test-worker-2 'example:filesystem-exports/example-filesystem-api.{get-contents}()'
+```
+```output
+Invocation results in WAVE format:
+  - "I\'m already here\n"
+```
+
+### Updating a worker
+
+Updating a worker that uses IFS requires some special consideration depending on the update mode you choose:
+
+* Automatic updates: When using automatic updates the old worker invocations are replayed on top of the new IFS. This means that the worker
+should produce _exactly_ the same results and side effects as it did with the old IFS. For example, changing the format of a file will work without issues, but changing
+a file that gets read by the worker and returned to the user will likely lead to divergence. In such cases a manual update might be necessary.
+* Manual updates: When using manual updates, you are responsible for saving and restoring the content of files in the worker filesystem. You can
+use the `golem:api/save-snapshot` function to persist the files and later restore / migrate them using `golem:api/load-snapshot`.
+
+## Externally accessing worker files
+
+You can use [file-server worker bindings](/http-api-definitions/worker-binding-types) to automatically deploy a REST API that allows accessing the files
+on a worker filesystem.

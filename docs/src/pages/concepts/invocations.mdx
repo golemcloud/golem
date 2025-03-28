@@ -1,0 +1,221 @@
+import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
+
+# Introduction
+
+Golem is a durable computing platform that makes it simple to build and deploy
+highly reliable distributed systems.
+
+The fundamental building block of every Golem application is the
+[component](/concepts/components), which is instantiated to form
+[workers](/concepts/workers). The only way to create or interact with workers is
+through _invocations_.
+
+An _invocation_ is the act of invoking an exported function on a specific
+worker, by supplying the function with its required input parameters. If the
+invoked function has a return value, the invocation will return the value.
+
+Perhaps surprisingly for those new to Golem, every invocation occurs on a
+_specific worker_, rather than more generally on a component. If an attempt is
+made to invoke a function on a worker that does not exist yet, it will be
+created through the act of invocation.
+
+Invocation is such a fundamental aspect of building useful applications on
+Golem that in this section, we will discuss the origin of invocations, and
+provide high-level instructions on how to perform invocations during
+development, testing, and production scenarios.
+
+# Structure of Invocations
+
+The structure of invocations on workers derives from the WASM component model,
+which defines the constructs that make up the public APIs of components.
+
+The public API of a component is defined using WASM Interface Types (WIT), a
+text format analogous to protocol buffers (protobuf).
+
+Through WIT, components may export functions, which can be called from other
+components (as per the component model), but which Golem also makes available
+for remote invocation through multiple protocols.
+
+Understanding the structure of invocations, then, comes down to understanding
+the structure of component model types, as defined by WIT.
+
+In the next section, you will learn the basics of this structure. For a more
+detailed reference, you can see the page on [Function names](/function-names).
+
+## Basic Invocations
+
+Assume we have created a component designed to provide durable counters, whose
+public API is defined by the following WIT:
+
+```wit
+package demo:counter;
+
+interface counters {
+  get-total-counters: func() -> u32;
+
+  increment-counter: func(index: s32) -> s32;
+
+  get-counter: func(index: s32) -> s32;
+}
+```
+
+This API defines three standalone functions, named `get-total-counters`,
+`increment-counter`, and `get-counter`.
+
+In order to perform an invocation on a worker created from this component, we
+will need to specify two things:
+
+1. The fully qualified name of the function that we are invoking on the worker.
+2. The parameters to invoke the function with, which must have the correct
+   structure.
+
+The structure of the name of the function is fully standardized across all
+supported invocation protocols, and is as follows:
+
+```
+<package-name>/<interface-name>.{<function-name>}
+```
+
+So, in the preceding example, if we wish to invoke the `get-total-counters`
+function on some worker, we must utilize the following fully qualified name:
+
+```
+demo:counter/counters.{get-total-counters}
+```
+
+This name identifies the `get-total-counters` function, unique from any other
+function that is exported by the component.
+
+You will learn how to specify parameters later, when the different supported
+protocols are introduced. For more information on the structure of function
+names, see the page on [Function names](/function-names).
+
+## Resource Invocations
+
+In the WASM component model, resources are similar to classes in object-oriented
+programming languages. Like classes, they have constructors and methods.
+
+Because Golem is a durable computing platform, it is natural to use workers to
+store persistent information. For example, a user profile worker might store
+information related to a user; while an auction worker might store all
+information related to an online auction, including bids and bidders.
+
+Accomplishing this in some programming languages is straightforward. For
+example, a counter component written in C/C++ could have a global variable to
+keep track of a count, and then it could export two functions: one to retrieve
+the current total, and one to adjust the counter, up or down.
+
+However, some languages, including strongly object-oriented languages like Java,
+as well as languages like Haskell and Rust, strongly discourage or prevent
+global state.
+
+Because resources must be constructed before their methods can be invoked, the
+state associated with a resource need not be global, which provides a much more
+natural fit for many programming languages.
+
+Golem has special support for invoking methods on resources that is designed to
+greatly simplify these use cases. In particular, Golem supports an easy way
+to invoke methods on resources that are uniquely identified by their
+constructor parameters, and automatically constructs resources as necessary.
+
+<Callout type="warning">
+  <div>
+    In order to use Golem's special support for invoking methods on resources, each resource in your
+    component must be uniquely identified by constructor parameters _alone_. If the constructor
+    parameters of your resource are not sufficient to uniquely identify a desired instance of that
+    resource, then you will have to manage the resource on your own, without Golem's special support
+    for invoking methods on the resources.
+  </div>
+</Callout>
+
+Let's take the following example counter component, which defines a resource
+named `counter`:
+
+```wit
+package demo:counter;
+
+interface counters {
+  get-total-counters: func() -> u32;
+
+  resource counter {
+    constructor(id: string);
+
+    increment: func(s32) -> s32;
+
+    get: func() -> s32;
+  }
+}
+```
+
+In an object-oriented programming language such as Java, the `counter` resource
+would be bound to a class, with a single constructor and two methods.
+
+Golem allows us to invoke methods on counters that are uniquely identified by
+their constructor parameters. In this example, the constructor of a new
+`counter` takes an `id` as input, which is intended to be a user-defined string
+that uniquely identifies the counter.
+
+In order to invoke methods on a specific counter, we must include the
+values for the constructor parameter in the fully qualified name of the function
+being invoked.
+
+The generic structure of the fully qualified name for such a resource invocation
+is as follows:
+
+```
+<package-name>/<interface-name>.{<resource-name>(<resource-params>).<function-name>}
+```
+
+In the case of the preceding counter, we could specify the fully qualified name
+of the `increment` method on a counter with id `"total-profile-views"` with the
+following syntax:
+
+```
+demo:counter/counters.{counter("total-profile-views").increment}
+```
+
+In English, this fully qualified name indicates we are invoking the method
+`increment` on a specific counter, namely, the counter that is constructed with
+the constructor parameter `"total-profile-views"`.
+
+If we invoke this method on such a counter, but it does not exist yet, then
+Golem will automatically create the counter, and associate it with its
+constructor parameters. The next time a method is invoked on this counter, then
+Golem will lookup and find the existing counter, and invoke the method on it.
+
+Using Golem's special support for invoking methods on resources enables you to
+cleanly and automatically create local state on workers, which provides a
+pleasant experience for languages that discourage global state.
+
+We have overlooked one detail of resource invocation: the syntax used for
+specifying constructor parameters. The syntax that Golem requires is
+[WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave#readme),
+which stands for WebAssembly Value Encoding.
+
+Golem supports WAVE syntax because it has a 1-to-1 mapping with the data types
+supported by the WASM component model, ensuring that all resource constructor
+parameters have a single unambiguous value representation.
+
+# Performing Invocations
+
+There are four different ways you can perform invocations on workers, each
+suited to different use cases:
+
+- **CLI**. The Golem command-line interface (CLI) allows you to invoke any
+  function on any worker, providing a user-friendly way to input required
+  parameters and display return values. The CLI is useful for development, or
+  for interacting with your systems through scripts. For more information, see
+  [Invoke Using Golem CLI](/invoke/cli).
+- **Generic REST API**. The Golem REST API allows you to invoke any function on
+  any worker. The REST API is a low-level interface designed mostly for
+  building tooling, such as the CLI. For more information, see [Invoking Through
+  the REST API](/invoke/http).
+- **Custom API**. In order to facilitate interacting with Golem applications,
+  Golem makes it easy to build a custom API atop workers. This custom API can
+  be high-level and support arbitrary business requirements. For more
+  information, see [API Definitions](/concepts/api-definitions).
+- **Workers**. Workers themselves are able to invoke functions on other
+  workers, a feature referred to as _worker-to-worker communication_. For more
+  information, see
+  [Worker-to-Worker Communication](/concepts/worker-to-worker-communication).

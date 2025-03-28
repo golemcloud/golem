@@ -1,0 +1,93 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Updating workers to newer versions of C/C++ components
+
+As described in the general [Workers](/concepts/workers) page, each worker runs on a specific version of the component it is based on, but it is possible to **update** a worker to a different version of the same component.
+
+## Automatic update
+
+The **automatic update** mode has no C/C++-specific details and works as it is described in the general [Workers](/concepts/workers) page.
+
+## Manual snapshot-based update
+
+Sometimes the change between two component versions is so large that the only solution to migrate worker's state to a new version is to manually implement this state transfer.
+
+This is done by implementing a `save-snapshot` function in the old component and a `load-snapshot` function in the new component. The snapshot is an array of bytes and it is the responsibility of the user to ensure that the snapshot is compatible between the two versions.
+
+These functions are defined in the `golem:api` WIT package and must be explicitly exported from the component's `world`.
+
+### Implementing the save snapshot function
+
+The `save-snapshot` function must be explicitly exported from the component's `world` in it's `WIT` file:
+
+```wit
+package golem:demo;
+
+interface api {
+  // ...
+}
+
+world update-test-v3 {
+  export golem:api/save-snapshot@1.1.0;
+
+  export api;
+}
+```
+
+This requires manually adding all the WIT dependencies Golem provides to the component's `wit/deps` subdirectory, and importing some of them in the `Cargo.toml` file.
+
+<Steps>
+### Step 1: copy all the WIT dependencies
+
+First copy the whole contents of https://github.com/golemcloud/golem-wit/tree/main/wit/deps to the component's `wit/deps` directory.
+
+<Callout type="info">
+  The `golem new` examples for C automatically create the `wit/deps` directory for you, except
+  the `c-actor-minimal` one.
+</Callout>
+
+### Step 2: export the `save-snapshot` function
+
+Add the following line to the component's world in its main `WIT` file:
+
+```wit
+export golem:api/save-snapshot@1.1.0;
+```
+
+### Step 4: implement the `save-snapshot` function in C
+
+An example implementation that just writes out an empty array of bytes:
+
+```c
+void exports_golem_api_save_snapshot_save(example_list_u8_t *ret) {
+    ret->len = 0;
+    ret->ptr = (uint8_t*)malloc(0);
+}
+```
+
+</Steps>
+
+### Implementing the load snapshot function
+
+Implementing the `load-snapshot` function in the new component requires the same prerequisites as the `save-snapshot` function.
+
+Once the WIT dependencies are set up, export the `load-snapshot` function in the following way:
+
+```wit
+export golem:api/load-snapshot@1.1.0;
+```
+
+and then implement it in C:
+
+```rust
+bool exports_golem_api_load_snapshot_load(example_list_u8_t *bytes, example_string_t *err) {
+    example_string_set(err, "Failed to load snapshot");
+    return false;
+}
+
+```
+
+Note that the `load-snapshot` function can fail, indicating that it cannot load a previously saved snapshot. When the upgrade logic detects this, it reverts the worker to the previous version.
+
+If the snapshot can be loaded, the `load-snapshot` function must set up the worker's global state based on `bytes`, and return with `true`.

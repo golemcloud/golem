@@ -1,0 +1,57 @@
+# Limits API
+The limits API allows users to query their current resource limits.
+## Get resource limits for a given account.
+Path|Method|Protected
+---|---|---
+`/v1/resource-limits`|GET|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+account-id|string|Yes|The Account ID to check resource limits for.
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "availableFuel": 0,
+  "maxMemoryPerWorker": 0
+}
+```
+
+## Update resource limits for a given account.
+Path|Method|Protected
+---|---|---
+`/v1/resource-limits`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "updates": {
+    "property1": 0,
+    "property2": 0
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+## Limits API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403||`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

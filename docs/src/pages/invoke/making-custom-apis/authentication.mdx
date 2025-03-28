@@ -1,0 +1,121 @@
+import { Steps } from "nextra/components"
+
+## Authentication in API Gateway
+
+Golem API gateway has built-in authentication support to identify users using OpenID protocol.
+This allows you to refer to the claims such as `request.auth.email` (as an example) once authenticated in your Rib expression.
+You can choose to get pass this information into the worker function that exist in the Rib expression, and do further logic with it.
+Currently, this is tested with Google Identity connector.
+
+You can register your app with Google Identity Provider and get a client-id and client-secret for your app that is to be exposed through golem API gateway.
+
+### Setup Security for your API routes in Golem
+
+<Steps>
+### Register your app with Google Identity Provider and get a client-id and client-secret.
+
+Here is the direct link to register your app with [Google Identity Provider](https://console.cloud.google.com/apis/credentials)
+Here you can register your app with a name, and most importantly a redirect URL.
+A typical example of a redirect url is `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API definition in Golem.
+For testing with OSS version, most probably this can be a localhost, and you can register your test application with `http://localhost:9006/auth/callback`.
+The `/auth/callback` part is just an example and it can be anything, as far as it doesn't collide with any of your other paths.
+
+Once you have setup the app-name, redirect-urls, you should be getting a client-id, client-secret from Google Identity Provider in return.
+We call these details "Api Security Scheme" in Golem API Gateway.
+
+### Register your API Security Scheme with your app's client-id and client-secret with Golem
+
+Make sure you name your security scheme uniquely, and provide the client-id, client-secret and redirect-url as given below.
+
+```shell copy
+
+golem api security-scheme create
+  --scheme.id shopping-cart-security-scheme
+  --provider.type google
+  --client.id $GOOGLE_CLIENT_ID
+  --client.secret $GOOGLE_CLIENT_SECRET
+  --redirect.url http://localhost:9006/auth/callback
+  --scopes openid,email,profile
+```
+
+### Make sure to specify your API definition that consist of the routes of your app with the security scheme id.
+
+This is more or less inspired from open OpenAPI spec, however Golem is doing some heavy lifting here such that you only need to specify
+the security scheme id and nothing else. If you are using OpenAPI spec, you can choose to provide additional details such OpenID connect URL
+but it will simply be discared by Golem but it can be useful for your own documentation purposes.
+
+```yaml
+id: my-todo-api
+version: 0.0.1
+draft: true
+security:
+- my-unique-security-scheme
+routes:
+- method: Get
+  path: /foo/{user-id}
+  security: my-unique-security-scheme
+  binding:
+    type: wit-worker
+    componentId:
+      componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+      version: 0
+    response: |
+      let email: string = request.auth.email;
+      email
+```
+
+The list of security schemes at the root level is optional in the API definition. You can choose to have it or not.
+
+However, to enable security for a route, you need to specify security scheme under each route (similar to a typical OpenAPI spec).
+In the above example, the security scheme is `my-unique-security-scheme`. This is the same id that you have registered with Golem API Gateway in the previous step.
+
+The response mapping Rib script is expecting an email field in request authentication, which will be available in the context if the user is authenticated.
+More on this below. Before that, let's register and deploy the above API definition stored in api_definition.yaml file.
+
+### Register the API definition
+
+As explained in previous sections, register the API definition using cloud console or golem.
+
+```shell copy
+golem api definition add api_definition.yaml  --def-format yaml
+```
+
+### Deploy the API definition
+
+```shell copy
+golem api deployment deploy --host localhost:9006 --definition my-todo-api/0.0.1
+```
+
+With this setup, your route is accessible only by authenticated users who have logged in with Google Identity Provider.
+
+</Steps>
+
+### Testing the authenticated endpoint in Golem
+
+In your browser, you can try to access the endpoint with the following URL:
+
+```
+http://localhost:9006/foo/1
+```
+
+This should redirect you to Google Identity Provider login page, and once you login,
+you should be redirected back to the original URL which is http://localhost:9006/foo/1 which will now have the claims of the user in the request context,
+which you can lookup using Rib script using `request.auth.name` or `request.auth.email` etc. The claims available depends on the identity provider you are using.
+
+If you are using Google Identity Provider, you can expect `email`, `name` etc should be available in the request context.
+We will be exposing claims available in a later release of Golem to make things easier for you.
+
+#### Redirects and Cookies
+
+Internally, there are a couple of redirects that's going on when you access the protected endpoint.
+The first redirect is to the Google Identity Provider login page as explained below, and internally this is followed by identity provider hitting the redirect URL (
+which is exposed on your behalf by Golem API gateway) with all the details of the user.
+This is followed by another redirect to the original URL that you tried to access, and this time the session-id, tokens/secrets set in a secure Cookie, which your
+browser will resend. Once the browser sends the cookie, Golem API gateway will validate the cookie and allow you to access the protected endpoint.
+
+We will be adding more support for various clients and usecases in future releases based on the user feedback.
+
+#### Unexposed CallBack Endpoint
+
+Note that the callback endpoint is exposed automatically based on the re-direct url specified in the API security scheme. Users cannot customise or add
+these call back endpoints manually. This is to avoid any security issues that may arise due to misconfiguration of the callback endpoint.

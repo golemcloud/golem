@@ -1,0 +1,94 @@
+## Define an API definition
+
+To begin with, let's build an API over the functions in the _shopping cart example_ (available via `golem component new rust:example-shoping-cart example:cart`):
+
+```shell
+$ golem component get example:cart
+...
+Exports:
+	golem:component/api.{initialize-cart}(user-id: string)
+	golem:component/api.{add-item}(item: record { product-id: string, name: string, price: f32, quantity: u32 })
+	golem:component/api.{remove-item}(product-id: string)
+	golem:component/api.{update-item-quantity}(product-id: string, quantity: u32)
+	golem:component/api.{checkout}() -> variant { error(string), success(record { order-id: string }) }
+	golem:component/api.{get-cart-contents}() -> list<record { product-id: string, name: string, price: f32, quantity: u32 }>
+```
+
+Here is an example of an API definition, which we will use to expose an HTTP API over the function `golem:component/api.{get-cart-contents}`.
+We use [Rib](/rib) to define the API definition. Please refer to the [Rib reference](/rib) for more details on the syntax.
+
+```yaml
+id: my-shopping-cart-v1
+draft: true
+version: 0.0.4
+routes:
+  - method: Get
+    path: /v4/{user-id}/get-cart-contents
+    binding:
+      type: default
+      componentId:
+        componentId: dba38841-013a-49fa-a1dc-064949832f0c
+        version: 0
+      response: |
+        let user: u64 = request.path.user-id;
+        let worker = instance(my-worker-${user});
+        let result = worker.get-cart-contents();
+        {status: 200, body: result}
+```
+
+Please use this as a reference instead of using it with zero changes. For example, you might need to give a different
+version, componentId etc (explained below). You can get the `component` details including `componentId`
+by running `golem component list` command.
+
+The API definition's fields have the following meaning:
+
+| Field     | Description                                                                                                                                                                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`      | This field represents the unique identifier for the API definition. In this case, it is set to "shopping-cart-v1".                                                                                                                                                    |
+| `version` | This field indicates the version of the API definition. Here, it is set to "0.0.3".                                                                                                                                                                                   |
+| `routes`  | This field contains an array of route objects, each representing a specific endpoint definition.                                                                                                                                                                      |
+| `method`  | Indicates the HTTP method associated with the route. In this example, it is set to "Get", indicating that this route handles GET requests.                                                                                                                            |
+| `path`    | Specifies the URL path pattern for the route. It may include path parameters enclosed in curly braces. Here, the path is `/{user-id}/get-cart-contents`, indicating that this route handles requests to retrieve the contents of a shopping cart for a specific user. |
+| `binding` | This object contains information about how the request should be handled by the Golem worker.                                                                                                                                                                         |
+
+### Golem Binding
+
+Let's break down the binding object.
+
+| Field         | Description                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `type`        | Specifies the type of binding. Here, it is set to "default", indicating that the binding involves a Golem worker.                                                                                                                                                                                                                                                                             |
+| `componentId` | Provides the component ID associated with the worker binding. As you can see the the golem-worker                                                                                                                                                                                                                                                                                                |
+| `response`    | The `response` field here is a Rib expression that allows you to call any worker function and manipulates its output.                                                                                                                                                                                                                                                                            |
+
+See the [binding type reference](/http-api-definitions/worker-binding-types) for more details on the supported binding types.
+
+If your worker name is a constant, the you can simply make it a constant string such as `"foo"`. Please note that it has to be quoted for it a valid Rib string.
+See the [Rib reference](/rib) for the full reference of the binding language.
+
+
+### Ephemeral and Durable worker invocation
+
+The worker can be ephemeral or durable depending on whether you passed the worker-name argument into the `instance` function. You can find more details about the `instance` function in the [Rib reference](/rib).
+
+In this example, the following Rib expression defines the request:
+
+```
+let user: u64 = request.path.user-id;
+let worker = instance(my-worker-${user});
+let result = worker.get-cart-contents();
+{status: 200, body: result}
+
+```
+
+The first line is about extracting the `user-id` from the path and assigning it to the variable `user`.
+The second line is about creating a worker instance with the name `my-worker-${user}`.
+The third line is about calling the function `get-cart-contents`  in the component, and it will be invoked  against the worker `my-worker-${user}`.
+Note that the real fully qualified function name (the one that is listed in component metadata is `golem:it/api.{get-cart-contents}`) however,
+you can should use the shorter `get-cart-contents` as shown in the example. Please find more details about the `instance` function in the [Rib reference](/rib).
+
+The third line assigns the result of the worker function to the variable `result`. The last line is a WASM record where you are mapping to the response. Here body is `result` itself.
+That means, we are not manipulating the result returned by the function, and simply forward it as response body. Status is 200. Sometimes you need to specify the type of such as `200: u64`
+to help out with the compiler
+
+As mentioned above, see the [Rib reference](/rib) to know more about Rib language.

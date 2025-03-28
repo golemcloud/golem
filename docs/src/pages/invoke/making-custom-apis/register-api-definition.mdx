@@ -1,0 +1,16 @@
+## Upload API definition
+
+The API definitions can be uploaded to Golem using one of the following methods:
+
+- Use the [Golem CLI](/cli) tool
+- Use the [Rest APIs](/rest-api)
+- Use [Golem Console](https://console.golem.cloud/) (Only available in Golem Cloud)
+
+The following example uses `golem` to add a new API definition to the system.
+
+```shell copy
+golem api definition new api-definition.json
+```
+
+This API definition is still a **draft** since it is still not `deployed` yet.
+Once it is deployed you cannot further update this definition unless you change the version, to avoid breaking your public API.

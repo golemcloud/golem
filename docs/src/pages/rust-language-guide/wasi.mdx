@@ -1,0 +1,157 @@
+import { Callout } from "nextra/components"
+
+# Using WASI interfaces from Rust
+
+Golem implements and exports a subset of the [WASI](https://wasi.dev) interfaces, as well as its own **runtime interfaces**.
+
+The Golem Rust SDK (See https://crates.io/crates/golem-rust) provides idiomatic wrappers on a subset of these interfaces, and the Rust standard library is implemented on by another subset, but it is also possible to use the generated bindings directly.
+
+## WIT specifications
+
+The full set of WIT specifications Golem implements is available in the following public repository:
+
+https://github.com/golemcloud/golem-wit/tree/main/wit/deps
+
+The following table lists all packages provided by Golem:
+
+| Package           | Description                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `golem:api`       | Golem's Runtime API                                                                         |
+| `golem:rpc`       | Provides support for Worker to Worker communication                                         |
+| `wasi:blobstore`  | Interface for storing and retrieving large binary data                                      |
+| `wasi:cli`        | Interface for environment variables and standard I/O                                        |
+| `wasi:clocks`     | Interface for querying the system time                                                      |
+| `wasi:filesystem` | Interface for working with files and directories                                            |
+| `wasi:http`       | Interface for making HTTP requests                                                          |
+| `wasi:io`         | Interface for working with futures and streams                                              |
+| `wasi:keyvalue`   | Interface for storing and retrieving key-value pairs - only partially implemented           |
+| `wasi:logging`    | Interface for logging messages                                                              |
+| `wasi:random`     | Interface for generating random numbers                                                     |
+| `wasi:sockets`    | Interface for working with TCP and UDP sockets (currently not supporting durable execution) |
+
+## Bindings
+
+It is possible to manually add these `WIT` specifications to a Rust component using `cargo-component`, but it is recommended to use the `golem-rust` and `golem-wasm-rpc` libraries instead.
+
+- `golem-rust` reexports all the bindings generated for the above listed interfaces
+- `golem-wasm-rpc` contains the bindings and the higher level implementation of the `golem:rpc` interface
+
+## Additional Golem runtime APIs
+
+This section describes Golem-specific functionalities which are available through the Golem runtime API but does not have an idiomatic Rust wrapper in the `golem-rust` library yet.
+
+### Generate an idempotency key
+
+Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
+
+It is guaranteed that this idempotency key will always be the same (per occurrence) even if the worker is restarted due to a crash.
+
+First add the `uuid` crate to the `Cargo.toml` file:
+
+```toml
+[dependencies]
+uuid = "1.8.0"
+```
+
+Then generate the idempotency key:
+
+```rust
+use golem_rust::generate_idempotency_key;
+
+let key: uuid::Uuid = generate_idempotency_key().into();
+```
+
+### Get worker metadata
+
+It is possible to query **metadata** for Golem workers. This metadata is defined by the following `WIT` record:
+
+```wit
+record worker-metadata {
+    worker-id: worker-id,
+    args: list<string>,
+    env: list<tuple<string, string>>,
+    status: worker-status,
+    component-version: u64,
+    retry-count: u64
+}
+
+enum worker-status {
+    /// The worker is running an invoked function
+    running,
+    /// The worker is ready to run an invoked function
+    idle,
+    /// An invocation is active but waiting for something (sleeping, waiting for a promise)
+    suspended,
+    /// The last invocation was interrupted but will be resumed
+    interrupted,
+    /// The last invocation failed and a retry was scheduled
+    retrying,
+    /// The last invocation failed and the worker can no longer be used
+    failed,
+    /// The worker exited after a successful invocation and can no longer be invoked
+    exited,
+}
+```
+
+There are two exported functions to query worker metadata:
+
+- `get_self_metadata` returns the metadata for the current worker
+- `get_worker_metadata` returns the metadata for a specific worker given by it's `WorkerId`
+
+### Enumerate workers
+
+Worker enumeration is a feature of Golem available both through the public HTTP API and using the WIT interfaces.
+
+<Callout type="warning">
+  Enumerating workers of a component is a slow operation and should not be used as part of the
+  application logic.
+</Callout>
+
+The following example demonstrates how to enumerate workers API:
+
+```rust
+use golem_rust::bindings::golem::api::host::*;
+
+let filter = Some(WorkerAnyFilter {
+    filters: vec![WorkerAllFilter {
+        filters: vec![WorkerPropertyFilter::Status(WorkerStatusFilter {
+            comparator: FilterComparator::Equal,
+            value: WorkerStatus::Idle,
+        })],
+    }]
+});
+let mut workers: Vec<WorkerMetadata> = Vec::new();
+let getter = GetWorkers::new(component_id, &filter, true);
+loop {
+    match getter.get_next() {
+        Some(values) => {
+            workers.extend(values);
+        }
+        None => break,
+    }
+}
+```
+
+The third parameter of the `GetWorkers::new` constructor enables `precise` mode. In this mode Golem will calculate the latest metadata for each returned worker, otherwise it uses only the last cached values.
+
+### Update a worker
+
+To trigger update for a given worker from one component version to another, use the `update_worker` function:
+
+```rust
+use golem_rust::bindings::golem::api::host::{update_worker, UpdateMode};
+
+update_worker(worker_id, target_version, UpdateMode::Automatic);
+```
+
+To learn more about updating workers, see [the updating workers page](/rust-language-guide/updating).
+
+### The WASI Key-Value store interface
+
+Although Golem workers can store their state completely in their own memory, it is possible to use the `wasi:keyvalue` interface to store key-value pairs in a Golem managed key value storage.
+
+This can be useful if state needs to be shared between different workers or if the size of this state is too large to be stored in memory.
+
+### The WASI Blob Store interface
+
+The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the worker's memory.

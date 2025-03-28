@@ -1,0 +1,163 @@
+import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
+import { Tabs } from 'nextra/components'
+import { useEffect } from 'react'
+
+# Golem Desktop Introduction
+
+Golem Desktop provides a native application experience across Windows, Linux, and macOS. Since the application is currently unsigned, please follow the platform-specific instructions below to install it.
+
+<Callout type="info">
+  Please note that the Golem Desktop application is only supported for the open source version of Golem.
+</Callout>
+
+## Download and Installation Instructions
+
+<Tabs items={['Windows', 'macOS', 'Linux']}>
+  <Tabs.Tab>
+    <Tabs items={['Windows Installer']}>
+      <Tabs.Tab>
+        1. Download the `.exe` installer from the [release page](https://github.com/golemcloud/golem-cli/actions/runs/13761723238/artifacts/2721155019)
+        2. When you run the installer, Windows may show a SmartScreen warning
+        3. Click "More info" and then "Run anyway" to proceed with installation
+        4. Follow the on-screen instructions to complete installation
+      </Tabs.Tab>
+    </Tabs>
+  </Tabs.Tab>
+  <Tabs.Tab>
+    <Tabs items={['Intel Mac', 'Apple Silicon (M-Chip)', 'Older macOS Versions']}>
+      <Tabs.Tab>
+        1. Download the Intel x64 `.dmg` file from the [release page](https://github.com/golemcloud/golem-cli/actions/runs/13761723238/artifacts/2721155019)
+        2. Open the downloaded `.dmg` file
+        3. Drag the application to your Applications folder
+        4. When first launching, macOS may block the app with a message "Golem is damaged and can’t be opened. You should move it to the Trash"
+        5. To open the app, try one of these methods:
+           - Method 1: Right-click (or Control-click) on the app icon and select "Open", then click "Open" in the dialog box
+           - Method 2: If the above doesn't work, open Terminal and run the following command:
+             ```bash
+             xattr -rd com.apple.quarantine "/Applications/Golem.app"
+             ```
+           - The app should now open and subsequent launches won't require these steps
+      </Tabs.Tab>
+      <Tabs.Tab>
+        1. Download the ARM64 `.dmg` file from the [release page](https://github.com/golemcloud/golem-cli/actions/runs/13761723238/artifacts/2721155019)
+        2. Open the downloaded `.dmg` file
+        3. Drag the application to your Applications folder
+        4. When first launching, macOS may block the app with a message "Golem is damaged and can’t be opened. You should move it to the Trash"
+        5. To open the app, try one of these methods:
+           - Method 1: Right-click (or Control-click) on the app icon and select "Open", then click "Open" in the dialog box
+           - Method 2: If the above doesn't work, open Terminal and run the following command:
+             ```bash
+             xattr -rd com.apple.quarantine "/Applications/Golem.app"
+             ```
+           - The app should now open and subsequent launches won't require these steps
+      </Tabs.Tab>
+      <Tabs.Tab>
+        For older macOS versions (pre-Catalina), you may need to adjust your security settings:
+        
+        1. After downloading and attempting to open the app, go to **System Preferences** → **Security & Privacy**
+        2. In the **General** tab, you should see a message about Golem being blocked
+        3. Click the **Open Anyway** button (you may need to unlock the settings with the padlock icon first)
+        4. If you don't see this option, try these alternative steps:
+           - Open **System Preferences** → **Security & Privacy**
+           - Click the padlock icon to make changes
+           - Under **Allow apps downloaded from**, select **Anywhere** (if available) or **App Store and identified developers**
+      </Tabs.Tab>
+    </Tabs>
+  </Tabs.Tab>
+  <Tabs.Tab>
+    <Tabs items={['Debian/Ubuntu', 'Fedora/RHEL', 'Arch Linux']}>
+      <Tabs.Tab>
+        1. Download the `.deb` file from the [release page](https://github.com/golemcloud/golem-cli/actions/runs/13761723238/artifacts/2721155019)
+
+        ```bash
+        # Install the downloaded .deb file
+        sudo dpkg -i golem-desktop_x.x.x_amd64.deb
+
+        # If there are dependency issues, run
+        sudo apt-get install -f
+        ```
+      </Tabs.Tab>
+      <Tabs.Tab>
+        1. Download the `.rpm` file from the [release page](https://github.com/golemcloud/golem-cli/actions/runs/13761723238/artifacts/2721155019)
+
+        ```bash
+        # Install the downloaded .rpm file
+        sudo rpm -i golem-desktop-x.x.x.x86_64.rpm
+
+        # Alternatively, using dnf
+        sudo dnf install golem-desktop-x.x.x.x86_64.rpm
+        ```
+      </Tabs.Tab>
+      <Tabs.Tab>
+        1. Download the Linux `.AppImage` from the [release page](https://github.com/golemcloud/golem-cli/actions/runs/13761723238/artifacts/2721155019)
+
+        ```bash
+        # Make the AppImage executable
+        chmod +x golem-desktop-x.x.x.AppImage
+
+        # Run the AppImage
+        ./golem-desktop-x.x.x.AppImage
+        ```
+      </Tabs.Tab>
+    </Tabs>
+  </Tabs.Tab>
+</Tabs>
+
+export function PlatformDetector() {
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const platform = navigator.platform.toLowerCase();
+      const userAgent = navigator.userAgent.toLowerCase();
+      const tabButtons = document.querySelectorAll('[role="tab"]');
+      if (tabButtons.length > 0) {
+        let osTabIndex = 0;
+        
+        if (platform.includes('mac') || userAgent.includes('mac') || userAgent.includes('darwin')) {
+          osTabIndex = 1;
+        } else if (platform.includes('linux') || platform.includes('x11')) {
+          osTabIndex = 2;
+        }
+        
+        if (tabButtons[osTabIndex]) {
+          setTimeout(() => {
+            tabButtons[osTabIndex].click();
+
+            if (osTabIndex === 1) {
+              setTimeout(() => {
+                const macTabs = document.querySelectorAll('[role="tabpanel"]:not([hidden]) [role="tab"]');
+                if (macTabs.length > 0) {
+                  const isAppleSilicon = 
+                    /arm|aarch64/i.test(navigator.platform) || 
+                    (userAgent.includes('mac') && 
+                     (/macbookpro1[78]|macbookair1[01]|macmini9|imac2[34]/i.test(userAgent) || 
+                      (typeof window.navigator.hardwareConcurrency !== 'undefined' && 
+                       window.navigator.hardwareConcurrency >= 8))) ||
+                    (typeof navigator.cpuClass !== 'undefined' && 
+                     navigator.cpuClass === 'arm64');
+                  
+                  console.log("Is Apple Silicon:", isAppleSilicon);
+                  const archIndex = isAppleSilicon ? 1 : 0;
+                  
+                  if (macTabs[archIndex]) {
+                    macTabs[archIndex].click();
+                  }
+                }
+              }, 300);
+            } else if (osTabIndex === 2) {
+              // For Linux, we can't reliably detect the distro Leave all as default, might need some time to test this with some linux machine
+            }
+          }, 300);
+        }
+      }
+    }
+  }, []);
+  
+  return null;
+}
+
+<PlatformDetector />
+
+<Callout type="warning">
+  These instructions are for the unsigned version of Golem Desktop. Signed versions with proper verification will be available in future releases.
+</Callout>

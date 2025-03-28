@@ -1,0 +1,20 @@
+# Deploy to Kubernetes
+
+To get started we recommend using the [Golem Helm Chart](https://github.com/golemcloud/golem/blob/main/kube/golem-chart).
+You will need to have [Helm](https://helm.sh/docs/intro/quickstart/) and [kubectl](https://kubernetes.io/docs/tasks/tools/) installed locally
+and running [kubernetes](https://kubernetes.io/docs/concepts/overview/) cluster (for testing you can use [Docker Desktop](https://docs.docker.com/desktop/kubernetes/) or [minikube](https://minikube.sigs.k8s.io/docs/start)).
+
+For quick start we recommend to download content of [kube](https://github.com/golemcloud/golem/blob/main/kube/) directory from Golem [repository](https://github.com/golemcloud/golem/tree/main) and run `deploy.sh` script:
+
+```bash copy
+./deploy.sh -n golem
+```
+
+which will deploy Golem with Redis and PostgreSQL to kubernetes namespace `golem`.
+Kubernetes [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) are used to store Golem's data.
+[Nginx ingress controller](https://github.com/kubernetes/ingress-nginx) is used to expose [Golem APIs](/rest-api/oss-rest-api) (http with port 80). For testing, you may need to change [golem-cli](/cli) configuration to use proper host and port.
+Worker [API Gateway](/concepts/worker-gateway) endpoint is exposed under port 9006.
+
+For production is preferable to use separate PostgreSQL cluster, Redis cluster and reliable Shared File System or S3 for Blob storage.
+
+See Golem Helm Chart [values.yaml](https://github.com/golemcloud/golem/blob/main/kube/golem-chart/values.yaml) and [readme](https://github.com/golemcloud/golem/blob/main/kube/README.md) for more details.

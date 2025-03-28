@@ -1,0 +1,84 @@
+import { Callout } from "nextra/components"
+
+# Working with Golem Promises in JavaScript
+
+Golem **promises** provide a way for Golem workers to wait on an external condition. The worker creates the promise and somehow sends its identifier to the external system responsible for **completing** the promise. Then the worker can **await** the promise, being suspended until the external system completes the promise using Golem's REST API.
+
+It is also possible to complete a promise from within a Golem worker using the Golem SDK.
+
+When a promise is completed, an arbitrary byte array can be attached to it as a payload - this data is returned to the awaiting worker when is continues execution.
+
+In JavaScript the promise API has idiomatic JavaScript wrappers in the [Golem JavaScript SDK](/js-language-guide/golem-js-sdk).
+
+### Creating a promise
+
+To create a promise simply call the `createPromise` function:
+
+```javascript
+import { createPromise, PromiseId } from "@golemcloud/golem-ts"
+
+const promiseId = createPromise()
+```
+
+The returned value has the following shape:
+
+```javascript
+// A promise ID is a value that can be passed to an external Golem API to complete that promise
+// from an arbitrary external source, while Golem workers can await for this completion.
+const promiseId = {
+  // Represents the worker
+  workerId: {
+    // Represents the component
+    componentId: {
+      uuid: {
+        highBits: BigInt(0),
+        lowBits: BigInt(0),
+      },
+    },
+    workerName: "worker-name",
+  },
+  oplogIdx: BigInt(0),
+}
+```
+
+### Deleting a promise
+
+If a promise is no longer used, it has to be deleted with:
+
+```javascript
+import { deletePromise } from "@golemcloud/golem-ts"
+
+deletePromise(promiseId)
+```
+
+### Awaiting a promise
+
+To await a promise, use the `awaitPromise` functions, which returns the promise result as a byte array payload.
+Here's an example that awaits a promise, then decodes the payload from JSON format:
+
+```javascript
+import { awaitPromise } from "@golemcloud/golem-ts"
+
+const byteArrayPayload = awaitPromise(promiseId) // returns Uint8Array;
+const payload = JSON.parse(new TextDecoder().decode(byteArrayPayload))
+```
+
+### Completing a promise from within a worker
+
+To complete a promise from within a worker, use the `completePromise` function.
+The following example completes a promise with a value encoded as JSON:
+
+```javascript
+import { completePromise } from "@golemcloud/golem-ts"
+
+const payload = {
+  id: "value",
+  meta: "data",
+}
+const byteArrayPayload = new TextEncoder().encode(JSON.stringify(payload)) // create Uint8Array payload;
+const success = completePromise(promiseId, byteArrayPayload) // returns boolean;
+```
+
+### Completing a promise from an external source
+
+To see how to use the **promise ID** to complete a promise through the external REST API, check [the REST API documentation](/rest-api).

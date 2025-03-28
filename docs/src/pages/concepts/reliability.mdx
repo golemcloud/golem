@@ -1,0 +1,364 @@
+import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
+
+# Introduction
+
+Golem is a durable computing platform that makes it simple to build and
+deploy highly reliabile distributed systems.
+
+When developing for Golem, you normally don't need to worry about most of
+the complexity of ensuring reliable execution. Golem takes care of the heavy
+lifting for you, ensuring that your applications are resilient, robust,
+fault-tolerant, and highly available.
+
+However, when evaluating Golem for your use case, it is essential to understand
+exactly what guarantees Golem provides, what you need to handle on your own,
+and how you can tune Golem to meet your specific requirements.
+
+In this section, we'll explore all of these aspects in detail, starting with
+the essential concepts of reliability in distributed systems.
+
+# Essential Concepts
+
+In the field of distributed systems, several technical concepts are crucial to
+the development of reliable solutions:
+
+1. **Resiliency**: The system's ability to correctly identify and respond to
+   failures in external dependencies.
+2. **Robustness**: The system's capacity to prevent, identify, and correctly
+   respond to internal failures.
+3. **Fault-Tolerance**: The system's ability to continue functioning correctly
+   even when experiencing one or more faults.
+4. **High-Availability**: The system's capability to remain available and
+   responsive under various conditions, including partial failures or high stress.
+
+Let's explore each of these concepts in detail to understand how they
+contribute to overall system reliability.
+
+## Resiliency
+
+Resiliency is the ability of a system to continue functioning correctly even in
+the presence of failures in the systems it interacts with.
+
+Modern systems interact with numerous remote components through network
+protocols. These external systems can fail in various ways, presenting
+challenges for maintaining overall system reliability.
+
+Common types of external failures include:
+
+- **Network Failures**: Disruptions in connectivity, degraded performance, or
+  unstable connections preventing reliable communication.
+- **Internal Failures in Remote Systems**: Bugs, crashes, or other malfunctions
+  within external systems causing incorrect behavior or non-responsiveness.
+- **Load-Related Failures**: Overwhelmed systems leading to degraded performance
+  or total unavailability.
+- **Maintenance-Related Downtime**: Planned or unplanned system updates,
+  migrations, or other maintenance activities causing temporary unavailability.
+- **API Versioning Incompatibilities**: Mismatches between different versions of
+  interacting systems or APIs leading to errors or unpredictable outcomes.
+- **Authorization and Authentication Issues**: Invalid credentials,
+  insufficient permissions, or other access-related problems.
+
+Highly resilient systems employ various strategies to handle these external
+failures:
+
+1. **Intelligent Retry Mechanisms**: Implementing advanced retry policies,
+   often combining exponential backoff with random jitter to handle transient
+   failures gracefully.
+2. **Circuit Breaker Pattern**: Temporarily disabling calls to failing services
+   to prevent cascading failures.
+3. **Bulkhead Pattern**: Isolating components to ensure that failures in one
+   part of the system don't bring down the entire application.
+
+## Robustness
+
+Robustness is the ability of a system to both prevent, as well as identify and
+correctly respond to, failures of the system itself.
+
+Internal failure scenarios can be categorized into a hierarchy, ranging from
+business logic issues to infrastructure problems:
+
+- **Defect Failures**: Errors due to software defects, such as null pointer
+  exceptions, buffer overflows, or division by zero.
+- **Domain Failures**: Failures to handle scenarios anticipated and specified
+  by the business logic.
+- **Unrecoverable Failures**: Situations where the software cannot recover,
+  such as database access failures due to incorrect configuration.
+- **OS Faults**: Operating system interference with process execution.
+- **Hardware Faults**: Failures in critical hardware components like RAM,
+  CPU, or network interfaces.
+
+Strategies for improving robustness include:
+
+1. **Comprehensive Error Handling**: Implementing thorough error handling
+   covering various failure scenarios.
+2. **Graceful Degradation**: Allowing systems to continue operating with
+   reduced functionality rather than complete shutdown when encountering
+   non-critical failures.
+3. **Rapid Failure Detection**: Quickly identifying and reporting internal
+   failures to enable fast resolution.
+
+## Fault-Tolerance
+
+Fault-tolerant systems are designed to continue functioning correctly even in
+the presence of one or more faults. Fault-tolerance can be considered a
+specific type of robustness, focusing on a system's ability to handle systemic
+issues.
+
+Strategies for fault-tolerant systems include:
+
+1. **Replication**: Duplicating critical components across multiple nodes to
+   ensure continued operation if some nodes fail.
+2. **State Management**: Implementing robust state management tools to allow
+   systems to recover gracefully from failures without data loss.
+3. **Failover Mechanisms**: Automatically redirecting traffic to healthy nodes
+   in case of node failures.
+
+## High-Availability
+
+High-availability systems are designed to be accessible and responsive to their
+intended workloads, even under conditions of partial failure or stress.
+
+Strategies for achieving high availability include:
+
+1. **Load Balancing**: Distributing traffic across multiple instances to
+   prevent any single point of failure.
+2. **Auto-Scaling**: Automatically adjusting resources based on demand to
+   ensure optimal performance during peak times.
+3. **Geographic Distribution**: Deploying across multiple geographic regions
+   to reduce latency and improve resilience against regional outages.
+
+# Reliability: Bringing It All Together
+
+Reliability is a comprehensive term that encompasses all of the preceding
+concepts. A _highly reliable_ system is one that is:
+
+- Resilient to external failures
+- Robust in handling internal failures
+- Fault-tolerant to systemic issues
+- Highly available under various conditions
+
+By addressing each of these aspects, developers can create distributed systems
+that ensure data integrity, maintain consistent performance, and provide a
+seamless experience for end-users, even in the face of various challenges and
+failure scenarios.
+
+# High-Reliability with Golem
+
+With any programming language, tech stack, or SDK, Golem automatically provides
+you with a high degree of built-in reliability.
+
+These guarantees are summarized as follows:
+
+- **Transactional execution**. Golem ensures that your workers execute
+  transactionally. Once they begin execution, they will complete execution,
+  even if there are software or hardware faults, restarts, or updates.
+- **Durable state**. Golem ensures that the state of your workers is durable.
+  If a worker is recovered after a failure, it will resume with the same state
+  as before the failure.
+- **Reliable internal communication**. Golem ensures that communication
+  between workers is delivered reliably. If a message is sent, it will
+  eventually be delivered, with exactly-once semantics; even if there are
+  network partitions, faults, or other failures.
+- **Resilient external communication**. Golem automatically applies retry
+  strategies and other techniques to ensure that transient failures of
+  external systems do not affect reliability.
+
+In the following sections, we will explore these guarantees in more detail,
+looking at how each of them improves different faucets of reliability.
+
+## Resiliency
+
+As discussed in [Components](/concepts/components), all components deployed
+on Golem ultimately derive their capability to interact with external systems
+from _WASI_, which is the Posix-like interface provided by the WASM component
+model.
+
+WASI provides facilities to interact with file systems, sockets, time, and other
+system resources in a portable and secure manner.
+
+Because Golem provides a custom implementation of WASI, it has direct insight
+into the interactions between components and the underlying system. This allows
+Golem to detect a variety of transient failure scenarios and automatically
+apply resiliency strategies, such as retries, to ensure that the system remains
+resilient to these failures.
+
+Golem automatically applies retry strategies to the following types of failures:
+
+- HTTP Request Failures
+
+In the case of errors which are not resolved on their own, Golem will
+eventually give up and mark the worker as failed. This is to prevent the
+system from getting stuck in an infinite loop of retries.
+
+These workers can be detected using worker enumeration.
+
+### Limitations
+
+Golem does not have awareness into transient errors that are expressed in protocol-
+agnostic ways. For example, if an HTTP response contains a 200 status code, but
+the body contains a transient error, then Golem will not be able to detect this
+error and attempt recovery.
+
+You should be aware of this limitation when designing your applications, and
+consider implementing your own retry strategies for such cases.
+
+### Customization
+
+Currently, you can customize a worker's retry policy, including number of
+retries, delays, and so on, but it is a global setting that applies to all
+failed operations. See [Golem host functions](/golem-host-functions) for
+more details, or langauge-specific SDKs.
+
+## Fault-Tolerance
+
+Golem's fault-tolerance guarantees are focused on ensuring that your workers
+are executed transactionally and that their state is durable, regardless of
+software or hardware faults, restarts, or updates.
+
+In order to more precisely define the scope of these guarantees, we need to
+introduce some terminology:
+
+- **Failure Event**. A _failure event_ is any event that causes a worker to
+  interrupt execution, but excluding all internal errors in the worker itself.
+  This includes operating system faults, hardware faults, disruptions
+  (termination through the container orchestrator), restarts, and updates.
+- **Supervision**. _Supervision_ is the process by which Golem detects failure
+  events and takes action to recover interrupted workers.
+- **Recovery**. _Recovery_ is the process by which Golem restores the state of
+  a worker to its state before the failure event, and resumes execution.
+
+### Limitations
+
+Golem's fault-tolerant guarantees are extensive, and they enable you to build
+highly reliable distributed systems without having to think about most failure
+scenarios. However, you should be aware of the following limitation:
+
+- **Execution Semantics**. For external systems (those not executed by Golem),
+  Golem generally guarantees only _at-least once semantics_ with respect to
+  the last external request made before the failure event.
+
+The following section discusses this limitation in more depth and what you can
+do to mitigate it.
+
+### Execution Semantics
+
+All local code, as well as all communication between workers, is executed with
+exactly-once semantics. All local code executed strictly inside Golem,
+including worker-to-worker communication, is guaranteed to have exactly-once
+semantics. This means that during recovery, the state of the worker is restored
+to the exact state it was in before the failure event, and no operations
+performed by the worker are repeated.
+
+However, for remote operations, such as invoking an HTTP API, Golem cannot
+generally guarantee exactly-once semantics. This is because a failure event
+may occur after a request has been sent, but before the response has been
+received. In this scenario, during the recovery, the request must be retried,
+which may lead to the remote system processing the same request multiple times.
+
+To mitigate this issue, you should consider using HTTP APIs that support the
+[The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/).
+This header allows you to provide a unique key for each request, which the
+remote system can use to ensure that the request is idempotent.
+
+In a future release, Golem will automatically generate idempotency keys for
+each request. For now, however, you can use the language-specific Golem SDK
+to generate an idempotency key, which you can then pass to the remote system.
+
+<Callout type="warning">
+  It is recommended to use the Golem SDK to generate idempotency keys, rather than generating them
+  yourself, to ensure that Golem transactionally _commits_ the key to durable persistence right
+  away. If you generate a random idempotency key yourself, without also using the Golem SDK to
+  manually perform a commit, then there is a small but nonzero chance that a failure event could
+  happen after the HTTP API is invoked, but before the idempotency key is committed to durable
+  persistence.
+</Callout>
+
+Idempotency keys guarantee exactly-once semantics for requests that support
+them, ensuring that the remote system can safely process the request multiple
+times without causing any side effects.
+
+## High-Availability
+
+Golem is designed to be highly-available with respect to the creation and
+execution of new workers in the Golem cluster.
+
+This is accomplished by supporting large cluster sizes that can evenly
+distribute workloads any number of nodes, and by automatically rebalancing
+workloads across the cluster when nodes are added or removed.
+
+However, because Golem allows and encourages communication with specific,
+stateful workers, there are limitations around the availability of specific
+workers in the cluster.
+
+The following sections overview these limitations.
+
+### Limitations
+
+The availability of specific workers in a Golem cluster is affected by several
+different factors, including all of the following:
+
+- **Cluster Size**. The number of worker executor nodes in the cluster.
+  If the cluster is too small, then it may not be able to handle the
+  workload, leading to degraded performance or unavailability.
+- **Cluster Resizing**. Cluster resizing requires rebalancing the workload
+  across the new set of nodes. This process may take some time, during which
+  availability of specific workers being relocated may be degraded.
+- **Worker Executor Node Health**. If the node running a shard of workers goes
+  down, then those workers will be unavailable until the node is recovered.
+  This process may take anywhere from a few seconds to a few minutes,
+  depending on how quickly the failure is detected and the number of workers
+  in the shard.
+- **Shard Manager Health**. If the shard manager goes down, there are scenarios
+  where this can negatively impact availability.
+
+### Tuning
+
+Though not supported currently, it is very likely Golem will increase the
+availability of specific high-priority workers by supporting instant-failover.
+
+# Conclusion
+
+Throughout this document, we've explored the crucial aspects of reliability in
+distributed systems and how Golem addresses these challenges. We began by
+examining the four pillars of reliability: resiliency, robustness, fault-
+tolerance, and high availability. These concepts form the foundation for
+creating dependable systems that can withstand various failure scenarios and
+maintain consistent performance.
+
+Golem provides a robust set of built-in reliability guarantees that
+significantly simplify the development of highly reliable distributed systems.
+These include transactional execution, durable state management, reliable
+internal communication, and resilient external communication.
+
+By automatically handling many complex reliability concerns, Golem allows
+developers to focus on their core business logic rather than intricate failure
+handling mechanisms. While Golem offers substantial reliability features, it's
+essential to understand its current limitations. These include the potential
+for at-least-once semantics in certain external system interactions and
+limitations in the availability of specific workers during cluster changes.
+However, Golem's team is actively working on addressing these areas, with
+plans for customizable retry strategies and improved worker availability on
+the horizon.
+
+For developers leveraging Golem, a deep understanding of these reliability
+concepts and Golem's capabilities is crucial. This knowledge allows you to make
+informed decisions about system design, identify areas where additional
+reliability measures may be necessary, and fully utilize Golem's built-in
+features to create robust distributed applications.
+
+As distributed systems continue to grow in complexity and importance, platforms
+like Golem evolve to meet these challenges. Future releases promise to bring
+even more advanced reliability features, such as automatic idempotency key
+generation and instant failover for high-priority workers, further enhancing
+Golem's ability to support mission-critical applications.
+
+In conclusion, Golem provides a powerful foundation for building highly reliable
+distributed systems. By abstracting away many of the complexities associated with
+fault-tolerance and high availability, it enables developers to create resilient
+applications that can withstand the unpredictable nature of distributed
+environments.
+
+As you embark on your journey with Golem, remember that reliability is not just a
+feature, but a fundamental aspect of system design that Golem helps you achieve
+with greater ease and confidence.

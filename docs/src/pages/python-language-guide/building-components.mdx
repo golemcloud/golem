@@ -1,0 +1,56 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Building Golem Components in Python
+Building Golem components having an [application manifest](/app-manifest) is straightforward, just use the `golem` command line interface:
+
+```shell copy
+golem app build
+```
+
+If the project was created using `golem app new` as recommended, the `golem app build` command will always work as expected.
+
+The result of the `golem app build` command is a WebAssembly component file ready to be uploaded to Golem. It does not have to be specified explicitly, as the `golem` tool will automatically find the correct file when doing for example:
+
+```shell copy
+golem component add
+```
+
+## Under the hood
+Building Golem components written in Python involves two steps:
+
+<Steps>
+
+### Package the Python code into a WASM component
+
+The `componentize` subcommand of the `componentize-py` tool packages the Python code and the Python interpreter into a single WebAssembly component:
+
+```shell
+$ componentize-py componentize main -o py_example.wasm
+```
+
+<Callout type="info">
+  Note that the `componentize-py` tool respects the `VIRTUAL_ENV` environment variable, so make sure
+  to activate the virtualenv if there are any Python dependencies used by your component.
+</Callout>
+
+### Reducing the size of the component
+
+The output of `compoenntize-py` is large. It is possible to strip some parts of it to reduce the size by about 50% using the `wasm-tools strip` command:
+
+```shell
+$ wasm-tools strip -a py_example.wasm -o py_example_stripped.wasm
+```
+
+### Generate the Python bindings from the WIT files
+
+The `bindings` subcommand of the `componentize-py` tool generates the module containing the generated bindings:
+
+```shell
+$ componentize-py bindings generated_bindings
+```
+
+This will generate bindings into the `bindings` directory.
+Make sure to not actually use these bindings to **invoke** imported functions, as they don't have any implementation.
+
+</Steps>

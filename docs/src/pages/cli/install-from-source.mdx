@@ -1,0 +1,60 @@
+import { Callout, Tabs } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Golem CLI installation from source
+
+If the precompiled binaries are not available for your platform, or prefer to install from source, you can build it with the Rust toolchain,
+
+## Prerequisites
+To build `golem-cli` you need to use `cargo`, Rust's build tool, and the build will require `protoc`, the [protobuf](https://github.com/protocolbuffers/protobuf) compiler.
+
+To get `cargo` on your system, we recommend using [rustup](https://rustup.rs/):
+
+```bash filename="Terminal" copy
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup install stable
+rustup default stable
+```
+
+To install `protoc` see [https://grpc.io/docs/protoc-installation/](https://grpc.io/docs/protoc-installation/).
+Make sure to install version **3.15 or higher**.
+
+## Installing `golem-cli`
+
+The `golem-cli` command is the more lightweight version of Golem's command line interface, that allows you to interact with a running Golem cluster but it does not have a built-in local version of Golem itself.
+
+To install `golem-cli` from source, use `cargo install`:
+
+```bash copy
+cargo install golem-cli --locked
+```
+
+This will create a binary file named `golem-cli` in the `~/.cargo/bin` directory.
+
+## Installing `golem`
+
+The `golem` binary is the full version of Golem's command line interface, containing everything `golem-cli` has and also has a built-in local version of Golem itself.
+
+The `golem` package is not published to [crates.io](https://crates.io/) so in order to install it from source, follow the steps below.
+
+<Steps>
+    ### Clone the repository
+    Clone the [GitHub repository](https://github.com/golemcloud/golem-cli):
+
+    ```bash copy
+    git clone https://github.com/golemcloud/golem-cli.git
+    ```
+    ### Install cargo-make
+    Install cargo-make using `cargo install`:
+
+    ```bash copy
+    cargo install cargo-make --locked
+    ```
+
+    ### Build the project
+    Build the project using `cargo make`:
+
+    ```bash copy
+    cargo make build
+    ```
+</Steps>

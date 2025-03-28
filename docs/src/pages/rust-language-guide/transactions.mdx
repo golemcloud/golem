@@ -1,0 +1,91 @@
+# High level transactions in Rust
+
+On top of the [durability controls](/rust-language-guide/durability) and [retry controls](/rust-language-guide/retries), the golem-rust crate (https://crates.io/crates/golem-rust) also provides a high level library for defining transactions supporting **compensation actions** in case of getting reverted.
+
+Although Golem's automatic retry policies and low level atomic regions provide a lot of power automatically, many times a set of external operations such as HTTP requests needs to be executed **transactionally**; if one of the operations fails, the whole transaction need to be rolled back by executing some compensation actions.
+
+The `golem-rust` crate provides support for two different types of transactions:
+
+- **fallible transactions** are only dealing with domain errors
+- **infallible transactions** must always succeed, and Golem applies its active retry policy to it
+
+### Fallible transactions
+
+Many times external operations (such as HTTP calls to remote hosts) need to be executed transactionally. If some of the operations failed the transaction need to be rolled back - compensation actions need to undo whatever the already successfully performed operations did.
+
+A **fallible transaction** only deals with domain errors. Within the transaction every operation that succeeds gets recorded. If an operation fails, all the recorded operations get compensated in reverse order before the transaction block returns with a failure.
+
+A fallible transaction can be executed using the `fallible_transaction` function, by passing a closure that can execute operations on the open transaction (see below).
+
+### Infallible transactions
+
+An infallible transaction must always succeed - in case of a failure or interruption, it gets retried. If there is a domain error, the compensation actions are executed before the retry.
+
+An infallible transaction can be executed using the `infallible_transaction` function, by passing a closure that can execute **operations** on the open transaction (see below).
+
+### Operations
+
+Both transaction types require the definition of **operations**.
+
+It is defined with the following trait:
+
+```rust
+/// Represents an atomic operation of the transaction which has a rollback action.
+///
+/// Implement this trait and use it within a `transaction` block.
+/// Operations can also be constructed from closures using `operation`.
+pub trait Operation: Clone {
+    type In: Clone;
+    type Out: Clone;
+    type Err: Clone;
+
+    /// Executes the operation which may fail with a domain error
+    fn execute(&self, input: Self::In) -> Result<Self::Out, Self::Err>;
+
+    /// Executes a compensation action for the operation.
+    fn compensate(&self, input: Self::In, result: Self::Out) -> Result<(), Self::Err>;
+}
+```
+
+There are multiple ways to define an operation:
+
+1. Implement the trait manually
+
+2. Use the `operation` function to create an operation from a pair of closures
+
+```rust
+pub fn operation<In: Clone, Out: Clone, Err: Clone>(
+    execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
+    compensate_fn: impl Fn(In, Out) -> Result<(), Err> + 'static,
+) -> impl Operation<In = In, Out = Out, Err = Err>
+```
+
+3. Use the `golem_operation` macro
+
+The `#[golem_operation(compensation=xyz)]` annotation can be applied to a function that takes any number of inputs, and returns a `Result`. The compensation parameter must point to another function which can have one of the following forms:
+
+- no parameter
+- single parameter, getting the _result_ of the successful operation
+- multiple parameters where the first one is the _result_ of the successful operation, and the rest of them are the _inputs_ of the operation
+
+When using this macro, it generates **associated functions** for the transaction so they can be directly called within the transaction in the following way:
+
+```rust
+#[golem_operation(compensation = compensation_step)]
+fn transaction_step(step: u64) -> Result<bool, String> {
+    println!("Step {step}");
+    Ok(remote_call(step))
+}
+
+fn compensation_step(_: bool, step: u64) -> Result<(), String> {
+    println!("Compensating step {step}");
+    remote_call_undo(step);
+    Ok(())
+}
+
+fallible_transaction(|tx| {
+    tx.transaction_step(1)?;
+    tx.transaction_step(2)?;
+    Ok(11)
+})?
+```

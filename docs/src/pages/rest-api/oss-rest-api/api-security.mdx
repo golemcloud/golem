@@ -1,0 +1,74 @@
+# Api Security API
+
+## Get a security scheme
+Path|Method|Protected
+---|---|---
+`/v1/api/security/{security_scheme_identifier}`|GET|No
+
+Get a security scheme by name
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "providerType": "Google",
+  "schemeIdentifier": "string",
+  "clientId": "string",
+  "clientSecret": "string",
+  "redirectUrl": "string",
+  "scopes": [
+    "string"
+  ]
+}
+```
+
+## Create a security scheme
+Path|Method|Protected
+---|---|---
+`/v1/api/security`|POST|No
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "providerType": "Google",
+  "schemeIdentifier": "string",
+  "clientId": "string",
+  "clientSecret": "string",
+  "redirectUrl": "string",
+  "scopes": [
+    "string"
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "providerType": "Google",
+  "schemeIdentifier": "string",
+  "clientId": "string",
+  "clientSecret": "string",
+  "redirectUrl": "string",
+  "scopes": [
+    "string"
+  ]
+}
+```
+## Api Security API Errors
+Status Code|Description|Body
+---|---|---
+400||`{"type":"Messages","errors":["string"]}`
+401||`{"error":"string"}`
+403||`{"error":"string"}`
+404||`{"error":"string"}`
+409||`"string"`
+500||`{"error":"string"}`

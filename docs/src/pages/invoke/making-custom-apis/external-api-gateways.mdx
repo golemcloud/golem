@@ -1,0 +1,112 @@
+## Integrating worker-gateway with existing API Gateways
+
+Note that, while the Golem's Worker Gateway is a powerful tool for defining and managing API endpoints, it is not a full-fledged API Gateway.
+However, it can be used conjunction with existing API Gateways, allowing you to leverage the capabilities of both systems.
+For example, you can use Golem's Worker Gateway to define and manage the worker bindings for your API endpoints, while using an API Gateway to handle other aspects of API management, such as authentication, rate limiting, and monitoring.
+In this scenario, the third party API Gateway would route incoming requests to Golem based on the defined endpoints, allowing Golem's Worker Gateway to handle the request processing and response generation.
+
+### Tyk
+
+This section shows how to integrate with [Tyk API gateway](https://tyk.io).
+
+Note that Tyk allows users to upload OpenAPI spec similar to Golem. You can upload the same OpenAPI spec with worker-gateway info to Tyk,
+with 1 more extra information which is `servers` block with the value of the URL of the Golem Worker Gateway (which is the URL of the worker-service service in docker),
+that tells the Tyk API gateway of Tyk to route the request to worker-gateway.
+
+Please note, the above set up will work depending on how you installed Tyk.
+If you installed Tyk in the same network as worker-gateway, you can use the localhost as servers.
+
+If you are using a separate docker network with Tyk, you will need to give the machine IP address to reach the Worker Gateway URL.
+
+```yaml
+openapi: 3.0.0
+x-golem-api-definition-version: 0.0.3
+x-golem-api-definition-id: shopping-cart-v1
+info:
+  title: Sample API
+  version: 1.0.2
+servers:
+  - url: http://ip-address-of-your-local-machine:9881
+paths:
+  /{user-id}/get-cart-contents:
+    x-golem-worker-bridge:
+      component-id: dba38841-013a-49fa-a1dc-064949832f0c
+      component-version: 0
+      response: |
+        let worker = instance("foo");
+        let x = worker.checkout();
+        let status: u64 = 200;
+        {headers : {ContentType: "json", userid: "foo"}, body: "foo", status: status}
+    get:
+      summary: Get Cart Contents
+      description: Get the contents of a user's cart
+      parameters:
+        - name: user-id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartItem"
+        404:
+          description: Contents not found
+components:
+  schemas:
+    CartItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        price:
+          type: number
+
+```
+
+The difference here is we added the server's block. You can include this servers block from the beginning
+so that it's exactly the same OpenAPI spec which you used to upload to Golem as well as Tyk.
+
+#### Install Tyk
+
+```bash filename="Terminal" copy
+git clone https://github.com/TykTechnologies/tyk-gateway-docker
+cd tyk-gateway-docker
+docker-compose up
+```
+
+#### Registration with Tyk
+
+Let's say we saved the above json as open_api.json
+
+```bash filename="Terminal" copy
+curl -X POST http://localhost:8080/tyk/apis/oas/import --header 'x-tyk-authorization: foo' --header 'Content-Type: text/plain' -d @open_api.json
+
+```
+
+Reload the Tyk API Gateway, otherwise the API is not deployed with Tyk yet, so this is an important step.
+Note that, if you are encountering issues following these steps, please refer to Tyk documentations.
+
+```bash
+curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
+
+```
+
+Note that Tyk is now running at 8080, and now requests has to go into 8080 and not the Golem Worker Gateway.
+
+```bash filename="Terminal" copy
+curl -X GET http://localhost:9006/adam/get-cart-contents
+```
+
+## FAQ
+
+**How does worker service know which API definition to pick for a given endpoint?**
+
+When a request comes in, worker-service looks at the host in the request and matches it with the site in the deployment.
+If there is a deployment corresponding to the site, it picks the API definition ID and version from the deployment and gets the API definition,
+to further process the request

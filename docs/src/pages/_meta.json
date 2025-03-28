@@ -1,20 +1,60 @@
 {
-  "index": {
-    "type": "page",
-    "display": "hidden",
-    "theme": {
-      "typesetting": "article"
-    }
+  "index": "Home",
+  "-- Getting Started": {
+    "type": "separator",
+    "title": "Getting Started"
   },
-  "docs": {
-    "title": "Documentation",
-    "type": "page"
+  "why-golem": "Why Golem?",
+  "fundamentals": "Fundamentals",
+  "quickstart": "Quickstart",
+  "concepts": {
+    "title": "Concepts"
   },
-  "404": {
-    "type": "page",
-    "theme": {
-      "timestamp": false,
-      "typesetting": "article"
-    }
-  }
+  "-- Develop": {
+    "type": "separator",
+    "title": "Develop"
+  },
+  "develop-overview": "Language Guides",
+  "rust-language-guide": "Rust Language Guide",
+  "ccpp-language-guide": "C/C++ Language Guide",
+  "python-language-guide": "Python Language Guide",
+  "go-language-guide": "Go Language Guide",
+  "js-language-guide": "JavaScript Language Guide",
+  "ts-language-guide": "TypeScript Language Guide",
+  "experimental-languages": "Experimental Languages",
+  "common-language-guide": "Common Guides",
+  "-- Usage": {
+    "type": "separator",
+    "title": "Usage"
+  },
+  "deploy": {
+    "title": "Deploy"
+  },
+  "invoke": {
+    "title": "Invoke"
+  },
+  "debug": {
+    "title": "Debug"
+  },
+  "operate": {
+    "title": "Operate"
+  },
+  "cli": {
+    "title": "CLI"
+  },
+  "desktop": {
+    "title": "Desktop"
+  },
+  "-- References": {
+    "type": "separator",
+    "title": "References"
+  },
+  "http-api-definitions": "API Definitions",
+  "app-manifest": "Application Manifest",
+  "function-names": "Function names",
+  "golem-host-functions": "Golem Host Functions",
+  "json-wave-mapping": "JSON-WAVE Mapping",
+  "rest-api": "REST API",
+  "rib": "Rib",
+  "wasm-rpc": "WASM RPC"
 }

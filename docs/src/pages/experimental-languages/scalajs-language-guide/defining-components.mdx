@@ -1,0 +1,36 @@
+import { Callout } from "nextra/components"
+
+# Defining Golem Components in Scala.js
+
+## Creating a project
+
+Golem's **command line interface** provides a set of predefined, Golem-specific **templates** to choose from as a starting point.
+
+To get started from scratch, first create a new application using the `Scala.js` template:
+
+```shell copy
+golem app new my-app scalajs
+cd my-app
+```
+
+An application can consist of multiple components. Add a new component by choosing from one of the available templates. To see the list of available templates, run:
+
+```shell copy
+golem component new
+```
+
+Then create a new component using the chosen template:
+
+```shell copy
+golem component new scalajs my-component
+```
+
+## Specification-first approach
+
+Golem and the Scala.js toolchain currently requires defining the component's interface using the **WebAssembly Interface Type (WIT)** format. See [the official documentation of this format](https://component-model.bytecodealliance.org/design/wit.html) for reference.
+
+Each new project generated with `golem` contains a `wit` directory with at least one `.wit` file defining a `world`. This world can contain **exports** (exported functions and interfaces) and these exports will be the compiled Golem component's public API.
+
+When a component is compiled (see the [Building Components page](/experimental-languages/scalajs-language-guide/building-components) for details), a couple of scala packages get generated in the `target/<scala version>/src_managed` directory. These packages contains the Scala definitions of all the data types and interfaces defined in the `WIT` file(s).
+
+To **implement** the specification written in WIT, the Scala.js code must implement some of these generated exported traits with proper `@JSExport` annotations.

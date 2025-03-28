@@ -1,0 +1,7 @@
+{
+  "persistence": "Persistence",
+  "metrics": "Metrics",
+  "logs": "Logs",
+  "metadata": "Metadata",
+  "invocation_context": "Invocation Context"
+}

@@ -1,0 +1,103 @@
+import { Callout } from "nextra/components"
+
+# Working with Golem Promises in Go
+
+Golem **promises** provide a way for Golem workers to wait on an external condition. The worker creates the promise and somehow sends its identifier to the external system responsible for **completing** the promise. Then the worker can **await** the promise, being suspended until the external system completes the promise using Golem's REST API.
+
+It is also possible to complete a promise from within a Golem worker using the Golem SDK.
+
+When a promise is completed, an arbitrary byte array can be attached to it as a payload - this data is returned to the awaiting worker when is continues execution.
+
+In Go the promise API has idiomatic Go wrappers in the [Golem Go SDK](/go-language-guide/golem-go-sdk).
+
+### Creating a promise
+
+To create a promise simply call the `golemhost.NewPromise` function:
+
+```go
+import "github.com/golemcloud/golem-go/golemhost"
+
+promiseID := golemhost.NewPromise()
+```
+
+The returned value has the type `golemhost.PromiseID`, is defined as the following (including the nested types):
+
+```go
+// UUID, uses the commonly used google UUID module
+type ComponentID uuid.UUID
+
+// Represents a Golem component
+typedef struct golem_api_host_component_id_t {
+  golem_api_host_uuid_t   uuid;
+} golem_api_host_component_id_t;
+
+// Represents a Golem worker
+type WorkerID struct {
+	ComponentID ComponentID
+	WorkerName  string
+}
+
+// A promise ID is a value that can be passed to an external Golem API to complete that promise
+// from an arbitrary external source, while Golem workers can await for this completion.
+type PromiseID struct {
+	WorkerID WorkerID
+	OplogIdx OpLogIndex
+}
+```
+
+### Deleting a promise
+
+If a promise is no longer used, it has to be deleted with:
+
+```go
+import "github.com/golemcloud/golem-go/golemhost"
+
+golemhost.DeletePromise(promiseID)
+```
+
+### Awaiting a promise
+
+To await a promise, use the `golemhost.AwaitPromise` or the `golemhost.AwaitPromiseJSON()` functions:
+
+```go
+import "github.com/golemcloud/golem-go/golemhost"
+
+// returns the raw payload as []byte
+bs := golemhost.AwaitPromise(promiseID)
+
+type ExmaplePayload struct {
+	ID   int64  `json:"id"`
+	Meta string `json:"meta,omitempty"`
+}
+var payload ExmaplePayload
+// requires a JSON unmarshall target and might return serialization errors
+err := golemhost.AwaitPromiseJSON(promiseID, &payload)
+```
+
+### Completing a promise from within a worker
+
+To complete a promise from within a worker, use the `golemhost.CompletePromise` of the `golemhost.CompletePromiseJSON` functions:
+
+```go
+import "github.com/golemcloud/golem-go/golemhost"
+
+// accepts the payload as []byte
+ok := golemhost.CompletePromise(promiseID, []byte{1, 2})
+
+type ExmaplePayload struct {
+	ID   int64  `json:"id"`
+	Meta string `json:"meta,omitempty"`
+}
+// accepts the payload as any JSON marshallable, and might return serialization errors
+ok, err := golemhost.CompletePromiseJSON(
+	promiseID,
+	ExmaplePayload{
+		ID:   100,
+		Meta: "meta data",
+	},
+)
+```
+
+### Completing a promise from an external source
+
+To see how to use the **promise ID** to complete a promise through the external REST API, check [the REST API documentation](/rest-api).

@@ -5,9 +5,9 @@ import { OpenAPIV3 } from "openapi-types"
 import OpenAPISampler from "openapi-sampler"
 
 const CLOUD_SPEC_SRC = "./openapi/cloud-spec.yaml"
-const CLOUD_GEN_PATH = "./src/pages/docs/rest-api/cloud-rest-api"
+const CLOUD_GEN_PATH = "./src/pages/rest-api/cloud-rest-api"
 const OSS_SPEC_SRC = "./openapi/oss-spec.yaml"
-const OSS_GEN_PATH = "./src/pages/docs/rest-api/oss-rest-api"
+const OSS_GEN_PATH = "./src/pages/rest-api/oss-rest-api"
 
 main().catch(e => console.error("Failed to update API Docs", e))
 

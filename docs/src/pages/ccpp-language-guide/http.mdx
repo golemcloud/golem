@@ -1,0 +1,345 @@
+import { Callout } from "nextra/components"
+
+# HTTP requests in C/C++
+
+Golem implements the [WASI HTTP](https://github.com/WebAssembly/wasi-http) interfaces so any library built on this specification can be used from Golem components to communicate with external services.
+
+The only way to make HTTP requests from a C/C++ code currently is to use these WASI HTTP interfaces directly.
+
+## Example
+
+The following example shows how to make a POST request with JSON request and response bodies using the generated WASI HTTP bindings directly from C.
+
+<Callout type="info">
+  This example is available as an example to be used with `golem new` called `c-example-http`.
+</Callout>
+
+### Defining the request
+
+#### Headers
+
+The first step to do is to create a **fields** resource, which is going to hold the outgoing request headers. We can initialize this resource by passing a list of string tuples holding the initial set of headers, and there are host functions for manipulating this list if needed.
+
+First let's make two helper functions for filling `c_example_http_string_t` (the string type generated for our binding - it's prefix is coming from the example world's name which was `c-example-http` in this example) from a constant null-terminated string, and have a similar one that does the same for `wasi_http_types_field_value_t`, the type that holds **header values** in the WASI HTTP API.
+
+```c
+void set_string(c_example_http_string_t* ret, const char* str) {
+    ret->ptr = (uint8_t*)str;
+    ret->len = strlen(str);
+}
+
+void set_string_field(wasi_http_types_field_value_t* ret, const char* str) {
+    ret->ptr = (uint8_t*)str;
+    ret->len = strlen(str);
+}
+```
+
+With these helper functions define the outgoing headers:
+
+```c
+wasi_http_types_own_fields_t headers;
+wasi_http_types_header_error_t headers_err;
+c_example_http_list_tuple2_field_key_field_value_t entries;
+entries.ptr = malloc(2 * sizeof(c_example_http_tuple2_field_key_field_value_t));
+entries.len = 2;
+set_string(&entries.ptr[0].f0, "Content-Type");
+set_string_field(&entries.ptr[0].f1, "application/json");
+set_string(&entries.ptr[1].f0, "Accept");
+set_string_field(&entries.ptr[1].f1, "application/json");
+
+if (!wasi_http_types_static_fields_from_list(&entries, &headers, &headers_err)) {
+    // Failed to create header list
+    return;
+}
+```
+
+#### Request properties
+
+Using this headers resource, the next step is to create an outgoing request and set properties such as the URL and method. The request properties are managed by an `outgoing-request` resource, which can be created by passing the headers to its constructor:
+
+```c
+wasi_http_types_own_outgoing_request_t request = wasi_http_types_constructor_outgoing_request(headers);
+```
+
+Use the this resource's methods to set the method, the path, the scheme and the authority of the request:
+
+```c
+wasi_http_types_method_t method;
+method.tag = WASI_HTTP_TYPES_METHOD_POST;
+if (!wasi_http_types_method_outgoing_request_set_method(
+    wasi_http_types_borrow_outgoing_request(request),
+    &method
+)) {
+    // Failed to set method
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+
+c_example_http_string_t path;
+set_string(&path, "/post");
+if (!wasi_http_types_method_outgoing_request_set_path_with_query(
+    wasi_http_types_borrow_outgoing_request(request),
+    &path
+)) {
+    // Failed to set path
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+
+wasi_http_types_scheme_t scheme;
+scheme.tag = WASI_HTTP_TYPES_SCHEME_HTTPS;
+if (!wasi_http_types_method_outgoing_request_set_scheme(
+    wasi_http_types_borrow_outgoing_request(request),
+    &scheme
+)) {
+    // Failed to set scheme
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+
+c_example_http_string_t authority;
+set_string(&authority, "httpbin.org");
+if (!wasi_http_types_method_outgoing_request_set_authority(
+    wasi_http_types_borrow_outgoing_request(request),
+    &authority
+)) {
+    // Failed to set authority
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+```
+
+#### Outgoing request body
+
+The last step before sending the request is to write the outgoing request body. For that we open the request's `body` and then acquire an `output-stream` for it, use it for writing the body, and finally mark the body as finished.
+
+```c
+wasi_http_types_own_outgoing_body_t out_body;
+if (!wasi_http_types_method_outgoing_request_body(wasi_http_types_borrow_outgoing_request(request), &out_body)) {
+    // Failed to get outgoing body
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+
+wasi_http_types_own_output_stream_t out_body_stream;
+if (!wasi_http_types_method_outgoing_body_write(wasi_http_types_borrow_outgoing_body(out_body), &out_body_stream)) {
+    // Failed to get outgoing body stream
+    wasi_http_types_outgoing_body_drop_own(out_body);
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+```
+
+In this example let's write a JSON object containing a single field `count` which holds a dynamic value coming from a global variable called `total`:
+
+```c
+wasi_io_streams_stream_error_t stream_err;
+
+c_example_http_list_u8_t body_data;
+body_data.ptr = malloc(256);
+sprintf((char*)body_data.ptr, "{ \"count\": %llu }", total);
+body_data.len = strlen((char*)body_data.ptr);
+```
+
+Write this data to the output stream:
+
+```c
+if (!wasi_io_streams_method_output_stream_blocking_write_and_flush(
+    wasi_io_streams_borrow_output_stream(out_body_stream), &body_data, &stream_err)) {
+    // Failed to write body
+    wasi_io_streams_output_stream_drop_own(out_body_stream);
+    wasi_http_types_outgoing_body_drop_own(out_body);
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+
+wasi_io_streams_output_stream_drop_own(out_body_stream);
+```
+
+And mark the body as finished:
+
+```c
+wasi_http_types_error_code_t err;
+if (!wasi_http_types_static_outgoing_body_finish(out_body, NULL, &err)) {
+    // Failed to finish body
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+```
+
+### Sending the request
+
+Finally the request is ready to be sent:
+
+#### Setting request options
+
+Before sending the request, optionally some request options can be set which control various timeouts:
+
+```c
+wasi_http_types_own_request_options_t request_options = wasi_http_types_constructor_request_options();
+wasi_http_types_duration_t timeout = 5000000000; // 5 seconds (in ns)
+
+if (!wasi_http_types_method_request_options_set_connect_timeout(
+    wasi_http_types_borrow_request_options(request_options),
+    &timeout
+)) {
+    // Failed to set connect timeout
+    wasi_http_types_request_options_drop_own(request_options);
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+
+if (!wasi_http_types_method_request_options_set_first_byte_timeout(
+    wasi_http_types_borrow_request_options(request_options),
+    &timeout
+)) {
+    // Failed to set first byte timeout
+    wasi_http_types_request_options_drop_own(request_options);
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+
+if (!wasi_http_types_method_request_options_set_between_bytes_timeout(
+    wasi_http_types_borrow_request_options(request_options),
+    &timeout
+)) {
+    // Failed to set between-bytes timeout
+    wasi_http_types_request_options_drop_own(request_options);
+    wasi_http_types_outgoing_request_drop_own(request);
+    return;
+}
+```
+
+#### Sending the request
+
+Finally everything is prepared to send the request:
+
+```c
+wasi_http_outgoing_handler_own_future_incoming_response_t future_response;
+wasi_http_outgoing_handler_error_code_t err_code;
+if (!wasi_http_outgoing_handler_handle(request, &request_options, &future_response, &err_code)) {
+    // Failed to send request
+    return;
+}
+```
+
+### Reading the response
+
+#### Awaiting the response
+
+The return value of `wasi_http_outgoing_handler_handle` is a future which needs to be awaited. To do so, we need to implement the following logic:
+
+- Check if the future is ready by calling `get` on it, and use the result if it is available
+- If the future is not ready, call `poll` to await it
+- Repeat until it is completed
+
+The following while loop demonstrates this logic:
+
+```c
+bool got_response = false;
+wasi_http_types_own_incoming_response_t response;
+
+while (!got_response) {
+    wasi_http_types_result_result_own_incoming_response_error_code_void_t res;
+    if (wasi_http_types_method_future_incoming_response_get(wasi_http_types_borrow_future_incoming_response(future_response), &res)) {
+        if (!res.is_err && !res.val.ok.is_err) {
+            // Got a response
+            response = res.val.ok.val.ok;
+            got_response = true;
+        } else if (!res.is_err && res.val.ok.is_err) {
+            // Returned with an error code (res.val.ok.val.err.tag)
+            wasi_http_types_future_incoming_response_drop_own(future_response);
+            return;
+        } else {
+            // Returned with an error
+            wasi_http_types_future_incoming_response_drop_own(future_response);
+            return;
+        }
+    } else {
+        // No result yet, polling
+
+        wasi_http_types_own_pollable_t pollable = wasi_http_types_method_future_incoming_response_subscribe(
+            wasi_http_types_borrow_future_incoming_response(future_response)
+        );
+        wasi_io_poll_list_borrow_pollable_t pollable_list;
+        pollable_list.len = 1;
+        pollable_list.ptr = malloc(sizeof(wasi_io_poll_borrow_pollable_t));
+        pollable_list.ptr[0] = wasi_io_poll_borrow_pollable(pollable);
+
+        c_example_http_list_u32_t poll_result;
+        wasi_io_poll_poll(&pollable_list, &poll_result);
+        wasi_io_poll_pollable_drop_own(pollable);
+    }
+}
+```
+
+Note that it is possible to poll multiple futures simultaneously but here we are not taking advantage of that.
+
+Once this loop exits, `response` holds the incoming response.
+
+#### Reading the response properties
+
+The response immediately has headers and status code available, for example the following code reads the status code:
+
+```c
+wasi_http_types_status_code_t status = wasi_http_types_method_incoming_response_status(
+    wasi_http_types_borrow_incoming_response(response)
+);
+```
+
+#### Reading the response body
+
+The response body is a stream and needs to be read similarly to how the request body was written.
+
+First, open the incoming body stream:
+
+```c
+wasi_http_types_own_incoming_body_t incoming_body;
+if (!wasi_http_types_method_incoming_response_consume(wasi_http_types_borrow_incoming_response(response), &incoming_body)) {
+    // Failed to consume response
+    wasi_http_types_incoming_response_drop_own(response);
+    return;
+}
+
+wasi_http_types_own_input_stream_t incoming_body_stream;
+if (!wasi_http_types_method_incoming_body_stream(wasi_http_types_borrow_incoming_body(incoming_body), &incoming_body_stream)) {
+    // Failed to get body stream
+    wasi_http_types_incoming_body_drop_own(incoming_body);
+    wasi_http_types_incoming_response_drop_own(response);
+    return;
+}
+```
+
+Then use the `input-stream` API to read chunks from this stream until it's fully consumed:
+
+```c
+bool eof = false;
+uint8_t *full_body = malloc(0);
+uint64_t len = 0;
+
+while (!eof) {
+    c_example_http_list_u8_t chunk;
+    wasi_io_streams_stream_error_t stream_err;
+    if (wasi_io_streams_method_input_stream_blocking_read(wasi_io_streams_borrow_input_stream(incoming_body_stream), 1024, &chunk, &stream_err)) {
+        len += chunk.len;
+        full_body = realloc(full_body, len);
+        memcpy(full_body + len - chunk.len, chunk.ptr, chunk.len);
+    } else {
+        if (stream_err.tag == WASI_IO_STREAMS_STREAM_ERROR_CLOSED) {
+            eof = true;
+        } else {
+            set_string(ret, "Failed to read from body stream");
+            wasi_io_streams_input_stream_drop_own(incoming_body_stream);
+            wasi_http_types_incoming_body_drop_own(incoming_body);
+            wasi_http_types_incoming_response_drop_own(response);
+            return;
+        }
+    }
+}
+
+wasi_io_streams_input_stream_drop_own(incoming_body_stream);
+wasi_http_types_incoming_body_drop_own(incoming_body);
+wasi_http_types_incoming_response_drop_own(response);
+```
+
+After this loop quits, `full_body` contains the full response body which has `len` bytes.

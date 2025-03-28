@@ -1,0 +1,63 @@
+import { Cards, Card } from "nextra/components"
+
+# Deployment
+
+Golem Services are distributed as Docker images. They are available in [Golem Services Docker Hub](https://hub.docker.com/u/golemservices). Each Docker image is built for OS/ARCH-s:
+
+- linux/amd64
+- linux/arm64
+
+Services are using following types of storage:
+
+- Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (mainly for testing purposes)
+- [Redis](https://redis.io/)
+- Blob storage - Shared File System or S3
+
+## Golem Services
+
+Following sections provide a description of each service.
+
+### Component Service
+
+[golem-component-service](https://github.com/golemcloud/golem/tree/main/golem-component-service) is a [component](concepts/components) registry/management service. Service is using RDB and Blob storage as data storage.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-service)
+
+### Worker Service
+
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) providing APIs and [API Gateway](concepts/worker-gateway) functionality for workers and act like routing service for worker executors. Service is using RDB as data storage.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
+
+### Worker Executor
+
+[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [workers](concepts/workers) which belongs to assigned shards. Service is using Redis and Blob storage as data storage.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-executor)
+
+### Shard Manager
+
+[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) is a single node in charge of maintaining the worker executors shards assignments, only one instance can be alive at any given time. Service is using Redis as data storage.
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-shard-manager)
+
+### Component Compilation Service
+
+[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is sidecar service responsible for compiling [components](concepts/components). Service is using Blob storage as data storage.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-compilation-service)
+
+### Golem Router
+
+[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is [nginx](https://nginx.org/) Golem APIs proxy.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-services.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+
+## Deployment Variants
+
+For deployment variants, see the following sections:
+
+<Cards num={3}>
+  <Card title="Docker" href="/deploy/docker" />
+  <Card title="Kubernetes" href="/deploy/kubernetes" />
+  <Card title="Golem Cloud" href="/deploy/golem-cloud" />
+</Cards>

@@ -1536,6 +1536,82 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}:
+    delete:
+      tags:
+      - Worker
+      summary: Cancels a pending invocation if it has not started yet
+      description: The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+      operationId: cancel_invocation
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: idempotency_key
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CancelInvocationResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -1999,7 +2075,6 @@ paths:
       parameters:
       - in: query
         name: api-definition-id
-        required: true
         deprecated: false
         schema:
           type: string
@@ -3208,7 +3283,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/PluginDefinitionWithoutOwner_DefaultPluginScope'
+              $ref: '#/components/schemas/PluginDefinitionCreation_DefaultPluginScope'
         required: true
       responses:
         '200':
@@ -3277,6 +3352,166 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/PluginDefinition_DefaultPluginOwner_DefaultPluginScope'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/library-plugins:
+    post:
+      tags:
+      - Plugin
+      summary: Registers a new library plugin
+      operationId: create_library_plugin
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                version:
+                  type: string
+                description:
+                  type: string
+                icon:
+                  type: string
+                  format: binary
+                homepage:
+                  type: string
+                scope:
+                  $ref: '#/components/schemas/DefaultPluginScope'
+                wasm:
+                  type: string
+                  format: binary
+              required:
+              - name
+              - version
+              - description
+              - icon
+              - homepage
+              - scope
+              - wasm
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/app-plugins:
+    post:
+      tags:
+      - Plugin
+      summary: Registers a new app plugin
+      operationId: create_app_plugin
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                version:
+                  type: string
+                description:
+                  type: string
+                icon:
+                  type: string
+                  format: binary
+                homepage:
+                  type: string
+                scope:
+                  $ref: '#/components/schemas/DefaultPluginScope'
+                wasm:
+                  type: string
+                  format: binary
+              required:
+              - name
+              - version
+              - description
+              - icon
+              - homepage
+              - scope
+              - wasm
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
         '400':
           description: ''
           content:
@@ -3824,6 +4059,24 @@ components:
           type: string
       required:
       - host
+    CancelInvocationParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+      required:
+      - timestamp
+      - idempotency_key
+    CancelInvocationResponse:
+      type: object
+      properties:
+        canceled:
+          type: boolean
+      required:
+      - canceled
     ChangeRetryPolicyParameters:
       type: object
       properties:
@@ -4002,11 +4255,26 @@ components:
             $ref: '#/components/schemas/ValueAndType'
         idempotency_key:
           type: string
+        trace_id:
+          type: string
+        trace_states:
+          type: array
+          items:
+            type: string
+        invocation_context:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
       required:
       - timestamp
       - function_name
       - request
       - idempotency_key
+      - trace_id
+      - trace_states
+      - invocation_context
     ExportedFunctionParameters:
       type: object
       properties:
@@ -4058,6 +4326,17 @@ components:
       - Greater
       - LessEqual
       - Less
+    FinishSpanParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        span_id:
+          type: string
+      required:
+      - timestamp
+      - span_id
     FlatComponentFileSystemNode:
       type: object
       properties:
@@ -4094,6 +4373,8 @@ components:
         idempotencyKey:
           type: string
         response:
+          type: string
+        invocationContext:
           type: string
         allowOrigin:
           type: string
@@ -4831,7 +5112,7 @@ components:
         params:
           type: array
           items:
-            $ref: '#/components/schemas/TypeAnnotatedValue'
+            $ref: '#/components/schemas/ValueAndOptionalType'
       required:
       - params
     InvokeResponse:
@@ -5030,6 +5311,26 @@ components:
       - Facebook
       - Microsoft
       - Gitlab
+    PublicAttributeValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          String: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
+    PublicAttributeValue_StringAttributeValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: String
+            type: string
+            enum:
+            - String
+        required:
+        - type
+      - $ref: '#/components/schemas/StringAttributeValue'
     PublicDurableFunctionType:
       discriminator:
         propertyName: type
@@ -5070,6 +5371,37 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
+    PublicExternalSpanData:
+      type: object
+      properties:
+        span_id:
+          type: string
+      required:
+      - span_id
+    PublicLocalSpanData:
+      type: object
+      properties:
+        span_id:
+          type: string
+        start:
+          type: string
+          format: date-time
+        parent_id:
+          type: string
+        linked_context:
+          type: integer
+          format: uint64
+        attributes:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PublicAttributeValue'
+        inherited:
+          type: boolean
+      required:
+      - span_id
+      - start
+      - attributes
+      - inherited
     PublicOplogEntry:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5111,6 +5443,10 @@ components:
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
           Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
+          CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+          StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+          FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5141,6 +5477,10 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5164,6 +5504,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ActivatePluginParameters'
+    PublicOplogEntry_CancelInvocationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CancelInvocation
+            type: string
+            enum:
+            - CancelInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/CancelInvocationParameters'
     PublicOplogEntry_ChangeRetryPolicyParameters:
       allOf:
       - type: object
@@ -5272,6 +5624,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/FailedUpdateParameters'
+    PublicOplogEntry_FinishSpanParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FinishSpan
+            type: string
+            enum:
+            - FinishSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/FinishSpanParameters'
     PublicOplogEntry_GrowMemoryParameters:
       allOf:
       - type: object
@@ -5368,6 +5732,30 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/RevertParameters'
+    PublicOplogEntry_SetSpanAttributeParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SetSpanAttribute
+            type: string
+            enum:
+            - SetSpanAttribute
+        required:
+        - type
+      - $ref: '#/components/schemas/SetSpanAttributeParameters'
+    PublicOplogEntry_StartSpanParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StartSpan
+            type: string
+            enum:
+            - StartSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/StartSpanParameters'
     PublicOplogEntry_SuccessfulUpdateParameters:
       allOf:
       - type: object
@@ -5415,6 +5803,40 @@ components:
       - min_delay
       - max_delay
       - multiplier
+    PublicSpanData:
+      discriminator:
+        propertyName: type
+        mapping:
+          LocalSpan: '#/components/schemas/PublicSpanData_PublicLocalSpanData'
+          ExternalSpan: '#/components/schemas/PublicSpanData_PublicExternalSpanData'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicSpanData_PublicLocalSpanData'
+      - $ref: '#/components/schemas/PublicSpanData_PublicExternalSpanData'
+    PublicSpanData_PublicExternalSpanData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExternalSpan
+            type: string
+            enum:
+            - ExternalSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicExternalSpanData'
+    PublicSpanData_PublicLocalSpanData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: LocalSpan
+            type: string
+            enum:
+            - LocalSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicLocalSpanData'
     PublicUpdateDescription:
       discriminator:
         propertyName: type
@@ -5654,6 +6076,23 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+    SetSpanAttributeParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        span_id:
+          type: string
+        key:
+          type: string
+        value:
+          $ref: '#/components/schemas/PublicAttributeValue'
+      required:
+      - timestamp
+      - span_id
+      - key
+      - value
     ShardId:
       type: object
       properties:
@@ -5672,6 +6111,33 @@ components:
             format: uint8
       required:
       - payload
+    StartSpanParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        span_id:
+          type: string
+        parent_id:
+          type: string
+        linked_context:
+          type: string
+        attributes:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PublicAttributeValue'
+      required:
+      - timestamp
+      - span_id
+      - attributes
+    StringAttributeValue:
+      type: object
+      properties:
+        value:
+          type: string
+      required:
+      - value
     StringFilterComparator:
       type: string
       enum:
@@ -5902,6 +6368,14 @@ components:
             type: string
       required:
       - errors
+    ValueAndOptionalType:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - value
     ValueAndType:
       type: object
       properties:
@@ -6394,6 +6868,8 @@ components:
       required:
       - name
       - functions
+    AppPluginDefinition:
+      type: object
     Component:
       type: object
       properties:
@@ -6589,6 +7065,8 @@ components:
       - key
       - path
       - permissions
+    LibraryPluginDefinition:
+      type: object
     LinearMemory:
       type: object
       properties:
@@ -6614,7 +7092,7 @@ components:
       required:
       - componentId
       - componentVersion
-    PluginDefinitionWithoutOwner_DefaultPluginScope:
+    PluginDefinitionCreation_DefaultPluginScope:
       type: object
       properties:
         name:
@@ -6631,7 +7109,7 @@ components:
         homepage:
           type: string
         specs:
-          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
+          $ref: '#/components/schemas/PluginTypeSpecificCreation'
         scope:
           $ref: '#/components/schemas/DefaultPluginScope'
       required:
@@ -6704,6 +7182,7 @@ components:
         version:
           type: string
         priority:
+          description: Plugins will be applied in order of increasing priority
           type: integer
           format: int32
         parameters:
@@ -6728,16 +7207,66 @@ components:
       required:
       - priority
       - parameters
+    PluginTypeSpecificCreation:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentTransformer: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
+          OplogProcessor: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
+    PluginTypeSpecificCreation_ComponentTransformerDefinition:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentTransformer
+            type: string
+            enum:
+            - ComponentTransformer
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentTransformerDefinition'
+    PluginTypeSpecificCreation_OplogProcessorDefinition:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: OplogProcessor
+            type: string
+            enum:
+            - OplogProcessor
+        required:
+        - type
+      - $ref: '#/components/schemas/OplogProcessorDefinition'
     PluginTypeSpecificDefinition:
       discriminator:
         propertyName: type
         mapping:
           ComponentTransformer: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
           OplogProcessor: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
+          Library: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
+          App: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
       - $ref: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
+    PluginTypeSpecificDefinition_AppPluginDefinition:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: App
+            type: string
+            enum:
+            - App
+        required:
+        - type
+      - $ref: '#/components/schemas/AppPluginDefinition'
     PluginTypeSpecificDefinition_ComponentTransformerDefinition:
       allOf:
       - type: object
@@ -6750,6 +7279,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ComponentTransformerDefinition'
+    PluginTypeSpecificDefinition_LibraryPluginDefinition:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Library
+            type: string
+            enum:
+            - Library
+        required:
+        - type
+      - $ref: '#/components/schemas/LibraryPluginDefinition'
     PluginTypeSpecificDefinition_OplogProcessorDefinition:
       allOf:
       - type: object

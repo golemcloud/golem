@@ -1,0 +1,59 @@
+# Invoke using Golem CLI
+
+The `golem` command line interface exposes one invocation subcommand:
+
+- `golem worker invoke` triggers a function invocation on a worker and awaits its result
+- `golem worker invoke --enqueue` just enqueues an invocation and returns immediately
+
+## Specifying what to invoke
+
+The command requires specifying which worker to invoke, and the name of the function.
+
+There are multiple options for selecting the worker:
+
+**Durable workers identified by a component ID and a worker name**:
+
+- `worker-name`
+- `component-name/worker-name`
+- `project-name/component-name/worker-name`
+- `account-name/project-name/component-name/worker-name`
+
+**Ephemeral workers identified by just a component**:
+
+- `-`
+- `component-name/-`
+- `project-name/component-name/-`
+- `account-name/project-name/component-name/-`
+
+Note that you can only omit the component name if it can be inferred from the context, for example if the current directory is a component directory or the application root with a single component only.
+
+The function to be invoked is selected by the second parameter. Read the [invocation function name syntax page](/function-names) for more information about the possible function names.
+
+## Encoding parameters
+
+The CLI requires you to encode the function parameters using the [WebAssembly Value Encoding](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) with one or more parameters following the function name (one for each invocation parameter).
+
+## Getting results
+
+When using `invoke` without the `--enqueue` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the [WebAssembly Value Encoding](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).
+
+This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on the JSON WAVE Mapping page](/json-wave-mapping).
+
+## Logs
+
+Both invocation commands accept an optional `--connect` flag for conneting to the invoked worker's event stream and showing its logs. This works the same as running a separate `golem worker connect` command during the invocation. The logs consists of everything the worker writes to its standard output and standard error, as well as through the WASI Logging API.
+
+The `--connect` option's output (and also the `connect` subcommand) can be customized with the following parameters:
+
+- `--format text|json|yaml` for different encodings of the log lines
+- `--colors=yes|no` to enable/disable colors for the `text` format
+- `--show-timestamps=yes|no` to enable/disable showing timestamps for each log line
+- `--show-level=yes|no` to enable/disable showing the log level (or stdout/stderr) for each log line
+
+## Cancelling pending invocations
+
+As invocations are executed sequentially, it is possible to cancel a pending invocation before it starts executing. This can be done using the command line interface by running the `worker cancel-invocation` subcommand:
+
+```shell copy
+golem worker cancel-invocation <component-name>/<worker-name> --idempotency-key <idempotency-key>
+```

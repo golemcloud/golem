@@ -1,0 +1,88 @@
+# Logs
+
+## Golem server logs
+
+Every Golem service emits structured logs with with configurable format and level. The default configuration for our dockerized builds is to log to the container's standard output using JSON format. Each service supports the same set of configuration keys controlling the logging behavior, which can be overwritten using **environment variables**.
+
+The **default log level and filtering** can be configured using the `RUST_LOG` environment variable, as described in the [tracing-subscriber](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) crate's documentation. The simplest way to use this environment variable is to set a global log level, for example `RUST_LOG=debug`.
+
+The Golem specific config keys are the following:
+
+```toml
+[tracing]
+console = false
+dtor_friendly = false
+file_name = "worker-executor.log"
+file_truncate = true
+
+[tracing.file]
+ansi = false
+compact = false
+enabled = false
+json = true
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+[tracing.stdout]
+ansi = true
+compact = false
+enabled = true
+json = false
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+```
+
+### Overwriting config
+
+To overwrite any of the above config keys using **environment variables**, use the `GOLEM_` prefix and the `__` separator for levels. For example to disable logging to the standard output, and instead enable logging to a file, set the following two variables:
+
+```
+GOLEM_TRACING__FILE__ENABLED=true
+GOLEM_TRACING__STDOUT__ENABLED=false
+```
+
+### Configurable options
+
+The top-level `tracing` block allows setting the file name and truncate behavior for file logging, as well as enabling connection to [`tokio-console`](https://github.com/tokio-rs/console).
+
+For both `file` and `stdout` logging, a set of boolean flags control the format of the emitted log lines:
+
+| Flag                 | Description                                           |
+| -------------------- | ----------------------------------------------------- |
+| `ansi`               | Use ANSI colors for the output                        |
+| `compact`            | Use the **compact formatter**.                        |
+| `enabled`            | Enables logging to file or stdout                     |
+| `json`               | Use JSON logging                                      |
+| `json_flatten`       | Flatten event metadata                                |
+| `json_flatten_span`  | Flatten nested span fields                            |
+| `pretty`             | Use the **pretty formatter**                          |
+| `span_events_active` | Emit one event per enter/exit of a span               |
+| `span_events_full`   | Emit one event at all points (new, enter, exit, drop) |
+| `without_time`       | Do not emit timestamps for the log entries            |
+
+## Golem worker logs
+
+For logging from **workers** running on Golem, there are two options:
+
+- Print log lines to the **stdout** and/or **stderr** channels of the worker
+- Use the [WASI Logging interface](https://github.com/WebAssembly/wasi-logging)
+
+Using the WASI Logging interface depends on the guest language - for example for Rust, there is a crate providing bindings for the standard `log` crate as [described on the Building Components in Rust page](/rust-language-guide/building-components).
+
+### Getting worker logs
+
+Worker logs (both stdout/err and WASI logging entries) are persisted for each worker, and they can be watched in live by using the **connect API**. There are three ways to connect to a worker:
+
+- Using `golem`
+- Using the connect WebSocket API
+- Using the [Golem Console](https://console.golem.cloud/) (Golem Cloud only)
+
+To connect to a worker's log with `golem`, use either the `golem worker connect` command or the `--connect` flag when making an invocation. See the [CLI documentation](/cli/workers) for more details.

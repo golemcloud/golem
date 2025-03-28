@@ -1,0 +1,10 @@
+{
+  "-- getting-started": {
+    "type": "separator",
+    "title": "Getting Started"
+  },
+  "setup": "Setup",
+  "defining-components": "Defining Components",
+  "building-components": "Building Components",
+  "next-steps": "Next Steps"
+}
