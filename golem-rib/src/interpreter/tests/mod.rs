@@ -2248,6 +2248,7 @@ mod comprehensive_test {
                 &RibInput::new(interpreter_env_input),
                 dynamic_worker_invoke,
                 None,
+                None,
             )
         }
 
