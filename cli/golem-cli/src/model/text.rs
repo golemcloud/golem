@@ -487,11 +487,8 @@ pub mod api_definition {
                 component_name: value
                     .binding
                     .clone()
-                    .component_id
-                    .map(|id| {
-                        // TODO: get component name
-                        id.component_id.to_string()
-                    })
+                    .component
+                    .map(|component| component.name)
                     .unwrap_or("<NA>".to_string())
                     .into(),
             }
