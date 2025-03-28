@@ -18,6 +18,8 @@ use crate::interpreter::stack::InterpreterStack;
 use crate::{RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
 use std::sync::Arc;
 
+use super::interpreter_stack_value::RibInterpreterStackValue;
+
 pub struct Interpreter {
     pub input: RibInput,
     pub invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
@@ -296,7 +298,7 @@ impl Interpreter {
 
         let stack_value = stack
             .pop()
-            .ok_or_else(|| "Empty stack after running the instructions".to_string())?;
+            .unwrap_or_else(|| RibInterpreterStackValue::Unit);
 
         let rib_result = RibResult::from_rib_interpreter_stack_value(&stack_value)
             .ok_or_else(|| "Failed to obtain a valid result from rib execution".to_string())?;

@@ -50,12 +50,14 @@ impl RibRepl {
                     } else {
                         // Evaluate normal Rib expressions
                         lines.push(line);
-                        dbg!("lines: {:?}", &lines);
-                        match eval(&lines.join("\n"), &mut repl_state).await {
+                        match eval(&lines.join(";\n"), &mut repl_state).await {
                             Ok(result) => {
                                 println!("{}", result);
                             }
-                            Err(err) => eprintln!("Error: {}", err),
+                            Err(err) => {
+                                lines.pop(); // Removing the wrong line
+                                eprintln!("Error: {}", err)
+                            }
                         }
                     }
                 }
