@@ -81,7 +81,9 @@ impl PluginGrpcApi {
             .try_into()
             .map_err(|err| bad_request_error(&format!("Invalid plugin specification: {err}")))?;
 
-        self.plugin_service.create_plugin(plugin).await?;
+        self.plugin_service
+            .create_plugin(&DefaultPluginOwner, plugin)
+            .await?;
 
         Ok(())
     }
