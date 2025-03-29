@@ -18,8 +18,8 @@ use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandler
 use super::request::{
     authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
 };
-use super::to_response::GatewayHttpResult;
 use super::swagger_binding_handler::SwaggerBindingHandler;
+use super::to_response::GatewayHttpResult;
 use super::WorkerDetails;
 
 use crate::gateway_api_deployment::ApiSiteString;
@@ -28,9 +28,8 @@ use crate::gateway_binding::{
     IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::api_definition_lookup::ApiDefinitionLookupError;
-use crate::service::gateway::api_deployment::ApiDeploymentError;
+use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -41,16 +40,17 @@ use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
 use crate::service::gateway::api_definition::ApiDefinitionService;
+use crate::service::gateway::api_deployment::ApiDeploymentError;
 use async_trait::async_trait;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::IdempotencyKey;
+use golem_common::SafeDisplay;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_service_base::model::VersionedComponentId;
-use golem_common::SafeDisplay;
 use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -64,9 +64,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::error;
-
-
-
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {
@@ -596,7 +593,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
         let possible_api_definitions = match self
             .api_definition_lookup_service
             .get(&ApiSiteString(authority.clone()))
-            .await 
+            .await
         {
             Ok(api_defs) => api_defs,
             Err(api_defs_lookup_error) => {
