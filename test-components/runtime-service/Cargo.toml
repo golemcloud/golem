@@ -1,7 +1,7 @@
 [package]
 name = "runtime-service"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 
 [lib]
 path = "src/lib.rs"
@@ -15,7 +15,9 @@ strip = true
 [dependencies]
 once_cell = "1.17.1"
 rand = "0.8.5"
-reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-jun-2024", features = ["json"] }
+reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-march-2025", features = [
+    "json",
+] }
 wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [package.metadata.component.target]
