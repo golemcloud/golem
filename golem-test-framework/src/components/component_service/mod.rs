@@ -1020,8 +1020,71 @@ fn to_http_dynamic_linking(
                         DynamicLinkedInstance::WasmRpc(link) => {
                             golem_client::model::DynamicLinkedInstance::WasmRpc(
                                 golem_client::model::DynamicLinkedWasmRpc {
-                                    targets: link.targets.clone(),
-                                },
+                                        targets: link.targets.clone(),
+                                        remote: match link.remote.clone() {
+                                            golem_common::model::component_metadata::RpcRemote::OpenApi(open_api_remote) => {
+                                                if let Some(metadata) = open_api_remote.metadata.clone() {
+                                                    golem_client::model::RpcRemote::OpenApi(
+                                                        golem_client::model::OpenApiRemote {
+                                                            metadata: Some(golem_client::model::OpenApiMetadata {
+                                                                    endpoints: metadata
+                                                                        .endpoints
+                                                                        .iter()
+                                                                        .map(|(k, v)| {
+                                                                            (
+                                                                                k.clone(),
+                                                                                golem_client::model::EndpointConfig {
+                                                                                    method: v.method.clone(),
+                                                                                    endpoint: v.endpoint.clone(),
+                                                                                    no_path_params: v.no_path_params,
+                                                                                    no_query_params: v.no_query_params,
+                                                                                    has_body: v.has_body,
+                                                                                    query_param_names: v
+                                                                                        .query_param_names
+                                                                                        .clone(),
+                                                                                },
+                                                                            )
+                                                                        })
+                                                                        .collect(),
+                                                            }),
+                                                        }
+                                                    )
+                                                } else {
+                                                    golem_client::model::RpcRemote::OpenApi(
+                                                        golem_client::model::OpenApiRemote {
+                                                            metadata: None
+                                                        }
+                                                    )
+                                                }
+                                            },
+                                            golem_common::model::component_metadata::RpcRemote::Grpc(grpc_remote) => {
+                                                if let Some(metadata) = grpc_remote.metadata {
+                                                    golem_client::model::RpcRemote::Grpc(
+                                                        golem_client::model::GrpcRemote {
+                                                            metadata: Some(golem_client::model::GrpcMetadata {
+                                                                file_descriptor_set: metadata.file_descriptor_set,
+                                                                package_name: metadata.package_name,
+                                                                url: metadata.url,
+                                                                api_token: metadata.api_token
+                                                            })
+                                                        }
+                                                    )
+                                                } else {
+                                                    golem_client::model::RpcRemote::Grpc(
+                                                        golem_client::model::GrpcRemote {
+                                                            metadata: None
+                                                        }
+                                                    )
+                                                }
+                                            },
+                                            golem_common::model::component_metadata::RpcRemote::GolemWorker(_) => {
+                                                golem_client::model::RpcRemote::GolemWorker(
+                                                    golem_client::model::GolemWorkerRemote {
+                                                    }
+                                                )
+                                            },
+                                        }
+                                }
                             )
                         }
                     },

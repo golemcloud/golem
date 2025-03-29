@@ -18,7 +18,8 @@ members = [
     "golem-worker-service",
     "integration-tests",
     "wasm-ast",
-    "wasm-rpc"
+    "wasm-rpc",
+    "wit-carpenter"
 ]
 
 exclude = [

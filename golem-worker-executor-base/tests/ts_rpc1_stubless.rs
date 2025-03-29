@@ -65,6 +65,9 @@ async fn counter_resource_test_1(
                         },
                     ),
                 ]),
+                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
+                    golem_common::model::component_metadata::GolemWorkerRemote {},
+                ),
             }),
         )])
         .store()
@@ -134,6 +137,9 @@ async fn counter_resource_test_1_with_restart(
                         },
                     ),
                 ]),
+                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
+                    golem_common::model::component_metadata::GolemWorkerRemote {},
+                ),
             }),
         )])
         .store()
@@ -207,6 +213,9 @@ async fn context_inheritance(
                         },
                     ),
                 ]),
+                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
+                    golem_common::model::component_metadata::GolemWorkerRemote {},
+                ),
             }),
         )])
         .store()

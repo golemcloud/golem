@@ -12,8 +12,46 @@ message DynamicLinkedInstance {
 
 message DynamicLinkedWasmRpc {
   map<string, WasmRpcTarget> targets = 1;
+  RpcRemote remote = 2;
 }
 
+message RpcRemote {
+  oneof remote {
+    GrpcRemote grpc = 1;
+    OpenApiRemote open_api = 2;
+    GolemWorkerRemote golem_worker = 3;
+  }
+}
+
+message GrpcRemote {
+  GrpcMetadata metadata = 1;
+}
+
+message OpenApiRemote {
+  OpenApiMetadata metadata = 1;
+}
+
+message GolemWorkerRemote {}
+
+message GrpcMetadata {
+  bytes file_descriptor_set = 1;
+  string package_name = 2;
+  string url = 3;
+  string api_token =4;
+}
+
+message EndpointConfig {
+    string method = 1;
+    string endpoint = 2;
+    int32 no_path_params = 3;
+    int32 no_query_params = 4;
+    repeated string query_param_names = 5;
+    bool has_body = 6;
+}
+
+message OpenApiMetadata {
+    map<string, EndpointConfig> endpoints = 1;
+}
 message WasmRpcTarget {
   string interface_name = 1;
   string component_name = 2;

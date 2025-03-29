@@ -39,6 +39,7 @@ use golem_common::model::{
     WorkerId,
 };
 use golem_common::serialization::try_deserialize;
+use golem_wasm_ast::analysis::AnalysedFunction;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
     Uri,
@@ -1072,6 +1073,32 @@ async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         }),
     })?;
     Ok(entry)
+}
+
+pub async fn try_get_analysed_function<Ctx: WorkerCtx>(
+    components: Arc<dyn ComponentService<Ctx::Types>>,
+    account_id: &AccountId,
+    component_id: &ComponentId,
+    function_name: &str,
+) -> anyhow::Result<AnalysedFunction> {
+    if let Ok(metadata) = components
+        .get_metadata(account_id, component_id, None)
+        .await
+    {
+        if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {
+            Ok(function)
+        } else {
+            Err(anyhow!(
+                "Unable to get a function with name : {}",
+                function_name
+            ))
+        }
+    } else {
+        Err(anyhow!(
+            "Unable to get metadata for the component with id : {}",
+            component_id.to_string()
+        ))
+    }
 }
 
 /// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the
