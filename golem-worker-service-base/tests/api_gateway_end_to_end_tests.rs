@@ -42,7 +42,7 @@ use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
-use http::header::{LOCATION, HOST};
+use http::header::{HOST, LOCATION};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
@@ -2348,6 +2348,10 @@ mod internal {
     use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
         HttpHandlerBindingHandler, HttpHandlerBindingResult,
     };
+    use golem_worker_service_base::gateway_execution::request::RichRequest;
+    use golem_worker_service_base::gateway_execution::swagger_binding_handler::{
+        SwaggerBindingHandler, SwaggerBindingResult, SwaggerBindingSuccess,
+    };
     use golem_worker_service_base::gateway_execution::WorkerDetails;
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
@@ -2357,10 +2361,6 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
-    use golem_worker_service_base::gateway_execution::swagger_binding_handler::{
-        SwaggerBindingHandler, SwaggerBindingResult, SwaggerBindingSuccess,
-    };
-    use golem_worker_service_base::gateway_execution::request::RichRequest;
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
