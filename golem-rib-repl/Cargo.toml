@@ -17,4 +17,5 @@ golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0", optional = true }
 
 rustyline = "15"
+termion = "1.5.6"
 tokio = { version = "1", features = ["full"] }

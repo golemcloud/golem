@@ -48,10 +48,10 @@ impl GetLiteralValue for ValueAndType {
             }
             ValueAndType {
                 value:
-                    Value::Variant {
-                        case_idx,
-                        case_value,
-                    },
+                Value::Variant {
+                    case_idx,
+                    case_value,
+                },
                 typ: AnalysedType::Variant(typ),
             } => {
                 // A no arg variant can be turned into a simple literal and can be part of string concatenations
@@ -140,20 +140,20 @@ impl CoercedNumericValue {
             }
 
             (CoercedNumericValue::NegInt(val), AnalysedType::S8(_))
-                if *val >= i8::MIN as i64 && *val <= i8::MAX as i64 =>
-            {
-                Some((*val as i8).into_value_and_type())
-            }
+            if *val >= i8::MIN as i64 && *val <= i8::MAX as i64 =>
+                {
+                    Some((*val as i8).into_value_and_type())
+                }
             (CoercedNumericValue::NegInt(val), AnalysedType::S16(_))
-                if *val >= i16::MIN as i64 && *val <= i16::MAX as i64 =>
-            {
-                Some((*val as i16).into_value_and_type())
-            }
+            if *val >= i16::MIN as i64 && *val <= i16::MAX as i64 =>
+                {
+                    Some((*val as i16).into_value_and_type())
+                }
             (CoercedNumericValue::NegInt(val), AnalysedType::S32(_))
-                if *val >= i32::MIN as i64 && *val <= i32::MAX as i64 =>
-            {
-                Some((*val as i32).into_value_and_type())
-            }
+            if *val >= i32::MIN as i64 && *val <= i32::MAX as i64 =>
+                {
+                    Some((*val as i32).into_value_and_type())
+                }
             (CoercedNumericValue::NegInt(val), AnalysedType::S64(_)) => {
                 Some((*val).into_value_and_type())
             }
@@ -162,10 +162,10 @@ impl CoercedNumericValue {
                 Some((*val).into_value_and_type())
             }
             (CoercedNumericValue::Float(val), AnalysedType::F32(_))
-                if *val >= f32::MIN as f64 && *val <= f32::MAX as f64 =>
-            {
-                Some((*val as f32).into_value_and_type())
-            }
+            if *val >= f32::MIN as f64 && *val <= f32::MAX as f64 =>
+                {
+                    Some((*val as f32).into_value_and_type())
+                }
 
             _ => None,
         }

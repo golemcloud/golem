@@ -1,3 +1,5 @@
+mod syntax_highlighter;
+
 use rib::Interpreter;
 use rib::InterpreterEnv;
 use rib::InterpreterStack;
@@ -10,6 +12,7 @@ use tokio;
 
 // Import Rib evaluation function
 use rib::compile;
+use crate::syntax_highlighter::RibSyntaxHighlighter;
 
 struct RibRepl {
     loaded_files: Vec<String>,
@@ -32,7 +35,8 @@ impl RibRepl {
     }
 
     async fn run(&mut self) {
-        let mut rl = Editor::<(), DefaultHistory>::new().unwrap();
+        let mut rl = Editor::<RibSyntaxHighlighter, DefaultHistory>::new().unwrap();
+        rl.set_helper(Some(RibSyntaxHighlighter::default()));
 
         let mut lines = vec![];
         let mut repl_state = ReplState::default();
@@ -55,7 +59,7 @@ impl RibRepl {
                                 println!("{}", result);
                             }
                             Err(err) => {
-                                lines.pop(); // Removing the wrong line
+                                lines.pop();
                                 eprintln!("Error: {}", err)
                             }
                         }
