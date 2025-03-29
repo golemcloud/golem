@@ -19,3 +19,4 @@ golem-worker-service-base = { path = "../golem-worker-service-base", version = "
 rustyline = "15"
 termion = "1.5.6"
 tokio = { version = "1", features = ["full"] }
+dirs = "4.0.0"

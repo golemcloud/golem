@@ -1,5 +1,7 @@
+mod history;
 mod syntax_highlighter;
 
+use std::path::{Path, PathBuf};
 use rib::Interpreter;
 use rib::InterpreterEnv;
 use rib::InterpreterStack;
@@ -11,8 +13,8 @@ use rustyline::Editor;
 use tokio;
 
 // Import Rib evaluation function
-use rib::compile;
 use crate::syntax_highlighter::RibSyntaxHighlighter;
+use rib::compile;
 
 struct RibRepl {
     loaded_files: Vec<String>,
@@ -35,31 +37,42 @@ impl RibRepl {
     }
 
     async fn run(&mut self) {
+
+        let history_file = get_history_file();
+
         let mut rl = Editor::<RibSyntaxHighlighter, DefaultHistory>::new().unwrap();
         rl.set_helper(Some(RibSyntaxHighlighter::default()));
 
-        let mut lines = vec![];
+        // Try to load history from the file
+        if history_file.exists() {
+            if let Err(err) = rl.load_history(&history_file) {
+                eprintln!("Failed to load history: {}", err);
+            }
+        }
+
+        let mut session_history = vec![];
         let mut repl_state = ReplState::default();
 
         loop {
             let readline = rl.readline("> ");
             match readline {
                 Ok(line) if !line.is_empty() => {
-                    let _ = rl.add_history_entry(line.as_str());
 
                     if line.starts_with(":load ") {
                         let files: Vec<String> =
                             line[6..].split(',').map(|s| s.trim().to_string()).collect();
                         self.load_files(files);
                     } else {
-                        // Evaluate normal Rib expressions
-                        lines.push(line);
-                        match eval(&lines.join(";\n"), &mut repl_state).await {
+                        session_history.push(line.clone());
+                        let _ = rl.add_history_entry(line.as_str());
+                        let _ = rl.save_history(history_file.as_path());
+
+                        match eval(&session_history.join(";\n"), &mut repl_state).await {
                             Ok(result) => {
                                 println!("{}", result);
                             }
                             Err(err) => {
-                                lines.pop();
+                                session_history.pop();
                                 eprintln!("Error: {}", err)
                             }
                         }
@@ -87,6 +100,12 @@ async fn eval(line: &str, repl_state: &mut ReplState) -> Result<String, String> 
         .await
         .map_err(|e| format!("Runtime error: {}", e))?;
     Ok(format!("{}", result))
+}
+
+fn get_history_file() -> PathBuf {
+    let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push(".rib_history");
+    path
 }
 
 struct ReplState {

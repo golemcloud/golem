@@ -1,13 +1,15 @@
-use rustyline::highlight::Highlighter;
+use rib::Expr;
+use rustyline::completion::Completer;
 use rustyline::config::CompletionType;
 use rustyline::highlight::CmdKind;
-use std::borrow::Cow;
-use rustyline::completion::Completer;
-use rustyline::Helper;
+use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
-use rustyline::validate::Validator;
+use rustyline::history::SearchDirection;
+use rustyline::validate::{ValidationResult, Validator};
+use rustyline::{Context, Helper};
+use std::borrow::Cow;
 use termion::color;
-use rib::Expr;
+use crate::history::retrieve_history;
 
 #[derive(Default)]
 pub struct RibSyntaxHighlighter;
@@ -16,6 +18,42 @@ impl Helper for RibSyntaxHighlighter {}
 
 impl Completer for RibSyntaxHighlighter {
     type Candidate = String;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        let history_entries = retrieve_history(ctx.history());
+
+        let mut completions = Vec::new();
+        let mut start = pos;
+
+        // Find the start of the word to complete
+        while start > 0
+            && line[start - 1..start]
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+        {
+            start -= 1;
+        }
+
+        let word = &line[start..pos];
+
+        // Example: Add some dummy completions
+        if word.is_empty() {
+            completions.push("let".to_string());
+            completions.push("fn".to_string());
+            completions.push("if".to_string());
+            completions.push("else".to_string());
+        } else {
+            completions.push(format!("{}{}", word, "123"));
+            completions.push(format!("{}{}", word, "456"));
+        }
+
+        Ok((start, completions))
+    }
 }
 
 impl Hinter for RibSyntaxHighlighter {
@@ -23,20 +61,22 @@ impl Hinter for RibSyntaxHighlighter {
 }
 
 impl Validator for RibSyntaxHighlighter {
-    fn validate(&self, context: &mut rustyline::validate::ValidationContext) -> rustyline::Result<rustyline::validate::ValidationResult> {
+    fn validate(
+        &self,
+        context: &mut rustyline::validate::ValidationContext,
+    ) -> rustyline::Result<ValidationResult> {
         // Implement validation logic here (e.g., check for balanced parentheses)
 
-        let expr = Expr::from_text(context.input())
-            .map_err(|e| format!("Parse error: {}", e));
+        let expr = Expr::from_text(context.input()).map_err(|e| format!("Parse error: {}", e));
 
         match expr {
             Ok(_) => {
                 // If the expression is valid, return Valid
-                 Ok(rustyline::validate::ValidationResult::Valid(None))
+                Ok(ValidationResult::Valid(None))
             }
             Err(e) => {
                 // If the expression is invalid, return Invalid with an error message
-                 Ok(rustyline::validate::ValidationResult::Invalid(Some(format!("\nParse error: {}", e))))
+                Ok(ValidationResult::Invalid(Some(e)))
             }
         }
     }
@@ -49,9 +89,11 @@ impl Highlighter for RibSyntaxHighlighter {
 
         for word in line.split_whitespace() {
             if [
-                "let", "fn", "if", "else", "match", "return", "while", "for", "in",
-                "break", "continue", "true", "yield", "false", "some", "none", "ok", "error",
-            ].contains(&word) {
+                "let", "fn", "if", "else", "match", "return", "while", "for", "in", "break",
+                "continue", "true", "yield", "false", "some", "none", "ok", "error",
+            ]
+            .contains(&word)
+            {
                 // Highlight keywords in blue
                 highlighted.push_str(&format!(
                     "{}{}{} ",
@@ -105,17 +147,36 @@ impl Highlighter for RibSyntaxHighlighter {
         prompt: &'p str,
         _default: bool,
     ) -> Cow<'b, str> {
-        Cow::Owned(format!("{}{}{}", color::Fg(color::Cyan), prompt, color::Fg(color::Reset)))
+        Cow::Owned(format!(
+            "{}{}{}",
+            color::Fg(color::Cyan),
+            prompt,
+            color::Fg(color::Reset)
+        ))
     }
 
     /// Highlights hints (optional)
     fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
-        Cow::Owned(format!("{}{}{}", color::Fg(color::LightBlack), hint, color::Fg(color::Reset)))
+        Cow::Owned(format!(
+            "{}{}{}",
+            color::Fg(color::LightBlack),
+            hint,
+            color::Fg(color::Reset)
+        ))
     }
 
     /// Highlights autocompletion candidates (optional)
-    fn highlight_candidate<'c>(&self, candidate: &'c str, _completion: CompletionType) -> Cow<'c, str> {
-        Cow::Owned(format!("{}{}{}", color::Fg(color::Magenta), candidate, color::Fg(color::Reset)))
+    fn highlight_candidate<'c>(
+        &self,
+        candidate: &'c str,
+        _completion: CompletionType,
+    ) -> Cow<'c, str> {
+        Cow::Owned(format!(
+            "{}{}{}",
+            color::Fg(color::Magenta),
+            candidate,
+            color::Fg(color::Reset)
+        ))
     }
 
     /// Defines if highlighting should change when cursor moves
