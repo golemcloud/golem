@@ -1120,6 +1120,43 @@ pub trait WorkerService: WorkerServiceInternal {
         }
     }
 
+    async fn export_api_definition(
+        &self,
+        request: golem_api_grpc::proto::golem::apidefinition::v1::ExportApiDefinitionRequest,
+    ) -> crate::Result<golem_api_grpc::proto::golem::apidefinition::v1::ExportApiDefinitionResponse>
+    {
+        match self.api_definition_client() {
+            ApiDefinitionServiceClient::Grpc(mut client) => {
+                Ok(client.export_api_definition(request).await?.into_inner())
+            }
+            ApiDefinitionServiceClient::Http(client) => {
+                match client
+                    .export_definition(&request.api_definition_id.unwrap().value, &request.version)
+                    .await
+                {
+                    Ok(result) => {
+                        use golem_api_grpc::proto::golem::apidefinition::v1::{
+                            export_api_definition_response, OpenApiHttpApiDefinitionResponse,
+                        };
+
+                        Ok(golem_api_grpc::proto::golem::apidefinition::v1::ExportApiDefinitionResponse {
+                            result: Some(export_api_definition_response::Result::Success(
+                                OpenApiHttpApiDefinitionResponse {
+                                    id: Some(golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
+                                        value: result.id,
+                                    }),
+                                    version: result.version,
+                                    openapi_yaml: result.openapi_yaml,
+                                }
+                            )),
+                        })
+                    }
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
     async fn delete_api_definition(
         &self,
         request: DeleteApiDefinitionRequest,
@@ -1715,6 +1752,9 @@ async fn http_api_definition_to_grpc(
                                 golem_client::model::GatewayBindingType::CorsPreflight => {
                                     GatewayBindingType::CorsPreflight
                                 }
+                                golem_client::model::GatewayBindingType::SwaggerUi => {
+                                    GatewayBindingType::SwaggerUi
+                                }
                             } as i32,
                         ),
                         static_binding: route.binding.cors_preflight.map(|cors_preflight| {
@@ -1806,6 +1846,9 @@ async fn grpc_api_definition_request_to_http(
                                         }
                                         GatewayBindingType::HttpHandler => {
                                             golem_client::model::GatewayBindingType::HttpHandler
+                                        }
+                                        GatewayBindingType::SwaggerUi => {
+                                            golem_client::model::GatewayBindingType::SwaggerUi
                                         }
                                     }
                                 }),
