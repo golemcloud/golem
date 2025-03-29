@@ -15,10 +15,11 @@
 use crate::api::api_definition::HttpApiDefinitionResponseData;
 use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
 use crate::gateway_api_deployment::ApiSiteString;
-use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::{HttpApiDefinitionsLookup};
 use crate::gateway_execution::request::RichRequest;
 use crate::service::gateway::api_definition::ApiDefinitionService;
 use async_trait::async_trait;
+use golem_common::SafeDisplay;
 use golem_service_base::auth::EmptyAuthCtx;
 use http::StatusCode;
 use openapiv3;
@@ -83,6 +84,8 @@ impl<Namespace> DefaultSwaggerBindingHandler<Namespace> {
     }
 }
 
+
+
 #[async_trait]
 impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
     for DefaultSwaggerBindingHandler<Namespace>
@@ -103,10 +106,15 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             .await
         {
             Ok(defs) => defs,
-            Err(_) => {
+            Err(api_defs_lookup_error) => {
+                error!(
+                    "API request host: {} - error: {}",
+                    authority,
+                    api_defs_lookup_error.to_safe_string()
+                );
                 return Err(SwaggerBindingError::InternalError(
-                    "Failed to get API definitions".to_string(),
-                ))
+                    api_defs_lookup_error.to_safe_string(),
+                ));
             }
         };
 

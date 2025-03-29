@@ -29,6 +29,8 @@ use crate::gateway_binding::{
     WorkerBindingCompiled, WorkerNameCompiled,
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::ApiDefinitionLookupError;
+use crate::service::gateway::api_deployment::ApiDeploymentError;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -47,6 +49,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::IdempotencyKey;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::headers::TraceContextHeaders;
+use golem_service_base::model::VersionedComponentId;
+use golem_common::SafeDisplay;
 use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -545,6 +549,36 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     }
 }
 
+fn get_status_code_from_api_lookup_error<Namespace>(
+    error: &ApiDefinitionLookupError<Namespace>,
+) -> StatusCode {
+    match &error {
+        ApiDefinitionLookupError::ApiDeploymentError(err) => {
+            // In the context of APIDefinitionLookup (which occurs for an actual incoming request),
+            // we have a different set of http response status code
+            // for API deployment errors
+            match &err {
+                ApiDeploymentError::ApiDeploymentNotFound(_, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDeploymentConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+
+                ApiDeploymentError::ComponentConstraintCreateError(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+
+                ApiDeploymentError::ApiDefinitionsConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalRepoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalConversionError { .. } => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }
+        ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
+    }
+}
+
 #[async_trait]
 impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     for DefaultGatewayInputExecutor<Namespace>
@@ -562,13 +596,18 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
         let possible_api_definitions = match self
             .api_definition_lookup_service
             .get(&ApiSiteString(authority.clone()))
-            .await
+            .await 
         {
-            Ok(defs) => defs,
-            Err(_) => {
-                return poem::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string("Internal server error".to_string()));
+            Ok(api_defs) => api_defs,
+            Err(api_defs_lookup_error) => {
+                error!(
+                    "API request host: {} - error: {}",
+                    authority,
+                    api_defs_lookup_error.to_safe_string()
+                );
+
+                return api_defs_lookup_error
+                    .to_response_from_safe_display(get_status_code_from_api_lookup_error);
             }
         };
 
