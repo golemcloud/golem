@@ -7,6 +7,7 @@ use rustyline::Helper;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use termion::color;
+use rib::Expr;
 
 #[derive(Default)]
 pub struct RibSyntaxHighlighter;
@@ -21,7 +22,25 @@ impl Hinter for RibSyntaxHighlighter {
     type Hint = String;
 }
 
-impl Validator for RibSyntaxHighlighter {}
+impl Validator for RibSyntaxHighlighter {
+    fn validate(&self, context: &mut rustyline::validate::ValidationContext) -> rustyline::Result<rustyline::validate::ValidationResult> {
+        // Implement validation logic here (e.g., check for balanced parentheses)
+
+        let expr = Expr::from_text(context.input())
+            .map_err(|e| format!("Parse error: {}", e));
+
+        match expr {
+            Ok(_) => {
+                // If the expression is valid, return Valid
+                 Ok(rustyline::validate::ValidationResult::Valid(None))
+            }
+            Err(e) => {
+                // If the expression is invalid, return Invalid with an error message
+                 Ok(rustyline::validate::ValidationResult::Invalid(Some(format!("\nParse error: {}", e))))
+            }
+        }
+    }
+}
 
 impl Highlighter for RibSyntaxHighlighter {
     /// Highlights Rib code in the REPL
