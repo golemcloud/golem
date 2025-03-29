@@ -37,12 +37,12 @@ fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
 
     let version = {
         if !output.status.success() {
-            println!("cargo::warn=git describe failed, using fallback version 0.0.0");
+            println!("cargo::warning=git describe failed, using fallback version 0.0.0");
             for line in String::from_utf8_lossy(&output.stdout).lines() {
-                println!("cargo::warn=git stdout: {}", line);
+                println!("cargo::warning=git stdout: {}", line);
             }
             for line in String::from_utf8_lossy(&output.stderr).lines() {
-                println!("cargo::warn=git stderr: {}", line);
+                println!("cargo::warning=git stderr: {}", line);
             }
 
             "0.0.0".to_string()
