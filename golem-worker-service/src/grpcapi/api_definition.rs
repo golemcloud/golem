@@ -24,14 +24,16 @@ use golem_api_grpc::proto::golem::{
     apidefinition::v1::{
         api_definition_error, api_definition_service_server::ApiDefinitionService,
         create_api_definition_request, create_api_definition_response,
-        delete_api_definition_response, export_api_definition_response, get_all_api_definitions_response,
-        get_api_definition_response, get_api_definition_versions_response,
-        update_api_definition_request, update_api_definition_response, ApiDefinitionError,
-        CreateApiDefinitionRequest, CreateApiDefinitionResponse, DeleteApiDefinitionRequest,
-        DeleteApiDefinitionResponse, GetAllApiDefinitionsRequest, GetAllApiDefinitionsResponse,
-        GetApiDefinitionRequest, GetApiDefinitionResponse, GetApiDefinitionVersionsRequest,
-        GetApiDefinitionVersionsResponse, UpdateApiDefinitionRequest, UpdateApiDefinitionResponse,
-        ExportApiDefinitionRequest, ExportApiDefinitionResponse, OpenApiHttpApiDefinitionResponse as GrpcOpenApiHttpApiDefinitionResponse,
+        delete_api_definition_response, export_api_definition_response,
+        get_all_api_definitions_response, get_api_definition_response,
+        get_api_definition_versions_response, update_api_definition_request,
+        update_api_definition_response, ApiDefinitionError, CreateApiDefinitionRequest,
+        CreateApiDefinitionResponse, DeleteApiDefinitionRequest, DeleteApiDefinitionResponse,
+        ExportApiDefinitionRequest, ExportApiDefinitionResponse, GetAllApiDefinitionsRequest,
+        GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
+        GetApiDefinitionVersionsRequest, GetApiDefinitionVersionsResponse,
+        OpenApiHttpApiDefinitionResponse as GrpcOpenApiHttpApiDefinitionResponse,
+        UpdateApiDefinitionRequest, UpdateApiDefinitionResponse,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
@@ -42,10 +44,10 @@ use golem_common::grpc::{
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
-use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::api::HttpApiDefinitionResponseData;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse as InternalOpenApiHttpApiDefinitionResponse;
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {
@@ -486,18 +488,25 @@ impl GrpcApiDefinitionService {
 
         let response_data = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
             definition,
-            &self.definition_service.conversion_context(&EmptyAuthCtx::default()),
+            &self
+                .definition_service
+                .conversion_context(&EmptyAuthCtx::default()),
         )
         .await
         .map_err(|e| internal_error(format!("Failed to convert to response data: {}", e)))?;
 
-        let internal_response = InternalOpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+        let internal_response =
+            InternalOpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(
+                &response_data,
+            )
             .map_err(|e| internal_error(format!("Failed to create OpenAPI response: {}", e)))?;
 
         Ok(GrpcOpenApiHttpApiDefinitionResponse {
-            id: Some(golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId { 
-                value: internal_response.id.0 
-            }),
+            id: Some(
+                golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
+                    value: internal_response.id.0,
+                },
+            ),
             version: internal_response.version.0,
             openapi_yaml: internal_response.openapi_yaml,
         })

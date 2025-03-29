@@ -15,7 +15,7 @@
 use crate::api::api_definition::HttpApiDefinitionResponseData;
 use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
 use crate::gateway_api_deployment::ApiSiteString;
-use crate::gateway_execution::api_definition_lookup::{HttpApiDefinitionsLookup};
+use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::request::RichRequest;
 use crate::service::gateway::api_definition::ApiDefinitionService;
 use async_trait::async_trait;
@@ -84,8 +84,6 @@ impl<Namespace> DefaultSwaggerBindingHandler<Namespace> {
     }
 }
 
-
-
 #[async_trait]
 impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
     for DefaultSwaggerBindingHandler<Namespace>
@@ -122,7 +120,10 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
         let api_def = api_definitions.iter().find(|def| {
             def.routes.iter().any(|route| {
                 route.path.to_string() == request_path
-                    && matches!(route.binding, crate::gateway_binding::GatewayBindingCompiled::SwaggerUi)
+                    && matches!(
+                        route.binding,
+                        crate::gateway_binding::GatewayBindingCompiled::SwaggerUi
+                    )
             })
         });
 
