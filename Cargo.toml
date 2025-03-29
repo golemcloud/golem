@@ -234,6 +234,8 @@ wasm-wave = "0.227.1"
 wasmtime = { version = "=27.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=27.0.0" }
 wasmtime-wasi-http = { version = "=27.0.0" }
+wit-component = "0.227.1"
+wit-parser = "0.227.1"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }

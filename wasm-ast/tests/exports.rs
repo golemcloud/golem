@@ -2,6 +2,7 @@ use golem_wasm_ast::analysis::analysed_type::{
     case, f32, field, handle, list, record, result, result_err, str, tuple, u32, u64, unit_case,
     variant,
 };
+use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysisContext,
@@ -19,6 +20,10 @@ fn exports_shopping_cart_component() {
 
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
+    let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
+        .unwrap()
+        .get_top_level_exports()
+        .unwrap();
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api".to_string(),
@@ -94,6 +99,7 @@ fn exports_shopping_cart_component() {
     })];
 
     pretty_assertions::assert_eq!(metadata, expected);
+    pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
@@ -103,6 +109,10 @@ fn exports_file_service_component() {
 
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
+    let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
+        .unwrap()
+        .get_top_level_exports()
+        .unwrap();
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api".to_string(),
@@ -311,6 +321,7 @@ fn exports_file_service_component() {
     })];
 
     pretty_assertions::assert_eq!(metadata, expected);
+    pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
@@ -320,71 +331,75 @@ fn exports_auction_registry_composed_component() {
 
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
+    let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
+        .unwrap()
+        .get_top_level_exports()
+        .unwrap();
 
-    pretty_assertions::assert_eq!(
-        metadata,
-        vec![AnalysedExport::Instance(AnalysedInstance {
-            name: "auction:registry/api".to_string(),
-            functions: vec![
-                AnalysedFunction {
-                    name: "create-bidder".to_string(),
-                    parameters: vec![
-                        AnalysedFunctionParameter {
-                            name: "name".to_string(),
-                            typ: str(),
-                        },
-                        AnalysedFunctionParameter {
-                            name: "address".to_string(),
-                            typ: str(),
-                        },
-                    ],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
-                        typ: record(vec![field("bidder-id", str())]),
-                    }],
-                },
-                AnalysedFunction {
-                    name: "create-auction".to_string(),
-                    parameters: vec![
-                        AnalysedFunctionParameter {
-                            name: "name".to_string(),
-                            typ: str(),
-                        },
-                        AnalysedFunctionParameter {
-                            name: "description".to_string(),
-                            typ: str(),
-                        },
-                        AnalysedFunctionParameter {
-                            name: "limit-price".to_string(),
-                            typ: f32(),
-                        },
-                        AnalysedFunctionParameter {
-                            name: "expiration".to_string(),
-                            typ: u64(),
-                        },
-                    ],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
-                        typ: record(vec![field("auction-id", str())]),
-                    }],
-                },
-                AnalysedFunction {
-                    name: "get-auctions".to_string(),
-                    parameters: vec![],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
-                        typ: list(record(vec![
-                            field("auction-id", record(vec![field("auction-id", str())])),
-                            field("name", str()),
-                            field("description", str()),
-                            field("limit-price", f32()),
-                            field("expiration", u64()),
-                        ],))
-                    }],
-                },
-            ],
-        })]
-    );
+    let expected = vec![AnalysedExport::Instance(AnalysedInstance {
+        name: "auction:registry/api".to_string(),
+        functions: vec![
+            AnalysedFunction {
+                name: "create-bidder".to_string(),
+                parameters: vec![
+                    AnalysedFunctionParameter {
+                        name: "name".to_string(),
+                        typ: str(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "address".to_string(),
+                        typ: str(),
+                    },
+                ],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: record(vec![field("bidder-id", str())]),
+                }],
+            },
+            AnalysedFunction {
+                name: "create-auction".to_string(),
+                parameters: vec![
+                    AnalysedFunctionParameter {
+                        name: "name".to_string(),
+                        typ: str(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "description".to_string(),
+                        typ: str(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "limit-price".to_string(),
+                        typ: f32(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "expiration".to_string(),
+                        typ: u64(),
+                    },
+                ],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: record(vec![field("auction-id", str())]),
+                }],
+            },
+            AnalysedFunction {
+                name: "get-auctions".to_string(),
+                parameters: vec![],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: list(record(vec![
+                        field("auction-id", record(vec![field("auction-id", str())])),
+                        field("name", str()),
+                        field("description", str()),
+                        field("limit-price", f32()),
+                        field("expiration", u64()),
+                    ])),
+                }],
+            },
+        ],
+    })];
+
+    pretty_assertions::assert_eq!(metadata, expected);
+    pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
@@ -394,6 +409,10 @@ fn exports_shopping_cart_resource_component() {
 
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
+    let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
+        .unwrap()
+        .get_top_level_exports()
+        .unwrap();
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api".to_string(),
@@ -508,6 +527,7 @@ fn exports_shopping_cart_resource_component() {
     })];
 
     pretty_assertions::assert_eq!(metadata, expected);
+    pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
@@ -517,6 +537,10 @@ fn exports_shopping_cart_resource_versioned_component() {
 
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
+    let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
+        .unwrap()
+        .get_top_level_exports()
+        .unwrap();
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api@1.2.3".to_string(),
@@ -631,6 +655,7 @@ fn exports_shopping_cart_resource_versioned_component() {
     })];
 
     pretty_assertions::assert_eq!(metadata, expected);
+    pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
@@ -640,6 +665,10 @@ fn exports_caller_composed_component() {
 
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
+    let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
+        .unwrap()
+        .get_top_level_exports()
+        .unwrap();
 
     let expected = vec![
         AnalysedExport::Function(AnalysedFunction {
@@ -696,6 +725,7 @@ fn exports_caller_composed_component() {
     ];
 
     pretty_assertions::assert_eq!(metadata, expected);
+    pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
@@ -706,6 +736,10 @@ fn exports_caller_component() {
 
     let state = AnalysisContext::new(component);
     let metadata = state.get_top_level_exports().unwrap();
+    let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
+        .unwrap()
+        .get_top_level_exports()
+        .unwrap();
 
     let expected = vec![
         AnalysedExport::Function(AnalysedFunction {
@@ -770,4 +804,5 @@ fn exports_caller_component() {
     ];
 
     pretty_assertions::assert_eq!(metadata, expected);
+    pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
