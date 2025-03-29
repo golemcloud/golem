@@ -1,3 +1,4 @@
+
 // syntax = "proto3";
 // package todo.v1;
 
@@ -80,7 +81,7 @@
 
 syntax = "proto3";
 
-package grpcbin.bin.v1_2;
+package grpcbin;
 
 service GRPCBin {
   // This endpoint
