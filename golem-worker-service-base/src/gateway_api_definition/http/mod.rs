@@ -24,6 +24,3 @@ pub mod oas_api_definition;
 mod path_pattern_parser;
 mod place_holder_parser;
 
-// remove this later
-// #[cfg(test)]
-// mod http_api_oas_test;

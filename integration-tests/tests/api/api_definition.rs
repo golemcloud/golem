@@ -29,6 +29,8 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
+use serde_yaml::Value;
+use serde_json::Value as JsonValue;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -465,6 +467,197 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
     check_contains(&result, &request_2_3);
 }
 
+#[test]
+#[tracing::instrument]
+// This is a full round trip test for API definition
+// Which is the converted to OpenAPI YAML, delete the original API and 
+// Upload the OpenAPI YAML as a new API definition
+// Then verify that the new API definition is the same as the original
+
+async fn test_export_import_api_definition(deps: &EnvBasedTestDependencies) {
+    // Create a component to use in the API definition
+    let component_id = deps.component("counters").unique().store().await;
+
+    // Create an API definition with a specific route
+    let api_id = Uuid::new_v4().to_string();
+    let request = ApiDefinitionRequest {
+        id: Some(ApiDefinitionId {
+            value: api_id.clone(),
+        }),
+        version: "1.0".to_string(),
+        draft: false,
+        definition: Some(api_definition_request::Definition::Http(
+            HttpApiDefinition {
+                routes: vec![HttpRoute {
+                    method: HttpMethod::Get as i32,
+                    path: "/test-export-path".to_string(),
+                    binding: Some(GatewayBinding {
+                        component: Some(VersionedComponentId {
+                            component_id: Some(component_id.clone().into()),
+                            version: 0,
+                        }),
+                        worker_name: Some(to_grpc_rib_expr(r#""counter-export-test""#)),
+                        response: Some(to_grpc_rib_expr(
+                            r#"
+                                {
+                                    headers: {
+                                        {ContentType: "application/json"}
+                                    },
+                                    body: "Export test response",
+                                    status: 200
+                                }
+                            "#,
+                        )),
+                        idempotency_key: None,
+                        binding_type: Some(GatewayBindingType::Default as i32),
+                        static_binding: None,
+                        invocation_context: None,
+                    }),
+                    middleware: None,
+                }],
+            },
+        )),
+    };
+
+    // Create the API definition
+    let response = deps
+        .worker_service()
+        .create_api_definition(CreateApiDefinitionRequest {
+            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                request.clone(),
+            )),
+        })
+        .await
+        .unwrap();
+
+    check_equal_api_definition_request_and_response(&request, &response);
+
+    // Export the API definition
+    let export_response = deps
+        .worker_service()
+        .export_api_definition(golem_api_grpc::proto::golem::apidefinition::v1::ExportApiDefinitionRequest {
+            api_definition_id: Some(golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
+                value: api_id.clone(),
+            }),
+            version: "1.0".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Verify the export response
+    let export_data = match export_response.result.unwrap() {
+        golem_api_grpc::proto::golem::apidefinition::v1::export_api_definition_response::Result::Success(data) => data,
+        golem_api_grpc::proto::golem::apidefinition::v1::export_api_definition_response::Result::Error(e) => {
+            panic!("Export API definition failed: {:?}", e);
+        }
+    };
+
+    // Parse the YAML to extract API definition details
+    let parsed_yaml: Value = serde_yaml::from_str(&export_data.openapi_yaml)
+        .expect("Failed to parse OpenAPI YAML");
+
+    // Extract API definition details from YAML
+    let _info = parsed_yaml["info"].as_mapping().expect("Missing info section");
+    let paths = parsed_yaml["paths"].as_mapping().expect("Missing paths section");
+
+    // Get the API ID and version from the root level extensions
+    let yaml_api_id = parsed_yaml.get("x-golem-api-definition-id")
+        .and_then(|v| v.as_str())
+        .expect("API ID missing in YAML");
+    assert_eq!(yaml_api_id, api_id, "API ID in YAML doesn't match original");
+
+    let yaml_version = parsed_yaml.get("x-golem-api-definition-version")
+        .and_then(|v| v.as_str())
+        .expect("Version missing in YAML");
+    assert_eq!(yaml_version, "1.0", "Version in YAML doesn't match original");
+
+    // Get the first route (we know there's only one in this test)
+    let (path, methods) = paths.iter().next().expect("No paths found");
+    let method = methods["get"].as_mapping().expect("Missing GET method");
+    let binding = method["x-golem-api-gateway-binding"]
+        .as_mapping()
+        .expect("Missing gateway binding");
+
+    // Verify worker name matches
+    let yaml_worker_name = binding.get("worker-name")
+        .and_then(|v| v.as_str())
+        .expect("Worker name missing in YAML");
+    assert_eq!(yaml_worker_name, r#""counter-export-test""#, "Worker name in YAML doesn't match original");
+
+    // Verify response data matches
+    let yaml_response = binding.get("response")
+        .and_then(|v| v.as_str())
+        .expect("Response missing in YAML");
+    assert!(yaml_response.contains("Export test response"), "Response in YAML doesn't match original");
+
+    // Verify binding type is default
+    let yaml_binding_type = binding.get("binding-type")
+        .and_then(|v| v.as_str())
+        .expect("Binding type missing in YAML");
+    assert_eq!(yaml_binding_type, "default", "Binding type in YAML is not default");
+
+    // Delete the original API definition
+    deps.worker_service()
+        .delete_api_definition(DeleteApiDefinitionRequest {
+            api_definition_id: request.id.clone(),
+            version: request.version.clone(),
+        })
+        .await
+        .unwrap();
+
+    // Create new API definition from parsed YAML
+    let imported_request = ApiDefinitionRequest {
+        id: Some(ApiDefinitionId {
+            value: parsed_yaml.get("x-golem-api-definition-id")
+                .and_then(|v| v.as_str())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+        }),
+        version: parsed_yaml.get("x-golem-api-definition-version")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "1.0".to_string()),
+        draft: false,
+        definition: Some(api_definition_request::Definition::Http(
+            HttpApiDefinition {
+                routes: vec![HttpRoute {
+                    method: HttpMethod::Get as i32,
+                    path: path.as_str()
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "/default-path".to_string()),
+                    binding: Some(GatewayBinding {
+                        component: Some(VersionedComponentId {
+                            component_id: Some(component_id.clone().into()),
+                            version: 0,
+                        }),
+                        worker_name: Some(to_grpc_rib_expr(yaml_worker_name)),
+                        response: Some(to_grpc_rib_expr(yaml_response)),
+                        idempotency_key: None,
+                        binding_type: Some(GatewayBindingType::Default as i32),
+                        static_binding: None,
+                        invocation_context: None,
+                    }),
+                    middleware: None,
+                }],
+            },
+        )),
+    };
+
+    // Create the imported API definition
+    let imported_response = deps
+        .worker_service()
+        .create_api_definition(CreateApiDefinitionRequest {
+            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                imported_request.clone(),
+            )),
+        })
+        .await
+        .unwrap();
+
+    // Verify the imported API matches the original
+    check_equal_api_definition_request_and_response(&request, &imported_response);
+}
+
 fn check_equal_api_definition_request_and_response(
     request: &ApiDefinitionRequest,
     response: &ApiDefinition,
@@ -478,3 +671,4 @@ fn check_equal_api_definition_request_and_response(
     let api_definition::Definition::Http(response_api_def) = response.definition.as_ref().unwrap();
     check!(request_api_def == response_api_def);
 }
+

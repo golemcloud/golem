@@ -24,13 +24,14 @@ use golem_api_grpc::proto::golem::{
     apidefinition::v1::{
         api_definition_error, api_definition_service_server::ApiDefinitionService,
         create_api_definition_request, create_api_definition_response,
-        delete_api_definition_response, get_all_api_definitions_response,
+        delete_api_definition_response, export_api_definition_response, get_all_api_definitions_response,
         get_api_definition_response, get_api_definition_versions_response,
         update_api_definition_request, update_api_definition_response, ApiDefinitionError,
         CreateApiDefinitionRequest, CreateApiDefinitionResponse, DeleteApiDefinitionRequest,
         DeleteApiDefinitionResponse, GetAllApiDefinitionsRequest, GetAllApiDefinitionsResponse,
         GetApiDefinitionRequest, GetApiDefinitionResponse, GetApiDefinitionVersionsRequest,
         GetApiDefinitionVersionsResponse, UpdateApiDefinitionRequest, UpdateApiDefinitionResponse,
+        ExportApiDefinitionRequest, ExportApiDefinitionResponse, OpenApiHttpApiDefinitionResponse as GrpcOpenApiHttpApiDefinitionResponse,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
@@ -43,6 +44,8 @@ use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::api::HttpApiDefinitionResponseData;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse as InternalOpenApiHttpApiDefinitionResponse;
 
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {
@@ -247,6 +250,33 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             result: Some(result),
         }))
     }
+
+    async fn export_api_definition(
+        &self,
+        request: tonic::Request<ExportApiDefinitionRequest>,
+    ) -> Result<tonic::Response<ExportApiDefinitionResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "export_api_definition",
+            api_definition_id = request
+                .api_definition_id
+                .as_ref()
+                .map(|id| { id.value.clone() }),
+            version = request.version,
+        );
+
+        let result = match self.export_api_definition(request).await {
+            Ok(result) => record.succeed(export_api_definition_response::Result::Success(result)),
+            Err(error) => record.fail(
+                export_api_definition_response::Result::Error(error.clone()),
+                &ApiDefinitionTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(tonic::Response::new(ExportApiDefinitionResponse {
+            result: Some(result),
+        }))
+    }
 }
 
 impl GrpcApiDefinitionService {
@@ -429,6 +459,48 @@ impl GrpcApiDefinitionService {
             .await?;
 
         Ok(())
+    }
+
+    async fn export_api_definition(
+        &self,
+        request: ExportApiDefinitionRequest,
+    ) -> Result<GrpcOpenApiHttpApiDefinitionResponse, ApiDefinitionError> {
+        let api_definition_id = get_api_definition_id(request.api_definition_id)?;
+        let version = ApiVersion(request.version);
+
+        let definition = self
+            .definition_service
+            .get(
+                &api_definition_id,
+                &version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?
+            .ok_or_else(|| {
+                not_found(format!(
+                    "Api Definition with id: {} and version: {} not found",
+                    api_definition_id.0, version.0
+                ))
+            })?;
+
+        let response_data = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+            definition,
+            &self.definition_service.conversion_context(&EmptyAuthCtx::default()),
+        )
+        .await
+        .map_err(|e| internal_error(format!("Failed to convert to response data: {}", e)))?;
+
+        let internal_response = InternalOpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .map_err(|e| internal_error(format!("Failed to create OpenAPI response: {}", e)))?;
+
+        Ok(GrpcOpenApiHttpApiDefinitionResponse {
+            id: Some(golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId { 
+                value: internal_response.id.0 
+            }),
+            version: internal_response.version.0,
+            openapi_yaml: internal_response.openapi_yaml,
+        })
     }
 }
 
