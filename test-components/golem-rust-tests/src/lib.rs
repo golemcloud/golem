@@ -1,13 +1,14 @@
 #[allow(static_mut_refs)]
 mod bindings;
 
-use std::time::Duration;
 use crate::bindings::exports::golem::it::api::*;
-use golem_rust::*;
 use golem_rust::bindings::wasi;
 use golem_rust::bindings::wasi::io::streams::StreamError;
+use golem_rust::wasm_rpc::wasi::io::poll;
+use golem_rust::*;
 use golem_rust_macro::golem_operation;
 use reqwest::{Client, Response};
+use std::time::Duration;
 
 struct Component;
 
@@ -18,7 +19,7 @@ impl Guest for Component {
             min_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(1),
             multiplier: 1.0,
-            max_jitter_factor: None
+            max_jitter_factor: None,
         });
 
         panic!("Fail now");
@@ -112,7 +113,8 @@ impl Guest for Component {
             }
             tx.transaction_step(4)?;
             Ok(11)
-        }).expect("Transaction failed")
+        })
+        .expect("Transaction failed")
     }
 
     fn infallible_transaction_test() -> u64 {
@@ -250,7 +252,7 @@ fn get_incoming_response(
         None => {
             println!("No incoming response yet, polling");
             let pollable = future_incoming_response.subscribe();
-            let _ = wasi::io::poll::poll(&[&pollable]);
+            let _ = poll::poll(&[&pollable]);
             get_incoming_response(future_incoming_response)
         }
     };

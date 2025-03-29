@@ -14,10 +14,10 @@ strip = true
 
 [dependencies]
 bytes = "1.6.0"
-reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-jun-2024", features = [
+reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-march-2025", features = [
     "json",
 ] }
-wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [package.metadata.component.target]
 path = "wit"
