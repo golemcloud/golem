@@ -4936,6 +4936,7 @@ dependencies = [
  "reqwest 0.12.18",
  "serde",
  "serde_json",
+ "serde_yaml",
  "test-r",
  "tokio",
  "tracing",
