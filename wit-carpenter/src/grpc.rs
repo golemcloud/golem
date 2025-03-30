@@ -75,7 +75,7 @@ fn _add(left: u64, right: u64) -> Result<u64, std::io::Error> {
     //     }
     // }
 
-    let (wit, package_name, _) = from_grpc(Path::new("./in/grpc.proto"), None);
+    let (wit, package_name, _) = from_grpc(Path::new("./in/"), None);
 
     let template = mustache::compile_path("templates/wit.mustache").unwrap();
     let wit_output = template.render_to_string(&wit).unwrap();
@@ -157,11 +157,10 @@ impl FileFromUtils for wit::Wit {
 
         Self {
             package_meta: wit::PackageMetadata {
-                name_space: "grpc".to_string(),
+                name_space: "rpc-grpc".to_string(),
                 name: wit_package_name.to_string(),
                 version: wit_package_version,
                 docs: package_name.to_owned(),
-                ..Default::default()
             },
 
             interfaces,

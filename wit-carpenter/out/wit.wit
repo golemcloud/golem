@@ -1,12 +1,12 @@
 /**
-grpcbin.bin.v1_2
+grpcbin
 */
-package grpc:grpcbin-bin-v-n1-n-n2@1.2.0;
+package rpc-grpc:grpcbin@0.1.0;
 
 /**
-* grpcbin.bin.v1_2
+* grpcbin
 */
-interface grpcbin-bin-v-n1-n2 {
+interface grpcbin {
     
     /**
     * HeadersMessage.Values
@@ -143,8 +143,8 @@ interface grpcbin-bin-v-n1-n2 {
 * GRPCBin
 */
 interface g-r-p-c-bin {
-    use grpcbin-bin-v-n1-n2.{ grpc-configuration, grpc-status, };
-    use grpcbin-bin-v-n1-n2.{ headers-message, dummy-message, index-reply, empty-message, specific-error-request, };
+    use grpcbin.{ grpc-configuration, grpc-status, };
+    use grpcbin.{ empty-message, headers-message, index-reply, dummy-message, specific-error-request, };
     
     
     /**
@@ -211,7 +211,7 @@ interface g-r-p-c-bin {
 /**
 * 
 */
-world grpcbin-bin-v-n1-n2-world {
-    export grpcbin-bin-v-n1-n2;
+world grpcbin-world {
+    export grpcbin;
     export g-r-p-c-bin;
 }

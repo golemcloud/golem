@@ -6,124 +6,122 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 fn fill_root_types() -> Vec<wit::Type> {
-    let mut types = vec![];
-
-    types.push(wit::Type {
-        name: "grpc-configuration".to_owned(),
-        kind: "record".to_owned(),
-        is_record: true,
-        fields: vec![
-            wit::Field {
-                name: "url".to_owned(),
-                type_name: "string".to_owned(),
-            },
-            wit::Field {
-                name: "secret-token".to_owned(),
-                type_name: "string".to_owned(),
-            },
-        ],
-        ..Default::default()
-    });
-
-    // grpc status code
-    types.push(wit::Type {
-        name: "grpc-status-code".to_owned(),
-        kind: "enum".to_owned(),
-        is_enum: true,
-        fields: vec![
-            wit::Field {
-                name: "ok".to_owned(),
-                type_name: "ok".to_owned(),
-            },
-            wit::Field {
-                name: "cancelled".to_owned(),
-                type_name: "cancelled".to_owned(),
-            },
-            wit::Field {
-                name: "unknown".to_owned(),
-                type_name: "unknown".to_owned(),
-            },
-            wit::Field {
-                name: "invalid-argument".to_owned(),
-                type_name: "invalid-argument".to_owned(),
-            },
-            wit::Field {
-                name: "deadline-exceeded".to_owned(),
-                type_name: "deadline-exceeded".to_owned(),
-            },
-            wit::Field {
-                name: "not-found".to_owned(),
-                type_name: "not-found".to_owned(),
-            },
-            wit::Field {
-                name: "already-exists".to_owned(),
-                type_name: "already-exists".to_owned(),
-            },
-            wit::Field {
-                name: "permission-denied".to_owned(),
-                type_name: "permission-denied".to_owned(),
-            },
-            wit::Field {
-                name: "resource-exhausted".to_owned(),
-                type_name: "resource-exhausted".to_owned(),
-            },
-            wit::Field {
-                name: "failed-precondition".to_owned(),
-                type_name: "failed-precondition".to_owned(),
-            },
-            wit::Field {
-                name: "aborted".to_owned(),
-                type_name: "aborted".to_owned(),
-            },
-            wit::Field {
-                name: "out-of-range".to_owned(),
-                type_name: "out-of-range".to_owned(),
-            },
-            wit::Field {
-                name: "unimplemented".to_owned(),
-                type_name: "unimplemented".to_owned(),
-            },
-            wit::Field {
-                name: "internal".to_owned(),
-                type_name: "internal".to_owned(),
-            },
-            wit::Field {
-                name: "unavailable".to_owned(),
-                type_name: "unavailable".to_owned(),
-            },
-            wit::Field {
-                name: "data-loss".to_owned(),
-                type_name: "data-loss".to_owned(),
-            },
-            wit::Field {
-                name: "unauthenticated".to_owned(),
-                type_name: "unauthenticated".to_owned(),
-            },
-        ],
-        ..Default::default()
-    });
-
-    // Add the GrpcStatus struct type
-    types.push(wit::Type {
-        name: "grpc-status".to_owned(),
-        kind: "record".to_owned(),
-        is_record: true,
-        fields: vec![
-            wit::Field {
-                name: "code".to_owned(),
-                type_name: "grpc-status-code".to_owned(),
-            },
-            wit::Field {
-                name: "message".to_owned(),
-                type_name: "string".to_owned(),
-            },
-            wit::Field {
-                name: "details".to_owned(),
-                type_name: "list<u8>".to_owned(),
-            },
-        ],
-        ..Default::default()
-    });
+    let types = vec![
+        wit::Type {
+            name: "grpc-configuration".to_owned(),
+            kind: "record".to_owned(),
+            is_record: true,
+            fields: vec![
+                wit::Field {
+                    name: "url".to_owned(),
+                    type_name: "string".to_owned(),
+                },
+                wit::Field {
+                    name: "secret-token".to_owned(),
+                    type_name: "string".to_owned(),
+                },
+            ],
+            ..Default::default()
+        },
+        // grpc status code
+        wit::Type {
+            name: "grpc-status-code".to_owned(),
+            kind: "enum".to_owned(),
+            is_enum: true,
+            fields: vec![
+                wit::Field {
+                    name: "ok".to_owned(),
+                    type_name: "ok".to_owned(),
+                },
+                wit::Field {
+                    name: "cancelled".to_owned(),
+                    type_name: "cancelled".to_owned(),
+                },
+                wit::Field {
+                    name: "unknown".to_owned(),
+                    type_name: "unknown".to_owned(),
+                },
+                wit::Field {
+                    name: "invalid-argument".to_owned(),
+                    type_name: "invalid-argument".to_owned(),
+                },
+                wit::Field {
+                    name: "deadline-exceeded".to_owned(),
+                    type_name: "deadline-exceeded".to_owned(),
+                },
+                wit::Field {
+                    name: "not-found".to_owned(),
+                    type_name: "not-found".to_owned(),
+                },
+                wit::Field {
+                    name: "already-exists".to_owned(),
+                    type_name: "already-exists".to_owned(),
+                },
+                wit::Field {
+                    name: "permission-denied".to_owned(),
+                    type_name: "permission-denied".to_owned(),
+                },
+                wit::Field {
+                    name: "resource-exhausted".to_owned(),
+                    type_name: "resource-exhausted".to_owned(),
+                },
+                wit::Field {
+                    name: "failed-precondition".to_owned(),
+                    type_name: "failed-precondition".to_owned(),
+                },
+                wit::Field {
+                    name: "aborted".to_owned(),
+                    type_name: "aborted".to_owned(),
+                },
+                wit::Field {
+                    name: "out-of-range".to_owned(),
+                    type_name: "out-of-range".to_owned(),
+                },
+                wit::Field {
+                    name: "unimplemented".to_owned(),
+                    type_name: "unimplemented".to_owned(),
+                },
+                wit::Field {
+                    name: "internal".to_owned(),
+                    type_name: "internal".to_owned(),
+                },
+                wit::Field {
+                    name: "unavailable".to_owned(),
+                    type_name: "unavailable".to_owned(),
+                },
+                wit::Field {
+                    name: "data-loss".to_owned(),
+                    type_name: "data-loss".to_owned(),
+                },
+                wit::Field {
+                    name: "unauthenticated".to_owned(),
+                    type_name: "unauthenticated".to_owned(),
+                },
+            ],
+            ..Default::default()
+        },
+        // Add the GrpcStatus struct type
+        wit::Type {
+            name: "grpc-status".to_owned(),
+            kind: "record".to_owned(),
+            is_record: true,
+            fields: vec![
+                wit::Field {
+                    name: "code".to_owned(),
+                    type_name: "grpc-status-code".to_owned(),
+                },
+                wit::Field {
+                    name: "message".to_owned(),
+                    type_name: "string".to_owned(),
+                },
+                wit::Field {
+                    name: "details".to_owned(),
+                    type_name: "list<u8>".to_owned(),
+                },
+            ],
+            ..Default::default()
+        },
+    ];
 
     types
 }
