@@ -283,7 +283,10 @@ pub async fn start_limited(
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
         if client.is_ok() {
             let deps = deps.per_test(details.http_port, grpc_port);
-            break Ok(EmbeddedWorkerExecutor { deps });
+            break Ok(EmbeddedWorkerExecutor {
+                _join_set: Some(join_set),
+                deps
+            });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
         }
@@ -368,9 +371,9 @@ async fn run(
         .await
 }
 
-#[derive(Clone)]
 pub struct EmbeddedWorkerExecutor {
     deps: WorkerExecutorPerTestDependencies,
+    _join_set: Option<JoinSet<anyhow::Result<()>>>,
 }
 
 impl EmbeddedWorkerExecutor {

@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
 use crate::local::{start, EmbeddedWorkerExecutor, WorkerExecutorLocalDependencies};
 use crate::rib_repl::RibRepl;
@@ -7,6 +8,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_wasm_rpc::ValueAndType;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke};
 use std::sync::Arc;
+use uuid::Uuid;
 
 mod dependency_manager;
 mod history;
@@ -22,7 +24,7 @@ async fn main() {
     let embedded_worker_executor = start(&dependencies)
         .await
         .expect("Failed to start embedded worker executor");
-
+    
     let default_dependency_manager =
         dependency_manager::DefaultRibDependencyManager::new(&embedded_worker_executor)
             .await
@@ -34,7 +36,7 @@ async fn main() {
         .expect("Failed to register component");
 
     let rib_function_invoke =
-        EmbeddedRibFunctionInvoke::new(&component_dependency, &embedded_worker_executor);
+        EmbeddedRibFunctionInvoke::new(&component_dependency, embedded_worker_executor);
 
     let mut repl = RibRepl::new(
         None,
@@ -53,11 +55,11 @@ struct EmbeddedRibFunctionInvoke {
 impl EmbeddedRibFunctionInvoke {
     pub fn new(
         dependency: &ComponentDependency,
-        embedded_worker_executor: &EmbeddedWorkerExecutor,
+        embedded_worker_executor: EmbeddedWorkerExecutor,
     ) -> Self {
         Self {
             dependency: dependency.clone(),
-            embedded_worker_executor: embedded_worker_executor.clone(),
+            embedded_worker_executor,
         }
     }
 }

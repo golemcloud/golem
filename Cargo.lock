@@ -3303,6 +3303,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tracing",
+ "uuid",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",

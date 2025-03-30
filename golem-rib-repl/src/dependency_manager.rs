@@ -1,8 +1,8 @@
 use crate::local::{start, EmbeddedWorkerExecutor, WorkerExecutorLocalDependencies};
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{ComponentId, ComponentType, TargetWorkerId};
 use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::{TestDslUnsafe};
 use golem_wasm_ast::analysis::AnalysedExport;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -28,20 +28,20 @@ pub struct ComponentDependency {
 
 // A default Rib dependency manager is mainly allowing rib to be used standalone
 // without the nuances of app manifest. This is mainly used for testing the REPL itself
-pub struct DefaultRibDependencyManager {
-    embedded_worker_executor: EmbeddedWorkerExecutor,
+pub struct DefaultRibDependencyManager<'a> {
+    embedded_worker_executor: &'a EmbeddedWorkerExecutor,
 }
 
-impl DefaultRibDependencyManager {
-    pub async fn new(embedded_worker_executor: &EmbeddedWorkerExecutor) -> Result<Self, String> {
+impl<'a> DefaultRibDependencyManager<'a> {
+    pub async fn new(embedded_worker_executor: &'a EmbeddedWorkerExecutor) -> Result<Self, String> {
         Ok(Self {
-            embedded_worker_executor: embedded_worker_executor.clone(),
+            embedded_worker_executor,
         })
     }
 }
 
 #[async_trait]
-impl RibDependencyManager for DefaultRibDependencyManager {
+impl<'a> RibDependencyManager for DefaultRibDependencyManager<'a> {
     async fn register_global(&self) -> Result<Vec<ComponentDependency>, String> {
         Err("multiple components not supported in local mode".to_string())
     }
@@ -73,6 +73,19 @@ impl RibDependencyManager for DefaultRibDependencyManager {
                 false,
             )
             .await;
+
+        let target_worker_id = TargetWorkerId {
+            component_id: component_id.clone(),
+            worker_name: None,
+        };
+
+        let result1 = self.embedded_worker_executor.invoke_and_await_typed(
+            target_worker_id,
+            "golem:it/api.{get-cart-contents}",
+            vec![],
+        ).await;
+
+        dbg!(&result1);
 
         Ok(ComponentDependency {
             component_id,
