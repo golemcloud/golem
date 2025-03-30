@@ -167,7 +167,7 @@ impl GetResourceId for WitAnalysisContext {
     }
 }
 
-trait GetResourceId {
+pub trait GetResourceId {
     fn get_resource_id(&self, type_id: TypeId) -> Option<AnalysedResourceId>;
 }
 
