@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const OPENAPI_YAML: &[u8; 210840] = include_bytes!("../openapi/golem-service.yaml");
+pub const OPENAPI_YAML: &[u8] = include_bytes!("../openapi/golem-service.yaml");
 include!(concat!(env!("OUT_DIR"), "/src/lib.rs"));
 
 #[cfg(test)]
