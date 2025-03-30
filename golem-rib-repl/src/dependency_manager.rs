@@ -1,11 +1,11 @@
-use std::collections::HashMap;
 use crate::local::{start, EmbeddedWorkerExecutor, WorkerExecutorLocalDependencies};
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::AnalysedExport;
-use std::fmt::Debug;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::{TestDslUnsafe};
+use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_ast::analysis::AnalysedExport;
+use std::collections::HashMap;
+use std::fmt::Debug;
 
 #[async_trait]
 pub trait RibDependencyManager {
@@ -20,7 +20,7 @@ pub trait RibDependencyManager {
     ) -> Result<ComponentDependency, String>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ComponentDependency {
     pub component_id: ComponentId,
     pub metadata: Vec<AnalysedExport>,
@@ -50,29 +50,42 @@ impl RibDependencyManager for DefaultRibDependencyManager {
         &self,
         component_name: String,
     ) -> Result<ComponentDependency, String> {
-        let component_id =
-            self.embedded_worker_executor.component(component_name.as_str()).store().await;
+        let component_id = self
+            .embedded_worker_executor
+            .component(component_name.as_str())
+            .store()
+            .await;
 
-        let source_path = self.embedded_worker_executor.component_directory().join(format!("{component_name}.wasm"));
+        let source_path = self
+            .embedded_worker_executor
+            .component_directory()
+            .join(format!("{component_name}.wasm"));
 
-        let result = self.embedded_worker_executor.component_service().get_or_add_component(
-            &source_path,
-            &component_name,
-            ComponentType::Durable,
-            &[],
-            &HashMap::new(),
-            false
-        ).await;
+        let result = self
+            .embedded_worker_executor
+            .component_service()
+            .get_or_add_component(
+                &source_path,
+                &component_name,
+                ComponentType::Durable,
+                &[],
+                &HashMap::new(),
+                false,
+            )
+            .await;
 
         Ok(ComponentDependency {
             component_id,
-            metadata: result.metadata.map(|metadata| {
-                metadata
-                    .exports
-                    .iter()
-                    .map(|m| AnalysedExport::try_from(m.clone()).unwrap())
-                    .collect()
-            }).unwrap_or_default(),
+            metadata: result
+                .metadata
+                .map(|metadata| {
+                    metadata
+                        .exports
+                        .iter()
+                        .map(|m| AnalysedExport::try_from(m.clone()).unwrap())
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 }

@@ -236,7 +236,9 @@ impl TestDependencies for WorkerExecutorLocalDependencies {
     }
 }
 
-pub async fn start(deps: &WorkerExecutorLocalDependencies) -> anyhow::Result<EmbeddedWorkerExecutor> {
+pub async fn start(
+    deps: &WorkerExecutorLocalDependencies,
+) -> anyhow::Result<EmbeddedWorkerExecutor> {
     start_limited(deps).await
 }
 
@@ -281,9 +283,7 @@ pub async fn start_limited(
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
         if client.is_ok() {
             let deps = deps.per_test(details.http_port, grpc_port);
-            break Ok(EmbeddedWorkerExecutor {
-                deps,
-            });
+            break Ok(EmbeddedWorkerExecutor { deps });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
         }
@@ -1156,7 +1156,6 @@ impl InvocationContextManagement for TestWorkerCtx {
     }
 }
 
-
 #[async_trait]
 impl TestDependencies for EmbeddedWorkerExecutor {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
@@ -1187,9 +1186,9 @@ impl TestDependencies for EmbeddedWorkerExecutor {
         &self,
     ) -> Arc<
         dyn golem_test_framework::components::component_service::ComponentService
-        + Send
-        + Sync
-        + 'static,
+            + Send
+            + Sync
+            + 'static,
     > {
         self.deps.component_service()
     }

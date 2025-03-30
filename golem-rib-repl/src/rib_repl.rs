@@ -11,14 +11,14 @@ use std::sync::Arc;
 use tokio;
 
 // Import Rib evaluation function
-use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
+use crate::dependency_manager::ComponentDependency;
 use crate::result_printer::{DefaultResultPrinter, ResultPrinter};
 use crate::syntax_highlighter::RibSyntaxHighlighter;
 use rib::compile;
 
 pub struct RibRepl {
     history_file_path: PathBuf,
-    dependency_manager: Box<dyn RibDependencyManager>,
+    component_dependency: ComponentDependency,
     worker_function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
     rib_result_printer: Box<dyn ResultPrinter>,
     component_name: Option<String>,
@@ -27,14 +27,14 @@ pub struct RibRepl {
 impl RibRepl {
     pub fn new(
         history_file: Option<PathBuf>,
-        dependency_manager: Box<dyn RibDependencyManager>,
+        component_dependency: ComponentDependency,
         worker_function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
         rib_result_printer: Option<Box<dyn ResultPrinter>>,
         component_name: Option<String>,
     ) -> Self {
         Self {
             history_file_path: history_file.unwrap_or_else(|| get_default_history_file()),
-            dependency_manager,
+            component_dependency,
             worker_function_invoke,
             rib_result_printer: rib_result_printer
                 .unwrap_or_else(|| Box::new(DefaultResultPrinter)),
@@ -57,34 +57,18 @@ impl RibRepl {
 
         let mut session_history = vec![];
 
-        let mut repl_state = match &self.component_name {
-            Some(name) => {
-                let result = self
-                    .dependency_manager
-                    .register_component(name.to_string())
-                    .await;
-
-                match result {
-                    Ok(dependency) => ReplState::new(dependency, Arc::clone(&self.worker_function_invoke)),
-                    Err(err) => {
-                        eprintln!("Failed to deploy component {}: {}", name, err);
-                        return;
-                    }
-                }
-            }
-
-            _ => {
-                eprintln!("multiple components as dependency to rib is not yet supported");
-                return;
-            }
-        };
+        let mut repl_state = ReplState::new(
+            &self.component_dependency,
+            Arc::clone(&self.worker_function_invoke),
+        );
 
         loop {
-            let readline = rl.readline("> ");
+            let readline = rl.readline(">>> ");
             match readline {
                 Ok(line) if !line.is_empty() => {
                     session_history.push(line.clone());
                     let _ = rl.add_history_entry(line.as_str());
+                    let _ = rl.save_history(&history_file);
 
                     match eval(&session_history.join(";\n"), &mut repl_state).await {
                         Ok(result) => {
@@ -104,8 +88,8 @@ impl RibRepl {
     }
 }
 
-async fn eval(line: &str, repl_state: &mut ReplState) -> Result<String, String> {
-    let expr = Expr::from_text(line).map_err(|e| format!("Parse error: {}", e))?;
+async fn eval(rib_script: &str, repl_state: &mut ReplState) -> Result<String, String> {
+    let expr = Expr::from_text(rib_script).map_err(|e| format!("Parse error: {}", e))?;
     let compiled = compile(expr, &repl_state.dependency.metadata)
         .map_err(|e| format!("Compile error: {}", e))?;
     let new_byte_code = compiled.byte_code;
@@ -118,6 +102,7 @@ async fn eval(line: &str, repl_state: &mut ReplState) -> Result<String, String> 
         .run(byte_code)
         .await
         .map_err(|e| format!("Runtime error: {}", e))?;
+
     Ok(format!("{}", result))
 }
 
@@ -134,16 +119,21 @@ struct ReplState {
 }
 
 impl ReplState {
-    fn new(dependency: ComponentDependency, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,) -> Self {
+    fn new(
+        dependency: &ComponentDependency,
+        invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+    ) -> Self {
+        let interpreter_env = InterpreterEnv::from(&RibInput::default(), &invoke);
+
         Self {
             byte_code: RibByteCode::default(),
             interpreter: Interpreter::new(
                 &RibInput::default(),
                 invoke,
                 Some(InterpreterStack::default()),
-                Some(InterpreterEnv::default()),
+                Some(interpreter_env),
             ),
-            dependency,
+            dependency: dependency.clone(),
         }
     }
 }

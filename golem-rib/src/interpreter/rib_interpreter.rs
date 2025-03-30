@@ -72,7 +72,7 @@ impl Interpreter {
     // where a rib script is now trying to access a specific input
     // such that the compiler already knows the required global variable and its types,
     // to later override the interpreter with this input. The previous inputs will be completely
-    // discared as they are either loaded in as variables, or if they are accessed again, the inputs
+    // discard as they are either loaded in as variables, or if they are accessed again, the inputs
     // will be or can be overriden back
     pub fn override_rib_input(
         &mut self,
@@ -336,7 +336,7 @@ mod internal {
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
+    use golem_wasm_ast::analysis::analysed_type::{str, tuple, u64};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -1275,7 +1275,9 @@ mod internal {
             ValueAndType {
                 value: Value::Tuple(value),
                 ..
-            } if value.is_empty() => Ok(RibInterpreterStackValue::Unit),
+            } if value.is_empty() => {
+                Ok(RibInterpreterStackValue::Unit)
+            },
             ValueAndType {
                 value: Value::Tuple(value),
                 typ: AnalysedType::Tuple(typ),
