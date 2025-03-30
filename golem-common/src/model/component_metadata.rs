@@ -18,6 +18,7 @@ use std::fmt::{self, Display, Formatter};
 
 use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
+use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
@@ -186,6 +187,7 @@ pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<WasmAstProducers>,
     pub memories: Vec<Mem>,
+    pub binary_wit: Vec<u8>,
 }
 
 impl RawComponentMetadata {
@@ -200,10 +202,16 @@ impl RawComponentMetadata {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let state = AnalysisContext::new(component);
+        let analysis = AnalysisContext::new(component);
 
-        let mut exports = state
+        let wit_analysis =
+            WitAnalysisContext::new(data).map_err(ComponentProcessingError::Analysis)?;
+
+        let mut exports = wit_analysis
             .get_top_level_exports()
+            .map_err(ComponentProcessingError::Analysis)?;
+        let binary_wit = wit_analysis
+            .serialized_interface_only()
             .map_err(ComponentProcessingError::Analysis)?;
 
         add_resource_drops(&mut exports);
@@ -211,7 +219,7 @@ impl RawComponentMetadata {
 
         let exports = exports.into_iter().collect::<Vec<_>>();
 
-        let memories: Vec<Mem> = state
+        let memories: Vec<Mem> = analysis
             .get_all_memories()
             .map_err(ComponentProcessingError::Analysis)?
             .into_iter()
@@ -221,6 +229,7 @@ impl RawComponentMetadata {
             exports,
             producers,
             memories,
+            binary_wit,
         })
     }
 }
