@@ -15,16 +15,16 @@ use crate::result_printer::{DefaultResultPrinter, ResultPrinter};
 use crate::syntax_highlighter::RibSyntaxHighlighter;
 use rib::compile;
 
-struct RibRepl {
+pub struct RibRepl {
     history_file_path: PathBuf,
     dependency_manager: Box<dyn RibDependencyManager>,
     worker_function_invoke: Box<dyn RibFunctionInvoke>,
     rib_result_printer: Box<dyn ResultPrinter>,
-    component_name: Option<String>
+    component_name: Option<String>,
 }
 
 impl RibRepl {
-    fn new(
+    pub fn new(
         history_file: Option<PathBuf>,
         dependency_manager: Box<dyn RibDependencyManager>,
         worker_function_invoke: Box<dyn RibFunctionInvoke>,
@@ -41,7 +41,7 @@ impl RibRepl {
         }
     }
 
-    async fn run(&mut self) {
+    pub async fn run(&mut self) {
         let history_file = get_default_history_file();
 
         let mut rl = Editor::<RibSyntaxHighlighter, DefaultHistory>::new().unwrap();
@@ -58,12 +58,13 @@ impl RibRepl {
 
         let mut repl_state = match &self.component_name {
             Some(name) => {
-                let result = self.dependency_manager.register_component(name.to_string()).await;
+                let result = self
+                    .dependency_manager
+                    .register_component(name.to_string())
+                    .await;
 
                 match result {
-                    Ok(dependency) => {
-                        ReplState::new(dependency)
-                    }
+                    Ok(dependency) => ReplState::new(dependency),
                     Err(err) => {
                         eprintln!("Failed to deploy component {}: {}", name, err);
                         return;
@@ -71,33 +72,26 @@ impl RibRepl {
                 }
             }
 
-            _ =>  {
+            _ => {
                 eprintln!("multiple components as dependency to rib is not yet supported");
                 return;
-            },
+            }
         };
-
 
         loop {
             let readline = rl.readline("> ");
             match readline {
                 Ok(line) if !line.is_empty() => {
-                    if line.starts_with(":load ") {
-                        let files: Vec<String> =
-                            line[6..].split(',').map(|s| s.trim().to_string()).collect();
-                        self.load_files(files);
-                    } else {
-                        session_history.push(line.clone());
-                        let _ = rl.add_history_entry(line.as_str());
+                    session_history.push(line.clone());
+                    let _ = rl.add_history_entry(line.as_str());
 
-                        match eval(&session_history.join(";\n"), &mut repl_state).await {
-                            Ok(result) => {
-                                println!("{}", result);
-                            }
-                            Err(err) => {
-                                session_history.pop();
-                                eprintln!("Error: {}", err)
-                            }
+                    match eval(&session_history.join(";\n"), &mut repl_state).await {
+                        Ok(result) => {
+                            println!("{}", result);
+                        }
+                        Err(err) => {
+                            session_history.pop();
+                            eprintln!("Error: {}", err)
                         }
                     }
                 }

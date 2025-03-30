@@ -13,15 +13,28 @@ path = "src/main.rs"
 
 
 [dependencies]
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "=0.0.0"}
+golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0"}
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0"}
 golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0", optional = true }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
     "analysis",
     "bincode",
 ] }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0"}
+
+prometheus = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 
 rustyline = "15"
 termion = "1.5.6"
 tokio = { version = "1", features = ["full"] }
 dirs = "4.0.0"
 async-trait = "0.1.87"
+anyhow = "1.0.97"

@@ -3286,14 +3286,26 @@ dependencies = [
 name = "golem-rib-repl"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "dirs",
+ "golem-api-grpc",
+ "golem-common",
  "golem-rib",
+ "golem-service-base",
+ "golem-test-framework",
  "golem-wasm-ast",
- "golem-worker-service-base",
+ "golem-wasm-rpc",
+ "golem-worker-executor-base",
+ "prometheus",
  "rustyline",
  "termion",
  "tokio",
+ "tonic",
+ "tracing",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
 ]
 
 [[package]]
