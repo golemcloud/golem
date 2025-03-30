@@ -81,6 +81,7 @@ async_zip = "0.0.17"
 aws-config = "=1.5.10" # Pinned because newer versions were failing with localstack
 aws-sdk-s3 = "=1.65.0" # Pinned because newer versions were failing with localstack
 axum = { version = "0.7.9", features = ["multipart"] }
+base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "=2.0.0-rc.3", features = ["serde"] }
 bincode_derive = { version = "=2.0.0-rc.3" }
@@ -134,7 +135,7 @@ openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
-poem-openapi = { version = "=5.1.5", features = [ # pinned temporarily because 5.1.8 generats invalid OpenAPI yaml
+poem-openapi = { version = "=5.1.5", features = [# pinned temporarily because 5.1.8 generats invalid OpenAPI yaml
     "swagger-ui",
     "chrono",
     "time",

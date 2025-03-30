@@ -99,8 +99,8 @@ impl FileSystemComponentService {
                 ))
             })?;
 
-        let (memories, exports) = if skip_analysis {
-            (vec![], vec![])
+        let (raw_component_metadata, memories, exports) = if skip_analysis {
+            (RawComponentMetadata::default(), vec![], vec![])
         } else {
             Self::analyze_memories_and_exports(&target_path)
                 .await
@@ -151,6 +151,9 @@ impl FileSystemComponentService {
                     .iter()
                     .map(|(link, instance)| (link.clone(), instance.clone().into()))
                     .collect(),
+                binary_wit: raw_component_metadata.binary_wit,
+                root_package_name: raw_component_metadata.root_package_name,
+                root_package_version: raw_component_metadata.root_package_version,
             }),
             account_id: None,
             project_id: None,
@@ -163,25 +166,27 @@ impl FileSystemComponentService {
 
     async fn analyze_memories_and_exports(
         path: &Path,
-    ) -> crate::Result<(Vec<LinearMemory>, Vec<AnalysedExport>)> {
+    ) -> crate::Result<(RawComponentMetadata, Vec<LinearMemory>, Vec<AnalysedExport>)> {
         let component_bytes = &tokio::fs::read(path).await?;
         let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)?;
 
         let exports = raw_component_metadata
             .exports
-            .into_iter()
+            .iter()
+            .cloned()
             .collect::<Vec<_>>();
 
         let linear_memories: Vec<LinearMemory> = raw_component_metadata
             .memories
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|mem| LinearMemory {
                 initial: mem.mem_type.limits.min * 65536,
                 maximum: mem.mem_type.limits.max.map(|m| m * 65536),
             })
             .collect::<Vec<_>>();
 
-        Ok((linear_memories, exports))
+        Ok((raw_component_metadata, linear_memories, exports))
     }
 
     async fn load_metadata(

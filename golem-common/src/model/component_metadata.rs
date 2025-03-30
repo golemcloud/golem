@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
-use std::collections::HashMap;
-use std::fmt::{self, Display, Formatter};
-
+use crate::model::base64::Base64;
 use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
+use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_ast::core::Mem;
@@ -29,6 +27,8 @@ use golem_wasm_ast::{
 };
 use rib::ParsedFunctionSite;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::{self, Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -38,6 +38,9 @@ pub struct ComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
+    pub binary_wit: Base64,
+    pub root_package_name: String,
+    pub root_package_version: Option<String>,
 
     #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -178,6 +181,9 @@ impl From<RawComponentMetadata> for ComponentMetadata {
             producers,
             memories,
             dynamic_linking: HashMap::new(),
+            binary_wit: Base64(value.binary_wit),
+            root_package_name: value.root_package_name,
+            root_package_version: value.root_package_version,
         }
     }
 }
@@ -242,6 +248,19 @@ impl RawComponentMetadata {
             root_package_name: format!("{}:{}", root_package.namespace, root_package.name),
             root_package_version: root_package.version.map(|v| v.to_string()),
         })
+    }
+}
+
+impl Default for RawComponentMetadata {
+    fn default() -> Self {
+        Self {
+            exports: vec![],
+            producers: vec![],
+            memories: vec![],
+            binary_wit: vec![],
+            root_package_name: "unknown:unknown".to_string(),
+            root_package_version: None,
+        }
     }
 }
 
@@ -386,6 +405,7 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::model::base64::Base64;
     use crate::model::component_metadata::{
         ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory,
         ProducerField, Producers, VersionedName, WasmRpcTarget,
@@ -484,6 +504,9 @@ mod protobuf {
                     .into_iter()
                     .map(|memory| memory.into())
                     .collect(),
+                binary_wit: Base64(value.binary_wit),
+                root_package_name: value.root_package_name,
+                root_package_version: value.root_package_version,
                 dynamic_linking: value
                     .dynamic_linking
                     .into_iter()
@@ -517,6 +540,9 @@ mod protobuf {
                         .into_iter()
                         .map(|(k, v)| (k, v.into())),
                 ),
+                binary_wit: value.binary_wit.0,
+                root_package_name: value.root_package_name,
+                root_package_version: value.root_package_version,
             }
         }
     }
@@ -529,7 +555,7 @@ mod protobuf {
                 DynamicLinkedInstance::WasmRpc(dynamic_linked_wasm_rpc) => Self {
                     dynamic_linked_instance: Some(
                         golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::WasmRpc(
-                        dynamic_linked_wasm_rpc.into())),
+                            dynamic_linked_wasm_rpc.into())),
                 },
             }
         }
