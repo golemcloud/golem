@@ -73,7 +73,7 @@ impl<'a> RibDependencyManager for DefaultRibDependencyManager<'a> {
                 false,
             )
             .await;
-        
+
         Ok(ComponentDependency {
             component_id,
             metadata: result

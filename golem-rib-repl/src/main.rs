@@ -83,7 +83,7 @@ impl RibFunctionInvoke for EmbeddedRibFunctionInvoke {
             });
 
         let function_name = function_name.0;
-
+        
         self.embedded_worker_executor
             .invoke_and_await_typed(target_worker_id, function_name.as_str(), args.0)
             .await
