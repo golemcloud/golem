@@ -214,6 +214,10 @@ impl RawComponentMetadata {
             .serialized_interface_only()
             .map_err(ComponentProcessingError::Analysis)?;
 
+        for warning in wit_analysis.warnings() {
+            tracing::warn!("Wit analysis warning: {}", warning);
+        }
+
         add_resource_drops(&mut exports);
         add_virtual_exports(&mut exports);
 

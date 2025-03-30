@@ -95,7 +95,7 @@ impl FileSystemComponentService {
             .await
             .map_err(|err| {
                 AddComponentError::Other(format!(
-                    "Failed to copy WASM to the local component store: {err}"
+                    "Failed to copy WASM to the local component store: {err:#}"
                 ))
             })?;
 
@@ -104,14 +104,16 @@ impl FileSystemComponentService {
         } else {
             Self::analyze_memories_and_exports(&target_path)
                 .await
-                .ok_or(AddComponentError::Other(
-                    "Failed to analyze component".to_string(),
-                ))?
+                .map_err(|err| {
+                    AddComponentError::Other(format!("Failed to analyze component: {err:#}"))
+                })?
         };
 
         let size = tokio::fs::metadata(&target_path)
             .await
-            .map_err(|e| AddComponentError::Other(format!("Failed to read component size: {}", e)))?
+            .map_err(|err| {
+                AddComponentError::Other(format!("Failed to read component size: {err:#}"))
+            })?
             .len();
 
         let metadata = LocalFileSystemComponentMetadata {
@@ -161,10 +163,9 @@ impl FileSystemComponentService {
 
     async fn analyze_memories_and_exports(
         path: &Path,
-    ) -> Option<(Vec<LinearMemory>, Vec<AnalysedExport>)> {
-        let component_bytes = &tokio::fs::read(path).await.ok()?;
-        let raw_component_metadata =
-            RawComponentMetadata::analyse_component(component_bytes).ok()?;
+    ) -> crate::Result<(Vec<LinearMemory>, Vec<AnalysedExport>)> {
+        let component_bytes = &tokio::fs::read(path).await?;
+        let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)?;
 
         let exports = raw_component_metadata
             .exports
@@ -180,7 +181,7 @@ impl FileSystemComponentService {
             })
             .collect::<Vec<_>>();
 
-        Some((linear_memories, exports))
+        Ok((linear_memories, exports))
     }
 
     async fn load_metadata(

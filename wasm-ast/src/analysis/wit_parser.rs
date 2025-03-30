@@ -1,7 +1,8 @@
 use crate::analysis::{
     analysed_type, AnalysedExport, AnalysedFunction, AnalysedFunctionParameter,
     AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
-    AnalysedType, AnalysisFailure, AnalysisResult, NameOptionTypePair, NameTypePair, TypeHandle,
+    AnalysedType, AnalysisFailure, AnalysisResult, AnalysisWarning,
+    InterfaceCouldNotBeAnalyzedWarning, NameOptionTypePair, NameTypePair, TypeHandle,
 };
 use itertools::Itertools;
 use std::cell::RefCell;
@@ -19,6 +20,7 @@ use wit_parser::{TypeId, TypeOwner as WitParserTypeOwner};
 pub struct WitAnalysisContext {
     wasm: DecodedWasm,
     resource_ids: Rc<RefCell<HashMap<TypeId, AnalysedResourceId>>>,
+    warnings: Rc<RefCell<Vec<AnalysisWarning>>>,
 }
 
 impl WitAnalysisContext {
@@ -29,6 +31,7 @@ impl WitAnalysisContext {
         Ok(Self {
             wasm,
             resource_ids: Rc::new(RefCell::new(HashMap::new())),
+            warnings: Rc::new(RefCell::new(Vec::new())),
         })
     }
 
@@ -54,7 +57,8 @@ impl WitAnalysisContext {
             let world = AnalysisFailure::fail_on_missing(resolve.worlds.get(*world_id), "world")?;
 
             let mut result = Vec::new();
-            for (_world_key, world_item) in &world.exports {
+            for (world_key, world_item) in &world.exports {
+                let world_name = resolve.name_world_key(world_key);
                 match world_item {
                     WorldItem::Interface { id, .. } => {
                         let interface = AnalysisFailure::fail_on_missing(
@@ -62,7 +66,17 @@ impl WitAnalysisContext {
                             "interface",
                         )?;
 
-                        result.push(AnalysedExport::Instance(self.analyse_interface(interface)?))
+                        match self.analyse_interface(interface) {
+                            Ok(instance) => result.push(AnalysedExport::Instance(instance)),
+                            Err(failure) => {
+                                self.warning(AnalysisWarning::InterfaceCouldNotBeAnalyzed(
+                                    InterfaceCouldNotBeAnalyzedWarning {
+                                        name: world_name,
+                                        failure,
+                                    },
+                                ))
+                            }
+                        }
                     }
                     WorldItem::Function(function) => {
                         result.push(AnalysedExport::Function(self.analyse_function(function)?));
@@ -94,6 +108,14 @@ impl WitAnalysisContext {
             ))
         })?;
         Ok(bytes)
+    }
+
+    pub fn warnings(&self) -> Vec<AnalysisWarning> {
+        self.warnings.borrow().clone()
+    }
+
+    fn warning(&self, warning: AnalysisWarning) {
+        self.warnings.borrow_mut().push(warning);
     }
 
     fn analyse_function(&self, function: &Function) -> AnalysisResult<AnalysedFunction> {
