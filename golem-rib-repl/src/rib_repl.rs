@@ -1,4 +1,5 @@
 use std::path::{PathBuf};
+use std::sync::Arc;
 use rib::Interpreter;
 use rib::InterpreterEnv;
 use rib::InterpreterStack;
@@ -12,29 +13,24 @@ use tokio;
 // Import Rib evaluation function
 use crate::syntax_highlighter::RibSyntaxHighlighter;
 use rib::compile;
+use crate::dependency_manager::RibDependencyManager;
+use crate::result_printer::{DefaultResultPrinter, ResultPrinter};
 
 struct RibRepl {
-    loaded_files: Vec<String>,
-    history_file: PathBuf,
-    component_dependency: Vec<String>,
+    history_file_path: PathBuf,
+    dependency_manager: Box<dyn RibDependencyManager>,
+    rib_result_printer: Box<dyn ResultPrinter>,
 }
 
 impl RibRepl {
-    fn new(history_file: Option<PathBuf>) -> Self {
+    fn new(history_file: Option<PathBuf>, dependency_manager: Box<dyn RibDependencyManager>, rib_result_printer: Option<Box<dyn ResultPrinter>>) -> Self {
         Self {
-            loaded_files: Vec::new(),
-            history_file: history_file.unwrap_or_else(|| get_default_history_file()),
+            history_file_path: history_file.unwrap_or_else(|| get_default_history_file()),
+            dependency_manager,
+            rib_result_printer: rib_result_printer.unwrap_or_else(|| Box::new(DefaultResultPrinter)),
         }
     }
 
-    fn load_files(&mut self, files: Vec<String>) {
-        for file in &files {
-            if !self.loaded_files.contains(file) {
-                self.loaded_files.push(file.clone());
-            }
-        }
-        println!("Loaded files: {:?}", self.loaded_files);
-    }
 
     async fn run(&mut self) {
 
