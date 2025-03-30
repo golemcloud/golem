@@ -20,6 +20,7 @@ use crate::components::rdb::Rdb;
 use crate::components::ChildProcessLogger;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -27,15 +28,17 @@ use std::time::Duration;
 use tracing::info;
 use tracing::Level;
 
+use super::ComponentServiceInternal;
+
 pub struct SpawnedComponentService {
     component_directory: PathBuf,
     http_port: u16,
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
 impl SpawnedComponentService {
@@ -51,35 +54,7 @@ impl SpawnedComponentService {
         out_level: Level,
         err_level: Level,
         client_protocol: GolemClientProtocol,
-    ) -> Self {
-        Self::new_base(
-            component_directory,
-            executable,
-            working_directory,
-            http_port,
-            grpc_port,
-            component_compilation_service_port,
-            rdb,
-            verbosity,
-            out_level,
-            err_level,
-            client_protocol,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        component_directory: PathBuf,
-        executable: &Path,
-        working_directory: &Path,
-        http_port: u16,
-        grpc_port: u16,
-        component_compilation_service_port: Option<u16>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        client_protocol: GolemClientProtocol,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     ) -> Self {
         info!("Starting golem-component-service process");
 
@@ -128,7 +103,6 @@ impl SpawnedComponentService {
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            client_protocol,
             component_client: new_component_client(
                 client_protocol,
                 "localhost",
@@ -138,16 +112,13 @@ impl SpawnedComponentService {
             .await,
             plugin_client: new_plugin_client(client_protocol, "localhost", grpc_port, http_port)
                 .await,
+            plugin_wasm_files_service,
         }
     }
 }
 
 #[async_trait]
-impl ComponentService for SpawnedComponentService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        self.client_protocol
-    }
-
+impl ComponentServiceInternal for SpawnedComponentService {
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
@@ -156,6 +127,13 @@ impl ComponentService for SpawnedComponentService {
         self.plugin_client.clone()
     }
 
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
+}
+
+#[async_trait]
+impl ComponentService for SpawnedComponentService {
     fn component_directory(&self) -> &Path {
         &self.component_directory
     }

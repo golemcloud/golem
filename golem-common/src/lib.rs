@@ -63,9 +63,6 @@ pub mod serialization;
 #[cfg(feature = "observability")]
 pub mod tracing;
 
-#[cfg(feature = "model")]
-pub mod uri;
-
 pub mod virtual_exports;
 
 pub mod testing;

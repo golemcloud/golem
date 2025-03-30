@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{Expr, FunctionCallError, FunctionTypeRegistry, RegistryKey};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, FunctionCallError, FunctionTypeRegistry, RegistryKey};
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,
 // we have this special phase to grab errors in the context function calls.
@@ -25,25 +24,22 @@ pub fn check_type_error_in_function_calls(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
 ) -> Result<(), FunctionCallError> {
-    let mut queue = VecDeque::new();
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    queue.push_back(expr);
-
-    while let Some(expr) = queue.pop_front() {
-        let parent_copy = expr.clone();
-        match expr {
-            Expr::Call {
-                call_type, args, ..
-            } => match call_type {
+    while let Some(expr) = visitor.pop_front() {
+        if let Expr::Call {
+            call_type, args, ..
+        } = &expr
+        {
+            match call_type {
                 CallType::InstanceCreation(_) => {}
                 call_type => internal::check_type_mismatch_in_function_call(
                     call_type,
                     args,
                     type_registry,
-                    parent_copy,
+                    expr,
                 )?,
-            },
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
+            }
         }
     }
 
@@ -57,10 +53,10 @@ mod internal {
 
     #[allow(clippy::result_large_err)]
     pub(crate) fn check_type_mismatch_in_function_call(
-        call_type: &mut CallType,
-        args: &mut [Expr],
+        call_type: &CallType,
+        args: &[Expr],
         type_registry: &FunctionTypeRegistry,
-        function_call_expr: Expr, // The actual function call expression
+        function_call_expr: &Expr,
     ) -> Result<(), FunctionCallError> {
         let registry_key = RegistryKey::from_call_type(call_type).ok_or(
             FunctionCallError::InvalidFunctionCall {
@@ -86,7 +82,7 @@ mod internal {
             filtered_expected_types.remove(0);
         }
 
-        for (actual_arg, expected_arg_type) in args.iter_mut().zip(filtered_expected_types) {
+        for (actual_arg, expected_arg_type) in args.iter().zip(filtered_expected_types) {
             let actual_arg_type = &actual_arg.inferred_type();
 
             // See if there are unresolved types in function arguments,
@@ -119,7 +115,7 @@ mod internal {
 
             type_checker::check_type_mismatch(
                 actual_arg,
-                Some(&function_call_expr),
+                Some(function_call_expr),
                 &expected_arg_type,
                 actual_arg_type,
             )

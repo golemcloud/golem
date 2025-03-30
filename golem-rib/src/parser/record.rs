@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::rib_source_span::{GetSourcePosition, SourceSpan};
+use combine::parser::char::digit;
 use combine::{
     between, many1, parser,
     parser::char::{char as char_, letter, spaces},
     position, sep_by1, ParseError, Parser, Stream,
 };
-
-use super::rib_expr::rib_expr;
-use crate::expr::Expr;
-use crate::parser::errors::RibParseError;
-use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -43,23 +43,21 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(
-            between(
-                char_('{').skip(spaces()),
-                char_('}').skip(spaces()),
-                sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
-            )
-            .map(|fields: Vec<Field>| {
-                Expr::record(
-                    fields
-                        .iter()
-                        .map(|f| (f.key.clone(), f.value.clone()))
-                        .collect::<Vec<_>>(),
-                )
-            }),
+    spaces().with(
+        between(
+            char_('{').skip(spaces()),
+            char_('}').skip(spaces()),
+            sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
         )
-        .message("Invalid syntax for record type")
+        .map(|fields: Vec<Field>| {
+            Expr::record(
+                fields
+                    .iter()
+                    .map(|f| (f.key.clone(), f.value.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        }),
+    )
 }
 
 fn field_key<Input>() -> impl Parser<Input, Output = String>
@@ -70,9 +68,8 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    many1(letter().or(char_('_').or(char_('-'))))
+    many1(letter().or(char_('_').or(char_('-')).or(digit())))
         .map(|s: Vec<char>| s.into_iter().collect())
-        .message("Invalid identifier")
 }
 
 struct Field {

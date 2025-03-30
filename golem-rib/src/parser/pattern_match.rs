@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use combine::parser::char::{alpha_num, char, spaces, string};
-use combine::{attempt, not_followed_by, sep_by1, ParseError, Parser};
+use combine::{attempt, not_followed_by, sep_end_by1, ParseError, Parser};
 
 use match_arm::*;
 
@@ -30,7 +30,10 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    let arms = sep_by1(match_arm().skip(spaces()), char(',').skip(spaces()));
+    let arms = sep_end_by1(
+        match_arm().skip(spaces().silent()),
+        char(',').skip(spaces().silent()),
+    );
 
     attempt(
         string("match")
@@ -39,14 +42,13 @@ where
     )
     .with(
         (
-            rib_expr().skip(spaces()),
-            char('{').skip(spaces()),
-            arms.skip(spaces()),
-            char('}').skip(spaces()),
+            rib_expr(),
+            char('{').skip(spaces().silent()),
+            arms.skip(spaces().silent()),
+            char('}'),
         )
             .map(|(expr, _, arms, _)| Expr::pattern_match(expr, arms)),
     )
-    .message("Invalid syntax for pattern match")
 }
 
 mod match_arm {
@@ -70,10 +72,10 @@ mod match_arm {
     {
         (
             //LHS
-            arm_pattern().skip(spaces()),
-            string("=>").skip(spaces()),
+            arm_pattern().skip(spaces().silent()),
+            string("=>").skip(spaces().silent()),
             //RHS
-            rib_expr().skip(spaces()),
+            rib_expr(),
         )
             .map(|(lhs, _, rhs)| MatchArm::new(lhs, rhs))
     }
@@ -173,9 +175,7 @@ mod internal {
         >,
         Input::Position: GetSourcePosition,
     {
-        many1(letter().or(digit()).or(char_('_')))
-            .map(|s: Vec<char>| s.into_iter().collect())
-            .message("Unable to parse alias name")
+        many1(letter().or(digit()).or(char_('_'))).map(|s: Vec<char>| s.into_iter().collect())
     }
 
     fn arm_pattern_constructor_with_name<Input>() -> impl Parser<Input, Output = ArmPattern>
@@ -296,9 +296,7 @@ mod internal {
         >,
         Input::Position: GetSourcePosition,
     {
-        many1(letter().or(char_('_').or(char_('-'))))
-            .map(|s: Vec<char>| s.into_iter().collect())
-            .message("Invalid identifier")
+        many1(letter().or(char_('_').or(char_('-')))).map(|s: Vec<char>| s.into_iter().collect())
     }
 
     fn constructor_type_name<Input>() -> impl Parser<Input, Output = String>
@@ -311,7 +309,6 @@ mod internal {
     {
         many1(letter().or(digit()).or(char_('_')).or(char_('-')))
             .map(|s: Vec<char>| s.into_iter().collect())
-            .message("Unable to parse custom constructor name")
     }
 }
 
@@ -399,6 +396,28 @@ mod tests {
                 )]
             ))
         );
+    }
+
+    #[test]
+    fn test_pattern_match_with_trailing_comma_for_match_arm() {
+        let input = r#"match foo {
+            ok(x) => x,
+            _ => bar,
+          }"#;
+        let result = Expr::from_text(input).unwrap();
+
+        let expected = Expr::pattern_match(
+            Expr::identifier_global("foo", None),
+            vec![
+                MatchArm::new(
+                    ArmPattern::constructor("ok", vec![ArmPattern::identifier("x")]),
+                    Expr::identifier_global("x", None),
+                ),
+                MatchArm::new(ArmPattern::WildCard, Expr::identifier_global("bar", None)),
+            ],
+        );
+
+        assert_eq!(result, expected);
     }
 
     #[test]

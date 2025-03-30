@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::PluginTransformationsConfig;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
@@ -29,7 +28,7 @@ use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -44,7 +43,6 @@ use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
-use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -53,8 +51,6 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
-use http::StatusCode;
-use reqwest::multipart::{Form, Part};
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -71,6 +67,8 @@ use tracing::{debug, error, info, info_span};
 use tracing_futures::Instrument;
 use wac_graph::types::Package;
 use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
+
+use super::transformer_plugin_caller::{TransformationFailedReason, TransformerPluginCaller};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -295,29 +293,6 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
     }
 }
 
-#[derive(Debug)]
-pub enum TransformationFailedReason {
-    Failure(String),
-    Request(reqwest::Error),
-    HttpStatus(StatusCode),
-}
-
-impl Display for TransformationFailedReason {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TransformationFailedReason::Failure(message) => write!(f, "{message}"),
-            TransformationFailedReason::Request(error) => write!(f, "Request error: {error}"),
-            TransformationFailedReason::HttpStatus(status) => write!(f, "HTTP status: {status}"),
-        }
-    }
-}
-
-impl SafeDisplay for TransformationFailedReason {
-    fn to_safe_string(&self) -> String {
-        self.to_string()
-    }
-}
-
 pub fn create_new_versioned_component_id(component_id: &ComponentId) -> VersionedComponentId {
     VersionedComponentId {
         component_id: component_id.clone(),
@@ -436,11 +411,18 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         component_constraint: &ComponentConstraints<Owner>,
     ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
+    async fn delete_constraints(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints_to_remove: &[FunctionSignature],
+    ) -> Result<ComponentConstraints<Owner>, ComponentError>;
+
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
+    ) -> Result<Option<FunctionConstraints>, ComponentError>;
 
     /// Gets the list of installed plugins for a given component version belonging to `owner`
     async fn get_plugin_installations_for_component(
@@ -480,7 +462,7 @@ pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    transformations_config: PluginTransformationsConfig,
+    transformer_plugin_caller: Arc<dyn TransformerPluginCaller<Owner>>,
 }
 
 impl<Owner: ComponentOwner, Scope: PluginScope> Debug for ComponentServiceDefault<Owner, Scope> {
@@ -497,7 +479,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         initial_component_files_service: Arc<InitialComponentFilesService>,
         plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        transformations_config: PluginTransformationsConfig,
+        transformer_plugin_caller: Arc<dyn TransformerPluginCaller<Owner>>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
@@ -506,25 +488,26 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             initial_component_files_service,
             plugin_service,
             plugin_wasm_files_service,
-            transformations_config,
+            transformer_plugin_caller,
         }
     }
 
     pub fn find_component_metadata_conflicts(
-        function_constraint_collection: &FunctionConstraintCollection,
+        function_constraints: &FunctionConstraints,
         new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
-        for existing_function_call in &function_constraint_collection.function_constraints {
+        for existing_function_call in &function_constraints.constraints {
             if let Some(new_registry_value) =
-                new_type_registry.lookup(&existing_function_call.function_key)
+                new_type_registry.lookup(existing_function_call.function_key())
             {
                 let mut parameter_conflict = false;
                 let mut return_conflict = false;
 
-                if existing_function_call.parameter_types != new_registry_value.argument_types() {
+                if existing_function_call.parameter_types() != &new_registry_value.argument_types()
+                {
                     parameter_conflict = true;
                 }
 
@@ -533,21 +516,37 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     _ => vec![],
                 };
 
-                if existing_function_call.return_types != new_return_types {
+                if existing_function_call.return_types() != &new_return_types {
                     return_conflict = true;
                 }
 
-                if parameter_conflict || return_conflict {
+                let parameter_conflict = if parameter_conflict {
+                    Some(ParameterTypeConflict {
+                        existing: existing_function_call.parameter_types().clone(),
+                        new: new_registry_value.clone().argument_types().clone(),
+                    })
+                } else {
+                    None
+                };
+
+                let return_conflict = if return_conflict {
+                    Some(ReturnTypeConflict {
+                        existing: existing_function_call.return_types().clone(),
+                        new: new_return_types,
+                    })
+                } else {
+                    None
+                };
+
+                if parameter_conflict.is_some() || return_conflict.is_some() {
                     conflicting_functions.push(ConflictingFunction {
-                        function: existing_function_call.function_key.clone(),
-                        existing_parameter_types: existing_function_call.parameter_types.clone(),
-                        new_parameter_types: new_registry_value.clone().argument_types().clone(),
-                        existing_result_types: existing_function_call.return_types.clone(),
-                        new_result_types: new_return_types,
+                        function: existing_function_call.function_key().clone(),
+                        parameter_type_conflict: parameter_conflict,
+                        return_type_conflict: return_conflict,
                     });
                 }
             } else {
-                missing_functions.push(existing_function_call.function_key.clone());
+                missing_functions.push(existing_function_call.function_key().clone());
             }
         }
 
@@ -947,94 +946,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
     ) -> Result<Vec<u8>, ComponentError> {
         info!(%url, "Applying component transformation plugin");
 
-        // NOTE: the client could be cached per target url to keep connection pools open for component
-        //       transformer plugins, however this is not done yet as component update is not that frequent
-        let client = reqwest::Client::new();
-        let serializable_component: golem_service_base::model::Component = component.clone().into();
-        let response = with_retries(
-            "component_transformer_plugin",
-            "transform",
-            None,
-            &self.transformations_config.retries,
-            &(client, serializable_component, url, data, parameters),
-            |(client, serializable_component, url, data, parameters)| {
-                Box::pin(async move {
-                    let mut form = Form::new();
-                    form = form.part("component", Part::bytes(data.to_vec()));
-                    form = form.part(
-                        "metadata",
-                        Part::text(serde_json::to_string(&serializable_component).map_err(
-                            |err| {
-                                ComponentError::conversion_error(
-                                    "component metadata",
-                                    err.to_string(),
-                                )
-                            },
-                        )?)
-                        .mime_str("application/json")
-                        .unwrap(),
-                    );
-                    for (key, value) in *parameters {
-                        if key == "component" {
-                            return Err(ComponentError::TransformationFailed(
-                                TransformationFailedReason::Failure(
-                                    "Parameter key 'component' is reserved".to_string(),
-                                ),
-                            ));
-                        }
-                        if key == "metadata" {
-                            return Err(ComponentError::TransformationFailed(
-                                TransformationFailedReason::Failure(
-                                    "Parameter key 'metadata' is reserved".to_string(),
-                                ),
-                            ));
-                        }
-                        form = form.part(key.clone(), Part::text(value.clone()));
-                    }
-
-                    let request = client.post(url).multipart(form);
-
-                    let response = request.send().await.map_err(|err| {
-                        ComponentError::TransformationFailed(TransformationFailedReason::Request(
-                            err,
-                        ))
-                    })?;
-
-                    if response.status().is_server_error() {
-                        return Err(ComponentError::TransformationFailed(
-                            TransformationFailedReason::HttpStatus(response.status()),
-                        ));
-                    }
-
-                    Ok(response)
-                })
-            },
-            |err| {
-                matches!(
-                    err,
-                    ComponentError::TransformationFailed(TransformationFailedReason::HttpStatus(_))
-                        | ComponentError::TransformationFailed(
-                            TransformationFailedReason::Request(_)
-                        )
-                )
-            },
-        )
-        .await?;
-
-        if response.status().is_success() {
-            let body = response.bytes().await.map_err(|err| {
-                ComponentError::TransformationFailed(TransformationFailedReason::Failure(format!(
-                    "Failed to read response from transformation plugin: {}",
-                    err
-                )))
-            })?;
-
-            Ok(body.to_vec())
-        } else {
-            Err(ComponentError::TransformationFailed(
-                TransformationFailedReason::HttpStatus(response.status()),
-            ))
-        }
+        self.transformer_plugin_caller
+            .call_remote_transformer_plugin(component, data, url, parameters)
+            .await
+            .map_err(ComponentError::TransformationFailed)
     }
 
     async fn apply_library_plugin(
@@ -1613,11 +1528,41 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         Ok(component_constraints)
     }
 
+    async fn delete_constraints(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints_to_remove: &[FunctionSignature],
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        info!(owner = %owner, component_id = %component_id, "Delete constraint");
+
+        self.component_repo
+            .delete_constraints(&owner.to_string(), &component_id.0, constraints_to_remove)
+            .await?;
+
+        let result = self
+            .component_repo
+            .get_constraint(&owner.to_string(), &component_id.0)
+            .await?
+            .ok_or(ComponentError::ComponentConstraintCreateError(format!(
+                "Failed to get constraints for {}",
+                component_id
+            )))?;
+
+        let component_constraints = ComponentConstraints {
+            owner: owner.clone(),
+            component_id: component_id.clone(),
+            constraints: result,
+        };
+
+        Ok(component_constraints)
+    }
+
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+    ) -> Result<Option<FunctionConstraints>, ComponentError> {
         info!(component_id = %component_id, "Get component constraint");
 
         let result = self
@@ -2053,11 +1998,24 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
             .await
     }
 
+    async fn delete_constraints(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        constraints_to_remove: &[FunctionSignature],
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .delete_constraints(owner, component_id, constraints_to_remove)
+            .await
+    }
+
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
         owner: &Owner,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+    ) -> Result<Option<FunctionConstraints>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2123,38 +2081,63 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 #[derive(Debug)]
 pub struct ConflictingFunction {
     pub function: RegistryKey,
-    pub existing_parameter_types: Vec<AnalysedType>,
-    pub new_parameter_types: Vec<AnalysedType>,
-    pub existing_result_types: Vec<AnalysedType>,
-    pub new_result_types: Vec<AnalysedType>,
+    pub parameter_type_conflict: Option<ParameterTypeConflict>,
+    pub return_type_conflict: Option<ReturnTypeConflict>,
+}
+
+#[derive(Debug)]
+pub struct ParameterTypeConflict {
+    pub existing: Vec<AnalysedType>,
+    pub new: Vec<AnalysedType>,
+}
+
+#[derive(Debug)]
+pub struct ReturnTypeConflict {
+    pub existing: Vec<AnalysedType>,
+    pub new: Vec<AnalysedType>,
 }
 
 impl Display for ConflictingFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Function: {}", self.function)?;
-        writeln!(f, "  Parameter Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_parameter_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_parameter_types)
-        )?;
 
-        writeln!(f, "  Result Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_result_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_result_types)
-        )?;
+        match self.parameter_type_conflict {
+            Some(ref conflict) => {
+                writeln!(f, "  Parameter Type Conflict:")?;
+                writeln!(
+                    f,
+                    "    Existing: {}",
+                    internal::convert_to_pretty_types(&conflict.existing)
+                )?;
+                writeln!(
+                    f,
+                    "    New:      {}",
+                    internal::convert_to_pretty_types(&conflict.new)
+                )?;
+            }
+            None => {
+                writeln!(f, "  Parameter Type Conflict: None")?;
+            }
+        }
+
+        match self.return_type_conflict {
+            Some(ref conflict) => {
+                writeln!(f, "  Result Type Conflict:")?;
+                writeln!(
+                    f,
+                    "    Existing: {}",
+                    internal::convert_to_pretty_types(&conflict.existing)
+                )?;
+                writeln!(
+                    f,
+                    "    New:      {}",
+                    internal::convert_to_pretty_types(&conflict.new)
+                )?;
+            }
+            None => {
+                writeln!(f, "  Result Type Conflict: None")?;
+            }
+        }
 
         Ok(())
     }

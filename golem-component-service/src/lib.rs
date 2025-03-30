@@ -24,7 +24,6 @@ use include_dir::{include_dir, Dir};
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, IntoEndpoint};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
@@ -103,6 +102,9 @@ impl ComponentService {
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_standalone_http_server(join_set).await?;
+        self.services
+            .compilation_service
+            .set_self_grpc_port(grpc_port);
         Ok(RunDetails {
             http_port,
             grpc_port,
@@ -116,6 +118,9 @@ impl ComponentService {
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let endpoint = self.main_endpoint();
+        self.services
+            .compilation_service
+            .set_self_grpc_port(grpc_port);
         Ok(TrafficReadyEndpoints {
             grpc_port,
             endpoint,
@@ -155,9 +160,7 @@ impl ComponentService {
     ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
 
-        let app = api::combined_routes(prometheus_registry, &self.services)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+        let app = api::combined_routes(prometheus_registry, &self.services);
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));

@@ -4,6 +4,7 @@ use crate::bindings::golem::it_client::child_component_client::{Api, Data};
 use crate::bindings::golem::rpc::types::Uri;
 use std::env;
 
+#[allow(static_mut_refs)]
 mod bindings;
 
 struct Component;

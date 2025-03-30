@@ -1,10 +1,12 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use crate::bindings::exports::rpc::caller_exports::caller_inline_functions::{Guest, TimelineNode};
-use crate::bindings::golem::rpc::types::Uri;
 use crate::bindings::rpc::counters_client::counters_client::{Api, Counter};
 use crate::bindings::rpc::ephemeral_client::ephemeral_client::Api as EphemeralApi;
+use golem_rust::wasm_rpc::{ComponentId, WorkerId};
 use std::env;
+use uuid::Uuid;
 
 struct Component;
 
@@ -25,14 +27,16 @@ impl Guest for Component {
         println!("Creating, using and dropping counters");
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
-        let counters_uri = Uri {
-            value: format!("urn:worker:{component_id}/counters_test1"),
+        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+        let worker_id = WorkerId {
+            component_id: component_id.into(),
+            worker_name: "counters_test1".to_string(),
         };
 
-        create_use_and_drop_counters(&counters_uri);
+        create_use_and_drop_counters(&worker_id);
         println!("All counters dropped, querying result");
 
-        let remote_api = Api::new(&counters_uri);
+        let remote_api = Api::custom(&worker_id);
         remote_api.blocking_get_all_dropped()
     }
 
@@ -45,10 +49,13 @@ impl Guest for Component {
             None => {
                 let component_id =
                     env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
-                let counters_uri = Uri {
-                    value: format!("urn:worker:{component_id}/counters_test2"),
+                let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+                let worker_id = WorkerId {
+                    component_id: component_id.into(),
+                    worker_name: "counters_test2".to_string(),
                 };
-                let counter = Counter::new(&counters_uri, "counter");
+
+                let counter = Counter::custom(&worker_id, "counter");
                 counter.inc_by(1);
                 let result = counter.blocking_get_value();
                 state.counter = Some(counter);
@@ -60,10 +67,13 @@ impl Guest for Component {
     fn test3() -> u64 {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
-        let counters_uri = Uri {
-            value: format!("urn:worker:{component_id}/counters_test3"),
+        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+        let worker_id = WorkerId {
+            component_id: component_id.into(),
+            worker_name: "counters_test3".to_string(),
         };
-        let api = Api::new(&counters_uri);
+
+        let api = Api::custom(&worker_id);
         api.blocking_inc_global_by(1);
         api.blocking_get_global_value()
     }
@@ -71,10 +81,12 @@ impl Guest for Component {
     fn test4() -> (Vec<String>, Vec<(String, String)>) {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
-        let counters_uri = Uri {
-            value: format!("urn:worker:{component_id}/counters_test4"),
+        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+        let worker_id = WorkerId {
+            component_id: component_id.into(),
+            worker_name: "counters_test4".to_string(),
         };
-        let counter = Counter::new(&counters_uri, "counter-test4");
+        let counter = Counter::custom(&worker_id, "counter-test4");
         (counter.blocking_get_args(), counter.blocking_get_env())
     }
 
@@ -82,6 +94,8 @@ impl Guest for Component {
         println!("Creating, using and dropping counters in parallel");
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
+        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+        let component_id: ComponentId = component_id.into();
 
         let results = create_use_and_drop_counters_non_blocking(&component_id);
         results.to_vec()
@@ -91,26 +105,27 @@ impl Guest for Component {
         println!("Reproducer for wasm-rpc issue #32");
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
-        let counters_uri = Uri {
-            value: format!("urn:worker:{component_id}/bug32"),
+        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+        let worker_id = WorkerId {
+            component_id: component_id.into(),
+            worker_name: "bug32".to_string(),
         };
-        let api = Api::new(&counters_uri);
+        let api = Api::custom(&worker_id);
         api.blocking_bug_wasm_rpc_i32(in_)
     }
 
     fn ephemeral_test1() -> Vec<(String, String)> {
         let component_id =
             env::var("EPHEMERAL_COMPONENT_ID").expect("EPHEMERAL_COMPONENT_ID not set");
-        let ephemeral_uri: Uri = Uri {
-            value: format!("urn:worker:{component_id}"),
-        };
-        let api1 = EphemeralApi::new(&ephemeral_uri);
+        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+        let component_id: ComponentId = component_id.into();
+        let api1 = EphemeralApi::custom(component_id);
         let name1: String = api1.blocking_get_worker_name();
         let key1 = api1.blocking_get_idempotency_key();
         let name2 = api1.blocking_get_worker_name();
         let key2 = api1.blocking_get_idempotency_key();
 
-        let api2 = EphemeralApi::new(&ephemeral_uri);
+        let api2 = EphemeralApi::custom(component_id);
         let name3: String = api2.blocking_get_worker_name();
         let key3: String = api2.blocking_get_idempotency_key();
 
@@ -121,18 +136,20 @@ impl Guest for Component {
         println!("Reproducer for golem issue #1265");
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
-        let counters_uri = Uri {
-            value: format!("urn:worker:{component_id}/bug1265"),
+        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
+        let worker_id = WorkerId {
+            component_id: component_id.into(),
+            worker_name: "bug1265".to_string(),
         };
-        let api = Api::new(&counters_uri);
+        let api = Api::custom(&worker_id);
         api.blocking_bug_golem1265(&s)
     }
 }
 
-fn create_use_and_drop_counters(counters_uri: &Uri) {
-    let counter1 = Counter::new(counters_uri, "counter1");
-    let counter2 = Counter::new(counters_uri, "counter2");
-    let counter3 = Counter::new(counters_uri, "counter3");
+fn create_use_and_drop_counters(worker_id: &WorkerId) {
+    let counter1 = Counter::custom(worker_id, "counter1");
+    let counter2 = Counter::custom(worker_id, "counter2");
+    let counter3 = Counter::custom(worker_id, "counter3");
     counter1.blocking_inc_by(1);
     counter1.blocking_inc_by(1);
     counter1.blocking_inc_by(1);
@@ -151,22 +168,25 @@ fn create_use_and_drop_counters(counters_uri: &Uri) {
     println!("Counter3 value: {}", value3);
 }
 
-fn create_use_and_drop_counters_non_blocking(component_id: &str) -> [u64; 3] {
-    let counter1 = Counter::new(
-        &Uri {
-            value: format!("urn:worker:{component_id}/counters_test51"),
+fn create_use_and_drop_counters_non_blocking(component_id: &ComponentId) -> [u64; 3] {
+    let counter1 = Counter::custom(
+        &WorkerId {
+            component_id: component_id.clone(),
+            worker_name: "counters_test51".to_string(),
         },
         "counter",
     );
-    let counter2 = Counter::new(
-        &Uri {
-            value: format!("urn:worker:{component_id}/counters_test52"),
+    let counter2 = Counter::custom(
+        &WorkerId {
+            component_id: component_id.clone(),
+            worker_name: "counters_test52".to_string(),
         },
         "counter2",
     );
-    let counter3 = Counter::new(
-        &Uri {
-            value: format!("urn:worker:{component_id}/counters_test53"),
+    let counter3 = Counter::custom(
+        &WorkerId {
+            component_id: component_id.clone(),
+            worker_name: "counters_test53".to_string(),
         },
         "counter3",
     );
@@ -194,7 +214,7 @@ fn create_use_and_drop_counters_non_blocking(component_id: &str) -> [u64; 3] {
     let mut mapping = vec![0, 1, 2];
 
     while !remaining.is_empty() {
-        let poll_result = bindings::wasi::io::poll::poll(&remaining);
+        let poll_result = golem_rust::wasm_rpc::wasi::io::poll::poll(&remaining);
         println!("Got poll result: {:?}", poll_result);
         for idx in &poll_result {
             let counter_idx = mapping[*idx as usize];

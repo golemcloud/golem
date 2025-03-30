@@ -13,61 +13,12 @@ pub mod golem {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
-            pub type Uri = super::super::super::golem::rpc::types::Uri;
             pub type Duration = super::super::super::wasi::clocks::monotonic_clock::Duration;
+            pub type ComponentId = super::super::super::golem::rpc::types::ComponentId;
+            pub type Uuid = super::super::super::golem::rpc::types::Uuid;
+            pub type WorkerId = super::super::super::golem::rpc::types::WorkerId;
             /// An index into the persistent log storing all performed operations of a worker
             pub type OplogIndex = u64;
-            /// Represents a Golem component's version
-            pub type ComponentVersion = u64;
-            /// UUID
-            #[repr(C)]
-            #[derive(Clone, Copy)]
-            pub struct Uuid {
-                pub high_bits: u64,
-                pub low_bits: u64,
-            }
-            impl ::core::fmt::Debug for Uuid {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("Uuid")
-                        .field("high-bits", &self.high_bits)
-                        .field("low-bits", &self.low_bits)
-                        .finish()
-                }
-            }
-            /// Represents a Golem component
-            #[repr(C)]
-            #[derive(Clone, Copy)]
-            pub struct ComponentId {
-                pub uuid: Uuid,
-            }
-            impl ::core::fmt::Debug for ComponentId {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("ComponentId").field("uuid", &self.uuid).finish()
-                }
-            }
-            /// Represents a Golem worker
-            #[derive(Clone)]
-            pub struct WorkerId {
-                pub component_id: ComponentId,
-                pub worker_name: _rt::String,
-            }
-            impl ::core::fmt::Debug for WorkerId {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerId")
-                        .field("component-id", &self.component_id)
-                        .field("worker-name", &self.worker_name)
-                        .finish()
-                }
-            }
             /// A promise ID is a value that can be passed to an external Golem API to complete that promise
             /// from an arbitrary external source, while Golem workers can await for this completion.
             #[derive(Clone)]
@@ -86,6 +37,8 @@ pub mod golem {
                         .finish()
                 }
             }
+            /// Represents a Golem component's version
+            pub type ComponentVersion = u64;
             /// Represents a Golem Cloud account
             #[derive(Clone)]
             pub struct AccountId {
@@ -561,7 +514,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.6")]
                         extern "C" {
                             #[link_name = "[resource-drop]get-workers"]
                             fn drop(_: u32);
@@ -606,8 +559,13 @@ pub mod golem {
                 ) -> Self {
                     unsafe {
                         let mut cleanup_list = _rt::Vec::new();
-                        let ComponentId { uuid: uuid0 } = component_id;
-                        let Uuid { high_bits: high_bits1, low_bits: low_bits1 } = uuid0;
+                        let super::super::super::golem::rpc::types::ComponentId {
+                            uuid: uuid0,
+                        } = component_id;
+                        let super::super::super::golem::rpc::types::Uuid {
+                            high_bits: high_bits1,
+                            low_bits: low_bits1,
+                        } = uuid0;
                         let (result14_0, result14_1, result14_2) = match filter {
                             Some(e) => {
                                 let WorkerAnyFilter { filters: filters2 } = e;
@@ -727,7 +685,7 @@ pub mod golem {
                             None => (0i32, ::core::ptr::null_mut(), 0usize),
                         };
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.6")]
                         extern "C" {
                             #[link_name = "[constructor]get-workers"]
                             fn wit_import(
@@ -781,7 +739,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]get-workers.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -868,9 +826,9 @@ pub mod golem {
                                             let l25 = *base.add(48).cast::<i64>();
                                             let l26 = *base.add(56).cast::<i64>();
                                             WorkerMetadata {
-                                                worker_id: WorkerId {
-                                                    component_id: ComponentId {
-                                                        uuid: Uuid {
+                                                worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                                    component_id: super::super::super::golem::rpc::types::ComponentId {
+                                                        uuid: super::super::super::golem::rpc::types::Uuid {
                                                             high_bits: l4 as u64,
                                                             low_bits: l5 as u64,
                                                         },
@@ -905,7 +863,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "create-promise"]
                         fn wit_import(_: *mut u8);
@@ -923,9 +881,9 @@ pub mod golem {
                     let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
                     let l6 = *ptr0.add(24).cast::<i64>();
                     PromiseId {
-                        worker_id: WorkerId {
-                            component_id: ComponentId {
-                                uuid: Uuid {
+                        worker_id: super::super::super::golem::rpc::types::WorkerId {
+                            component_id: super::super::super::golem::rpc::types::ComponentId {
+                                uuid: super::super::super::golem::rpc::types::Uuid {
                                     high_bits: l1 as u64,
                                     low_bits: l2 as u64,
                                 },
@@ -945,18 +903,23 @@ pub mod golem {
                     struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
                         worker_name: worker_name1,
                     } = worker_id0;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "await-promise"]
                         fn wit_import(
@@ -1002,18 +965,23 @@ pub mod golem {
                     struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
                         worker_name: worker_name1,
                     } = worker_id0;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "poll-promise"]
                         fn wit_import(
@@ -1066,12 +1034,17 @@ pub mod golem {
             pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
                 unsafe {
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
                         worker_name: worker_name1,
                     } = worker_id0;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
@@ -1079,7 +1052,7 @@ pub mod golem {
                     let ptr5 = vec5.as_ptr().cast::<u8>();
                     let len5 = vec5.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "complete-promise"]
                         fn wit_import(
@@ -1121,17 +1094,22 @@ pub mod golem {
             pub fn delete_promise(promise_id: &PromiseId) {
                 unsafe {
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
                         worker_name: worker_name1,
                     } = worker_id0;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid2,
+                    } = component_id1;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = uuid2;
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "delete-promise"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64);
@@ -1154,7 +1132,7 @@ pub mod golem {
             pub fn get_oplog_index() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-oplog-index"]
                         fn wit_import() -> i64;
@@ -1173,7 +1151,7 @@ pub mod golem {
             pub fn set_oplog_index(oplog_idx: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-oplog-index"]
                         fn wit_import(_: i64);
@@ -1191,7 +1169,7 @@ pub mod golem {
             pub fn oplog_commit(replicas: u8) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "oplog-commit"]
                         fn wit_import(_: i32);
@@ -1211,7 +1189,7 @@ pub mod golem {
             pub fn mark_begin_operation() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "mark-begin-operation"]
                         fn wit_import() -> i64;
@@ -1230,7 +1208,7 @@ pub mod golem {
             pub fn mark_end_operation(begin: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "mark-end-operation"]
                         fn wit_import(_: i64);
@@ -1251,7 +1229,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 48]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-retry-policy"]
                         fn wit_import(_: *mut u8);
@@ -1302,7 +1280,7 @@ pub mod golem {
                         None => (0i32, 0.0f64),
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-retry-policy"]
                         fn wit_import(_: i32, _: i64, _: i64, _: f64, _: i32, _: f64);
@@ -1326,7 +1304,7 @@ pub mod golem {
             pub fn get_oplog_persistence_level() -> PersistenceLevel {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-oplog-persistence-level"]
                         fn wit_import() -> i32;
@@ -1358,7 +1336,7 @@ pub mod golem {
                         PersistenceLevel::Smart => 2i32,
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-oplog-persistence-level"]
                         fn wit_import(_: i32);
@@ -1375,7 +1353,7 @@ pub mod golem {
             pub fn get_idempotence_mode() -> bool {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-idempotence-mode"]
                         fn wit_import() -> i32;
@@ -1396,7 +1374,7 @@ pub mod golem {
             pub fn set_idempotence_mode(idempotent: bool) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "set-idempotence-mode"]
                         fn wit_import(_: i32);
@@ -1424,7 +1402,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "generate-idempotency-key"]
                         fn wit_import(_: *mut u8);
@@ -1436,7 +1414,7 @@ pub mod golem {
                     wit_import(ptr0);
                     let l1 = *ptr0.add(0).cast::<i64>();
                     let l2 = *ptr0.add(8).cast::<i64>();
-                    Uuid {
+                    super::super::super::golem::rpc::types::Uuid {
                         high_bits: l1 as u64,
                         low_bits: l2 as u64,
                     }
@@ -1451,17 +1429,22 @@ pub mod golem {
                 mode: UpdateMode,
             ) {
                 unsafe {
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id0,
                         worker_name: worker_name0,
                     } = worker_id;
-                    let ComponentId { uuid: uuid1 } = component_id0;
-                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
                     let vec3 = worker_name0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "update-worker"]
                         fn wit_import(
@@ -1496,7 +1479,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 64]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-self-metadata"]
                         fn wit_import(_: *mut u8);
@@ -1566,9 +1549,9 @@ pub mod golem {
                     let l22 = *ptr0.add(48).cast::<i64>();
                     let l23 = *ptr0.add(56).cast::<i64>();
                     WorkerMetadata {
-                        worker_id: WorkerId {
-                            component_id: ComponentId {
-                                uuid: Uuid {
+                        worker_id: super::super::super::golem::rpc::types::WorkerId {
+                            component_id: super::super::super::golem::rpc::types::ComponentId {
+                                uuid: super::super::super::golem::rpc::types::Uuid {
                                     high_bits: l1 as u64,
                                     low_bits: l2 as u64,
                                 },
@@ -1590,18 +1573,23 @@ pub mod golem {
                     #[repr(align(8))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 72]);
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 72]);
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id0,
                         worker_name: worker_name0,
                     } = worker_id;
-                    let ComponentId { uuid: uuid1 } = component_id0;
-                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
                     let vec3 = worker_name0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "get-worker-metadata"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
@@ -1686,9 +1674,9 @@ pub mod golem {
                                 let l27 = *ptr4.add(56).cast::<i64>();
                                 let l28 = *ptr4.add(64).cast::<i64>();
                                 WorkerMetadata {
-                                    worker_id: WorkerId {
-                                        component_id: ComponentId {
-                                            uuid: Uuid {
+                                    worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                        component_id: super::super::super::golem::rpc::types::ComponentId {
+                                            uuid: super::super::super::golem::rpc::types::Uuid {
                                                 high_bits: l6 as u64,
                                                 low_bits: l7 as u64,
                                             },
@@ -1716,26 +1704,36 @@ pub mod golem {
                 oplog_idx_cut_off: OplogIndex,
             ) {
                 unsafe {
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id0,
                         worker_name: worker_name0,
                     } = source_worker_id;
-                    let ComponentId { uuid: uuid1 } = component_id0;
-                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
                     let vec3 = worker_name0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id4,
                         worker_name: worker_name4,
                     } = target_worker_id;
-                    let ComponentId { uuid: uuid5 } = component_id4;
-                    let Uuid { high_bits: high_bits6, low_bits: low_bits6 } = uuid5;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid5,
+                    } = component_id4;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits6,
+                        low_bits: low_bits6,
+                    } = uuid5;
                     let vec7 = worker_name4;
                     let ptr7 = vec7.as_ptr().cast::<u8>();
                     let len7 = vec7.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "fork-worker"]
                         fn wit_import(
@@ -1784,12 +1782,17 @@ pub mod golem {
                 revert_target: RevertWorkerTarget,
             ) {
                 unsafe {
-                    let WorkerId {
+                    let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id0,
                         worker_name: worker_name0,
                     } = worker_id;
-                    let ComponentId { uuid: uuid1 } = component_id0;
-                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                    let super::super::super::golem::rpc::types::ComponentId {
+                        uuid: uuid1,
+                    } = component_id0;
+                    let super::super::super::golem::rpc::types::Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
                     let vec3 = worker_name0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
@@ -1802,7 +1805,7 @@ pub mod golem {
                         }
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "revert-worker"]
                         fn wit_import(
@@ -1850,7 +1853,7 @@ pub mod golem {
                     let len0 = vec0.len();
                     let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "resolve-component-id"]
                         fn wit_import(_: *mut u8, _: usize, _: *mut u8);
@@ -1867,8 +1870,8 @@ pub mod golem {
                             let e = {
                                 let l3 = *ptr1.add(8).cast::<i64>();
                                 let l4 = *ptr1.add(16).cast::<i64>();
-                                ComponentId {
-                                    uuid: Uuid {
+                                super::super::super::golem::rpc::types::ComponentId {
+                                    uuid: super::super::super::golem::rpc::types::Uuid {
                                         high_bits: l3 as u64,
                                         low_bits: l4 as u64,
                                     },
@@ -1899,7 +1902,7 @@ pub mod golem {
                     let len1 = vec1.len();
                     let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "resolve-worker-id"]
                         fn wit_import(
@@ -1936,9 +1939,9 @@ pub mod golem {
                                     len8,
                                     len8,
                                 );
-                                WorkerId {
-                                    component_id: ComponentId {
-                                        uuid: Uuid {
+                                super::super::super::golem::rpc::types::WorkerId {
+                                    component_id: super::super::super::golem::rpc::types::ComponentId {
+                                        uuid: super::super::super::golem::rpc::types::Uuid {
                                             high_bits: l4 as u64,
                                             low_bits: l5 as u64,
                                         },
@@ -1971,7 +1974,7 @@ pub mod golem {
                     let len1 = vec1.len();
                     let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.6")]
                     extern "C" {
                         #[link_name = "resolve-worker-id-strict"]
                         fn wit_import(
@@ -2008,9 +2011,9 @@ pub mod golem {
                                     len8,
                                     len8,
                                 );
-                                WorkerId {
-                                    component_id: ComponentId {
-                                        uuid: Uuid {
+                                super::super::super::golem::rpc::types::WorkerId {
+                                    component_id: super::super::super::golem::rpc::types::ComponentId {
+                                        uuid: super::super::super::golem::rpc::types::Uuid {
                                             high_bits: l4 as u64,
                                             low_bits: l5 as u64,
                                         },
@@ -2021,49 +2024,6 @@ pub mod golem {
                             Some(e)
                         }
                         _ => _rt::invalid_enum_discriminant(),
-                    }
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Construct an uri for a given worker id.
-            pub fn worker_uri(worker_id: &WorkerId) -> Uri {
-                unsafe {
-                    #[repr(align(4))]
-                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
-                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
-                    let WorkerId {
-                        component_id: component_id0,
-                        worker_name: worker_name0,
-                    } = worker_id;
-                    let ComponentId { uuid: uuid1 } = component_id0;
-                    let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
-                    let vec3 = worker_name0;
-                    let ptr3 = vec3.as_ptr().cast::<u8>();
-                    let len3 = vec3.len();
-                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.5")]
-                    extern "C" {
-                        #[link_name = "worker-uri"]
-                        fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8) {
-                        unreachable!()
-                    }
-                    wit_import(
-                        _rt::as_i64(high_bits2),
-                        _rt::as_i64(low_bits2),
-                        ptr3.cast_mut(),
-                        len3,
-                        ptr4,
-                    );
-                    let l5 = *ptr4.add(0).cast::<*mut u8>();
-                    let l6 = *ptr4.add(4).cast::<usize>();
-                    let len7 = l6;
-                    let bytes7 = _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
-                    super::super::super::golem::rpc::types::Uri {
-                        value: _rt::string_lift(bytes7),
                     }
                 }
             }
@@ -2105,7 +2065,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[resource-drop]span"]
                             fn drop(_: u32);
@@ -2144,7 +2104,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[resource-drop]invocation-context"]
                             fn drop(_: u32);
@@ -2217,7 +2177,7 @@ pub mod golem {
                     let ptr0 = vec0.as_ptr().cast::<u8>();
                     let len0 = vec0.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/context@1.1.6")]
                     extern "C" {
                         #[link_name = "start-span"]
                         fn wit_import(_: *mut u8, _: usize) -> i32;
@@ -2238,7 +2198,7 @@ pub mod golem {
             pub fn current_context() -> InvocationContext {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/context@1.1.6")]
                     extern "C" {
                         #[link_name = "current-context"]
                         fn wit_import() -> i32;
@@ -2258,7 +2218,7 @@ pub mod golem {
             pub fn allow_forwarding_trace_context_headers(allow: bool) -> bool {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                    #[link(wasm_import_module = "golem:api/context@1.1.6")]
                     extern "C" {
                         #[link_name = "allow-forwarding-trace-context-headers"]
                         fn wit_import(_: i32) -> i32;
@@ -2288,7 +2248,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]span.started-at"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2324,7 +2284,7 @@ pub mod golem {
                             }
                         };
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]span.set-attribute"]
                             fn wit_import(
@@ -2400,7 +2360,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]span.set-attributes"]
                             fn wit_import(_: i32, _: *mut u8, _: usize);
@@ -2422,7 +2382,7 @@ pub mod golem {
                 pub fn finish(&self) {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]span.finish"]
                             fn wit_import(_: i32);
@@ -2447,7 +2407,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.trace-id"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2477,7 +2437,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.span-id"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2510,7 +2470,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.parent"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2555,7 +2515,7 @@ pub mod golem {
                         let len0 = vec0.len();
                         let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.get-attribute"]
                             fn wit_import(
@@ -2625,7 +2585,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.get-attributes"]
                             fn wit_import(_: i32, _: i32, _: *mut u8);
@@ -2707,7 +2667,7 @@ pub mod golem {
                         let len0 = vec0.len();
                         let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.get-attribute-chain"]
                             fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
@@ -2764,7 +2724,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.get-attribute-chains"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2847,7 +2807,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/context@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/context@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]invocation-context.trace-context-headers"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -3865,7 +3825,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.6")]
                         extern "C" {
                             #[link_name = "[resource-drop]get-oplog"]
                             fn drop(_: u32);
@@ -3902,7 +3862,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.6")]
                         extern "C" {
                             #[link_name = "[resource-drop]search-oplog"]
                             fn drop(_: u32);
@@ -3915,14 +3875,14 @@ pub mod golem {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn new(worker_id: &WorkerId, start: OplogIndex) -> Self {
                     unsafe {
-                        let super::super::super::golem::api::host::WorkerId {
+                        let super::super::super::golem::rpc::types::WorkerId {
                             component_id: component_id0,
                             worker_name: worker_name0,
                         } = worker_id;
-                        let super::super::super::golem::api::host::ComponentId {
+                        let super::super::super::golem::rpc::types::ComponentId {
                             uuid: uuid1,
                         } = component_id0;
-                        let super::super::super::golem::api::host::Uuid {
+                        let super::super::super::golem::rpc::types::Uuid {
                             high_bits: high_bits2,
                             low_bits: low_bits2,
                         } = uuid1;
@@ -3930,7 +3890,7 @@ pub mod golem {
                         let ptr3 = vec3.as_ptr().cast::<u8>();
                         let len3 = vec3.len();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.6")]
                         extern "C" {
                             #[link_name = "[constructor]get-oplog"]
                             fn wit_import(
@@ -3973,7 +3933,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]get-oplog.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -4130,7 +4090,7 @@ pub mod golem {
                                                                 }
                                                                 _rt::cabi_dealloc(base57, len57 * 16, 4);
                                                                 PluginInstallationDescription {
-                                                                    installation_id: super::super::super::golem::api::host::Uuid {
+                                                                    installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                         high_bits: l41 as u64,
                                                                         low_bits: l42 as u64,
                                                                     },
@@ -4147,9 +4107,9 @@ pub mod golem {
                                                                 seconds: l5 as u64,
                                                                 nanoseconds: l6 as u32,
                                                             },
-                                                            worker_id: super::super::super::golem::api::host::WorkerId {
-                                                                component_id: super::super::super::golem::api::host::ComponentId {
-                                                                    uuid: super::super::super::golem::api::host::Uuid {
+                                                            worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                                                component_id: super::super::super::golem::rpc::types::ComponentId {
+                                                                    uuid: super::super::super::golem::rpc::types::Uuid {
                                                                         high_bits: l7 as u64,
                                                                         low_bits: l8 as u64,
                                                                     },
@@ -4176,9 +4136,9 @@ pub mod golem {
                                                                             len36,
                                                                             len36,
                                                                         );
-                                                                        super::super::super::golem::api::host::WorkerId {
-                                                                            component_id: super::super::super::golem::api::host::ComponentId {
-                                                                                uuid: super::super::super::golem::api::host::Uuid {
+                                                                        super::super::super::golem::rpc::types::WorkerId {
+                                                                            component_id: super::super::super::golem::rpc::types::ComponentId {
+                                                                                uuid: super::super::super::golem::rpc::types::Uuid {
                                                                                     high_bits: l32 as u64,
                                                                                     low_bits: l33 as u64,
                                                                                 },
@@ -6186,7 +6146,7 @@ pub mod golem {
                                                                 }
                                                                 _rt::cabi_dealloc(base445, len445 * 16, 4);
                                                                 PluginInstallationDescription {
-                                                                    installation_id: super::super::super::golem::api::host::Uuid {
+                                                                    installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                         high_bits: l429 as u64,
                                                                         low_bits: l430 as u64,
                                                                     },
@@ -6701,7 +6661,7 @@ pub mod golem {
                                                                 nanoseconds: l532 as u32,
                                                             },
                                                             plugin: PluginInstallationDescription {
-                                                                installation_id: super::super::super::golem::api::host::Uuid {
+                                                                installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                     high_bits: l533 as u64,
                                                                     low_bits: l534 as u64,
                                                                 },
@@ -6770,7 +6730,7 @@ pub mod golem {
                                                                 nanoseconds: l551 as u32,
                                                             },
                                                             plugin: PluginInstallationDescription {
-                                                                installation_id: super::super::super::golem::api::host::Uuid {
+                                                                installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                     high_bits: l552 as u64,
                                                                     low_bits: l553 as u64,
                                                                 },
@@ -7018,14 +6978,14 @@ pub mod golem {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn new(worker_id: &WorkerId, text: &str) -> Self {
                     unsafe {
-                        let super::super::super::golem::api::host::WorkerId {
+                        let super::super::super::golem::rpc::types::WorkerId {
                             component_id: component_id0,
                             worker_name: worker_name0,
                         } = worker_id;
-                        let super::super::super::golem::api::host::ComponentId {
+                        let super::super::super::golem::rpc::types::ComponentId {
                             uuid: uuid1,
                         } = component_id0;
-                        let super::super::super::golem::api::host::Uuid {
+                        let super::super::super::golem::rpc::types::Uuid {
                             high_bits: high_bits2,
                             low_bits: low_bits2,
                         } = uuid1;
@@ -7036,7 +6996,7 @@ pub mod golem {
                         let ptr4 = vec4.as_ptr().cast::<u8>();
                         let len4 = vec4.len();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.6")]
                         extern "C" {
                             #[link_name = "[constructor]search-oplog"]
                             fn wit_import(
@@ -7082,7 +7042,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.5")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.6")]
                         extern "C" {
                             #[link_name = "[method]search-oplog.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -7240,7 +7200,7 @@ pub mod golem {
                                                                 }
                                                                 _rt::cabi_dealloc(base58, len58 * 16, 4);
                                                                 PluginInstallationDescription {
-                                                                    installation_id: super::super::super::golem::api::host::Uuid {
+                                                                    installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                         high_bits: l42 as u64,
                                                                         low_bits: l43 as u64,
                                                                     },
@@ -7257,9 +7217,9 @@ pub mod golem {
                                                                 seconds: l6 as u64,
                                                                 nanoseconds: l7 as u32,
                                                             },
-                                                            worker_id: super::super::super::golem::api::host::WorkerId {
-                                                                component_id: super::super::super::golem::api::host::ComponentId {
-                                                                    uuid: super::super::super::golem::api::host::Uuid {
+                                                            worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                                                component_id: super::super::super::golem::rpc::types::ComponentId {
+                                                                    uuid: super::super::super::golem::rpc::types::Uuid {
                                                                         high_bits: l8 as u64,
                                                                         low_bits: l9 as u64,
                                                                     },
@@ -7286,9 +7246,9 @@ pub mod golem {
                                                                             len37,
                                                                             len37,
                                                                         );
-                                                                        super::super::super::golem::api::host::WorkerId {
-                                                                            component_id: super::super::super::golem::api::host::ComponentId {
-                                                                                uuid: super::super::super::golem::api::host::Uuid {
+                                                                        super::super::super::golem::rpc::types::WorkerId {
+                                                                            component_id: super::super::super::golem::rpc::types::ComponentId {
+                                                                                uuid: super::super::super::golem::rpc::types::Uuid {
                                                                                     high_bits: l33 as u64,
                                                                                     low_bits: l34 as u64,
                                                                                 },
@@ -9296,7 +9256,7 @@ pub mod golem {
                                                                 }
                                                                 _rt::cabi_dealloc(base446, len446 * 16, 4);
                                                                 PluginInstallationDescription {
-                                                                    installation_id: super::super::super::golem::api::host::Uuid {
+                                                                    installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                         high_bits: l430 as u64,
                                                                         low_bits: l431 as u64,
                                                                     },
@@ -9811,7 +9771,7 @@ pub mod golem {
                                                                 nanoseconds: l533 as u32,
                                                             },
                                                             plugin: PluginInstallationDescription {
-                                                                installation_id: super::super::super::golem::api::host::Uuid {
+                                                                installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                     high_bits: l534 as u64,
                                                                     low_bits: l535 as u64,
                                                                 },
@@ -9880,7 +9840,7 @@ pub mod golem {
                                                                 nanoseconds: l552 as u32,
                                                             },
                                                             plugin: PluginInstallationDescription {
-                                                                installation_id: super::super::super::golem::api::host::Uuid {
+                                                                installation_id: super::super::super::golem::rpc::types::Uuid {
                                                                     high_bits: l553 as u64,
                                                                     low_bits: l554 as u64,
                                                                 },
@@ -10135,6 +10095,55 @@ pub mod golem {
             use super::super::super::_rt;
             pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            /// UUID
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Uuid {
+                pub high_bits: u64,
+                pub low_bits: u64,
+            }
+            impl ::core::fmt::Debug for Uuid {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Uuid")
+                        .field("high-bits", &self.high_bits)
+                        .field("low-bits", &self.low_bits)
+                        .finish()
+                }
+            }
+            /// Represents a Golem component
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct ComponentId {
+                pub uuid: Uuid,
+            }
+            impl ::core::fmt::Debug for ComponentId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ComponentId").field("uuid", &self.uuid).finish()
+                }
+            }
+            /// Represents a Golem worker
+            #[derive(Clone)]
+            pub struct WorkerId {
+                pub component_id: ComponentId,
+                pub worker_name: _rt::String,
+            }
+            impl ::core::fmt::Debug for WorkerId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("WorkerId")
+                        .field("component-id", &self.component_id)
+                        .field("worker-name", &self.worker_name)
+                        .finish()
+                }
+            }
             pub type NodeIndex = i32;
             pub type ResourceId = u64;
             #[repr(u8)]
@@ -10490,7 +10499,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]wasm-rpc"]
                             fn drop(_: u32);
@@ -10527,7 +10536,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]future-invoke-result"]
                             fn drop(_: u32);
@@ -10564,7 +10573,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]cancellation-token"]
                             fn drop(_: u32);
@@ -10573,25 +10582,139 @@ pub mod golem {
                     }
                 }
             }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Parses a UUID from a string
+            pub fn parse_uuid(uuid: &str) -> Result<Uuid, _rt::String> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let vec0 = uuid;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "parse-uuid"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i64>();
+                                let l4 = *ptr1.add(16).cast::<i64>();
+                                Uuid {
+                                    high_bits: l3 as u64,
+                                    low_bits: l4 as u64,
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = *ptr1.add(8).cast::<*mut u8>();
+                                let l6 = *ptr1.add(12).cast::<usize>();
+                                let len7 = l6;
+                                let bytes7 = _rt::Vec::from_raw_parts(
+                                    l5.cast(),
+                                    len7,
+                                    len7,
+                                );
+                                _rt::string_lift(bytes7)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Converts a UUID to a string
+            pub fn uuid_to_string(uuid: Uuid) -> _rt::String {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let Uuid { high_bits: high_bits0, low_bits: low_bits0 } = uuid;
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "uuid-to-string"]
+                        fn wit_import(_: i64, _: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(_rt::as_i64(high_bits0), _rt::as_i64(low_bits0), ptr1);
+                    let l2 = *ptr1.add(0).cast::<*mut u8>();
+                    let l3 = *ptr1.add(4).cast::<usize>();
+                    let len4 = l3;
+                    let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
+                    _rt::string_lift(bytes4)
+                }
+            }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn new(location: &Uri) -> Self {
+                pub fn new(worker_id: &WorkerId) -> Self {
                     unsafe {
-                        let Uri { value: value0 } = location;
-                        let vec1 = value0;
-                        let ptr1 = vec1.as_ptr().cast::<u8>();
-                        let len1 = vec1.len();
+                        let WorkerId {
+                            component_id: component_id0,
+                            worker_name: worker_name0,
+                        } = worker_id;
+                        let ComponentId { uuid: uuid1 } = component_id0;
+                        let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
+                        let vec3 = worker_name0;
+                        let ptr3 = vec3.as_ptr().cast::<u8>();
+                        let len3 = vec3.len();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[constructor]wasm-rpc"]
-                            fn wit_import(_: *mut u8, _: usize) -> i32;
+                            fn wit_import(_: i64, _: i64, _: *mut u8, _: usize) -> i32;
                         }
                         #[cfg(not(target_arch = "wasm32"))]
-                        fn wit_import(_: *mut u8, _: usize) -> i32 {
+                        fn wit_import(_: i64, _: i64, _: *mut u8, _: usize) -> i32 {
                             unreachable!()
                         }
-                        let ret = wit_import(ptr1.cast_mut(), len1);
+                        let ret = wit_import(
+                            _rt::as_i64(high_bits2),
+                            _rt::as_i64(low_bits2),
+                            ptr3.cast_mut(),
+                            len3,
+                        );
+                        WasmRpc::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn ephemeral(component_id: ComponentId) -> WasmRpc {
+                    unsafe {
+                        let ComponentId { uuid: uuid0 } = component_id;
+                        let Uuid { high_bits: high_bits1, low_bits: low_bits1 } = uuid0;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[static]wasm-rpc.ephemeral"]
+                            fn wit_import(_: i64, _: i64) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i64, _: i64) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            _rt::as_i64(high_bits1),
+                            _rt::as_i64(low_bits1),
+                        );
                         WasmRpc::from_handle(ret as u32)
                     }
                 }
@@ -10844,7 +10967,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke-and-await"]
                             fn wit_import(
@@ -11480,7 +11603,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke"]
                             fn wit_import(
@@ -11838,7 +11961,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.async-invoke-and-await"]
                             fn wit_import(
@@ -12126,7 +12249,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.schedule-invocation"]
                             fn wit_import(
@@ -12419,7 +12542,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.schedule-cancelable-invocation"]
                             fn wit_import(
@@ -12470,7 +12593,7 @@ pub mod golem {
                 pub fn subscribe(&self) -> Pollable {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.subscribe"]
                             fn wit_import(_: i32) -> i32;
@@ -12497,7 +12620,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.get"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -12871,7 +12994,7 @@ pub mod golem {
                 pub fn cancel(&self) {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                         extern "C" {
                             #[link_name = "[method]cancellation-token.cancel"]
                             fn wit_import(_: i32);
@@ -13342,7 +13465,7 @@ pub mod golem {
                     }
                     let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                     extern "C" {
                         #[link_name = "extract-value"]
                         fn wit_import(
@@ -14106,7 +14229,7 @@ pub mod golem {
                     }
                     let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.1.3")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
                     extern "C" {
                         #[link_name = "extract-type"]
                         fn wit_import(
@@ -14751,11 +14874,11 @@ pub mod exports {
                 static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
                 use super::super::super::super::_rt;
                 pub type AccountId = super::super::super::super::golem::api::host::AccountId;
-                pub type ComponentId = super::super::super::super::golem::api::host::ComponentId;
                 pub type OplogIndex = super::super::super::super::golem::api::host::OplogIndex;
-                pub type WorkerId = super::super::super::super::golem::api::host::WorkerId;
                 pub type WorkerMetadata = super::super::super::super::golem::api::host::WorkerMetadata;
                 pub type OplogEntry = super::super::super::super::golem::api::oplog::OplogEntry;
+                pub type ComponentId = super::super::super::super::golem::rpc::types::ComponentId;
+                pub type WorkerId = super::super::super::super::golem::rpc::types::WorkerId;
                 #[derive(Clone)]
                 pub struct AccountInfo {
                     pub account_id: AccountId,
@@ -14884,7 +15007,7 @@ pub mod exports {
                         #[cfg(target_arch = "wasm32")]
                         {
                             #[link(
-                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.5"
+                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.6"
                             )]
                             extern "C" {
                                 #[link_name = "[resource-drop]processor"]
@@ -14933,8 +15056,8 @@ pub mod exports {
                                     value: _rt::string_lift(bytes0),
                                 },
                             },
-                            super::super::super::super::golem::api::host::ComponentId {
-                                uuid: super::super::super::super::golem::api::host::Uuid {
+                            super::super::super::super::golem::rpc::types::ComponentId {
+                                uuid: super::super::super::super::golem::rpc::types::Uuid {
                                     high_bits: arg2 as u64,
                                     low_bits: arg3 as u64,
                                 },
@@ -15160,7 +15283,7 @@ pub mod exports {
                                                 }
                                                 _rt::cabi_dealloc(base85, len85 * 16, 4);
                                                 super::super::super::super::golem::api::oplog::PluginInstallationDescription {
-                                                    installation_id: super::super::super::super::golem::api::host::Uuid {
+                                                    installation_id: super::super::super::super::golem::rpc::types::Uuid {
                                                         high_bits: l69 as u64,
                                                         low_bits: l70 as u64,
                                                     },
@@ -15177,9 +15300,9 @@ pub mod exports {
                                                 seconds: l33 as u64,
                                                 nanoseconds: l34 as u32,
                                             },
-                                            worker_id: super::super::super::super::golem::api::host::WorkerId {
-                                                component_id: super::super::super::super::golem::api::host::ComponentId {
-                                                    uuid: super::super::super::super::golem::api::host::Uuid {
+                                            worker_id: super::super::super::super::golem::rpc::types::WorkerId {
+                                                component_id: super::super::super::super::golem::rpc::types::ComponentId {
+                                                    uuid: super::super::super::super::golem::rpc::types::Uuid {
                                                         high_bits: l35 as u64,
                                                         low_bits: l36 as u64,
                                                     },
@@ -15206,9 +15329,9 @@ pub mod exports {
                                                             len64,
                                                             len64,
                                                         );
-                                                        super::super::super::super::golem::api::host::WorkerId {
-                                                            component_id: super::super::super::super::golem::api::host::ComponentId {
-                                                                uuid: super::super::super::super::golem::api::host::Uuid {
+                                                        super::super::super::super::golem::rpc::types::WorkerId {
+                                                            component_id: super::super::super::super::golem::rpc::types::ComponentId {
+                                                                uuid: super::super::super::super::golem::rpc::types::Uuid {
                                                                     high_bits: l60 as u64,
                                                                     low_bits: l61 as u64,
                                                                 },
@@ -17220,7 +17343,7 @@ pub mod exports {
                                                 }
                                                 _rt::cabi_dealloc(base473, len473 * 16, 4);
                                                 super::super::super::super::golem::api::oplog::PluginInstallationDescription {
-                                                    installation_id: super::super::super::super::golem::api::host::Uuid {
+                                                    installation_id: super::super::super::super::golem::rpc::types::Uuid {
                                                         high_bits: l457 as u64,
                                                         low_bits: l458 as u64,
                                                     },
@@ -17737,7 +17860,7 @@ pub mod exports {
                                                 nanoseconds: l560 as u32,
                                             },
                                             plugin: super::super::super::super::golem::api::oplog::PluginInstallationDescription {
-                                                installation_id: super::super::super::super::golem::api::host::Uuid {
+                                                installation_id: super::super::super::super::golem::rpc::types::Uuid {
                                                     high_bits: l561 as u64,
                                                     low_bits: l562 as u64,
                                                 },
@@ -17806,7 +17929,7 @@ pub mod exports {
                                                 nanoseconds: l579 as u32,
                                             },
                                             plugin: super::super::super::super::golem::api::oplog::PluginInstallationDescription {
-                                                installation_id: super::super::super::super::golem::api::host::Uuid {
+                                                installation_id: super::super::super::super::golem::rpc::types::Uuid {
                                                     high_bits: l580 as u64,
                                                     low_bits: l581 as u64,
                                                 },
@@ -18043,9 +18166,9 @@ pub mod exports {
                     _rt::cabi_dealloc(base649, len649 * 136, 8);
                     let result650 = T::process(
                         ProcessorBorrow::lift(l0 as u32 as usize).get(),
-                        super::super::super::super::golem::api::host::WorkerId {
-                            component_id: super::super::super::super::golem::api::host::ComponentId {
-                                uuid: super::super::super::super::golem::api::host::Uuid {
+                        super::super::super::super::golem::rpc::types::WorkerId {
+                            component_id: super::super::super::super::golem::rpc::types::ComponentId {
+                                uuid: super::super::super::super::golem::rpc::types::Uuid {
                                     high_bits: l1 as u64,
                                     low_bits: l2 as u64,
                                 },
@@ -18053,9 +18176,9 @@ pub mod exports {
                             worker_name: _rt::string_lift(bytes5),
                         },
                         super::super::super::super::golem::api::host::WorkerMetadata {
-                            worker_id: super::super::super::super::golem::api::host::WorkerId {
-                                component_id: super::super::super::super::golem::api::host::ComponentId {
-                                    uuid: super::super::super::super::golem::api::host::Uuid {
+                            worker_id: super::super::super::super::golem::rpc::types::WorkerId {
+                                component_id: super::super::super::super::golem::rpc::types::ComponentId {
+                                    uuid: super::super::super::super::golem::rpc::types::Uuid {
                                         high_bits: l6 as u64,
                                         low_bits: l7 as u64,
                                     },
@@ -18123,7 +18246,7 @@ pub mod exports {
                         #[cfg(target_arch = "wasm32")]
                         {
                             #[link(
-                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.5"
+                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.6"
                             )]
                             extern "C" {
                                 #[link_name = "[resource-new]processor"]
@@ -18145,7 +18268,7 @@ pub mod exports {
                         #[cfg(target_arch = "wasm32")]
                         {
                             #[link(
-                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.5"
+                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.6"
                             )]
                             extern "C" {
                                 #[link_name = "[resource-rep]processor"]
@@ -18178,36 +18301,36 @@ pub mod exports {
                     ) -> Result<(), _rt::String>;
                 }
                 #[doc(hidden)]
-                macro_rules! __export_golem_api_oplog_processor_1_1_5_cabi {
+                macro_rules! __export_golem_api_oplog_processor_1_1_6_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[export_name =
-                        "golem:api/oplog-processor@1.1.5#[constructor]processor"] unsafe
+                        "golem:api/oplog-processor@1.1.6#[constructor]processor"] unsafe
                         extern "C" fn export_constructor_processor(arg0 : * mut u8, arg1
                         : usize, arg2 : i64, arg3 : i64, arg4 : * mut u8, arg5 : usize,)
                         -> i32 { $($path_to_types)*::
                         _export_constructor_processor_cabi::<<$ty as $($path_to_types)*::
                         Guest >::Processor > (arg0, arg1, arg2, arg3, arg4, arg5) }
                         #[export_name =
-                        "golem:api/oplog-processor@1.1.5#[method]processor.process"]
+                        "golem:api/oplog-processor@1.1.6#[method]processor.process"]
                         unsafe extern "C" fn export_method_processor_process(arg0 : * mut
                         u8,) -> * mut u8 { $($path_to_types)*::
                         _export_method_processor_process_cabi::<<$ty as
                         $($path_to_types)*:: Guest >::Processor > (arg0) } #[export_name
                         =
-                        "cabi_post_golem:api/oplog-processor@1.1.5#[method]processor.process"]
+                        "cabi_post_golem:api/oplog-processor@1.1.6#[method]processor.process"]
                         unsafe extern "C" fn _post_return_method_processor_process(arg0 :
                         * mut u8,) { $($path_to_types)*::
                         __post_return_method_processor_process::<<$ty as
                         $($path_to_types)*:: Guest >::Processor > (arg0) } const _ : () =
                         { #[doc(hidden)] #[export_name =
-                        "golem:api/oplog-processor@1.1.5#[dtor]processor"]
+                        "golem:api/oplog-processor@1.1.6#[dtor]processor"]
                         #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
                         u8) { $($path_to_types)*:: Processor::dtor::< <$ty as
                         $($path_to_types)*:: Guest >::Processor > (rep) } }; };
                     };
                 }
                 #[doc(hidden)]
-                pub(crate) use __export_golem_api_oplog_processor_1_1_5_cabi;
+                pub(crate) use __export_golem_api_oplog_processor_1_1_6_cabi;
                 #[repr(align(4))]
                 struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
                 static mut _RET_AREA: _RetArea = _RetArea(
@@ -18394,6 +18517,43 @@ mod _rt {
     pub use alloc_crate::vec::Vec;
     pub use alloc_crate::alloc;
     pub use alloc_crate::string::String;
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
+    pub unsafe fn invalid_enum_discriminant<T>() -> T {
+        if cfg!(debug_assertions) {
+            panic!("invalid enum discriminant")
+        } else {
+            core::hint::unreachable_unchecked()
+        }
+    }
+    pub fn as_i64<T: AsI64>(t: T) -> i64 {
+        t.as_i64()
+    }
+    pub trait AsI64 {
+        fn as_i64(self) -> i64;
+    }
+    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
+        fn as_i64(self) -> i64 {
+            (*self).as_i64()
+        }
+    }
+    impl AsI64 for i64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
+    impl AsI64 for u64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
     pub fn as_i32<T: AsI32>(t: T) -> i32 {
         t.as_i32()
     }
@@ -18453,29 +18613,6 @@ mod _rt {
             self as i32
         }
     }
-    pub fn as_i64<T: AsI64>(t: T) -> i64 {
-        t.as_i64()
-    }
-    pub trait AsI64 {
-        fn as_i64(self) -> i64;
-    }
-    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
-        fn as_i64(self) -> i64 {
-            (*self).as_i64()
-        }
-    }
-    impl AsI64 for i64 {
-        #[inline]
-        fn as_i64(self) -> i64 {
-            self as i64
-        }
-    }
-    impl AsI64 for u64 {
-        #[inline]
-        fn as_i64(self) -> i64 {
-            self as i64
-        }
-    }
     pub fn as_f32<T: AsF32>(t: T) -> f32 {
         t.as_f32()
     }
@@ -18510,13 +18647,6 @@ mod _rt {
             self as f64
         }
     }
-    pub unsafe fn invalid_enum_discriminant<T>() -> T {
-        if cfg!(debug_assertions) {
-            panic!("invalid enum discriminant")
-        } else {
-            core::hint::unreachable_unchecked()
-        }
-    }
     pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
         if size == 0 {
             return;
@@ -18529,13 +18659,6 @@ mod _rt {
             core::char::from_u32(val).unwrap()
         } else {
             core::char::from_u32_unchecked(val)
-        }
-    }
-    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
-        if cfg!(debug_assertions) {
-            String::from_utf8(bytes).unwrap()
-        } else {
-            String::from_utf8_unchecked(bytes)
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -18572,7 +18695,7 @@ macro_rules! __export_oplog_processor_impl {
         exports::golem::component::api::__export_golem_component_api_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::component::api);
         $($path_to_types_root)*::
-        exports::golem::api::oplog_processor::__export_golem_api_oplog_processor_1_1_5_cabi!($ty
+        exports::golem::api::oplog_processor::__export_golem_api_oplog_processor_1_1_6_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::api::oplog_processor);
     };
 }
@@ -18581,220 +18704,222 @@ pub(crate) use __export_oplog_processor_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:component:oplog-processor:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10496] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xfaP\x01A\x02\x01A$\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10616] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf2Q\x01A\x02\x01A%\x01\
 B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\
 \x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-cloc\
 k@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\
 \x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[me\
 thod]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04pol\
 l\x01\x06\x03\0\x12wasi:io/poll@0.2.0\x05\x01\x02\x03\0\0\x08datetime\x02\x03\0\x01\
-\x08pollable\x01BK\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
-\x03\x04\0\x08pollable\x03\0\x02\x01z\x04\0\x0anode-index\x03\0\x04\x01w\x04\0\x0b\
-resource-id\x03\0\x06\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\
-\x08\x01o\x02s\x05\x01p\x0a\x01k\x05\x01o\x02s\x0c\x01p\x0d\x01ps\x01p\x05\x01o\x02\
-\x0c\x0c\x01o\x02\x07\x09\x01q\x16\x0brecord-type\x01\x0b\0\x0cvariant-type\x01\x0e\
-\0\x09enum-type\x01\x0f\0\x0aflags-type\x01\x0f\0\x0atuple-type\x01\x10\0\x09lis\
-t-type\x01\x05\0\x0boption-type\x01\x05\0\x0bresult-type\x01\x11\0\x0cprim-u8-ty\
-pe\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8\
--type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim\
--f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
-prim-string-type\0\0\x0bhandle-type\x01\x12\0\x04\0\x0dwit-type-node\x03\0\x13\x01\
-p\x14\x01r\x01\x05nodes\x15\x04\0\x08wit-type\x03\0\x16\x01r\x01\x05values\x04\0\
-\x03uri\x03\0\x18\x01o\x02y\x0c\x01p\x7f\x01j\x01\x0c\x01\x0c\x01o\x02\x19w\x01q\
-\x16\x0crecord-value\x01\x10\0\x0dvariant-value\x01\x1a\0\x0aenum-value\x01y\0\x0b\
-flags-value\x01\x1b\0\x0btuple-value\x01\x10\0\x0alist-value\x01\x10\0\x0coption\
--value\x01\x0c\0\x0cresult-value\x01\x1c\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08\
-prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-\
-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09p\
-rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1d\0\
-\x04\0\x08wit-node\x03\0\x1e\x01p\x1f\x01r\x01\x05nodes\x20\x04\0\x09wit-value\x03\
-\0!\x01r\x02\x05value\"\x03typ\x17\x04\0\x0evalue-and-type\x03\0#\x01q\x04\x0epr\
-otocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-erro\
-r\x01s\0\x04\0\x09rpc-error\x03\0%\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-inv\
-oke-result\x03\x01\x04\0\x12cancellation-token\x03\x01\x01i'\x01@\x01\x08locatio\
-n\x19\0*\x04\0\x15[constructor]wasm-rpc\x01+\x01h'\x01p\"\x01j\x01\"\x01&\x01@\x03\
-\x04self,\x0dfunction-names\x0ffunction-params-\0.\x04\0![method]wasm-rpc.invoke\
--and-await\x01/\x01j\0\x01&\x01@\x03\x04self,\x0dfunction-names\x0ffunction-para\
-ms-\00\x04\0\x17[method]wasm-rpc.invoke\x011\x01i(\x01@\x03\x04self,\x0dfunction\
--names\x0ffunction-params-\02\x04\0'[method]wasm-rpc.async-invoke-and-await\x013\
-\x01@\x04\x04self,\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params-\x01\
-\0\x04\0$[method]wasm-rpc.schedule-invocation\x014\x01i)\x01@\x04\x04self,\x0esc\
-heduled-time\x01\x0dfunction-names\x0ffunction-params-\05\x04\0/[method]wasm-rpc\
-.schedule-cancelable-invocation\x016\x01h(\x01i\x03\x01@\x01\x04self7\08\x04\0&[\
-method]future-invoke-result.subscribe\x019\x01k.\x01@\x01\x04self7\0:\x04\0\x20[\
-method]future-invoke-result.get\x01;\x01h)\x01@\x01\x04self<\x01\0\x04\0![method\
-]cancellation-token.cancel\x01=\x01@\x01\x03vnt$\0\"\x04\0\x0dextract-value\x01>\
-\x01@\x01\x03vnt$\0\x17\x04\0\x0cextract-type\x01?\x03\0\x15golem:rpc/types@0.1.\
-3\x05\x04\x01B\x0f\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07i\
-nstant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\
-\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\
-\0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-du\
-ration\x01\x0a\x03\0!wasi:clocks/monotonic-clock@0.2.0\x05\x05\x02\x03\0\x02\x03\
-uri\x02\x03\0\x02\x09wit-value\x02\x03\0\x03\x08duration\x01B{\x02\x03\x02\x01\x06\
-\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x07\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\
-\x01\x08\x04\0\x08duration\x03\0\x04\x01w\x04\0\x0boplog-index\x03\0\x06\x01w\x04\
-\0\x11component-version\x03\0\x08\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04u\
-uid\x03\0\x0a\x01r\x01\x04uuid\x0b\x04\0\x0ccomponent-id\x03\0\x0c\x01r\x02\x0cc\
-omponent-id\x0d\x0bworker-names\x04\0\x09worker-id\x03\0\x0e\x01r\x02\x09worker-\
-id\x0f\x09oplog-idx\x07\x04\0\x0apromise-id\x03\0\x10\x01r\x01\x05values\x04\0\x0a\
-account-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x05\x09max-del\
-ay\x05\x0amultiplieru\x11max-jitter-factor\x14\x04\0\x0cretry-policy\x03\0\x15\x01\
-q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\
-\0\x11persistence-level\x03\0\x17\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0b\
-update-mode\x03\0\x19\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\
-\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x1b\x01m\x04\x05equal\x09\
-not-equal\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x1d\x01m\x07\
-\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\
-\0\x0dworker-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\x12work\
-er-name-filter\x03\0!\x01r\x02\x0acomparator\x1c\x05value\x20\x04\0\x14worker-st\
-atus-filter\x03\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x15worker-version-\
-filter\x03\0%\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x18worker-created-at-fi\
-lter\x03\0'\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\0\x11worker-env-fi\
-lter\x03\0)\x01q\x05\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\x0acreat\
-ed-at\x01(\0\x03env\x01*\0\x04\0\x16worker-property-filter\x03\0+\x01p,\x01r\x01\
-\x07filters-\x04\0\x11worker-all-filter\x03\0.\x01p/\x01r\x01\x07filters0\x04\0\x11\
-worker-any-filter\x03\01\x01ps\x01o\x02ss\x01p4\x01r\x06\x09worker-id\x0f\x04arg\
-s3\x03env5\x06status\x20\x11component-versionw\x0bretry-countw\x04\0\x0fworker-m\
-etadata\x03\06\x04\0\x0bget-workers\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\
-\x07\0\x17revert-last-invocations\x01w\0\x04\0\x14revert-worker-target\x03\09\x01\
-k2\x01i8\x01@\x03\x0ccomponent-id\x0d\x06filter;\x07precise\x7f\0<\x04\0\x18[con\
-structor]get-workers\x01=\x01h8\x01p7\x01k?\x01@\x01\x04self>\0\xc0\0\x04\0\x1c[\
-method]get-workers.get-next\x01A\x01@\0\0\x11\x04\0\x0ecreate-promise\x01B\x01p}\
-\x01@\x01\x0apromise-id\x11\0\xc3\0\x04\0\x0dawait-promise\x01D\x01k\xc3\0\x01@\x01\
-\x0apromise-id\x11\0\xc5\0\x04\0\x0cpoll-promise\x01F\x01@\x02\x0apromise-id\x11\
-\x04data\xc3\0\0\x7f\x04\0\x10complete-promise\x01G\x01@\x01\x0apromise-id\x11\x01\
-\0\x04\0\x0edelete-promise\x01H\x01@\0\0\x07\x04\0\x0fget-oplog-index\x01I\x01@\x01\
-\x09oplog-idx\x07\x01\0\x04\0\x0fset-oplog-index\x01J\x01@\x01\x08replicas}\x01\0\
-\x04\0\x0coplog-commit\x01K\x04\0\x14mark-begin-operation\x01I\x01@\x01\x05begin\
-\x07\x01\0\x04\0\x12mark-end-operation\x01L\x01@\0\0\x16\x04\0\x10get-retry-poli\
-cy\x01M\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\x10set-retry-policy\x01N\x01\
-@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01O\x01@\x01\x15new-persistence-\
-level\x18\x01\0\x04\0\x1bset-oplog-persistence-level\x01P\x01@\0\0\x7f\x04\0\x14\
-get-idempotence-mode\x01Q\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempote\
-nce-mode\x01R\x01@\0\0\x0b\x04\0\x18generate-idempotency-key\x01S\x01@\x03\x09wo\
-rker-id\x0f\x0etarget-version\x09\x04mode\x1a\x01\0\x04\0\x0dupdate-worker\x01T\x01\
-@\0\07\x04\0\x11get-self-metadata\x01U\x01k7\x01@\x01\x09worker-id\x0f\0\xd6\0\x04\
-\0\x13get-worker-metadata\x01W\x01@\x03\x10source-worker-id\x0f\x10target-worker\
--id\x0f\x11oplog-idx-cut-off\x07\x01\0\x04\0\x0bfork-worker\x01X\x01@\x02\x09wor\
-ker-id\x0f\x0drevert-target:\x01\0\x04\0\x0drevert-worker\x01Y\x01k\x0d\x01@\x01\
-\x13component-references\0\xda\0\x04\0\x14resolve-component-id\x01[\x01k\x0f\x01\
-@\x02\x13component-references\x0bworker-names\0\xdc\0\x04\0\x11resolve-worker-id\
-\x01]\x04\0\x18resolve-worker-id-strict\x01]\x01@\x01\x09worker-id\x0f\0\x01\x04\
-\0\x0aworker-uri\x01^\x03\0\x14golem:api/host@1.1.5\x05\x09\x01B7\x02\x03\x02\x01\
-\x02\x04\0\x08datetime\x03\0\0\x04\0\x04span\x03\x01\x04\0\x12invocation-context\
-\x03\x01\x01q\x01\x06string\x01s\0\x04\0\x0fattribute-value\x03\0\x04\x01r\x02\x03\
-keys\x05value\x05\x04\0\x09attribute\x03\0\x06\x01p\x05\x01r\x02\x03keys\x06valu\
-es\x08\x04\0\x0fattribute-chain\x03\0\x09\x01s\x04\0\x08trace-id\x03\0\x0b\x01s\x04\
-\0\x07span-id\x03\0\x0d\x01h\x02\x01@\x01\x04self\x0f\0\x01\x04\0\x17[method]spa\
-n.started-at\x01\x10\x01@\x03\x04self\x0f\x04names\x05value\x05\x01\0\x04\0\x1a[\
-method]span.set-attribute\x01\x11\x01p\x07\x01@\x02\x04self\x0f\x0aattributes\x12\
-\x01\0\x04\0\x1b[method]span.set-attributes\x01\x13\x01@\x01\x04self\x0f\x01\0\x04\
-\0\x13[method]span.finish\x01\x14\x01h\x03\x01@\x01\x04self\x15\0\x0c\x04\0#[met\
-hod]invocation-context.trace-id\x01\x16\x01@\x01\x04self\x15\0\x0e\x04\0\"[metho\
-d]invocation-context.span-id\x01\x17\x01i\x03\x01k\x18\x01@\x01\x04self\x15\0\x19\
-\x04\0![method]invocation-context.parent\x01\x1a\x01k\x05\x01@\x03\x04self\x15\x03\
-keys\x09inherited\x7f\0\x1b\x04\0([method]invocation-context.get-attribute\x01\x1c\
-\x01@\x02\x04self\x15\x09inherited\x7f\0\x12\x04\0)[method]invocation-context.ge\
-t-attributes\x01\x1d\x01@\x02\x04self\x15\x03keys\0\x08\x04\0.[method]invocation\
--context.get-attribute-chain\x01\x1e\x01p\x0a\x01@\x01\x04self\x15\0\x1f\x04\0/[\
-method]invocation-context.get-attribute-chains\x01\x20\x01o\x02ss\x01p!\x01@\x01\
-\x04self\x15\0\"\x04\00[method]invocation-context.trace-context-headers\x01#\x01\
-i\x02\x01@\x01\x04names\0$\x04\0\x0astart-span\x01%\x01@\0\0\x18\x04\0\x0fcurren\
-t-context\x01&\x01@\x01\x05allow\x7f\0\x7f\x04\0&allow-forwarding-trace-context-\
-headers\x01'\x03\0\x17golem:api/context@1.1.5\x05\x0a\x02\x03\0\x04\x0aaccount-i\
-d\x02\x03\0\x04\x11component-version\x02\x03\0\x04\x0boplog-index\x02\x03\0\x04\x0c\
-retry-policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-id\x02\x03\0\x05\x09a\
-ttribute\x02\x03\0\x05\x0fattribute-value\x02\x03\0\x05\x07span-id\x02\x03\0\x05\
-\x08trace-id\x01B\x82\x01\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\
-\x01\x07\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0b\x04\0\x0aaccount-id\x03\
-\0\x04\x02\x03\x02\x01\x0c\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x01\x0d\
-\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\x0e\x04\0\x0cretry-policy\x03\0\x0a\
-\x02\x03\x02\x01\x0f\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01\x10\x04\0\x09worker\
--id\x03\0\x0e\x02\x03\x02\x01\x11\x04\0\x09attribute\x03\0\x10\x02\x03\x02\x01\x12\
-\x04\0\x0fattribute-value\x03\0\x12\x02\x03\x02\x01\x13\x04\0\x07span-id\x03\0\x14\
-\x02\x03\x02\x01\x14\x04\0\x08trace-id\x03\0\x16\x01k\x09\x01q\x05\x0aread-local\
-\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14write-remote-b\
-atched\x01\x18\0\x04\0\x15wrapped-function-type\x03\0\x19\x01o\x02ss\x01p\x1b\x01\
-r\x04\x0finstallation-id\x0d\x04names\x07versions\x0aparameters\x1c\x04\0\x1fplu\
-gin-installation-description\x03\0\x1d\x01ps\x01k\x0f\x01p\x1e\x01r\x0a\x09times\
-tamp\x01\x09worker-id\x0f\x11component-version\x07\x04args\x1f\x03env\x1c\x0aacc\
-ount-id\x05\x06parent\x20\x0ecomponent-sizew\x20initial-total-linear-memory-size\
-w\x16initial-active-plugins!\x04\0\x11create-parameters\x03\0\"\x01r\x05\x09time\
-stamp\x01\x0dfunction-names\x07request\x03\x08response\x03\x15wrapped-function-t\
-ype\x1a\x04\0$imported-function-invoked-parameters\x03\0$\x01k\x15\x01kw\x01p\x11\
-\x01r\x06\x07span-id\x15\x05start\x01\x06parent&\x0elinked-context'\x0aattribute\
-s(\x09inherited\x7f\x04\0\x0flocal-span-data\x03\0)\x01r\x01\x07span-id\x15\x04\0\
-\x12external-span-data\x03\0+\x01q\x02\x0alocal-span\x01*\0\x0dexternal-span\x01\
-,\0\x04\0\x09span-data\x03\0-\x01p\x03\x01p.\x01p0\x01r\x07\x09timestamp\x01\x0d\
-function-names\x07request/\x0fidempotency-keys\x08trace-id\x17\x0ctrace-states\x1f\
-\x12invocation-context1\x04\0$exported-function-invoked-parameters\x03\02\x01r\x03\
-\x09timestamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-function-comp\
-leted-parameters\x03\04\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10error-param\
-eters\x03\06\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0fjump-par\
-ameters\x03\08\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1echange-ret\
-ry-policy-parameters\x03\0:\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1c\
-end-atomic-region-parameters\x03\0<\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\
-\x04\0\x1bend-remote-write-parameters\x03\0>\x01k/\x01r\x03\x0fidempotency-keys\x0d\
-function-names\x05input\xc0\0\x04\0'exported-function-invocation-parameters\x03\0\
-A\x01q\x02\x11exported-function\x01\xc2\0\0\x0dmanual-update\x01\x07\0\x04\0\x11\
-worker-invocation\x03\0C\x01r\x02\x09timestamp\x01\x0ainvocation\xc4\0\x04\0$pen\
-ding-worker-invocation-parameters\x03\0E\x01p}\x01q\x02\x0bauto-update\0\0\x0esn\
-apshot-based\x01\xc7\0\0\x04\0\x12update-description\x03\0H\x01r\x03\x09timestam\
-p\x01\x0etarget-version\x07\x12update-description\xc9\0\x04\0\x19pending-update-\
-parameters\x03\0J\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12new-compone\
-nt-sizew\x12new-active-plugins!\x04\0\x1csuccessful-update-parameters\x03\0L\x01\
-ks\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x07details\xce\0\x04\0\x18fai\
-led-update-parameters\x03\0O\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16grow-m\
-emory-parameters\x03\0Q\x01w\x04\0\x12worker-resource-id\x03\0S\x01r\x02\x09time\
-stamp\x01\x0bresource-id\xd4\0\x04\0\x1acreate-resource-parameters\x03\0U\x01r\x02\
-\x09timestamp\x01\x0bresource-id\xd4\0\x04\0\x18drop-resource-parameters\x03\0W\x01\
-r\x04\x09timestamp\x01\x0bresource-id\xd4\0\x0dresource-names\x0fresource-params\
-/\x04\0\x1cdescribe-resource-parameters\x03\0Y\x01m\x08\x06stdout\x06stderr\x05t\
-race\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\0[\x01\
-r\x04\x09timestamp\x01\x05level\xdc\0\x07contexts\x07messages\x04\0\x0elog-param\
-eters\x03\0]\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1aactivate-plugin-pa\
-rameters\x03\0_\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1cdeactivate-plug\
-in-parameters\x03\0a\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x11\
-revert-parameters\x03\0c\x01r\x02\x09timestamp\x01\x0fidempotency-keys\x04\0\x1c\
-cancel-invocation-parameters\x03\0e\x01r\x05\x09timestamp\x01\x07span-id\x15\x06\
-parent&\x0elinked-context&\x0aattributes(\x04\0\x15start-span-parameters\x03\0g\x01\
-r\x02\x09timestamp\x01\x07span-id\x15\x04\0\x16finish-span-parameters\x03\0i\x01\
-r\x04\x09timestamp\x01\x07span-id\x15\x03keys\x05value\x13\x04\0\x1dset-span-att\
-ribute-parameters\x03\0k\x01q\x20\x06create\x01#\0\x19imported-function-invoked\x01\
-%\0\x19exported-function-invoked\x013\0\x1bexported-function-completed\x015\0\x07\
-suspend\x01\x01\0\x05error\x017\0\x05no-op\x01\x01\0\x04jump\x019\0\x0binterrupt\
-ed\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01;\0\x13begin-atomic-r\
-egion\x01\x01\0\x11end-atomic-region\x01=\0\x12begin-remote-write\x01\x01\0\x10e\
-nd-remote-write\x01?\0\x19pending-worker-invocation\x01\xc6\0\0\x0epending-updat\
-e\x01\xcb\0\0\x11successful-update\x01\xcd\0\0\x0dfailed-update\x01\xd0\0\0\x0bg\
-row-memory\x01\xd2\0\0\x0fcreate-resource\x01\xd6\0\0\x0ddrop-resource\x01\xd8\0\
-\0\x11describe-resource\x01\xda\0\0\x03log\x01\xde\0\0\x07restart\x01\x01\0\x0fa\
-ctivate-plugin\x01\xe0\0\0\x11deactivate-plugin\x01\xe2\0\0\x06revert\x01\xe4\0\0\
-\x11cancel-invocation\x01\xe6\0\0\x0astart-span\x01\xe8\0\0\x0bfinish-span\x01\xea\
-\0\0\x12set-span-attribute\x01\xec\0\0\x04\0\x0boplog-entry\x03\0m\x04\0\x09get-\
-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01io\x01@\x02\x09worker-id\x0f\x05s\
-tart\x09\0\xf1\0\x04\0\x16[constructor]get-oplog\x01r\x01ho\x01p\xee\0\x01k\xf4\0\
-\x01@\x01\x04self\xf3\0\0\xf5\0\x04\0\x1a[method]get-oplog.get-next\x01v\x01ip\x01\
-@\x02\x09worker-id\x0f\x04texts\0\xf7\0\x04\0\x19[constructor]search-oplog\x01x\x01\
-hp\x01o\x02\x09\xee\0\x01p\xfa\0\x01k\xfb\0\x01@\x01\x04self\xf9\0\0\xfc\0\x04\0\
-\x1d[method]search-oplog.get-next\x01}\x03\0\x15golem:api/oplog@1.1.5\x05\x15\x01\
-B\x03\x01ps\x01@\0\0\0\x04\0\x15get-invoked-functions\x01\x01\x04\0\x13golem:com\
-ponent/api\x05\x16\x02\x03\0\x04\x0ccomponent-id\x02\x03\0\x04\x0fworker-metadat\
-a\x02\x03\0\x06\x0boplog-entry\x01B\x1d\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\
-\0\0\x02\x03\x02\x01\x07\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0b\x04\0\x0a\
-account-id\x03\0\x04\x02\x03\x02\x01\x17\x04\0\x0ccomponent-id\x03\0\x06\x02\x03\
-\x02\x01\x0d\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\x10\x04\0\x09worker-\
-id\x03\0\x0a\x02\x03\x02\x01\x18\x04\0\x0fworker-metadata\x03\0\x0c\x02\x03\x02\x01\
-\x19\x04\0\x0boplog-entry\x03\0\x0e\x01r\x01\x0aaccount-id\x05\x04\0\x0caccount-\
-info\x03\0\x10\x04\0\x09processor\x03\x01\x01o\x02ss\x01p\x13\x01i\x12\x01@\x03\x0c\
-account-info\x11\x0ccomponent-id\x07\x06config\x14\0\x15\x04\0\x16[constructor]p\
-rocessor\x01\x16\x01h\x12\x01p\x0f\x01j\0\x01s\x01@\x05\x04self\x17\x09worker-id\
-\x0b\x08metadata\x0d\x11first-entry-index\x09\x07entries\x18\0\x19\x04\0\x19[met\
-hod]processor.process\x01\x1a\x04\0\x1fgolem:api/oplog-processor@1.1.5\x05\x1a\x04\
-\0\x1fgolem:component/oplog-processor\x04\0\x0b\x15\x01\0\x0foplog-processor\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-\
-bindgen-rust\x060.36.0";
+\x08pollable\x01BX\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
+\x03\x04\0\x08pollable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uu\
+id\x03\0\x04\x01r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0cco\
+mponent-id\x07\x0bworker-names\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0anode-i\
+ndex\x03\0\x0a\x01w\x04\0\x0bresource-id\x03\0\x0c\x01m\x02\x05owned\x08borrowed\
+\x04\0\x0dresource-mode\x03\0\x0e\x01o\x02s\x0b\x01p\x10\x01k\x0b\x01o\x02s\x12\x01\
+p\x13\x01ps\x01p\x0b\x01o\x02\x12\x12\x01o\x02\x0d\x0f\x01q\x16\x0brecord-type\x01\
+\x11\0\x0cvariant-type\x01\x14\0\x09enum-type\x01\x15\0\x0aflags-type\x01\x15\0\x0a\
+tuple-type\x01\x16\0\x09list-type\x01\x0b\0\x0boption-type\x01\x0b\0\x0bresult-t\
+ype\x01\x17\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dp\
+rim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0d\
+prim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\
+\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\x18\0\x04\0\x0d\
+wit-type-node\x03\0\x19\x01p\x1a\x01r\x01\x05nodes\x1b\x04\0\x08wit-type\x03\0\x1c\
+\x01r\x01\x05values\x04\0\x03uri\x03\0\x1e\x01o\x02y\x12\x01p\x7f\x01j\x01\x12\x01\
+\x12\x01o\x02\x1fw\x01q\x16\x0crecord-value\x01\x16\0\x0dvariant-value\x01\x20\0\
+\x0aenum-value\x01y\0\x0bflags-value\x01!\0\x0btuple-value\x01\x16\0\x0alist-val\
+ue\x01\x16\0\x0coption-value\x01\x12\0\x0cresult-value\x01\"\0\x07prim-u8\x01}\0\
+\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08p\
+rim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cp\
+rim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01\
+s\0\x06handle\x01#\0\x04\0\x08wit-node\x03\0$\x01p%\x01r\x01\x05nodes&\x04\0\x09\
+wit-value\x03\0'\x01r\x02\x05value(\x03typ\x1d\x04\0\x0evalue-and-type\x03\0)\x01\
+q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-in\
+ternal-error\x01s\0\x04\0\x09rpc-error\x03\0+\x04\0\x08wasm-rpc\x03\x01\x04\0\x14\
+future-invoke-result\x03\x01\x04\0\x12cancellation-token\x03\x01\x01i-\x01@\x01\x09\
+worker-id\x09\00\x04\0\x15[constructor]wasm-rpc\x011\x01@\x01\x0ccomponent-id\x07\
+\00\x04\0\x1a[static]wasm-rpc.ephemeral\x012\x01h-\x01p(\x01j\x01(\x01,\x01@\x03\
+\x04self3\x0dfunction-names\x0ffunction-params4\05\x04\0![method]wasm-rpc.invoke\
+-and-await\x016\x01j\0\x01,\x01@\x03\x04self3\x0dfunction-names\x0ffunction-para\
+ms4\07\x04\0\x17[method]wasm-rpc.invoke\x018\x01i.\x01@\x03\x04self3\x0dfunction\
+-names\x0ffunction-params4\09\x04\0'[method]wasm-rpc.async-invoke-and-await\x01:\
+\x01@\x04\x04self3\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params4\x01\
+\0\x04\0$[method]wasm-rpc.schedule-invocation\x01;\x01i/\x01@\x04\x04self3\x0esc\
+heduled-time\x01\x0dfunction-names\x0ffunction-params4\0<\x04\0/[method]wasm-rpc\
+.schedule-cancelable-invocation\x01=\x01h.\x01i\x03\x01@\x01\x04self>\0?\x04\0&[\
+method]future-invoke-result.subscribe\x01@\x01k5\x01@\x01\x04self>\0\xc1\0\x04\0\
+\x20[method]future-invoke-result.get\x01B\x01h/\x01@\x01\x04self\xc3\0\x01\0\x04\
+\0![method]cancellation-token.cancel\x01D\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc5\
+\0\x04\0\x0aparse-uuid\x01F\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01G\
+\x01@\x01\x03vnt*\0(\x04\0\x0dextract-value\x01H\x01@\x01\x03vnt*\0\x1d\x04\0\x0c\
+extract-type\x01I\x03\0\x15golem:rpc/types@0.2.0\x05\x04\x01B\x0f\x02\x03\x02\x01\
+\x03\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08dur\
+ation\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresoluti\
+on\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\
+\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clock\
+s/monotonic-clock@0.2.0\x05\x05\x02\x03\0\x03\x08duration\x02\x03\0\x02\x0ccompo\
+nent-id\x02\x03\0\x02\x04uuid\x02\x03\0\x02\x09worker-id\x01Bu\x02\x03\x02\x01\x06\
+\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\
+\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x09worker-id\x03\
+\0\x06\x01w\x04\0\x0boplog-index\x03\0\x08\x01r\x02\x09worker-id\x07\x09oplog-id\
+x\x09\x04\0\x0apromise-id\x03\0\x0a\x01w\x04\0\x11component-version\x03\0\x0c\x01\
+r\x01\x05values\x04\0\x0aaccount-id\x03\0\x0e\x01ku\x01r\x05\x0cmax-attemptsy\x09\
+min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x10\x04\0\x0c\
+retry-policy\x03\0\x11\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-ef\
+fects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x13\x01m\x02\x09automati\
+c\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x15\x01m\x06\x05equal\x09not-equa\
+l\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\
+\0\x17\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter\
+-comparator\x03\0\x19\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08\
+retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1b\x01r\x02\x0acompar\
+ator\x1a\x05values\x04\0\x12worker-name-filter\x03\0\x1d\x01r\x02\x0acomparator\x18\
+\x05value\x1c\x04\0\x14worker-status-filter\x03\0\x1f\x01r\x02\x0acomparator\x18\
+\x05valuew\x04\0\x15worker-version-filter\x03\0!\x01r\x02\x0acomparator\x18\x05v\
+aluew\x04\0\x18worker-created-at-filter\x03\0#\x01r\x03\x04names\x0acomparator\x1a\
+\x05values\x04\0\x11worker-env-filter\x03\0%\x01q\x05\x04name\x01\x1e\0\x06statu\
+s\x01\x20\0\x07version\x01\"\0\x0acreated-at\x01$\0\x03env\x01&\0\x04\0\x16worke\
+r-property-filter\x03\0'\x01p(\x01r\x01\x07filters)\x04\0\x11worker-all-filter\x03\
+\0*\x01p+\x01r\x01\x07filters,\x04\0\x11worker-any-filter\x03\0-\x01ps\x01o\x02s\
+s\x01p0\x01r\x06\x09worker-id\x07\x04args/\x03env1\x06status\x1c\x11component-ve\
+rsionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\02\x04\0\x0bget-workers\x03\x01\
+\x01q\x02\x15revert-to-oplog-index\x01\x09\0\x17revert-last-invocations\x01w\0\x04\
+\0\x14revert-worker-target\x03\05\x01k.\x01i4\x01@\x03\x0ccomponent-id\x03\x06fi\
+lter7\x07precise\x7f\08\x04\0\x18[constructor]get-workers\x019\x01h4\x01p3\x01k;\
+\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0b\x04\
+\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0b\0?\x04\0\x0dawait-pro\
+mise\x01@\x01k?\x01@\x01\x0apromise-id\x0b\0\xc1\0\x04\0\x0cpoll-promise\x01B\x01\
+@\x02\x0apromise-id\x0b\x04data?\0\x7f\x04\0\x10complete-promise\x01C\x01@\x01\x0a\
+promise-id\x0b\x01\0\x04\0\x0edelete-promise\x01D\x01@\0\0\x09\x04\0\x0fget-oplo\
+g-index\x01E\x01@\x01\x09oplog-idx\x09\x01\0\x04\0\x0fset-oplog-index\x01F\x01@\x01\
+\x08replicas}\x01\0\x04\0\x0coplog-commit\x01G\x04\0\x14mark-begin-operation\x01\
+E\x01@\x01\x05begin\x09\x01\0\x04\0\x12mark-end-operation\x01H\x01@\0\0\x12\x04\0\
+\x10get-retry-policy\x01I\x01@\x01\x10new-retry-policy\x12\x01\0\x04\0\x10set-re\
+try-policy\x01J\x01@\0\0\x14\x04\0\x1bget-oplog-persistence-level\x01K\x01@\x01\x15\
+new-persistence-level\x14\x01\0\x04\0\x1bset-oplog-persistence-level\x01L\x01@\0\
+\0\x7f\x04\0\x14get-idempotence-mode\x01M\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\
+\x14set-idempotence-mode\x01N\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01\
+O\x01@\x03\x09worker-id\x07\x0etarget-version\x0d\x04mode\x16\x01\0\x04\0\x0dupd\
+ate-worker\x01P\x01@\0\03\x04\0\x11get-self-metadata\x01Q\x01k3\x01@\x01\x09work\
+er-id\x07\0\xd2\0\x04\0\x13get-worker-metadata\x01S\x01@\x03\x10source-worker-id\
+\x07\x10target-worker-id\x07\x11oplog-idx-cut-off\x09\x01\0\x04\0\x0bfork-worker\
+\x01T\x01@\x02\x09worker-id\x07\x0drevert-target6\x01\0\x04\0\x0drevert-worker\x01\
+U\x01k\x03\x01@\x01\x13component-references\0\xd6\0\x04\0\x14resolve-component-i\
+d\x01W\x01k\x07\x01@\x02\x13component-references\x0bworker-names\0\xd8\0\x04\0\x11\
+resolve-worker-id\x01Y\x04\0\x18resolve-worker-id-strict\x01Y\x03\0\x14golem:api\
+/host@1.1.6\x05\x0a\x01B7\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x04\0\x04\
+span\x03\x01\x04\0\x12invocation-context\x03\x01\x01q\x01\x06string\x01s\0\x04\0\
+\x0fattribute-value\x03\0\x04\x01r\x02\x03keys\x05value\x05\x04\0\x09attribute\x03\
+\0\x06\x01p\x05\x01r\x02\x03keys\x06values\x08\x04\0\x0fattribute-chain\x03\0\x09\
+\x01s\x04\0\x08trace-id\x03\0\x0b\x01s\x04\0\x07span-id\x03\0\x0d\x01h\x02\x01@\x01\
+\x04self\x0f\0\x01\x04\0\x17[method]span.started-at\x01\x10\x01@\x03\x04self\x0f\
+\x04names\x05value\x05\x01\0\x04\0\x1a[method]span.set-attribute\x01\x11\x01p\x07\
+\x01@\x02\x04self\x0f\x0aattributes\x12\x01\0\x04\0\x1b[method]span.set-attribut\
+es\x01\x13\x01@\x01\x04self\x0f\x01\0\x04\0\x13[method]span.finish\x01\x14\x01h\x03\
+\x01@\x01\x04self\x15\0\x0c\x04\0#[method]invocation-context.trace-id\x01\x16\x01\
+@\x01\x04self\x15\0\x0e\x04\0\"[method]invocation-context.span-id\x01\x17\x01i\x03\
+\x01k\x18\x01@\x01\x04self\x15\0\x19\x04\0![method]invocation-context.parent\x01\
+\x1a\x01k\x05\x01@\x03\x04self\x15\x03keys\x09inherited\x7f\0\x1b\x04\0([method]\
+invocation-context.get-attribute\x01\x1c\x01@\x02\x04self\x15\x09inherited\x7f\0\
+\x12\x04\0)[method]invocation-context.get-attributes\x01\x1d\x01@\x02\x04self\x15\
+\x03keys\0\x08\x04\0.[method]invocation-context.get-attribute-chain\x01\x1e\x01p\
+\x0a\x01@\x01\x04self\x15\0\x1f\x04\0/[method]invocation-context.get-attribute-c\
+hains\x01\x20\x01o\x02ss\x01p!\x01@\x01\x04self\x15\0\"\x04\00[method]invocation\
+-context.trace-context-headers\x01#\x01i\x02\x01@\x01\x04names\0$\x04\0\x0astart\
+-span\x01%\x01@\0\0\x18\x04\0\x0fcurrent-context\x01&\x01@\x01\x05allow\x7f\0\x7f\
+\x04\0&allow-forwarding-trace-context-headers\x01'\x03\0\x17golem:api/context@1.\
+1.6\x05\x0b\x02\x03\0\x02\x09wit-value\x02\x03\0\x04\x0aaccount-id\x02\x03\0\x04\
+\x11component-version\x02\x03\0\x04\x0boplog-index\x02\x03\0\x04\x0cretry-policy\
+\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-id\x02\x03\0\x05\x09attribute\x02\
+\x03\0\x05\x0fattribute-value\x02\x03\0\x05\x07span-id\x02\x03\0\x05\x08trace-id\
+\x01B\x82\x01\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x0c\x04\
+\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0d\x04\0\x0aaccount-id\x03\0\x04\x02\x03\
+\x02\x01\x0e\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x01\x0f\x04\0\x0bo\
+plog-index\x03\0\x08\x02\x03\x02\x01\x10\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\
+\x02\x01\x11\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01\x12\x04\0\x09worker-id\x03\0\
+\x0e\x02\x03\x02\x01\x13\x04\0\x09attribute\x03\0\x10\x02\x03\x02\x01\x14\x04\0\x0f\
+attribute-value\x03\0\x12\x02\x03\x02\x01\x15\x04\0\x07span-id\x03\0\x14\x02\x03\
+\x02\x01\x16\x04\0\x08trace-id\x03\0\x16\x01k\x09\x01q\x05\x0aread-local\0\0\x0b\
+write-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\
+\x18\0\x04\0\x15wrapped-function-type\x03\0\x19\x01o\x02ss\x01p\x1b\x01r\x04\x0f\
+installation-id\x0d\x04names\x07versions\x0aparameters\x1c\x04\0\x1fplugin-insta\
+llation-description\x03\0\x1d\x01ps\x01k\x0f\x01p\x1e\x01r\x0a\x09timestamp\x01\x09\
+worker-id\x0f\x11component-version\x07\x04args\x1f\x03env\x1c\x0aaccount-id\x05\x06\
+parent\x20\x0ecomponent-sizew\x20initial-total-linear-memory-sizew\x16initial-ac\
+tive-plugins!\x04\0\x11create-parameters\x03\0\"\x01r\x05\x09timestamp\x01\x0dfu\
+nction-names\x07request\x03\x08response\x03\x15wrapped-function-type\x1a\x04\0$i\
+mported-function-invoked-parameters\x03\0$\x01k\x15\x01kw\x01p\x11\x01r\x06\x07s\
+pan-id\x15\x05start\x01\x06parent&\x0elinked-context'\x0aattributes(\x09inherite\
+d\x7f\x04\0\x0flocal-span-data\x03\0)\x01r\x01\x07span-id\x15\x04\0\x12external-\
+span-data\x03\0+\x01q\x02\x0alocal-span\x01*\0\x0dexternal-span\x01,\0\x04\0\x09\
+span-data\x03\0-\x01p\x03\x01p.\x01p0\x01r\x07\x09timestamp\x01\x0dfunction-name\
+s\x07request/\x0fidempotency-keys\x08trace-id\x17\x0ctrace-states\x1f\x12invocat\
+ion-context1\x04\0$exported-function-invoked-parameters\x03\02\x01r\x03\x09times\
+tamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-function-completed-par\
+ameters\x03\04\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10error-parameters\x03\
+\06\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0fjump-parameters\x03\
+\08\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1echange-retry-policy-p\
+arameters\x03\0:\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomi\
+c-region-parameters\x03\0<\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1b\
+end-remote-write-parameters\x03\0>\x01k/\x01r\x03\x0fidempotency-keys\x0dfunctio\
+n-names\x05input\xc0\0\x04\0'exported-function-invocation-parameters\x03\0A\x01q\
+\x02\x11exported-function\x01\xc2\0\0\x0dmanual-update\x01\x07\0\x04\0\x11worker\
+-invocation\x03\0C\x01r\x02\x09timestamp\x01\x0ainvocation\xc4\0\x04\0$pending-w\
+orker-invocation-parameters\x03\0E\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot\
+-based\x01\xc7\0\0\x04\0\x12update-description\x03\0H\x01r\x03\x09timestamp\x01\x0e\
+target-version\x07\x12update-description\xc9\0\x04\0\x19pending-update-parameter\
+s\x03\0J\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12new-component-sizew\x12\
+new-active-plugins!\x04\0\x1csuccessful-update-parameters\x03\0L\x01ks\x01r\x03\x09\
+timestamp\x01\x0etarget-version\x07\x07details\xce\0\x04\0\x18failed-update-para\
+meters\x03\0O\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameter\
+s\x03\0Q\x01w\x04\0\x12worker-resource-id\x03\0S\x01r\x02\x09timestamp\x01\x0bre\
+source-id\xd4\0\x04\0\x1acreate-resource-parameters\x03\0U\x01r\x02\x09timestamp\
+\x01\x0bresource-id\xd4\0\x04\0\x18drop-resource-parameters\x03\0W\x01r\x04\x09t\
+imestamp\x01\x0bresource-id\xd4\0\x0dresource-names\x0fresource-params/\x04\0\x1c\
+describe-resource-parameters\x03\0Y\x01m\x08\x06stdout\x06stderr\x05trace\x05deb\
+ug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\0[\x01r\x04\x09ti\
+mestamp\x01\x05level\xdc\0\x07contexts\x07messages\x04\0\x0elog-parameters\x03\0\
+]\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1aactivate-plugin-parameters\x03\
+\0_\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1cdeactivate-plugin-parameter\
+s\x03\0a\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x11revert-param\
+eters\x03\0c\x01r\x02\x09timestamp\x01\x0fidempotency-keys\x04\0\x1ccancel-invoc\
+ation-parameters\x03\0e\x01r\x05\x09timestamp\x01\x07span-id\x15\x06parent&\x0el\
+inked-context&\x0aattributes(\x04\0\x15start-span-parameters\x03\0g\x01r\x02\x09\
+timestamp\x01\x07span-id\x15\x04\0\x16finish-span-parameters\x03\0i\x01r\x04\x09\
+timestamp\x01\x07span-id\x15\x03keys\x05value\x13\x04\0\x1dset-span-attribute-pa\
+rameters\x03\0k\x01q\x20\x06create\x01#\0\x19imported-function-invoked\x01%\0\x19\
+exported-function-invoked\x013\0\x1bexported-function-completed\x015\0\x07suspen\
+d\x01\x01\0\x05error\x017\0\x05no-op\x01\x01\0\x04jump\x019\0\x0binterrupted\x01\
+\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01;\0\x13begin-atomic-region\x01\
+\x01\0\x11end-atomic-region\x01=\0\x12begin-remote-write\x01\x01\0\x10end-remote\
+-write\x01?\0\x19pending-worker-invocation\x01\xc6\0\0\x0epending-update\x01\xcb\
+\0\0\x11successful-update\x01\xcd\0\0\x0dfailed-update\x01\xd0\0\0\x0bgrow-memor\
+y\x01\xd2\0\0\x0fcreate-resource\x01\xd6\0\0\x0ddrop-resource\x01\xd8\0\0\x11des\
+cribe-resource\x01\xda\0\0\x03log\x01\xde\0\0\x07restart\x01\x01\0\x0factivate-p\
+lugin\x01\xe0\0\0\x11deactivate-plugin\x01\xe2\0\0\x06revert\x01\xe4\0\0\x11canc\
+el-invocation\x01\xe6\0\0\x0astart-span\x01\xe8\0\0\x0bfinish-span\x01\xea\0\0\x12\
+set-span-attribute\x01\xec\0\0\x04\0\x0boplog-entry\x03\0m\x04\0\x09get-oplog\x03\
+\x01\x04\0\x0csearch-oplog\x03\x01\x01io\x01@\x02\x09worker-id\x0f\x05start\x09\0\
+\xf1\0\x04\0\x16[constructor]get-oplog\x01r\x01ho\x01p\xee\0\x01k\xf4\0\x01@\x01\
+\x04self\xf3\0\0\xf5\0\x04\0\x1a[method]get-oplog.get-next\x01v\x01ip\x01@\x02\x09\
+worker-id\x0f\x04texts\0\xf7\0\x04\0\x19[constructor]search-oplog\x01x\x01hp\x01\
+o\x02\x09\xee\0\x01p\xfa\0\x01k\xfb\0\x01@\x01\x04self\xf9\0\0\xfc\0\x04\0\x1d[m\
+ethod]search-oplog.get-next\x01}\x03\0\x15golem:api/oplog@1.1.6\x05\x17\x01B\x03\
+\x01ps\x01@\0\0\0\x04\0\x15get-invoked-functions\x01\x01\x04\0\x13golem:componen\
+t/api\x05\x18\x02\x03\0\x04\x0fworker-metadata\x02\x03\0\x06\x0boplog-entry\x01B\
+\x1d\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x0c\x04\0\x09\
+wit-value\x03\0\x02\x02\x03\x02\x01\x0d\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\
+\x01\x0f\x04\0\x0boplog-index\x03\0\x06\x02\x03\x02\x01\x19\x04\0\x0fworker-meta\
+data\x03\0\x08\x02\x03\x02\x01\x1a\x04\0\x0boplog-entry\x03\0\x0a\x02\x03\x02\x01\
+\x07\x04\0\x0ccomponent-id\x03\0\x0c\x02\x03\x02\x01\x09\x04\0\x09worker-id\x03\0\
+\x0e\x01r\x01\x0aaccount-id\x05\x04\0\x0caccount-info\x03\0\x10\x04\0\x09process\
+or\x03\x01\x01o\x02ss\x01p\x13\x01i\x12\x01@\x03\x0caccount-info\x11\x0ccomponen\
+t-id\x0d\x06config\x14\0\x15\x04\0\x16[constructor]processor\x01\x16\x01h\x12\x01\
+p\x0b\x01j\0\x01s\x01@\x05\x04self\x17\x09worker-id\x0f\x08metadata\x09\x11first\
+-entry-index\x07\x07entries\x18\0\x19\x04\0\x19[method]processor.process\x01\x1a\
+\x04\0\x1fgolem:api/oplog-processor@1.1.6\x05\x1b\x04\0\x1fgolem:component/oplog\
+-processor\x04\0\x0b\x15\x01\0\x0foplog-processor\x03\0\0\0G\x09producers\x01\x0c\
+processed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

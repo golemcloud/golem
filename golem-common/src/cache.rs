@@ -22,7 +22,6 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use dashmap::try_result::TryResult::{Absent, Locked, Present};
 use dashmap::DashMap;
 use tokio::task::JoinHandle;
@@ -53,11 +52,10 @@ pub struct Cache<K, PV, V, E> {
     name: &'static str,
 }
 
-#[async_trait]
 pub trait SimpleCache<K, V, E> {
-    async fn get_or_insert_simple<F>(&self, key: &K, f: F) -> Result<V, E>
+    fn get_or_insert_simple<F>(&self, key: &K, f: F) -> impl Future<Output = Result<V, E>>
     where
-        F: FnOnce() -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send;
+        F: AsyncFnOnce() -> Result<V, E>;
 }
 
 struct CacheState<K, PV, V, E> {
@@ -66,7 +64,6 @@ struct CacheState<K, PV, V, E> {
     count: std::sync::atomic::AtomicUsize,
 }
 
-#[async_trait]
 impl<
         K: Eq + Hash + Clone + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
@@ -77,9 +74,10 @@ impl<
     /// it is awaited instead of recreating it.
     async fn get_or_insert_simple<F>(&self, key: &K, f: F) -> Result<V, E>
     where
-        F: FnOnce() -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send,
+        F: AsyncFnOnce() -> Result<V, E>,
     {
-        self.get_or_insert(key, || Ok(()), |_| f()).await
+        self.get_or_insert(key, || Ok(()), async |_| f().await)
+            .await
     }
 }
 
@@ -195,7 +193,7 @@ impl<
     pub async fn get_or_insert<F1, F2>(&self, key: &K, f1: F1, f2: F2) -> Result<V, E>
     where
         F1: FnOnce() -> Result<PV, E>,
-        F2: FnOnce(&PV) -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>>,
+        F2: AsyncFnOnce(&PV) -> Result<V, E>,
     {
         let mut eviction_needed = false;
         let result = {

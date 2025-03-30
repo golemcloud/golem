@@ -46,9 +46,10 @@ use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{
-    ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
+    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
     InitialComponentFile, PluginInstallationId,
 };
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -85,19 +86,15 @@ pub enum PluginServiceClient {
 }
 
 #[async_trait]
-pub trait ComponentService {
-    fn client_protocol(&self) -> GolemClientProtocol;
+pub trait ComponentServiceInternal: Send + Sync {
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
+}
 
+#[async_trait]
+pub trait ComponentService: ComponentServiceInternal {
     fn component_directory(&self) -> &Path;
-
-    fn handles_ifs_upload(&self) -> bool {
-        match self.client_protocol() {
-            GolemClientProtocol::Grpc => false,
-            GolemClientProtocol::Http => true,
-        }
-    }
 
     async fn get_components(&self, request: GetComponentsRequest) -> crate::Result<Vec<Component>> {
         match self.component_client() {
@@ -438,7 +435,7 @@ pub trait ComponentService {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
-    ) -> u64 {
+    ) -> crate::Result<u64> {
         let mut file = File::open(local_path)
             .await
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
@@ -505,11 +502,11 @@ pub trait ComponentService {
                     }
                     Some(update_component_response::Result::Success(component)) => {
                         info!("Updated component (GRPC) {component:?}");
-                        component.versioned_component_id.unwrap().version
+                        Ok(component.versioned_component_id.unwrap().version)
                     }
-                    Some(update_component_response::Result::Error(error)) => {
-                        panic!("Failed to update component in golem-component-service (GRPC): {error:?}");
-                    }
+                    Some(update_component_response::Result::Error(error)) => Err(anyhow!(
+                        "Failed to update component in golem-component-service (GRPC): {error:?}"
+                    )),
                 }
             }
             ComponentServiceClient::Http(client) => {
@@ -547,11 +544,11 @@ pub trait ComponentService {
                 {
                     Ok(component) => {
                         debug!("Updated component (HTTP) {:?}", component);
-                        component.versioned_component_id.version
+                        Ok(component.versioned_component_id.version)
                     }
-                    Err(error) => {
-                        panic!("Failed to update component in golem-component-service (HTTP): {error:?}");
-                    }
+                    Err(error) => Err(anyhow!(
+                        "Failed to update component in golem-component-service (HTTP): {error:?}"
+                    )),
                 }
             }
         }
@@ -618,40 +615,98 @@ pub trait ComponentService {
                 }
             }
             PluginServiceClient::Http(client) => {
-                let result = client.create_plugin(
-                    &golem_client::model::PluginDefinitionCreationDefaultPluginScope {
-                        name: definition.name,
-                        version: definition.version,
-                        description: definition.description,
-                        icon: definition.icon,
-                        homepage: definition.homepage,
-                        specs: match definition.specs {
-                            PluginTypeSpecificDefinition::ComponentTransformer(def) => {
-                                golem_client::model::PluginTypeSpecificCreation::ComponentTransformer(
-                                    golem_client::model::ComponentTransformerDefinition {
-                                        provided_wit_package: def.provided_wit_package,
-                                        json_schema: def.json_schema,
-                                        validate_url: def.validate_url,
-                                        transform_url: def.transform_url,
-                                    },
-                                )
-                            }
-                            PluginTypeSpecificDefinition::OplogProcessor(def) => {
-                                golem_client::model::PluginTypeSpecificCreation::OplogProcessor(
-                                    golem_client::model::OplogProcessorDefinition {
-                                        component_id: def.component_id.0,
-                                        component_version: def.component_version,
-                                    },
-                                )
-                            }
-                            golem_common::model::plugin::PluginTypeSpecificDefinition::Library(_) =>
-                                unimplemented!("Creating library plugins is not supported when using the http api"),
-                            golem_common::model::plugin::PluginTypeSpecificDefinition::App(_) =>
-                                unimplemented!("Creating app plugins is not supported when using the http api")
-                        },
-                        scope: definition.scope,
-                    },
-                ).await;
+                let result = match definition.specs {
+                    PluginTypeSpecificDefinition::ComponentTransformer(def) => {
+                        let specs =
+                            golem_client::model::PluginTypeSpecificCreation::ComponentTransformer(
+                                golem_client::model::ComponentTransformerDefinition {
+                                    provided_wit_package: def.provided_wit_package,
+                                    json_schema: def.json_schema,
+                                    validate_url: def.validate_url,
+                                    transform_url: def.transform_url,
+                                },
+                            );
+
+                        client
+                            .create_plugin(
+                                &golem_client::model::PluginDefinitionCreationDefaultPluginScope {
+                                    name: definition.name,
+                                    version: definition.version,
+                                    description: definition.description,
+                                    icon: definition.icon,
+                                    homepage: definition.homepage,
+                                    scope: definition.scope,
+                                    specs,
+                                },
+                            )
+                            .await
+                    }
+                    PluginTypeSpecificDefinition::OplogProcessor(def) => {
+                        let specs = golem_client::model::PluginTypeSpecificCreation::OplogProcessor(
+                            golem_client::model::OplogProcessorDefinition {
+                                component_id: def.component_id.0,
+                                component_version: def.component_version,
+                            },
+                        );
+
+                        client
+                            .create_plugin(
+                                &golem_client::model::PluginDefinitionCreationDefaultPluginScope {
+                                    name: definition.name,
+                                    version: definition.version,
+                                    description: definition.description,
+                                    icon: definition.icon,
+                                    homepage: definition.homepage,
+                                    scope: definition.scope,
+                                    specs,
+                                },
+                            )
+                            .await
+                    }
+                    golem_common::model::plugin::PluginTypeSpecificDefinition::Library(def) => {
+                        // TODO: This round trip trough the blob storage is redundant, but ensure the same api works both grpc and http. Improve this
+                        let data = self
+                            .plugin_wasm_files_service()
+                            .get(&AccountId::placeholder(), &def.blob_storage_key)
+                            .await
+                            .map_err(|e| anyhow!(e))?
+                            .ok_or(anyhow!("plugin wasm file not found in blob storage"))?;
+
+                        client
+                            .create_library_plugin(
+                                &definition.name,
+                                &definition.version,
+                                &definition.description,
+                                definition.icon,
+                                &definition.homepage,
+                                &definition.scope,
+                                data,
+                            )
+                            .await
+                    }
+                    golem_common::model::plugin::PluginTypeSpecificDefinition::App(def) => {
+                        // TODO: This round trip trough the blob storage is redundant, but ensure the same api works both grpc and http. Improve this
+                        let data = self
+                            .plugin_wasm_files_service()
+                            .get(&AccountId::placeholder(), &def.blob_storage_key)
+                            .await
+                            .map_err(|e| anyhow!(e))?
+                            .expect("plugin wasm file not found in blob storage");
+
+                        client
+                            .create_app_plugin(
+                                &definition.name,
+                                &definition.version,
+                                &definition.description,
+                                definition.icon,
+                                &definition.homepage,
+                                &definition.scope,
+                                data,
+                            )
+                            .await
+                    }
+                };
+
                 match result {
                     Ok(_) => Ok(()),
                     Err(error) => Err(anyhow!(
@@ -965,7 +1020,7 @@ fn to_http_dynamic_linking(
                         DynamicLinkedInstance::WasmRpc(link) => {
                             golem_client::model::DynamicLinkedInstance::WasmRpc(
                                 golem_client::model::DynamicLinkedWasmRpc {
-                                    target_interface_name: link.target_interface_name.clone(),
+                                    targets: link.targets.clone(),
                                 },
                             )
                         }

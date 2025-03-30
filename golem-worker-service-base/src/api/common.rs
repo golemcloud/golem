@@ -56,6 +56,17 @@ impl TraceErrorKind for ApiEndpointError {
             ApiEndpointError::InternalError(_) => "InternalError",
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            ApiEndpointError::BadRequest(_) => true,
+            ApiEndpointError::NotFound(_) => true,
+            ApiEndpointError::AlreadyExists(_) => true,
+            ApiEndpointError::Forbidden(_) => true,
+            ApiEndpointError::Unauthorized(_) => true,
+            ApiEndpointError::InternalError(_) => false,
+        }
+    }
 }
 
 impl ApiEndpointError {
@@ -116,6 +127,20 @@ impl TraceErrorKind for WorkerTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                worker::v1::worker_error::Error::BadRequest(_) => true,
+                worker::v1::worker_error::Error::Unauthorized(_) => true,
+                worker::v1::worker_error::Error::LimitExceeded(_) => true,
+                worker::v1::worker_error::Error::NotFound(_) => true,
+                worker::v1::worker_error::Error::AlreadyExists(_) => true,
+                worker::v1::worker_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }
 
 pub struct ApiDefinitionTraceErrorKind<'a>(pub &'a ApiDefinitionError);
@@ -139,6 +164,22 @@ impl TraceErrorKind for ApiDefinitionTraceErrorKind<'_> {
                 api_definition_error::Error::AlreadyExists(_) => "AlreadyExists",
                 api_definition_error::Error::InternalError(_) => "InternalError",
                 api_definition_error::Error::NotDraft(_) => "NotDraft",
+            },
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                api_definition_error::Error::BadRequest(_) => true,
+                api_definition_error::Error::InvalidRoutes(_) => true,
+                api_definition_error::Error::Unauthorized(_) => true,
+                api_definition_error::Error::LimitExceeded(_) => true,
+                api_definition_error::Error::NotFound(_) => true,
+                api_definition_error::Error::AlreadyExists(_) => true,
+                api_definition_error::Error::InternalError(_) => false,
+                api_definition_error::Error::NotDraft(_) => true,
             },
         }
     }
@@ -228,6 +269,12 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
                 ApiDefinitionServiceError::RibInternal(_) => ApiEndpointError::internal(error),
+                ApiDefinitionServiceError::InvalidRibScript(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
+                ApiDefinitionServiceError::InvalidOasDefinition(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
             }
         }
     }
@@ -303,6 +350,12 @@ mod conversion {
                     })),
                 },
 
+                ApiDefinitionServiceError::InvalidRibScript(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
+                    })),
+                },
+
                 ApiDefinitionServiceError::ApiDefinitionNotFound(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
                         error: error.to_safe_string(),
@@ -343,6 +396,11 @@ mod conversion {
                 ApiDefinitionServiceError::Internal(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::InvalidOasDefinition(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
                     })),
                 },
             }

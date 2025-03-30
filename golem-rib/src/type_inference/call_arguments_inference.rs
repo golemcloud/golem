@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, FunctionCallError};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
 // If the function call is a mere instance creation, then the return type i
@@ -22,26 +21,24 @@ pub fn infer_function_call_types(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), FunctionCallError> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
-    while let Some(expr) = queue.pop_back() {
+    let mut visitor = ExprVisitor::bottom_up(expr);
+    while let Some(expr) = visitor.pop_back() {
         let expr_copied = expr.clone();
-        match expr {
-            Expr::Call {
+
+        if let Expr::Call {
+            call_type,
+            args,
+            inferred_type,
+            ..
+        } = expr
+        {
+            internal::resolve_call_argument_types(
+                &expr_copied,
                 call_type,
+                function_type_registry,
                 args,
                 inferred_type,
-                ..
-            } => {
-                internal::resolve_call_argument_types(
-                    &expr_copied,
-                    call_type,
-                    function_type_registry,
-                    args,
-                    inferred_type,
-                )?;
-            }
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
+            )?;
         }
     }
 

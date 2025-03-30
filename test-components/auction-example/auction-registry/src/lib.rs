@@ -3,6 +3,7 @@ mod auction_registry_logic;
 mod model;
 
 #[allow(unused)]
+#[allow(static_mut_refs)]
 mod bindings;
 
 use bindings::*;

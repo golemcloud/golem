@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
+use crate::components::component_service::ComponentService;
 use crate::components::worker_service::{
     new_api_definition_client, new_api_deployment_client, new_api_security_client,
     new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
@@ -20,6 +23,8 @@ use crate::components::worker_service::{
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use tracing::info;
+
+use super::WorkerServiceInternal;
 
 pub struct ProvidedWorkerService {
     host: String,
@@ -31,6 +36,7 @@ pub struct ProvidedWorkerService {
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
+    component_service: Arc<dyn ComponentService>,
 }
 
 impl ProvidedWorkerService {
@@ -40,6 +46,7 @@ impl ProvidedWorkerService {
         grpc_port: u16,
         custom_request_port: u16,
         client_protocol: GolemClientProtocol,
+        component_service: Arc<dyn ComponentService>,
     ) -> Self {
         info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -70,12 +77,12 @@ impl ProvidedWorkerService {
                 http_port,
             )
             .await,
+            component_service: component_service.clone(),
         }
     }
 }
 
-#[async_trait]
-impl WorkerService for ProvidedWorkerService {
+impl WorkerServiceInternal for ProvidedWorkerService {
     fn client_protocol(&self) -> GolemClientProtocol {
         self.client_protocol
     }
@@ -96,6 +103,13 @@ impl WorkerService for ProvidedWorkerService {
         self.api_security_client.clone()
     }
 
+    fn component_service(&self) -> &Arc<dyn ComponentService> {
+        &self.component_service
+    }
+}
+
+#[async_trait]
+impl WorkerService for ProvidedWorkerService {
     fn private_host(&self) -> String {
         self.host.clone()
     }

@@ -1,3 +1,4 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use crate::bindings::exports::golem::it::component_resolve_api::Guest;

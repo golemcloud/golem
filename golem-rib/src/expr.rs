@@ -1123,7 +1123,8 @@ impl Expr {
 
     pub fn resolve_method_calls(&mut self) -> Result<(), RibCompilationError> {
         self.bind_instance_types();
-        self.infer_worker_function_invokes()
+        self.infer_worker_function_invokes()?;
+        Ok(())
     }
 
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.

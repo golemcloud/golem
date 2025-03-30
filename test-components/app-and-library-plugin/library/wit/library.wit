@@ -1,9 +1,0 @@
-package it:app-and-library-plugin-library;
-
-interface library-api {
-  library-function: func() -> u64;
-}
-
-world library {
-  export library-api;
-}

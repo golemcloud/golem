@@ -30,6 +30,8 @@ use std::time::Duration;
 use tracing::info;
 use tracing::Level;
 
+use super::WorkerServiceInternal;
+
 pub struct SpawnedWorkerService {
     http_port: u16,
     grpc_port: u16,
@@ -41,6 +43,7 @@ pub struct SpawnedWorkerService {
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
+    component_service: Arc<dyn ComponentService>,
 }
 
 impl SpawnedWorkerService {
@@ -50,40 +53,9 @@ impl SpawnedWorkerService {
         http_port: u16,
         grpc_port: u16,
         custom_request_port: u16,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        client_protocol: GolemClientProtocol,
-    ) -> Self {
-        Self::new_base(
-            executable,
-            working_directory,
-            http_port,
-            grpc_port,
-            custom_request_port,
-            component_service,
-            shard_manager,
-            rdb,
-            verbosity,
-            out_level,
-            err_level,
-            client_protocol,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        executable: &Path,
-        working_directory: &Path,
-        http_port: u16,
-        grpc_port: u16,
-        custom_request_port: u16,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync>,
+        rdb: Arc<dyn Rdb + Send + Sync>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
@@ -102,9 +74,9 @@ impl SpawnedWorkerService {
                     http_port,
                     grpc_port,
                     custom_request_port,
-                    component_service,
-                    shard_manager,
-                    rdb,
+                    &component_service,
+                    &shard_manager,
+                    &rdb,
                     verbosity,
                     false,
                 )
@@ -158,6 +130,7 @@ impl SpawnedWorkerService {
                 http_port,
             )
             .await,
+            component_service: component_service.clone(),
         }
     }
 
@@ -169,8 +142,7 @@ impl SpawnedWorkerService {
     }
 }
 
-#[async_trait]
-impl WorkerService for SpawnedWorkerService {
+impl WorkerServiceInternal for SpawnedWorkerService {
     fn client_protocol(&self) -> GolemClientProtocol {
         self.client_protocol
     }
@@ -191,6 +163,13 @@ impl WorkerService for SpawnedWorkerService {
         self.api_security_client.clone()
     }
 
+    fn component_service(&self) -> &Arc<dyn ComponentService> {
+        &self.component_service
+    }
+}
+
+#[async_trait]
+impl WorkerService for SpawnedWorkerService {
     fn private_host(&self) -> String {
         "localhost".to_string()
     }

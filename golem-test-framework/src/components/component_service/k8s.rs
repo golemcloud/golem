@@ -24,6 +24,7 @@ use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -33,6 +34,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
+
+use super::ComponentServiceInternal;
 
 pub struct K8sComponentService {
     component_directory: PathBuf,
@@ -44,9 +47,9 @@ pub struct K8sComponentService {
     service: Arc<Mutex<Option<K8sService>>>,
     grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
     http_routing: Arc<Mutex<Option<K8sRouting>>>,
-    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
+    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
 }
 
 impl K8sComponentService {
@@ -64,31 +67,7 @@ impl K8sComponentService {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         client_protocol: GolemClientProtocol,
-    ) -> Self {
-        Self::new_base(
-            component_directory,
-            namespace,
-            routing_type,
-            verbosity,
-            component_compilation_service,
-            rdb,
-            timeout,
-            service_annotations,
-            client_protocol,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        component_directory: PathBuf,
-        namespace: &K8sNamespace,
-        routing_type: &K8sRoutingType,
-        verbosity: Level,
-        component_compilation_service: Option<(&str, u16)>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        timeout: Duration,
-        service_annotations: Option<std::collections::BTreeMap<String, String>>,
-        client_protocol: GolemClientProtocol,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     ) -> Self {
         info!("Starting Golem Component Service pod");
 
@@ -217,7 +196,6 @@ impl K8sComponentService {
             service: Arc::new(Mutex::new(Some(managed_service))),
             grpc_routing: Arc::new(Mutex::new(Some(grpc_routing.routing))),
             http_routing: Arc::new(Mutex::new(Some(http_routing.routing))),
-            client_protocol,
             component_client: new_component_client(
                 client_protocol,
                 &grpc_routing.hostname,
@@ -232,16 +210,13 @@ impl K8sComponentService {
                 http_routing.port,
             )
             .await,
+            plugin_wasm_files_service,
         }
     }
 }
 
 #[async_trait]
-impl ComponentService for K8sComponentService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        self.client_protocol
-    }
-
+impl ComponentServiceInternal for K8sComponentService {
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
@@ -250,6 +225,13 @@ impl ComponentService for K8sComponentService {
         self.plugin_client.clone()
     }
 
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
+}
+
+#[async_trait]
+impl ComponentService for K8sComponentService {
     fn component_directory(&self) -> &Path {
         &self.component_directory
     }

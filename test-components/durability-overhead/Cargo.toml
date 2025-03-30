@@ -12,8 +12,8 @@ lto = true
 opt-level = 's'
 
 [dependencies]
-golem-rust = "1.2.1"
-wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+golem-rust = "1.4.0"
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [package.metadata.component.target]
 path = "wit"

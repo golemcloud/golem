@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Expr;
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor};
 pub enum InvalidMathExprError {
     Both {
         math_expr: Expr,
@@ -32,27 +31,23 @@ pub enum InvalidMathExprError {
 }
 
 pub fn check_invalid_math_expr(expr: &mut Expr) -> Result<(), InvalidMathExprError> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = queue.pop_back() {
-        let copied = expr.clone();
+    while let Some(expr) = visitor.pop_back() {
         if let Expr::Plus { lhs, rhs, .. }
         | Expr::Minus { lhs, rhs, .. }
         | Expr::Multiply { lhs, rhs, .. }
-        | Expr::Divide { lhs, rhs, .. } = expr
+        | Expr::Divide { lhs, rhs, .. } = &expr
         {
-            check_math_expression_types(copied, lhs, rhs)?;
+            check_math_expression_types(expr, lhs, rhs)?;
         }
-
-        expr.visit_children_mut_bottom_up(&mut queue);
     }
 
     Ok(())
 }
 
 fn check_math_expression_types(
-    original_expr: Expr,
+    original_expr: &Expr,
     left_expr: &Expr,
     right_expr: &Expr,
 ) -> Result<(), InvalidMathExprError> {

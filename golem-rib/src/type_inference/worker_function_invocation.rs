@@ -16,7 +16,10 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_compilation_error::RibCompilationError;
 use crate::type_parameter::TypeParameter;
-use crate::{DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeName};
+use crate::{
+    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError,
+    InferredType, TypeName,
+};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
@@ -135,7 +138,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                             ),
                                         })?;
 
-                                    let dynamic_parsed_function_name = resource_method
+                                    let mut dynamic_parsed_function_name = resource_method
                                         .dynamic_parsed_function_name(resource_args.clone())
                                         .map_err(|err| FunctionCallError::InvalidFunctionCall {
                                             function_name: resource_method
@@ -144,6 +147,26 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                             expr: expr_copied,
                                             message: format!("Invalid function name: {}", err),
                                         })?;
+
+                                    // Making sure the various compile phased resolved resource_args are kept intact
+                                    match &mut dynamic_parsed_function_name.function {
+                                        DynamicParsedFunctionReference::IndexedResourceConstructor { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+                                        DynamicParsedFunctionReference::IndexedResourceMethod { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+
+                                        DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+
+                                        DynamicParsedFunctionReference::IndexedResourceDrop { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+
+                                        _ => {}
+                                    };
 
                                     let method_args = args.clone();
 

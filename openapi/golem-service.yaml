@@ -1612,6 +1612,69 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/connect:
+    get:
+      tags:
+      - Worker
+      summary: Connect to a worker using a websocket and stream events
+      operationId: worker_connect
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '101':
+          description: A websocket response
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -1745,7 +1808,7 @@ paths:
       summary: Create a new API definition
       description: |-
         Creates a new API definition described by Golem's API definition JSON document.
-        If an API definition of the same version already exists, its an error.
+        If an API definition of the same version already exists, it is an error.
       operationId: create_definition
       requestBody:
         content:
@@ -4452,13 +4515,27 @@ components:
       enum:
       - directory
       - file
+    GatewayBindingComponent:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          description: |-
+            Version of the component. If not provided the latest version is used.
+            Note that the version is only used to typecheck the various rib scripts and prevent component updates.
+            During runtime, the actual version of the worker or the latest version (in case no was found) is used.
+          type: integer
+          format: uint64
+      required:
+      - name
     GatewayBindingData:
       type: object
       properties:
         bindingType:
           $ref: '#/components/schemas/GatewayBindingType'
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
+        component:
+          $ref: '#/components/schemas/GatewayBindingComponent'
         workerName:
           type: string
         idempotencyKey:
@@ -4483,8 +4560,8 @@ components:
     GatewayBindingResponseData:
       type: object
       properties:
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
+        component:
+          $ref: '#/components/schemas/ResolvedGatewayBindingComponent'
         workerName:
           type: string
         idempotencyKey:
@@ -5987,6 +6064,17 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ManualUpdateParameters'
+    ResolvedGatewayBindingComponent:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+          format: uint64
+      required:
+      - name
+      - version
     ResourceMetadata:
       type: object
       properties:
@@ -7093,13 +7181,13 @@ components:
     DynamicLinkedWasmRpc:
       type: object
       properties:
-        targetInterfaceName:
-          description: Maps resource names within the dynamic linked interface to target interfaces
+        targets:
+          description: Maps resource names within the dynamic linked interface to target information
           type: object
           additionalProperties:
-            type: string
+            $ref: '#/components/schemas/WasmRpcTarget'
       required:
-      - targetInterfaceName
+      - targets
     DynamicLinking:
       type: object
       properties:
@@ -7395,6 +7483,19 @@ components:
       required:
       - name
       - version
+    WasmRpcTarget:
+      type: object
+      properties:
+        interfaceName:
+          type: string
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+      required:
+      - interfaceName
+      - componentName
+      - componentType
 tags:
 - name: ApiDefinition
 - name: ApiDeployment

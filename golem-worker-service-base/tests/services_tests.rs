@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_service_base::migration::{Migrations, MigrationsDir};
+use golem_worker_service_base::service::gateway::{ComponentView, ConversionContext};
 use std::collections::HashMap;
 use test_r::test;
 
@@ -21,7 +22,7 @@ use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
 use golem_common::model::{ComponentId, RetryConfig};
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_service_base::db;
-use golem_service_base::model::Component;
+use golem_service_base::model::{Component, ComponentName};
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedInstance,
@@ -30,10 +31,12 @@ use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::repo::{api_definition, api_deployment};
-use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
+use golem_worker_service_base::service::component::{
+    ComponentResult, ComponentService, ComponentServiceError,
+};
 use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
-    ApiDefinitionServiceDefault,
+    ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
@@ -41,7 +44,7 @@ use golem_worker_service_base::service::gateway::api_deployment::{
 use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 
 use chrono::Utc;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::redis::RedisPool;
 use golem_service_base::storage::sqlite::SqlitePool;
 use golem_wasm_ast::analysis::analysed_type::str;
@@ -77,6 +80,7 @@ use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
+use uuid::uuid;
 use uuid::Uuid;
 
 test_r::enable!();
@@ -440,14 +444,40 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
         Ok(Self::test_component())
     }
 
+    async fn get_by_name(
+        &self,
+        name: &ComponentName,
+        _auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        let test_component = Self::test_component();
+        if name.0 == test_component.component_name.0 {
+            Ok(test_component)
+        } else {
+            Err(ComponentServiceError::NotFound(format!(
+                "component not found for name: {name}"
+            )))
+        }
+    }
+
     async fn create_or_update_constraints(
         &self,
         _component_id: &ComponentId,
-        _constraints: FunctionConstraintCollection,
+        _constraints: FunctionConstraints,
         _auth_ctx: &AuthCtx,
-    ) -> ComponentResult<FunctionConstraintCollection> {
-        Ok(FunctionConstraintCollection {
-            function_constraints: vec![],
+    ) -> ComponentResult<FunctionConstraints> {
+        Ok(FunctionConstraints {
+            constraints: vec![],
+        })
+    }
+
+    async fn delete_constraints(
+        &self,
+        _component_id: &ComponentId,
+        _constraints: &[FunctionSignature],
+        _auth_ctx: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints> {
+        Ok(FunctionConstraints {
+            constraints: vec![],
         })
     }
 }
@@ -478,6 +508,7 @@ async fn test_services(
         api_deployment_repo.clone(),
         security_scheme_service.clone(),
         api_definition_validator_service.clone(),
+        ApiDefinitionServiceConfig::default(),
     ));
 
     let deployment_service: Arc<
@@ -505,7 +536,7 @@ async fn test_deployment(
             "/api/1/foo/{user-id}",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let my-worker=instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = my-worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
-        );
+        ).await;
 
     let def2draft = get_api_definition(
             &Uuid::new_v4().to_string(),
@@ -513,7 +544,7 @@ async fn test_deployment(
             "/api/2/foo/{user-id}",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker-name = \"shopping-cart-${res}\"; let my-worker = instance[golem:it](worker-name); let not_found: u64 = 401; let success: u64 = 200; let result = my-worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             true,
-        );
+        ).await;
     let def2 = HttpApiDefinitionRequest {
         draft: false,
         ..def2draft.clone()
@@ -524,14 +555,14 @@ async fn test_deployment(
             "/api/3/foo/{user-id}?{id}",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
-        );
+        ).await;
     let def4 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/4/foo/{user-id}",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
-        );
+        ).await;
 
     definition_service
         .create(
@@ -701,6 +732,7 @@ async fn test_deployment(
         deployment_service
             .delete(
                 &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
                 &ApiSiteString("test.com".to_string()),
             )
             .await
@@ -756,14 +788,14 @@ async fn test_deployment_conflict(
             "/api/get1",
             "${ let worker = instance[golem:it](\"worker1\"); let status: u64 = 200; { headers: { ContentType: \"json\", userid: \"foo\"}, body: worker.get-cart-contents(\"foo\"), status: status }  }",
             false,
-        );
+        ).await;
     let def2 = get_api_definition(
         &Uuid::new_v4().to_string(),
         "0.0.1",
         "/api/get2",
         "${ let worker = instance[golem:it](\"worker2\"); {body: worker.get-cart-contents(\"foo\")} }",
         true,
-    );
+    ).await;
 
     let def3 = get_api_definition(
         &Uuid::new_v4().to_string(),
@@ -771,7 +803,7 @@ async fn test_deployment_conflict(
         "/api/get1",
         "${ let worker = instance[golem:it](\"worker2\"); {body: worker.get-cart-contents(\"foo\")} }",
         false,
-    );
+    ).await;
 
     definition_service
         .create(
@@ -862,21 +894,21 @@ async fn test_definition_crud(
             "/api/get1",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
-        );
+        ).await;
     let def1v1_upd = get_api_definition(
             &def1v1.id.0,
             "0.0.1",
             "/api/get1/1",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
-        );
+        ).await;
     let def1v2 = get_api_definition(
             &def1v1.id.0,
             "0.0.2",
             "/api/get1/2",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
-        );
+        ).await;
 
     let def1v2_upd = get_api_definition(
             &def1v1.id.0,
@@ -884,7 +916,7 @@ async fn test_definition_crud(
             "/api/get1/22",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
-        );
+        ).await;
 
     let def1v3 = get_api_definition(
         "test-def;;",
@@ -892,7 +924,7 @@ async fn test_definition_crud(
         "/api/get1/22v3",
         "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
         true,
-    );
+    ).await;
 
     definition_service
         .create(
@@ -1068,7 +1100,7 @@ fn get_security(security_schema_identifier: &SecuritySchemeIdentifier) -> Securi
     )
 }
 
-fn get_api_definition(
+async fn get_api_definition(
     id: &str,
     version: &str,
     path_pattern: &str,
@@ -1084,16 +1116,39 @@ fn get_api_definition(
           - method: Get
             path: {}
             binding:
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component:
+                name: test-component
                 version: 0
               response: '{}'
         "#,
         id, version, draft, path_pattern, response_mapping
     );
 
+    struct TestConversionContext;
+
+    #[async_trait]
+    impl ConversionContext for TestConversionContext {
+        async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
+            if name.0 == "test-component" {
+                Ok(ComponentView {
+                    name: ComponentName("test-component".to_string()),
+                    id: ComponentId(uuid!("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")),
+                    latest_version: 0,
+                })
+            } else {
+                Err("component not found".to_string())
+            }
+        }
+        async fn component_by_id(
+            &self,
+            _component_id: &ComponentId,
+        ) -> Result<ComponentView, String> {
+            unimplemented!()
+        }
+    }
+
     let api: api::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string.as_str()).unwrap();
-    api.try_into().unwrap()
+    api.into_core(&TestConversionContext.boxed()).await.unwrap()
 }
 
 fn contains_definitions(

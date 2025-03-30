@@ -12,13 +12,13 @@ lto = true
 opt-level = 's'
 
 [dependencies]
-wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
-golem-rust = { version = "1.2.1" }
-golem-rust-macro = { version = "1.2.1" }
+golem-rust = { version = "1.4.0" }
+golem-rust-macro = { version = "1.4.0" }
 log = { version = "0.4.22", features = ["kv"] }
 rand = "0.8.5"
-reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-jun-2024", features = [
+reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-march-2025", features = [
     "json",
 ] }
 serde = { version = "1.0", features = ["derive"] }

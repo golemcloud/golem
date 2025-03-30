@@ -1,3 +1,18 @@
+use futures::future::try_join_all;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
 use golem_common::json_yaml::JsonOrYaml;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
@@ -5,9 +20,8 @@ use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionResponseData;
-use golem_worker_service_base::gateway_api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
 use poem_openapi::param::{Path, Query};
@@ -38,36 +52,49 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/import", method = "put", operation_id = "import_open_api")]
     async fn create_or_update_open_api(
         &self,
-        payload: JsonOrYaml<OpenApiHttpApiDefinitionRequest>,
+        payload: JsonOrYaml<OpenApiHttpApiDefinition>,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!("import_open_api",);
 
-        let response = {
-            let definition = payload.0.to_http_api_definition_request().map_err(|e| {
-                error!("Invalid Spec {}", e);
-                ApiEndpointError::bad_request(safe(e))
-            })?;
-
-            let result = self
-                .create_api(&definition)
-                .instrument(record.span.clone())
-                .await?;
-
-            let result = HttpApiDefinitionResponseData::try_from(result).map_err(|e| {
-                error!("Failed to convert to response data {}", e);
-                ApiEndpointError::internal(safe(e))
-            });
-
-            result.map(Json)
-        };
-
+        let response = self
+            .create_or_update_open_api_internal(payload.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn create_or_update_open_api_internal(
+        &self,
+        payload: OpenApiHttpApiDefinition,
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
+        let compiled_definition = self
+            .definition_service
+            .create_with_oas(
+                &payload,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        let result = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+            compiled_definition,
+            &self
+                .definition_service
+                .conversion_context(&EmptyAuthCtx::default()),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to convert to response data {}", e);
+            ApiEndpointError::internal(safe(e))
+        })?;
+
+        Ok(Json(result))
     }
 
     /// Create a new API definition
     ///
     /// Creates a new API definition described by Golem's API definition JSON document.
-    /// If an API definition of the same version already exists, its an error.
+    /// If an API definition of the same version already exists, it is an error.
     #[oai(path = "/", method = "post", operation_id = "create_definition")]
     async fn create(
         &self,
@@ -80,27 +107,48 @@ impl RegisterApiDefinitionApi {
             draft = payload.0.draft.to_string()
         );
 
-        let response = {
-            let definition: CoreHttpApiDefinitionRequest = payload
-                .0
-                .try_into()
-                .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
-
-            let compiled_definition = self
-                .create_api(&definition)
-                .instrument(record.span.clone())
-                .await?;
-
-            let result =
-                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                });
-
-            result.map(Json)
-        };
-
+        let response = self
+            .create_internal(payload.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn create_internal(
+        &self,
+        payload: HttpApiDefinitionRequest,
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
+        let definition: CoreHttpApiDefinitionRequest = payload
+            .into_core(
+                &self
+                    .definition_service
+                    .conversion_context(&EmptyAuthCtx::default()),
+            )
+            .await
+            .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
+
+        let compiled_definition = self
+            .definition_service
+            .create(
+                &definition,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        let result = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+            compiled_definition,
+            &self
+                .definition_service
+                .conversion_context(&EmptyAuthCtx::default()),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to convert to response data {}", e);
+            ApiEndpointError::internal(safe(e))
+        })?;
+
+        Ok(Json(result))
     }
 
     /// Update an existing API definition.
@@ -124,42 +172,60 @@ impl RegisterApiDefinitionApi {
             draft = payload.0.draft.to_string()
         );
 
-        let response = {
-            let definition: CoreHttpApiDefinitionRequest = payload
-                .0
-                .try_into()
-                .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
-
-            if id.0 != definition.id {
-                Err(ApiEndpointError::bad_request(safe(
-                    "Unmatched url and body ids.".to_string(),
-                )))
-            } else if version.0 != definition.version {
-                Err(ApiEndpointError::bad_request(safe(
-                    "Unmatched url and body versions.".to_string(),
-                )))
-            } else {
-                let compiled_definition = self
-                    .definition_service
-                    .update(
-                        &definition,
-                        &DefaultNamespace::default(),
-                        &EmptyAuthCtx::default(),
-                    )
-                    .instrument(record.span.clone())
-                    .await?;
-
-                let result =
-                    HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                        error!("Failed to convert to response data {}", e);
-                        ApiEndpointError::internal(safe(e))
-                    });
-
-                result.map(Json)
-            }
-        };
-
+        let response = self
+            .update_internal(id.0, version.0, payload.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn update_internal(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiVersion,
+        payload: HttpApiDefinitionRequest,
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
+        let definition: CoreHttpApiDefinitionRequest = payload
+            .into_core(
+                &self
+                    .definition_service
+                    .conversion_context(&EmptyAuthCtx::default()),
+            )
+            .await
+            .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
+
+        if id != definition.id {
+            Err(ApiEndpointError::bad_request(safe(
+                "Unmatched url and body ids.".to_string(),
+            )))
+        } else if version != definition.version {
+            Err(ApiEndpointError::bad_request(safe(
+                "Unmatched url and body versions.".to_string(),
+            )))
+        } else {
+            let compiled_definition = self
+                .definition_service
+                .update(
+                    &definition,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .await?;
+
+            let result = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+                compiled_definition,
+                &self
+                    .definition_service
+                    .conversion_context(&EmptyAuthCtx::default()),
+            )
+            .await
+            .map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            })?;
+
+            Ok(Json(result))
+        }
     }
 
     /// Get an API definition
@@ -181,36 +247,45 @@ impl RegisterApiDefinitionApi {
             version = version.0.to_string()
         );
 
-        let response = {
-            let api_definition_id = id.0;
-
-            let api_version = version.0;
-
-            let data = self
-                .definition_service
-                .get(
-                    &api_definition_id,
-                    &api_version,
-                    &DefaultNamespace::default(),
-                    &EmptyAuthCtx::default(),
-                )
-                .instrument(record.span.clone())
-                .await?;
-
-            let compiled_definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
-                "Can't find api definition with id {api_definition_id}, and version {api_version}"
-            ))))?;
-
-            let result =
-                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                });
-
-            result.map(Json)
-        };
-
+        let response = self
+            .get_internal(id.0, version.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn get_internal(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiVersion,
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
+        let data = self
+            .definition_service
+            .get(
+                &id,
+                &version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        let compiled_definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
+            "Can't find api definition with id {id}, and version {version}"
+        ))))?;
+
+        let result = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+            compiled_definition,
+            &self
+                .definition_service
+                .conversion_context(&EmptyAuthCtx::default()),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to convert to response data {}", e);
+            ApiEndpointError::internal(safe(e))
+        })?;
+
+        Ok(Json(result))
     }
 
     /// Delete an API definition
@@ -232,23 +307,28 @@ impl RegisterApiDefinitionApi {
             version = version.0.to_string()
         );
 
-        let response = {
-            let api_definition_id = id.0;
-            let api_definition_version = version.0;
-
-            self.definition_service
-                .delete(
-                    &api_definition_id,
-                    &api_definition_version,
-                    &DefaultNamespace::default(),
-                    &EmptyAuthCtx::default(),
-                )
-                .instrument(record.span.clone())
-                .await?;
-
-            Ok(Json("API definition deleted".to_string()))
-        };
+        let response = self
+            .delete_internal(id.0, version.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn delete_internal(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiVersion,
+    ) -> Result<Json<String>, ApiEndpointError> {
+        self.definition_service
+            .delete(
+                &id,
+                &version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        Ok(Json("API definition deleted".to_string()))
     }
 
     /// Get or list API definitions
@@ -265,56 +345,41 @@ impl RegisterApiDefinitionApi {
             api_definition_id = api_definition_id_query.0.as_ref().map(|id| id.to_string()),
         );
 
-        let response = {
-            let data = if let Some(id) = api_definition_id_query.0 {
-                self.definition_service
-                    .get_all_versions(&id, &DefaultNamespace::default(), &EmptyAuthCtx::default())
-                    .instrument(record.span.clone())
-                    .await?
-            } else {
-                self.definition_service
-                    .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
-                    .instrument(record.span.clone())
-                    .await?
-            };
-
-            let values = data
-                .into_iter()
-                .map(HttpApiDefinitionResponseData::try_from)
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                })?;
-
-            Ok(Json(values))
-        };
+        let response = self
+            .list_internal(api_definition_id_query.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
     }
-}
 
-impl RegisterApiDefinitionApi {
-    async fn create_api(
+    async fn list_internal(
         &self,
-        definition: &CoreHttpApiDefinitionRequest,
-    ) -> Result<CompiledHttpApiDefinition<DefaultNamespace>, ApiEndpointError> {
-        let result = self
-            .definition_service
-            .create(
-                definition,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await
-            .map_err(|e| {
-                error!(
-                    "API definition ID: {} - register error: {e:?}",
-                    definition.id
-                );
-                e
-            })?;
+        api_definition_id_query: Option<ApiDefinitionId>,
+    ) -> Result<Json<Vec<HttpApiDefinitionResponseData>>, ApiEndpointError> {
+        let auth_ctx = EmptyAuthCtx::default();
 
-        Ok(result)
+        let data = if let Some(id) = api_definition_id_query {
+            self.definition_service
+                .get_all_versions(&id, &DefaultNamespace::default(), &auth_ctx)
+                .await?
+        } else {
+            self.definition_service
+                .get_all(&DefaultNamespace::default(), &auth_ctx)
+                .await?
+        };
+
+        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+
+        let converted = data.into_iter().map(|d| {
+            HttpApiDefinitionResponseData::from_compiled_http_api_definition(d, &conversion_context)
+        });
+
+        let values = try_join_all(converted).await.map_err(|e| {
+            error!("Failed to convert to response data {}", e);
+            ApiEndpointError::internal(safe(e))
+        })?;
+
+        Ok(Json(values))
     }
 }
 
@@ -327,10 +392,10 @@ mod test {
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
-    use golem_common::model::component_constraint::FunctionConstraintCollection;
+    use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
     use golem_common::model::ComponentId;
     use golem_service_base::db;
-    use golem_service_base::model::Component;
+    use golem_service_base::model::{Component, ComponentName};
     use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
     use golem_worker_service_base::repo::api_definition::{
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
@@ -340,7 +405,9 @@ mod test {
         DbSecuritySchemeRepo, LoggedSecuritySchemeRepo, SecuritySchemeRepo,
     };
     use golem_worker_service_base::service::component::ComponentResult;
-    use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
+    use golem_worker_service_base::service::gateway::api_definition::{
+        ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
+    };
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
     use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
     use http::StatusCode;
@@ -390,12 +457,29 @@ mod test {
             unimplemented!()
         }
 
+        async fn get_by_name(
+            &self,
+            _component_id: &ComponentName,
+            _auth_ctx: &EmptyAuthCtx,
+        ) -> ComponentResult<Component> {
+            unimplemented!()
+        }
+
         async fn create_or_update_constraints(
             &self,
             _component_id: &ComponentId,
-            _constraints: FunctionConstraintCollection,
+            _constraints: FunctionConstraints,
             _auth_ctx: &EmptyAuthCtx,
-        ) -> ComponentResult<FunctionConstraintCollection> {
+        ) -> ComponentResult<FunctionConstraints> {
+            unimplemented!()
+        }
+
+        async fn delete_constraints(
+            &self,
+            _component_id: &ComponentId,
+            _constraints: &[FunctionSignature],
+            _auth_ctx: &EmptyAuthCtx,
+        ) -> ComponentResult<FunctionConstraints> {
             unimplemented!()
         }
     }
@@ -442,6 +526,7 @@ mod test {
             api_deployment_repo,
             security_scheme_service,
             Arc::new(HttpApiDefinitionValidator {}),
+            ApiDefinitionServiceConfig::default(),
         );
 
         let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service));
@@ -457,7 +542,7 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition = golem_worker_service_base::api::HttpApiDefinitionRequest {
+        let definition = HttpApiDefinitionRequest {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
@@ -479,7 +564,7 @@ mod test {
             .send()
             .await;
 
-        response.assert_status(http::StatusCode::CONFLICT);
+        response.assert_status(StatusCode::CONFLICT);
     }
 
     #[test]
@@ -501,7 +586,7 @@ mod test {
             .send()
             .await;
 
-        response.assert_status(http::StatusCode::OK);
+        response.assert_status(StatusCode::OK);
     }
 
     #[test]
@@ -523,7 +608,7 @@ mod test {
             .send()
             .await;
 
-        response.assert_status(http::StatusCode::OK);
+        response.assert_status(StatusCode::OK);
     }
 
     #[test]
@@ -548,7 +633,7 @@ mod test {
             .send()
             .await;
 
-        response.assert_status(http::StatusCode::NOT_FOUND);
+        response.assert_status(StatusCode::NOT_FOUND);
     }
 
     #[test]
