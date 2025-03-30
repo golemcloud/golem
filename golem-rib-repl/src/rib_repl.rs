@@ -20,6 +20,7 @@ struct RibRepl {
     dependency_manager: Box<dyn RibDependencyManager>,
     worker_function_invoke: Box<dyn RibFunctionInvoke>,
     rib_result_printer: Box<dyn ResultPrinter>,
+    component_name: Option<String>
 }
 
 impl RibRepl {
@@ -28,6 +29,7 @@ impl RibRepl {
         dependency_manager: Box<dyn RibDependencyManager>,
         worker_function_invoke: Box<dyn RibFunctionInvoke>,
         rib_result_printer: Option<Box<dyn ResultPrinter>>,
+        component_name: Option<String>,
     ) -> Self {
         Self {
             history_file_path: history_file.unwrap_or_else(|| get_default_history_file()),
@@ -35,6 +37,7 @@ impl RibRepl {
             worker_function_invoke,
             rib_result_printer: rib_result_printer
                 .unwrap_or_else(|| Box::new(DefaultResultPrinter)),
+            component_name,
         }
     }
 
@@ -52,7 +55,28 @@ impl RibRepl {
         }
 
         let mut session_history = vec![];
-        let mut repl_state = ReplState::new(self.);
+
+        let mut repl_state = match &self.component_name {
+            Some(name) => {
+                let result = self.dependency_manager.register_component(name.to_string()).await;
+
+                match result {
+                    Ok(dependency) => {
+                        ReplState::new(dependency)
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to deploy component {}: {}", name, err);
+                        return;
+                    }
+                }
+            }
+
+            _ =>  {
+                eprintln!("multiple components as dependency to rib is not yet supported");
+                return;
+            },
+        };
+
 
         loop {
             let readline = rl.readline("> ");

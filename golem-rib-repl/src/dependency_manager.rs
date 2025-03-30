@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedExport;
 
@@ -17,4 +18,11 @@ pub trait RibDependencyManager {
 pub struct ComponentDependency {
     pub component_name: String,
     pub metadata: Vec<AnalysedExport>,
+}
+
+
+// A default Rib dependency manager
+pub struct DefaultRibDependencyManager {
+    pub component_name: Vec<PathBuf>,
+    pub executor: Vec<AnalysedExport>,
 }
