@@ -73,20 +73,7 @@ impl<'a> RibDependencyManager for DefaultRibDependencyManager<'a> {
                 false,
             )
             .await;
-
-        let target_worker_id = TargetWorkerId {
-            component_id: component_id.clone(),
-            worker_name: None,
-        };
-
-        let result1 = self.embedded_worker_executor.invoke_and_await_typed(
-            target_worker_id,
-            "golem:it/api.{get-cart-contents}",
-            vec![],
-        ).await;
-
-        dbg!(&result1);
-
+        
         Ok(ComponentDependency {
             component_id,
             metadata: result

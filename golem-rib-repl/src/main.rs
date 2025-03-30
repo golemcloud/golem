@@ -24,7 +24,7 @@ async fn main() {
     let embedded_worker_executor = start(&dependencies)
         .await
         .expect("Failed to start embedded worker executor");
-    
+
     let default_dependency_manager =
         dependency_manager::DefaultRibDependencyManager::new(&embedded_worker_executor)
             .await
