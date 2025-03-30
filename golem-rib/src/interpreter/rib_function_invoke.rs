@@ -11,6 +11,7 @@ pub trait RibFunctionInvoke {
     ) -> Result<ValueAndType, String>;
 }
 
+#[derive(Debug)]
 pub struct EvaluatedFqFn(pub String);
 
 #[derive(Clone)]

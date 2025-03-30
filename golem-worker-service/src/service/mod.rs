@@ -278,6 +278,7 @@ impl Services {
             api_deployment_repo.clone(),
             security_scheme_service.clone(),
             api_definition_validator_service.clone(),
+            config.api_definition.clone(),
         ));
 
         let deployment_service: Arc<

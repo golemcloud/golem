@@ -56,15 +56,13 @@ mod internal {
         Input::Position: GetSourcePosition,
     {
         spaces().with(
-            sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(
-                |expressions: Vec<Expr>| {
-                    if expressions.len() == 1 {
-                        expressions.first().unwrap().clone()
-                    } else {
-                        Expr::expr_block(expressions)
-                    }
-                },
-            ),
+            sep_by(rib_expr(), char(';').skip(spaces())).map(|expressions: Vec<Expr>| {
+                if expressions.len() == 1 {
+                    expressions.first().unwrap().clone()
+                } else {
+                    Expr::expr_block(expressions)
+                }
+            }),
         )
     }
 }

@@ -115,24 +115,6 @@ impl std::fmt::Display for VersionedComponentId {
     }
 }
 
-pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
-    let length = name.len();
-    if !(1..=100).contains(&length) {
-        Err("Worker name must be between 1 and 100 characters")
-    } else if name.contains(' ') {
-        Err("Worker name must not contain spaces")
-    } else if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    {
-        Err("Worker name must contain only alphanumeric characters, underscores, and dashes")
-    } else if name.starts_with('-') {
-        Err("Worker name must not start with a dash")
-    } else {
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]

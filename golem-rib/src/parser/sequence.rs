@@ -29,16 +29,14 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(
-            (between(
-                char('['),
-                char(']'),
-                sep_by(rib_expr(), char(',').skip(spaces())),
-            ))
-            .map(|exprs| Expr::sequence(exprs, None)),
-        )
-        .message("Invalid syntax for sequence type")
+    spaces().with(
+        (between(
+            char('['),
+            char(']'),
+            sep_by(rib_expr(), char(',').skip(spaces().silent())),
+        ))
+        .map(|exprs| Expr::sequence(exprs, None)),
+    )
 }
 
 #[cfg(test)]

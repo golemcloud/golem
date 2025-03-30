@@ -1,11 +1,10 @@
-/// NOTE: NOT FINALIZED YET
 package golem:durability@1.2.0;
 
 interface durability {
-    use golem:api/host@1.1.5.{persistence-level};
-    use golem:api/oplog@1.1.5.{oplog-index, wrapped-function-type};
+    use golem:api/host@1.1.6.{persistence-level};
+    use golem:api/oplog@1.1.6.{oplog-index, wrapped-function-type};
     use wasi:clocks/wall-clock@0.2.0.{datetime};
-    use golem:rpc/types@0.1.3.{value-and-type};
+    use golem:rpc/types@0.2.0.{value-and-type};
 
     type durable-function-type = wrapped-function-type;
 

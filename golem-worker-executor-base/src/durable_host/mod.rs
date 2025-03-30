@@ -19,7 +19,6 @@ use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
@@ -352,6 +351,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
         self.state.worker_proxy.clone()
+    }
+
+    pub fn component_service(&self) -> Arc<dyn ComponentService<Ctx::Types>> {
+        self.state.component_service.clone()
     }
 
     pub fn scheduler_service(&self) -> Arc<dyn SchedulerService + Send + Sync> {
@@ -2341,7 +2344,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
     fn self_uri(&self) -> Uri {
-        Uri::golem_urn(&self.owned_worker_id.worker_id, None)
+        Uri {
+            value: self.owned_worker_id.worker_id.to_worker_urn(),
+        }
     }
 
     async fn add(&mut self, resource: ResourceAny) -> u64 {

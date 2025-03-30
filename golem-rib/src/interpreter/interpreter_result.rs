@@ -17,7 +17,7 @@ use crate::{GetLiteralValue, LiteralValue};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RibResult {
     Unit,
     Val(ValueAndType),

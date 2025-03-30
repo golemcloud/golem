@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use combine::parser::char::alpha_num;
-use combine::parser::char::spaces;
 use combine::{
     attempt, choice, not_followed_by,
     parser::char::{char, string},
@@ -37,7 +36,6 @@ where
     (choice((
         attempt(string("some").skip(char('('))).with(
             rib_expr()
-                .skip(spaces())
                 .skip(char(')'))
                 .map(|expr| Expr::option(Some(expr))),
         ),
@@ -48,7 +46,6 @@ where
         Expr::Option { expr, .. } => Ok(Expr::option(expr.map(|x| x.deref().clone()))),
         _ => Err(RibParseError::Message("Unable to parse option".to_string())),
     })
-    .message("Invalid syntax for Option type")
 }
 
 #[cfg(test)]

@@ -45,11 +45,10 @@ where
         between(
             char('(').skip(spaces()),
             char(')').skip(spaces()),
-            sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
+            sep_by(rib_expr(), char(',').skip(spaces())),
         ),
     )
         .map(|(name, tp, args)| Expr::call_worker_function(name, tp, None, args))
-        .message("Invalid function call")
 }
 
 pub fn function_name<Input>() -> impl Parser<Input, Output = DynamicParsedFunctionName>
@@ -61,10 +60,10 @@ where
     Input::Position: GetSourcePosition,
 {
     let identifier = || many1(alpha_num().or(token('-'))).map(|string: String| string);
-    let namespace = many1(identifier()).message("namespace");
-    let package = many1(identifier()).message("package");
+    let namespace = many1(identifier());
+    let package = many1(identifier());
     let ns_pkg = (namespace, token(':'), package).map(|(ns, _, pkg)| (ns, pkg));
-    let interface = many1(identifier()).message("interface");
+    let interface = many1(identifier());
 
     let capture_resource_params = || {
         parser(|input| {

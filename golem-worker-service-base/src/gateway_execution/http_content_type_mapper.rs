@@ -14,10 +14,12 @@
 
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use mime::Mime;
 use poem::web::headers::ContentType;
 use poem::web::WithContentType;
 use poem::Body;
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
 pub trait HttpContentTypeResponseMapper {
     fn to_http_resp_with_content_type(
@@ -51,9 +53,19 @@ impl ContentTypeHeaderExt for ContentType {
 }
 impl ContentTypeHeaderExt for AcceptHeaders {
     fn has_application_json(&self) -> bool {
-        self.0
-            .iter()
-            .any(|v| v.contains(ContentType::json().to_string().as_str()))
+        self.0.iter().any(|v| {
+            if let Ok(mime) = Mime::from_str(v) {
+                matches!(
+                    (mime.type_(), mime.subtype()),
+                    (mime::APPLICATION, mime::JSON)
+                        | (mime::APPLICATION, mime::STAR)
+                        | (mime::STAR, mime::STAR)
+                        | (mime::STAR, mime::JSON)
+                )
+            } else {
+                false
+            }
+        })
     }
 
     fn response_content_type(&self) -> Result<ContentType, ContentTypeMapError> {
@@ -482,8 +494,14 @@ mod internal {
         content_type: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         let response_content_type = content_type.response_content_type()?;
-        Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
-            .with_content_type(response_content_type.to_string()))
+
+        let body = if content_type.has_application_json() {
+            bytes::Bytes::from(format!("\"{}\"", string))
+        } else {
+            bytes::Bytes::from(string.to_string())
+        };
+
+        Ok(Body::from_bytes(body).with_content_type(response_content_type.to_string()))
     }
 }
 
@@ -681,26 +699,16 @@ mod tests {
 
         #[test]
         async fn test_string_type_as_json() {
-            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-            let (content_type, body) =
-                get_content_type_and_body(&type_annotated_value, &ContentType::json());
-            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            assert_eq!(
-                (result, content_type),
-                ("Hello".to_string(), Some("application/json".to_string()))
-            );
-        }
-
-        #[test]
-        async fn test_json_string_type_as_json() {
             let type_annotated_value = TypeAnnotatedValue::Str("\"Hello\"".to_string());
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+
+            // It doesn't matter if the string is already jsonified, it will be jsonified again
             assert_eq!(
                 (result, content_type),
                 (
-                    "\"Hello\"".to_string(),
+                    "\"\"Hello\"\"".to_string(),
                     Some("application/json".to_string())
                 )
             );
@@ -807,7 +815,10 @@ mod tests {
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
-                ("Hello".to_string(), Some("application/json".to_string()))
+                (
+                    "\"Hello\"".to_string(),
+                    Some("application/json".to_string())
+                )
             );
         }
 
@@ -821,7 +832,10 @@ mod tests {
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
-                ("Hello".to_string(), Some("application/json".to_string()))
+                (
+                    "\"Hello\"".to_string(),
+                    Some("application/json".to_string())
+                )
             );
         }
 

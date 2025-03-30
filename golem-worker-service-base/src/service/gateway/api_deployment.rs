@@ -34,7 +34,7 @@ use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::component::ComponentService;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use chrono::Utc;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
@@ -81,6 +81,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
     async fn delete(
         &self,
         namespace: &Namespace,
+        auth_ctx: &AuthCtx,
         site: &ApiSiteString,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 }
@@ -306,7 +307,8 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         }
 
         // Find component constraints and update
-        let constraints = ComponentConstraints::from_deployment_plan(&deployment_plan)?;
+        let constraints =
+            ComponentConstraints::from_api_definitions(&deployment_plan.apis_to_deploy)?;
 
         for (component_id, constraints) in constraints.constraints {
             self.component_service
@@ -320,6 +322,35 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         self.deployment_repo
             .create(deployment_plan.deployment_records())
             .await?;
+
+        Ok(())
+    }
+
+    async fn remove_component_constraints<Namespace>(
+        &self,
+        existing_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), ApiDeploymentError<Namespace>>
+    where
+        Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
+    {
+        let constraints = ComponentConstraints::from_api_definitions(&existing_api_definitions)?;
+
+        for (component_id, constraints) in &constraints.constraints {
+            let signatures_to_be_removed = constraints
+                .constraints
+                .iter()
+                .map(|x| x.function_signature.clone())
+                .collect::<Vec<_>>();
+
+            self.component_service
+                .delete_constraints(component_id, &signatures_to_be_removed, auth_ctx)
+                .await
+                .map_err(|err| {
+                    ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
+                })?;
+        }
 
         Ok(())
     }
@@ -391,7 +422,6 @@ where
         deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %deployment.namespace, "Undeploying API definitions");
-
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
@@ -603,9 +633,13 @@ where
     async fn delete(
         &self,
         namespace: &Namespace,
+        auth_ctx: &AuthCtx,
         site: &ApiSiteString,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %namespace, "Get API deployment");
+
+        // Not sure of the purpose of retrieving records at repo level to delete API deployment
+        // https://github.com/golemcloud/golem/issues/1443
         let existing_deployment_records =
             self.deployment_repo.get_by_site(&site.to_string()).await?;
 
@@ -624,11 +658,17 @@ where
 
             Err(ApiDeploymentError::ApiDeploymentConflict(site.clone()))
         } else {
+            // API definitions corresponding to the deployment
+            let existing_api_definitions = self.get_definitions_by_site(namespace, site).await?;
+
             self.deployment_repo
                 .delete(existing_deployment_records.clone())
                 .await?;
 
             self.set_undeployed_as_draft(existing_deployment_records)
+                .await?;
+
+            self.remove_component_constraints(existing_api_definitions, auth_ctx)
                 .await?;
 
             Ok(())
@@ -766,17 +806,18 @@ where
     }
 }
 
+#[derive(Debug)]
 struct ComponentConstraints {
-    constraints: HashMap<ComponentId, FunctionConstraintCollection>,
+    constraints: HashMap<ComponentId, FunctionConstraints>,
 }
 
 impl ComponentConstraints {
-    fn from_deployment_plan<Namespace>(
-        deployment_plan: &ApiDeploymentPlan<Namespace>,
+    fn from_api_definitions<Namespace>(
+        definitions: &Vec<CompiledHttpApiDefinition<Namespace>>,
     ) -> Result<Self, ApiDeploymentError<Namespace>> {
         let mut worker_functions_in_rib = HashMap::new();
 
-        for definition in &deployment_plan.apis_to_deploy {
+        for definition in definitions {
             for route in definition.routes.iter() {
                 if let GatewayBindingCompiled::Worker(worker_binding) = route.binding.clone() {
                     let component_id = worker_binding.component_id;
@@ -798,18 +839,16 @@ impl ComponentConstraints {
 
     fn merge_worker_functions_in_rib<Namespace>(
         worker_functions: HashMap<ComponentId, Vec<WorkerFunctionsInRib>>,
-    ) -> Result<HashMap<ComponentId, FunctionConstraintCollection>, ApiDeploymentError<Namespace>>
-    {
-        let mut merged_worker_functions: HashMap<ComponentId, FunctionConstraintCollection> =
-            HashMap::new();
+    ) -> Result<HashMap<ComponentId, FunctionConstraints>, ApiDeploymentError<Namespace>> {
+        let mut merged_worker_functions: HashMap<ComponentId, FunctionConstraints> = HashMap::new();
 
         for (component_id, worker_functions_in_rib) in worker_functions {
             let function_constraints = worker_functions_in_rib
                 .iter()
-                .map(FunctionConstraintCollection::from_worker_functions_in_rib)
+                .map(FunctionConstraints::from_worker_functions_in_rib)
                 .collect::<Vec<_>>();
 
-            let merged_calls = FunctionConstraintCollection::try_merge(function_constraints)
+            let merged_calls = FunctionConstraints::try_merge(function_constraints)
                 .map_err(|err| ApiDeploymentError::ApiDefinitionsConflict(err))?;
 
             merged_worker_functions.insert(component_id, merged_calls);

@@ -173,7 +173,11 @@ impl ApiDeploymentApi {
 
     async fn delete_internal(&self, site: String) -> Result<Json<String>, ApiEndpointError> {
         self.deployment_service
-            .delete(&DefaultNamespace::default(), &ApiSiteString(site))
+            .delete(
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx(),
+                &ApiSiteString(site),
+            )
             .await?;
 
         Ok(Json("API deployment deleted".to_string()))

@@ -587,6 +587,7 @@ mod internal {
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
+
                 instructions.push(RibIR::Concat(exprs.len()));
             }
 
