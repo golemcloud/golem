@@ -5,7 +5,6 @@ pub trait ResultPrinter {
     fn print_interpreter_error(&self, error: &String) -> Result<(), String>;
 }
 
-
 pub struct DefaultResultPrinter;
 
 impl ResultPrinter for DefaultResultPrinter {

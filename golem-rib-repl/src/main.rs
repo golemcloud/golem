@@ -1,8 +1,8 @@
-mod history;
-mod syntax_highlighter;
 mod dependency_manager;
-mod rib_repl;
+mod history;
 mod result_printer;
+mod rib_repl;
+mod syntax_highlighter;
 
 #[tokio::main]
 async fn main() {

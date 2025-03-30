@@ -1,3 +1,4 @@
+use crate::history::retrieve_history;
 use rib::Expr;
 use rustyline::completion::Completer;
 use rustyline::config::CompletionType;
@@ -8,7 +9,6 @@ use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
 use termion::color;
-use crate::history::retrieve_history;
 
 #[derive(Default)]
 pub struct RibSyntaxHighlighter;

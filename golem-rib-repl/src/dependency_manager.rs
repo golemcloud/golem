@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedExport;
 
@@ -9,7 +8,10 @@ pub trait RibDependencyManager {
     async fn register_global(&mut self) -> Result<Vec<ComponentDependency>, String>;
 
     // Deploy a specific component if not done already with the Golem engine
-    async fn register_component(&mut self, component_name: String) -> Result<ComponentDependency, String>;
+    async fn register_component(
+        &mut self,
+        component_name: String,
+    ) -> Result<ComponentDependency, String>;
 }
 
 pub struct ComponentDependency {

@@ -1,39 +1,44 @@
-use std::path::{PathBuf};
-use std::sync::Arc;
-use rib::Interpreter;
 use rib::InterpreterEnv;
 use rib::InterpreterStack;
 use rib::RibInput;
 use rib::{Expr, RibByteCode};
+use rib::{Interpreter, RibFunctionInvoke};
 use rustyline::error::ReadlineError;
 use rustyline::history::{DefaultHistory, History};
 use rustyline::Editor;
+use std::path::PathBuf;
 use tokio;
 
 // Import Rib evaluation function
+use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
+use crate::result_printer::{DefaultResultPrinter, ResultPrinter};
 use crate::syntax_highlighter::RibSyntaxHighlighter;
 use rib::compile;
-use crate::dependency_manager::RibDependencyManager;
-use crate::result_printer::{DefaultResultPrinter, ResultPrinter};
 
 struct RibRepl {
     history_file_path: PathBuf,
     dependency_manager: Box<dyn RibDependencyManager>,
+    worker_function_invoke: Box<dyn RibFunctionInvoke>,
     rib_result_printer: Box<dyn ResultPrinter>,
 }
 
 impl RibRepl {
-    fn new(history_file: Option<PathBuf>, dependency_manager: Box<dyn RibDependencyManager>, rib_result_printer: Option<Box<dyn ResultPrinter>>) -> Self {
+    fn new(
+        history_file: Option<PathBuf>,
+        dependency_manager: Box<dyn RibDependencyManager>,
+        worker_function_invoke: Box<dyn RibFunctionInvoke>,
+        rib_result_printer: Option<Box<dyn ResultPrinter>>,
+    ) -> Self {
         Self {
             history_file_path: history_file.unwrap_or_else(|| get_default_history_file()),
             dependency_manager,
-            rib_result_printer: rib_result_printer.unwrap_or_else(|| Box::new(DefaultResultPrinter)),
+            worker_function_invoke,
+            rib_result_printer: rib_result_printer
+                .unwrap_or_else(|| Box::new(DefaultResultPrinter)),
         }
     }
 
-
     async fn run(&mut self) {
-
         let history_file = get_default_history_file();
 
         let mut rl = Editor::<RibSyntaxHighlighter, DefaultHistory>::new().unwrap();
@@ -47,13 +52,12 @@ impl RibRepl {
         }
 
         let mut session_history = vec![];
-        let mut repl_state = ReplState::default();
+        let mut repl_state = ReplState::new(self.);
 
         loop {
             let readline = rl.readline("> ");
             match readline {
                 Ok(line) if !line.is_empty() => {
-
                     if line.starts_with(":load ") {
                         let files: Vec<String> =
                             line[6..].split(',').map(|s| s.trim().to_string()).collect();
@@ -83,7 +87,8 @@ impl RibRepl {
 
 async fn eval(line: &str, repl_state: &mut ReplState) -> Result<String, String> {
     let expr = Expr::from_text(line).map_err(|e| format!("Parse error: {}", e))?;
-    let compiled = compile(expr, &vec![]).map_err(|e| format!("Compile error: {}", e))?;
+    let compiled = compile(expr, &repl_state.dependency.metadata)
+        .map_err(|e| format!("Compile error: {}", e))?;
     let new_byte_code = compiled.byte_code;
     let byte_code = new_byte_code.diff(&repl_state.byte_code);
 
@@ -106,17 +111,19 @@ fn get_default_history_file() -> PathBuf {
 struct ReplState {
     byte_code: RibByteCode,
     interpreter: Interpreter,
+    dependency: ComponentDependency, // To be changed to multiple dependency
 }
 
-impl Default for ReplState {
-    fn default() -> Self {
+impl ReplState {
+    fn new(dependency: ComponentDependency) -> Self {
         Self {
             byte_code: RibByteCode::default(),
             interpreter: Interpreter::pure(
-                &RibInput::default(), // TODO to be changed
+                &RibInput::default(), // no input to begin with, but as we go on, we will add input in the interpreter
                 Some(InterpreterStack::default()),
                 Some(InterpreterEnv::default()),
             ),
+            dependency,
         }
     }
 }

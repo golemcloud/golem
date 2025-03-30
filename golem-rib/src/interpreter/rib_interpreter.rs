@@ -68,6 +68,19 @@ impl Interpreter {
         }
     }
 
+    // Override rib input helps with incremental interpretation
+    // where a rib script is now trying to access a specific input
+    // such that the compiler already knows the required global variable and its types,
+    // to later override the interpreter with this input. The previous inputs will be completely
+    // discared as they are either loaded in as variables, or if they are accessed again, the inputs
+    // will be or can be overriden back
+    pub fn override_rib_input(
+        &mut self,
+        rib_input: RibInput,
+    ) {
+        self.input = rib_input;
+    }
+
     pub async fn run(&mut self, instructions0: RibByteCode) -> Result<RibResult, String> {
         let mut byte_code_cursor = RibByteCodeCursor::from_rib_byte_code(instructions0);
         let mut stack = match &mut self.custom_stack {
