@@ -3286,8 +3286,10 @@ dependencies = [
 name = "golem-rib-repl"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "dirs",
  "golem-rib",
+ "golem-wasm-ast",
  "golem-worker-service-base",
  "rustyline",
  "termion",

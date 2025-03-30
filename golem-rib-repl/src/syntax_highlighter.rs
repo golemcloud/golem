@@ -4,7 +4,6 @@ use rustyline::config::CompletionType;
 use rustyline::highlight::CmdKind;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
-use rustyline::history::SearchDirection;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
