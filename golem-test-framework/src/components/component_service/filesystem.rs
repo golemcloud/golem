@@ -170,11 +170,7 @@ impl FileSystemComponentService {
         let component_bytes = &tokio::fs::read(path).await?;
         let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)?;
 
-        let exports = raw_component_metadata
-            .exports
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let exports = raw_component_metadata.exports.to_vec();
 
         let linear_memories: Vec<LinearMemory> = raw_component_metadata
             .memories
