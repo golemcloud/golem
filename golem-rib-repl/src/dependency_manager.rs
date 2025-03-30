@@ -1,45 +1,78 @@
-use crate::local::WorkerExecutorLocalDependencies;
+use std::collections::HashMap;
+use crate::local::{start, EmbeddedWorkerExecutor, WorkerExecutorLocalDependencies};
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedExport;
 use std::fmt::Debug;
+use golem_common::model::{ComponentId, ComponentType};
+use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::{TestDslUnsafe};
 
 #[async_trait]
 pub trait RibDependencyManager {
     // Deploy all components within the context, if not already registered with the golem engine
     // and returning the list of components that were registered.
-    async fn register_global(&mut self) -> Result<Vec<ComponentDependency>, String>;
+    async fn register_global(&self) -> Result<Vec<ComponentDependency>, String>;
 
     // Deploy a specific component if not done already with the Golem engine
     async fn register_component(
-        &mut self,
+        &self,
         component_name: String,
     ) -> Result<ComponentDependency, String>;
 }
 
+#[derive(Clone)]
 pub struct ComponentDependency {
-    pub component_name: String,
+    pub component_id: ComponentId,
     pub metadata: Vec<AnalysedExport>,
 }
 
 // A default Rib dependency manager is mainly allowing rib to be used standalone
 // without the nuances of app manifest. This is mainly used for testing the REPL itself
-pub struct DefaultRibDependencyManager;
+pub struct DefaultRibDependencyManager {
+    embedded_worker_executor: EmbeddedWorkerExecutor,
+}
+
+impl DefaultRibDependencyManager {
+    pub async fn new(embedded_worker_executor: &EmbeddedWorkerExecutor) -> Result<Self, String> {
+        Ok(Self {
+            embedded_worker_executor: embedded_worker_executor.clone(),
+        })
+    }
+}
 
 #[async_trait]
 impl RibDependencyManager for DefaultRibDependencyManager {
-    async fn register_global(&mut self) -> Result<Vec<ComponentDependency>, String> {
-        let dependencies = WorkerExecutorLocalDependencies::new().await;
+    async fn register_global(&self) -> Result<Vec<ComponentDependency>, String> {
         Err("multiple components not supported in local mode".to_string())
     }
 
     async fn register_component(
-        &mut self,
+        &self,
         component_name: String,
     ) -> Result<ComponentDependency, String> {
-        // Implement the logic to register a specific component
+        let component_id =
+            self.embedded_worker_executor.component(component_name.as_str()).store().await;
+
+        let source_path = self.embedded_worker_executor.component_directory().join(format!("{component_name}.wasm"));
+
+        let result = self.embedded_worker_executor.component_service().get_or_add_component(
+            &source_path,
+            &component_name,
+            ComponentType::Durable,
+            &[],
+            &HashMap::new(),
+            false
+        ).await;
+
         Ok(ComponentDependency {
-            component_name,
-            metadata: vec![],
+            component_id,
+            metadata: result.metadata.map(|metadata| {
+                metadata
+                    .exports
+                    .iter()
+                    .map(|m| AnalysedExport::try_from(m.clone()).unwrap())
+                    .collect()
+            }).unwrap_or_default(),
         })
     }
 }

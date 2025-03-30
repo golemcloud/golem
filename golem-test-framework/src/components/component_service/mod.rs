@@ -248,7 +248,6 @@ pub trait ComponentService: ComponentServiceInternal {
                     }
                 }
             };
-
             if let Some(latest_component) = latest_component {
                 return latest_component;
             }

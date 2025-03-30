@@ -19,7 +19,6 @@ use golem_test_framework::components::component_compilation_service::ComponentCo
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::rdb::Rdb;
-use golem_test_framework::components::redis::provided::ProvidedRedis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
@@ -82,7 +81,6 @@ use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{
     component, plugins, rdbms, All, HasAll, HasConfig, HasOplogService,
 };
-use golem_worker_executor_base::storage::indexed::ScanCursor;
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
@@ -238,19 +236,13 @@ impl TestDependencies for WorkerExecutorLocalDependencies {
     }
 }
 
-pub async fn start(deps: &WorkerExecutorLocalDependencies) -> anyhow::Result<TestWorkerExecutor> {
+pub async fn start(deps: &WorkerExecutorLocalDependencies) -> anyhow::Result<EmbeddedWorkerExecutor> {
     start_limited(deps).await
 }
 
 pub async fn start_limited(
     deps: &WorkerExecutorLocalDependencies,
-) -> anyhow::Result<TestWorkerExecutor> {
-    let redis = deps.redis();
-    let redis_monitor = deps.redis_monitor();
-    redis.assert_valid();
-    redis_monitor.assert_valid();
-    info!("Using Redis on port {}", redis.public_port());
-
+) -> anyhow::Result<EmbeddedWorkerExecutor> {
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::InMemory(KeyValueStorageInMemoryConfig {}),
@@ -286,12 +278,10 @@ pub async fn start_limited(
 
     let start = std::time::Instant::now();
     loop {
-        info!("Waiting for worker-executor to be reachable on port {grpc_port}");
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
         if client.is_ok() {
             let deps = deps.per_test(details.http_port, grpc_port);
-            break Ok(TestWorkerExecutor {
-                _join_set: Some(join_set),
+            break Ok(EmbeddedWorkerExecutor {
                 deps,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -311,6 +301,59 @@ pub struct WorkerExecutorPerTestDependencies {
     component_directory: PathBuf,
 }
 
+#[async_trait]
+impl TestDependencies for WorkerExecutorPerTestDependencies {
+    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+        panic!("Not supported")
+    }
+
+    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+        panic!("Not supported")
+    }
+
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+        panic!("Not supported")
+    }
+
+    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+        panic!("Not supported")
+    }
+
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
+    }
+
+    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+        self.component_service.clone()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        panic!("Not supported")
+    }
+
+    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+        self.worker_service.clone()
+    }
+
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+        panic!("Not supported")
+    }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.blob_storage.clone()
+    }
+
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        self.initial_component_files_service.clone()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
+}
+
 async fn run(
     golem_config: GolemConfig,
     additional_config: DefaultAdditionalGolemConfig,
@@ -325,12 +368,12 @@ async fn run(
         .await
 }
 
-pub struct TestWorkerExecutor {
-    _join_set: Option<JoinSet<anyhow::Result<()>>>,
+#[derive(Clone)]
+pub struct EmbeddedWorkerExecutor {
     deps: WorkerExecutorPerTestDependencies,
 }
 
-impl TestWorkerExecutor {
+impl EmbeddedWorkerExecutor {
     pub async fn client(&self) -> golem_test_framework::Result<WorkerExecutorClient<Channel>> {
         self.deps.worker_executor.client().await
     }
@@ -1110,5 +1153,70 @@ impl InvocationContextManagement for TestWorkerCtx {
         self.durable_ctx
             .set_span_attribute(span_id, key, value)
             .await
+    }
+}
+
+
+#[async_trait]
+impl TestDependencies for EmbeddedWorkerExecutor {
+    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+        self.deps.rdb()
+    }
+
+    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+        self.deps.redis()
+    }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.deps.blob_storage()
+    }
+
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+        self.deps.redis_monitor()
+    }
+
+    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+        self.deps.shard_manager()
+    }
+
+    fn component_directory(&self) -> &Path {
+        self.deps.component_directory()
+    }
+
+    fn component_service(
+        &self,
+    ) -> Arc<
+        dyn golem_test_framework::components::component_service::ComponentService
+        + Send
+        + Sync
+        + 'static,
+    > {
+        self.deps.component_service()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        self.deps.component_compilation_service()
+    }
+
+    fn worker_service(
+        &self,
+    ) -> Arc<
+        dyn golem_test_framework::components::worker_service::WorkerService + Send + Sync + 'static,
+    > {
+        self.deps.worker_service()
+    }
+
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+        self.deps.worker_executor_cluster()
+    }
+
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        self.deps.initial_component_files_service()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.deps.plugin_wasm_files_service()
     }
 }

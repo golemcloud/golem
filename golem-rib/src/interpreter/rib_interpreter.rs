@@ -833,8 +833,6 @@ mod internal {
         let left = interpreter_stack.try_pop()?;
         let right = interpreter_stack.try_pop()?;
 
-        dbg!(&left);
-        dbg!(&right);
         let result = left.evaluate_math_op(&right, compare_fn)?;
         let numerical_type = result.cast_to(target_numerical_type).ok_or_else(|| {
             format!(

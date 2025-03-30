@@ -66,8 +66,6 @@ impl RibInterpreterStackValue {
                     left.get_literal().and_then(|x| x.get_number()),
                     right.get_literal().and_then(|x| x.get_number()),
                 ) {
-                    dbg!(&left_lit, &right_lit);
-
                     Ok(op(left_lit, right_lit))
                 } else {
                     Err(internal::unable_to_complete_math_operation(&left, &right))
