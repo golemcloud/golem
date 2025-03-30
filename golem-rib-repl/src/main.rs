@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_test_framework::dsl::TestDsl;
@@ -36,7 +37,7 @@ async fn main() {
     let mut repl = RibRepl::new(
         None,
         Box::new(default_dependency_manager),
-        Box::new(rib_function_invoke),
+        Arc::new(rib_function_invoke),
         None,
         Some("shopping-cart".to_string()),
     );
@@ -75,6 +76,8 @@ impl RibFunctionInvoke for EmbeddedRibFunctionInvoke {
         );
 
         let function_name = function_name.0;
+
+        dbg!(&function_name);
 
         self.embedded_worker_executor
             .invoke_and_await_typed(target_worker_id, function_name.as_str(), args.0)

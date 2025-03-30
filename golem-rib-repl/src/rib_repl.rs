@@ -7,6 +7,7 @@ use rustyline::error::ReadlineError;
 use rustyline::history::{DefaultHistory, History};
 use rustyline::Editor;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio;
 
 // Import Rib evaluation function
@@ -18,7 +19,7 @@ use rib::compile;
 pub struct RibRepl {
     history_file_path: PathBuf,
     dependency_manager: Box<dyn RibDependencyManager>,
-    worker_function_invoke: Box<dyn RibFunctionInvoke>,
+    worker_function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
     rib_result_printer: Box<dyn ResultPrinter>,
     component_name: Option<String>,
 }
@@ -27,7 +28,7 @@ impl RibRepl {
     pub fn new(
         history_file: Option<PathBuf>,
         dependency_manager: Box<dyn RibDependencyManager>,
-        worker_function_invoke: Box<dyn RibFunctionInvoke>,
+        worker_function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
         rib_result_printer: Option<Box<dyn ResultPrinter>>,
         component_name: Option<String>,
     ) -> Self {
@@ -64,7 +65,7 @@ impl RibRepl {
                     .await;
 
                 match result {
-                    Ok(dependency) => ReplState::new(dependency),
+                    Ok(dependency) => ReplState::new(dependency, Arc::clone(&self.worker_function_invoke)),
                     Err(err) => {
                         eprintln!("Failed to deploy component {}: {}", name, err);
                         return;
@@ -133,11 +134,12 @@ struct ReplState {
 }
 
 impl ReplState {
-    fn new(dependency: ComponentDependency) -> Self {
+    fn new(dependency: ComponentDependency, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,) -> Self {
         Self {
             byte_code: RibByteCode::default(),
-            interpreter: Interpreter::pure(
-                &RibInput::default(), // no input to begin with, but as we go on, we will add input in the interpreter
+            interpreter: Interpreter::new(
+                &RibInput::default(),
+                invoke,
                 Some(InterpreterStack::default()),
                 Some(InterpreterEnv::default()),
             ),
