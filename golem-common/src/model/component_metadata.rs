@@ -188,6 +188,8 @@ pub struct RawComponentMetadata {
     pub producers: Vec<WasmAstProducers>,
     pub memories: Vec<Mem>,
     pub binary_wit: Vec<u8>,
+    pub root_package_name: String,
+    pub root_package_version: Option<String>,
 }
 
 impl RawComponentMetadata {
@@ -213,6 +215,9 @@ impl RawComponentMetadata {
         let binary_wit = wit_analysis
             .serialized_interface_only()
             .map_err(ComponentProcessingError::Analysis)?;
+        let root_package = wit_analysis
+            .root_package_name()
+            .map_err(ComponentProcessingError::Analysis)?;
 
         for warning in wit_analysis.warnings() {
             tracing::warn!("Wit analysis warning: {}", warning);
@@ -234,6 +239,8 @@ impl RawComponentMetadata {
             producers,
             memories,
             binary_wit,
+            root_package_name: format!("{}:{}", root_package.namespace, root_package.name),
+            root_package_version: root_package.version.map(|v| v.to_string()),
         })
     }
 }

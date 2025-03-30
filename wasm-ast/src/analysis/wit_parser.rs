@@ -89,6 +89,7 @@ impl WitAnalysisContext {
         }
     }
 
+    /// Gets the component's root package name
     pub fn root_package_name(&self) -> AnalysisResult<PackageName> {
         let package_id = self.wasm.package();
         let resolve = self.wasm.resolve();
