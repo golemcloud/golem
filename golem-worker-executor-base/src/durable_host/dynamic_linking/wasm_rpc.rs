@@ -42,6 +42,7 @@ use golem_wasm_rpc::{
 use itertools::Itertools;
 use prost_reflect::{DescriptorPool, DynamicMessage};
 use rib::{ParsedFunctionName, ParsedFunctionReference};
+use serde::Serialize;
 use serde_json::{json, Deserializer, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -725,7 +726,7 @@ async fn grpc_call<Ctx: WorkerCtx + HostWasmRpc + ResourceStore + Send>(
         &function_name.to_string(),
     )
     .await?;
-    // skipping hadle at index 0 of params
+
     let (_, params_json_values) = get_req_types(
         function_name,
         params,
@@ -742,13 +743,10 @@ async fn grpc_call<Ctx: WorkerCtx + HostWasmRpc + ResourceStore + Send>(
             .map(|def| def.typ.clone())
             .collect()
     } else {
-        Vec::new()
+        Vec::new() // throw error
     };
 
     let constructor_params: Vec<JsonValue> = get_stored_constructor_args(store, &params[0])?;
-    for param in constructor_params.clone() {
-        println!("param : {}", param);
-    }
 
     let results_json_values = {
         let grpc_configuration: GrpcConfiguration =
@@ -771,6 +769,7 @@ async fn grpc_call<Ctx: WorkerCtx + HostWasmRpc + ResourceStore + Send>(
                 .interface_name()
                 .unwrap()
                 .split("/")
+                // skipping hadle at index 0 of params
                 .nth(1)
                 .unwrap()
                 .to_case(Case::Pascal)
@@ -788,14 +787,25 @@ async fn grpc_call<Ctx: WorkerCtx + HostWasmRpc + ResourceStore + Send>(
                 .to_case(Case::Pascal)
         );
 
-        let service_descriptor = descriptor_pool
-            .get_service_by_name(&service_full_name)
-            .unwrap();
+        let Some(service_descriptor) = descriptor_pool
+            .get_service_by_name(&service_full_name) 
+        else {
+            Err(anyhow!(
+                "Cannot find grpc service with full name : {}",
+                service_full_name
+            ))?
+        };
+            
 
-        let method_descriptor = service_descriptor
+        let Some(method_descriptor) = service_descriptor
             .methods()
             .find(|method| method.full_name() == method_full_name)
-            .unwrap();
+        else {
+            Err(anyhow!(
+                "Cannot find grpc service method with full name : {}",
+                method_full_name
+            ))?
+        };
 
         let message_descriptor: prost_reflect::MessageDescriptor = method_descriptor.input();
 
@@ -807,42 +817,55 @@ async fn grpc_call<Ctx: WorkerCtx + HostWasmRpc + ResourceStore + Send>(
 
         let mut metadata_map = MetadataMap::new();
         metadata_map.insert(
-            "authorization",
+            "Authorization",
             format!("Bearer {}", grpc_configuration.secret_token)
                 .parse()
                 .unwrap(),
         );
 
-        let grpc_client = GrpcClient::new(&http::Uri::from_str(&grpc_configuration.url)?).await?;
+        let uri = &http::Uri::from_str(&grpc_configuration.url)?;
 
-        match grpc_client
-            .unary_call(&method_descriptor, &dynamic_message, metadata_map)
-            .await
-        {
-            Ok(resp) => {
-                let result_dynamic_message = resp.into_parts().1;
-                let json_value = serde_json::to_value(result_dynamic_message.to_string())?;
+        match GrpcClient::new(uri).await {
+            Ok(grpc_client) => {
+                match grpc_client
+                    .unary_call(&method_descriptor, &dynamic_message, metadata_map)
+                    .await
+                {
+                    Ok(resp) => {
+                        let result_dynamic_message = resp.into_parts().1;
+                        let mut serializer = serde_json::Serializer::new(vec![]);
+                        result_dynamic_message.serialize(&mut serializer).unwrap();
+                        let json_value: serde_json::Value = serde_json::from_str(&String::from_utf8(serializer.into_inner())?)?;
 
-                vec![json!(
-                    {
-                        "ok" : json_value
+                        vec![json!(
+                            {
+                                "ok": json_value,
+                            }
+                        )]
                     }
-                )]
-            }
-            Err(status) => {
-                let grpc_status: GrpcStatus = GrpcStatus {
-                    code: status.code(),
-                    message: status.message().to_string(),
-                    details: status.details().to_vec(),
-                };
+                    Err(status) => {
+                        let grpc_status: GrpcStatus = GrpcStatus {
+                            code: status.code(),
+                            message: status.message().to_string(),
+                            details: status.details().to_vec(),
+                        };
 
-                // return result with err
-                vec![json!(
-                    {
-                        "err" : serde_json::to_value(grpc_status).unwrap()
+                        // return result with err
+                        vec![json!(
+                            {
+                                "err" : serde_json::to_value(grpc_status).unwrap(),
+                            }
+                        )]
                     }
-                )]
-            }
+                }
+            },
+            Err(_) => {
+                
+                    Err(anyhow!(
+                        "Unable to make connection with uri : {}",
+                        uri
+                    ))?
+            },
         }
     };
 

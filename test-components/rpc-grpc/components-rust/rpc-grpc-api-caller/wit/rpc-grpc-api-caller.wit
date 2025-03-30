@@ -1,0 +1,17 @@
+package rpc-grpc:api-caller;
+
+interface rpc-grpc-api-caller-api {
+  record input {
+    name : string
+  }
+
+  record output {
+    name : string
+  }
+  
+  hello: func(input: input) -> output;
+}
+
+world rpc-grpc-api-caller {
+  export rpc-grpc-api-caller-api;
+}

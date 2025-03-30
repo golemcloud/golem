@@ -1,0 +1,27 @@
+[package]
+name = "rpc_grpc_api_caller"
+version = "0.0.1"
+edition = "2021"
+
+[package.metadata]
+
+[package.metadata.component]
+
+[package.metadata.component.target]
+path = "wit-generated"
+
+[package.metadata.component.target.dependencies]
+"wasi:clocks" = { path = "wit-generated/deps/clocks" }
+"wasi:io" = { path = "wit-generated/deps/io" }
+"golem:rpc" = { path = "wit-generated/deps/wasm-rpc" }
+"rpc-grpc:grpcbin-exports" = { path = "wit-generated/deps/rpc-grpc_grpcbin-exports" }
+"rpc-grpc:grpcbin-client" = { path = "wit-generated/deps/rpc-grpc_grpcbin-client" }
+"rpc-grpc:api-caller-exports" = { path = "wit-generated/deps/rpc-grpc_api-caller-exports" }
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+wit-bindgen-rt = { workspace = true }

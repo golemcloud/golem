@@ -1,0 +1,22 @@
+[package]
+name = "rpc_grpc_grpcbin"
+version = "0.0.1"
+edition = "2021"
+
+[package.metadata]
+
+[package.metadata.component]
+
+[package.metadata.component.target]
+path = "wit-generated"
+
+[package.metadata.component.target.dependencies]
+"rpc-grpc:grpcbin-exports" = { path = "wit-generated/deps/rpc-grpc_grpcbin-exports" }
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+wit-bindgen-rt = { workspace = true }
