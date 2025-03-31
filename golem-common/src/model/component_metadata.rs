@@ -239,6 +239,7 @@ impl RawComponentMetadata {
             .root_package_name()
             .map_err(ComponentProcessingError::Analysis)?;
 
+        #[cfg(feature = "observability")]
         for warning in wit_analysis.warnings() {
             tracing::warn!("Wit analysis warning: {}", warning);
         }

@@ -20,12 +20,15 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 #[cfg(feature = "poem")]
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
+#[cfg(feature = "poem")]
 use poem_openapi::types::ToJSON;
 #[cfg(feature = "poem")]
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromParameter, ParseResult, Type};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+#[cfg(feature = "poem")]
 use serde_json::Value;
+#[cfg(feature = "poem")]
 use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
 
