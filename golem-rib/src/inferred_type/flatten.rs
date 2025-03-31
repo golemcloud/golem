@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use crate::InferredType;
+use std::collections::HashSet;
 
 // Convert AllOf(AllOf(x, y, z), AllOf(a, b, OneOf(c, d))) to AllOf(x, y, z, a, b, OneOf(c,d))
 // In Rib inference, there is no situation of a OneOf having AllOf

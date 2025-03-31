@@ -1098,7 +1098,6 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
         self.infer_orphan_literals()?;
         self.check_types(function_type_registry)?;
-        dbg!(self.clone());
         self.unify_types()?;
         Ok(())
     }

@@ -48,7 +48,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
             } => {
                 queue.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr));
 
+                dbg!(inferred_type.clone());
                 let unified_inferred_type = inferred_type.unify();
+                dbg!(unified_inferred_type.clone());
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,

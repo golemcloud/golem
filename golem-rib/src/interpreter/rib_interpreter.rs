@@ -3694,9 +3694,9 @@ mod tests {
             field(
                 "args0",
                 record(vec![
+                    field("product-id", str()),
                     field("name", str()),
                     field("price", f32()),
-                    field("product-id", str()),
                     field("quantity", u32()),
                 ]),
             ),
@@ -3708,7 +3708,7 @@ mod tests {
               {
                  worker-name: some("my-worker"),
                  function-name: "golem:it/api.{cart(\"bar\").add-item}",
-                 args0: {name: "macbook", price: 1.0, product-id: "mac", quantity: 1}
+                 args0: {product-id: "mac", name: "macbook", price: 1.0, quantity: 1}
               }
             "#,
         );

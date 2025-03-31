@@ -3230,6 +3230,12 @@ mod tests {
                                         ),
                                     ],
                                     InferredType::Record(vec![
+                                        ("id".to_string(), InferredType::Str),
+                                        ("name".to_string(), InferredType::Str),
+                                        (
+                                            "titles".to_string(),
+                                            InferredType::List(Box::new(InferredType::Str)),
+                                        ),
                                         (
                                             "address".to_string(),
                                             InferredType::Record(vec![
@@ -3237,30 +3243,24 @@ mod tests {
                                                 ("city".to_string(), InferredType::Str),
                                             ]),
                                         ),
-                                        ("id".to_string(), InferredType::Str),
-                                        ("name".to_string(), InferredType::Str),
-                                        (
-                                            "titles".to_string(),
-                                            InferredType::List(Box::new(InferredType::Str)),
-                                        ),
                                     ]),
                                 ),
                             )],
                             InferredType::Record(vec![(
                                 "body".to_string(),
                                 InferredType::Record(vec![
+                                    ("id".to_string(), InferredType::Str),
+                                    ("name".to_string(), InferredType::Str),
+                                    (
+                                        "titles".to_string(),
+                                        InferredType::List(Box::new(InferredType::Str)),
+                                    ),
                                     (
                                         "address".to_string(),
                                         InferredType::Record(vec![
                                             ("street".to_string(), InferredType::Str),
                                             ("city".to_string(), InferredType::Str),
                                         ]),
-                                    ),
-                                    ("id".to_string(), InferredType::Str),
-                                    ("name".to_string(), InferredType::Str),
-                                    (
-                                        "titles".to_string(),
-                                        InferredType::List(Box::new(InferredType::Str)),
                                     ),
                                 ]),
                             )]),
@@ -3284,18 +3284,18 @@ mod tests {
                                 InferredType::Record(vec![(
                                     "body".to_string(),
                                     InferredType::Record(vec![
+                                        ("id".to_string(), InferredType::Str),
+                                        ("name".to_string(), InferredType::Str),
+                                        (
+                                            "titles".to_string(),
+                                            InferredType::List(Box::new(InferredType::Str)),
+                                        ),
                                         (
                                             "address".to_string(),
                                             InferredType::Record(vec![
                                                 ("street".to_string(), InferredType::Str),
                                                 ("city".to_string(), InferredType::Str),
                                             ]),
-                                        ),
-                                        ("id".to_string(), InferredType::Str),
-                                        ("name".to_string(), InferredType::Str),
-                                        (
-                                            "titles".to_string(),
-                                            InferredType::List(Box::new(InferredType::Str)),
                                         ),
                                     ]),
                                 )]),
@@ -3340,6 +3340,14 @@ mod tests {
                                                 InferredType::Record(vec![(
                                                     "body".to_string(),
                                                     InferredType::Record(vec![
+                                                        ("id".to_string(), InferredType::Str),
+                                                        ("name".to_string(), InferredType::Str),
+                                                        (
+                                                            "titles".to_string(),
+                                                            InferredType::List(Box::new(
+                                                                InferredType::Str,
+                                                            )),
+                                                        ),
                                                         (
                                                             "address".to_string(),
                                                             InferredType::Record(vec![
@@ -3353,32 +3361,24 @@ mod tests {
                                                                 ),
                                                             ]),
                                                         ),
-                                                        ("id".to_string(), InferredType::Str),
-                                                        ("name".to_string(), InferredType::Str),
-                                                        (
-                                                            "titles".to_string(),
-                                                            InferredType::List(Box::new(
-                                                                InferredType::Str,
-                                                            )),
-                                                        ),
                                                     ]),
                                                 )]),
                                             ),
                                             "body".to_string(),
                                             None,
                                             InferredType::Record(vec![
+                                                ("id".to_string(), InferredType::Str),
+                                                ("name".to_string(), InferredType::Str),
+                                                (
+                                                    "titles".to_string(),
+                                                    InferredType::List(Box::new(InferredType::Str)),
+                                                ),
                                                 (
                                                     "address".to_string(),
                                                     InferredType::Record(vec![
                                                         ("street".to_string(), InferredType::Str),
                                                         ("city".to_string(), InferredType::Str),
                                                     ]),
-                                                ),
-                                                ("id".to_string(), InferredType::Str),
-                                                ("name".to_string(), InferredType::Str),
-                                                (
-                                                    "titles".to_string(),
-                                                    InferredType::List(Box::new(InferredType::Str)),
                                                 ),
                                             ]),
                                         ),

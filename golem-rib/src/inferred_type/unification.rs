@@ -438,24 +438,24 @@ pub fn unify_with_required(
 
         match (inferred_type, other) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
-                let mut fields: HashMap<String, InferredType> = HashMap::new();
+                let mut fields: Vec<(String, InferredType)> = vec![];
                 // Common fields unified else kept it as it is
                 for (a_name, a_type) in a_fields {
                     if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name)
                     {
-                        fields.insert(a_name.clone(), a_type.unify_with_required(b_type)?);
+                        fields.push((a_name.clone(), a_type.unify_with_required(b_type)?));
                     } else {
-                        fields.insert(a_name.clone(), a_type.clone());
+                        fields.push((a_name.clone(), a_type.clone()));
                     }
                 }
 
                 for (a_name, a_type) in b_fields {
                     if !a_fields.iter().any(|(b_name, _)| b_name == a_name) {
-                        fields.insert(a_name.clone(), a_type.clone());
+                        fields.push((a_name.clone(), a_type.clone()));
                     }
                 }
 
-                Ok(InferredType::Record(internal::sort_and_convert(fields)))
+                Ok(InferredType::Record(fields))
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
