@@ -42,6 +42,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tap::TapFallible;
 use tracing::Instrument;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 
 const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);

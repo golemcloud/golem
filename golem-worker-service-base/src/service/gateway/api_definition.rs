@@ -31,7 +31,7 @@ use chrono::Utc;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{Component, ComponentName, VersionedComponentId};
+use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
 use rib::RibError;
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 use tracing::{error, info};
-
+use golem_common::model::component::VersionedComponentId;
 use super::{BoxConversionContext, ComponentView, ConversionContext};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;

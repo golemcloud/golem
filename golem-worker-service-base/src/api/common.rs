@@ -18,9 +18,9 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiD
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Union};
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 
 #[derive(Union, Clone, Debug)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -308,7 +308,7 @@ mod conversion {
     impl From<ValidationErrors> for ApiEndpointError {
         fn from(error: ValidationErrors) -> Self {
             let error =
-                WorkerServiceErrorsBody::Validation(golem_service_base::model::ErrorsBody {
+                WorkerServiceErrorsBody::Validation(golem_common::model::error::ErrorsBody {
                     errors: error.errors,
                 });
 

@@ -28,7 +28,7 @@ use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
-use golem_service_base::model::{Component, VersionedComponentId};
+use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use rib::RibError;
@@ -42,6 +42,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
+use golem_common::model::component::VersionedComponentId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {

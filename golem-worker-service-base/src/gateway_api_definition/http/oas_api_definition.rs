@@ -127,18 +127,18 @@ mod internal {
 
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
 
-    use crate::service::gateway::BoxConversionContext;
-    use golem_common::model::GatewayBindingType;
-    use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
-    use rib::Expr;
-    use serde_json::Value;
-
     use crate::gateway_binding::{
         GatewayBinding, HttpHandlerBinding, ResponseMapping, StaticBinding, WorkerBinding,
     };
     use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
-    use golem_service_base::model::{ComponentName, VersionedComponentId};
+    use crate::service::gateway::BoxConversionContext;
+    use golem_common::model::component::VersionedComponentId;
+    use golem_common::model::GatewayBindingType;
+    use golem_service_base::model::ComponentName;
+    use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
+    use rib::Expr;
+    use serde_json::Value;
 
     pub(super) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(super) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -506,7 +506,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use golem_common::model::ComponentId;
-    use golem_service_base::model::{ComponentName, VersionedComponentId};
+    use golem_service_base::model::ComponentName;
     use test_r::test;
 
     use super::*;
@@ -518,6 +518,7 @@ mod tests {
     use openapiv3::Operation;
     use serde_json::json;
     use uuid::uuid;
+    use golem_common::model::component::VersionedComponentId;
 
     struct TestConversionCtx;
 

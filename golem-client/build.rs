@@ -62,6 +62,9 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "InitialComponentFile",
                 "golem_common::model::InitialComponentFile",
             ),
+            ("ErrorBody", "golem_common::model::error::ErrorBody"),
+            ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
+            ("GolemError", "golem_common::model::error::GolemError"),
             (
                 "ValueAndOptionalType",
                 "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",

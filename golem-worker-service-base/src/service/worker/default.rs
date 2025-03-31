@@ -41,9 +41,9 @@ use golem_common::model::{
     WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::model::{
-    GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
+    GetOplogResponse,  PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
-use golem_service_base::model::{GolemError, RevertWorkerTarget};
+use golem_service_base::model::{RevertWorkerTarget};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -52,6 +52,7 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
+use golem_common::model::error::{GolemError, GolemErrorUnknown};
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 

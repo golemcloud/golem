@@ -28,12 +28,13 @@ use crate::gateway_security::{
 };
 use crate::service::gateway::BoxConversionContext;
 use golem_common::model::GatewayBindingType;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};
 use serde::{Deserialize, Serialize};
 use std::result::Result;
+use golem_common::model::component::VersionedComponentId;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]

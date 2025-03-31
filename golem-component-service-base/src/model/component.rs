@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use chrono::Utc;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
@@ -23,7 +23,7 @@ use golem_common::model::component_metadata::{
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use rib::WorkerFunctionsInRib;
 use std::collections::HashMap;
 use std::fmt::Debug;

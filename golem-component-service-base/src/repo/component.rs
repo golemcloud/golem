@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
 use futures::future::try_join_all;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::{ComponentPluginInstallationTarget, PluginOwner};
@@ -26,7 +26,7 @@ use golem_common::model::{
     InitialComponentFileKey,
 };
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };

@@ -46,7 +46,6 @@ use golem_common::model::invocation_context::{
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
-use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -58,6 +57,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::error;
+use golem_common::model::component::VersionedComponentId;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {

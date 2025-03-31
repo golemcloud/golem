@@ -103,7 +103,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use test_r::test;
-
+    use golem_common::model::component::VersionedComponentId;
     use crate::gateway_api_definition::http::{
         AllPathPatterns, HttpApiDefinition, MethodPattern, Route,
     };
@@ -113,7 +113,6 @@ mod tests {
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
     use golem_common::model::ComponentId;
-    use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
 
     fn get_cors_preflight_route() -> Route {
