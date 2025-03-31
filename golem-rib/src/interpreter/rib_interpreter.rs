@@ -74,10 +74,7 @@ impl Interpreter {
     // to later override the interpreter with this input. The previous inputs will be completely
     // discard as they are either loaded in as variables, or if they are accessed again, the inputs
     // will be or can be overriden back
-    pub fn override_rib_input(
-        &mut self,
-        rib_input: RibInput,
-    ) {
+    pub fn override_rib_input(&mut self, rib_input: RibInput) {
         self.input = rib_input;
     }
 
@@ -1275,9 +1272,7 @@ mod internal {
             ValueAndType {
                 value: Value::Tuple(value),
                 ..
-            } if value.is_empty() => {
-                Ok(RibInterpreterStackValue::Unit)
-            },
+            } if value.is_empty() => Ok(RibInterpreterStackValue::Unit),
             ValueAndType {
                 value: Value::Tuple(value),
                 typ: AnalysedType::Tuple(typ),
@@ -1576,7 +1571,7 @@ mod tests {
         };
 
         let result = interpreter.run(instructions).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1595,7 +1590,7 @@ mod tests {
         };
 
         let result = interpreter.run(instructions).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]

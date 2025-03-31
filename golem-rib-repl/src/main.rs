@@ -4,11 +4,13 @@ use crate::local::{start, EmbeddedWorkerExecutor, WorkerExecutorLocalDependencie
 use crate::rib_repl::RibRepl;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_test_framework::dsl::TestDsl;
-use golem_wasm_rpc::ValueAndType;
+use golem_test_framework::dsl::{TestDslUnsafe};
+use golem_wasm_rpc::{Value, ValueAndType};
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke};
 use std::sync::Arc;
 use uuid::Uuid;
+use golem_wasm_ast::analysis::analysed_type::{f32, field, record, str, u32};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 mod dependency_manager;
 mod history;
@@ -34,6 +36,8 @@ async fn main() {
         .register_component("shopping-cart".to_string())
         .await
         .expect("Failed to register component");
+
+    dbg!(component_dependency.metadata.clone());
 
     let rib_function_invoke =
         EmbeddedRibFunctionInvoke::new(&component_dependency, embedded_worker_executor);
@@ -83,12 +87,42 @@ impl RibFunctionInvoke for EmbeddedRibFunctionInvoke {
             });
 
         let function_name = function_name.0;
-        
+
+        let value_and_type = ValueAndType::new(
+            Value::Record(vec![
+                    Value::String(
+                        "jon".to_string(),
+                    ),
+                    Value::F32(
+                        1.0,
+                    ),
+                    Value::String(
+                        "ssss".to_string(),
+                    ),
+                    Value::U32(
+                        1,
+                    ),
+            ]), record(
+                vec![
+                    field("product-id", str()),
+                    field("price", f32()),
+                    field("description", str()),
+                    field("quantity", u32()),
+                ],
+            ));
+
+        let type_annotated_value = TypeAnnotatedValue::try_from(value_and_type.clone())
+            .expect("Failed to convert to TypeAnnotatedValue");
+
+
+
+        let value = golem_wasm_rpc::Value::try_from(type_annotated_value).expect("Failed to convert to Value");
+
+        dbg!(value.clone());
+
         self.embedded_worker_executor
             .invoke_and_await_typed(target_worker_id, function_name.as_str(), args.0)
             .await
-            .map_err(|e| e.to_string())
-            .expect("Failed to invoke function")
             .map_err(|e| format!("Failed to invoke function: {:?}", e))
     }
 }

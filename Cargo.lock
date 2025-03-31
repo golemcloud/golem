@@ -3299,6 +3299,7 @@ dependencies = [
  "golem-worker-executor-base",
  "prometheus",
  "rustyline",
+ "serde_json",
  "termion",
  "tokio",
  "tonic",

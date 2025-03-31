@@ -475,10 +475,18 @@ where
             char('>').skip(spaces().silent()),
             (
                 choice!(
-                    string("_").skip(spaces().silent()).map(|_| ResultSuccess::NoType),
-                    type_name().skip(spaces().silent()).map(ResultSuccess::WithType)
+                    string("_")
+                        .skip(spaces().silent())
+                        .map(|_| ResultSuccess::NoType),
+                    type_name()
+                        .skip(spaces().silent())
+                        .map(ResultSuccess::WithType)
                 ),
-                optional(char(',').skip(spaces().silent()).with(type_name().skip(spaces().silent()))),
+                optional(
+                    char(',')
+                        .skip(spaces().silent())
+                        .with(type_name().skip(spaces().silent())),
+                ),
             ),
         )))
         .map(|result| match result {
