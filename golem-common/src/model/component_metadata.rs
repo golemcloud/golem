@@ -28,9 +28,9 @@ use golem_wasm_ast::{
 use rib::ParsedFunctionSite;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +50,20 @@ impl ComponentMetadata {
     pub fn analyse_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(raw.into())
+    }
+}
+
+impl Debug for ComponentMetadata {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ComponentMetadata")
+            .field("exports", &self.exports)
+            .field("producers", &self.producers)
+            .field("memories", &self.memories)
+            .field("binary_wit_len", &self.binary_wit.len())
+            .field("root_package_name", &self.root_package_name)
+            .field("root_package_version", &self.root_package_version)
+            .field("dynamic_linking", &self.dynamic_linking)
+            .finish()
     }
 }
 
