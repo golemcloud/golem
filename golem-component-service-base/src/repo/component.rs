@@ -1081,7 +1081,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
-                cv.root_package_name AS root_package_name,
+                    cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
