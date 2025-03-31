@@ -18,6 +18,7 @@ mod local;
 mod result_printer;
 mod rib_repl;
 mod syntax_highlighter;
+mod repl_state;
 
 #[tokio::main]
 async fn main() {

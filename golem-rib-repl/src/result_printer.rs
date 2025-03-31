@@ -12,48 +12,45 @@ pub struct DefaultResultPrinter;
 
 impl ResultPrinter for DefaultResultPrinter {
     fn print_rib_result(&self, result: &RibResult) {
-        println!("{}", result.to_string().green())
+        println!("{}", result.to_string().green());
     }
 
     fn print_compilation_error(&self, error: &RibError) {
-       match error {
-           RibError::InternalError(error) => {
-               print!("{}: ", "[internal rib error]".red().bold());
-               println!("{}", error.red())
-           }
-           RibError::RibCompilationError(compilation_error) => {
-               let cause = &compilation_error.cause;
-               let position =  compilation_error.expr.source_span().start_column();
+        match error {
+            RibError::InternalError(msg) => {
+                println!("{} {}", "[internal rib error]".red(), msg.red());
+            }
+            RibError::RibCompilationError(compilation_error) => {
+                let cause = &compilation_error.cause;
+                let position = compilation_error.expr.source_span().start_column();
 
-               println!("{}", "[compile error]".red().bold());
-               println!("{}", format!("{}, {}", "pos:".yellow(), position.to_string().white()));
-               println!("{}", format!("{}: {}", "cause:".yellow(), cause.white()));
+                println!("{}", "[compilation error]".red());
+                println!("{} {}", "position:".yellow(), position.to_string().white());
+                println!("{} {}", "cause:".yellow(), cause.white());
 
+                if !compilation_error.additional_error_details.is_empty() {
+                    for detail in &compilation_error.additional_error_details {
+                        println!("{}", detail.white());
+                    }
+                }
 
-               if !compilation_error.additional_error_details.is_empty() {
-                   for message in &compilation_error.additional_error_details {
-                       println!("{}", message.white().bold())
-                   }
-               }
-
-               if !compilation_error.help_messages.is_empty() {
-                   for message in &compilation_error.help_messages {
-                      let str = format!("{}: {}", "help:".yellow(), message.white().bold());
-                       println!("{}", str)
-                   }
-               }
-           }
-           RibError::InvalidRibScript(string) => {
-                println!("{}: {}", "invalid rib script".red().bold(), string.white())
-           }
-       }
+                if !compilation_error.help_messages.is_empty() {
+                    for message in &compilation_error.help_messages {
+                        println!("{} {}", "help:".blue(), message.white());
+                    }
+                }
+            }
+            RibError::InvalidRibScript(script) => {
+                println!("{} {}", "[invalid script]".red(), script.white());
+            }
+        }
     }
 
     fn print_bootstrap_error(&self, error: &str) {
-        println!("{}", format!("[repl bootstrap error]: {}", error).red())
+        println!("{} {}", "warn: bootstrap error".yellow(), error.white());
     }
 
     fn print_runtime_error(&self, error: &str) {
-        println!("[error: !!]: {}", error.red())
+        println!("{} {}", "[runtime error]".red(), error.white());
     }
 }
