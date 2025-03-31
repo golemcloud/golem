@@ -103,9 +103,7 @@ use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
-pub struct WorkerExecutorLocalDependencies {
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
+pub struct LocalRunnerDependencies {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
@@ -113,23 +111,14 @@ pub struct WorkerExecutorLocalDependencies {
     component_directory: PathBuf,
 }
 
-impl Debug for WorkerExecutorLocalDependencies {
+impl Debug for LocalRunnerDependencies {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "WorkerExecutorLocalDependencies")
     }
 }
 
-impl WorkerExecutorLocalDependencies {
+impl LocalRunnerDependencies {
     pub async fn new() -> Self {
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
-            Level::INFO,
-            Level::ERROR,
-        ));
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
-        );
 
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
@@ -151,8 +140,6 @@ impl WorkerExecutorLocalDependencies {
         );
 
         Self {
-            redis,
-            redis_monitor,
             component_directory,
             component_service,
             blob_storage,
@@ -161,7 +148,7 @@ impl WorkerExecutorLocalDependencies {
         }
     }
 
-    pub fn per_test(&self, http_port: u16, grpc_port: u16) -> WorkerExecutorPerTestDependencies {
+    pub fn per_test(&self, http_port: u16, grpc_port: u16) -> EmbeddedWorkerExecutorDependencies {
         // Connecting to the worker executor started in-process
         let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
@@ -171,7 +158,7 @@ impl WorkerExecutorLocalDependencies {
             ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
         );
 
-        WorkerExecutorPerTestDependencies {
+        EmbeddedWorkerExecutorDependencies {
             worker_executor,
             worker_service,
             component_service: self.component_service().clone(),
@@ -184,21 +171,21 @@ impl WorkerExecutorLocalDependencies {
 }
 
 #[async_trait]
-impl TestDependencies for WorkerExecutorLocalDependencies {
+impl TestDependencies for LocalRunnerDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         panic!("Not supported")
     }
 
     fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
-        self.redis.clone()
+        panic!("Redis is not used in embedded worker executor in REPL")
     }
 
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
-        self.redis_monitor.clone()
+        panic!("Redis monitor is not used in embedded worker executor in REPL")
     }
 
     fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
-        panic!("Not supported")
+        panic!("Shard manager is not used in embedded worker executor in REPL")
     }
 
     fn component_directory(&self) -> &Path {
@@ -237,13 +224,13 @@ impl TestDependencies for WorkerExecutorLocalDependencies {
 }
 
 pub async fn start(
-    deps: &WorkerExecutorLocalDependencies,
+    deps: &LocalRunnerDependencies,
 ) -> anyhow::Result<EmbeddedWorkerExecutor> {
     start_limited(deps).await
 }
 
 pub async fn start_limited(
-    deps: &WorkerExecutorLocalDependencies,
+    deps: &LocalRunnerDependencies,
 ) -> anyhow::Result<EmbeddedWorkerExecutor> {
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
@@ -294,7 +281,7 @@ pub async fn start_limited(
 }
 
 #[derive(Clone)]
-pub struct WorkerExecutorPerTestDependencies {
+pub struct EmbeddedWorkerExecutorDependencies {
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
@@ -305,7 +292,7 @@ pub struct WorkerExecutorPerTestDependencies {
 }
 
 #[async_trait]
-impl TestDependencies for WorkerExecutorPerTestDependencies {
+impl TestDependencies for EmbeddedWorkerExecutorDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         panic!("Not supported")
     }
@@ -372,14 +359,8 @@ async fn run(
 }
 
 pub struct EmbeddedWorkerExecutor {
-    deps: WorkerExecutorPerTestDependencies,
+    deps: EmbeddedWorkerExecutorDependencies,
     _join_set: Option<JoinSet<anyhow::Result<()>>>,
-}
-
-impl EmbeddedWorkerExecutor {
-    pub async fn client(&self) -> golem_test_framework::Result<WorkerExecutorClient<Channel>> {
-        self.deps.worker_executor.client().await
-    }
 }
 
 struct ServerBootstrap {

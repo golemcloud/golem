@@ -1,4 +1,4 @@
-use rib::InterpreterEnv;
+use rib::{InterpreterEnv, RibError, RibResult};
 use rib::InterpreterStack;
 use rib::RibInput;
 use rib::{Expr, RibByteCode};
@@ -8,6 +8,7 @@ use rustyline::history::{DefaultHistory, History};
 use rustyline::Editor;
 use std::path::PathBuf;
 use std::sync::Arc;
+use colored::Colorize;
 use tokio;
 
 // Import Rib evaluation function
@@ -51,7 +52,10 @@ impl RibRepl {
         // Try to load history from the file
         if history_file.exists() {
             if let Err(err) = rl.load_history(&history_file) {
-                eprintln!("Failed to load history: {}", err);
+                self.rib_result_printer.print_bootstrap_error(&format!(
+                    "Failed to load history: {}. Starting with an empty history.",
+                    err
+                ));
             }
         }
 
@@ -63,20 +67,30 @@ impl RibRepl {
         );
 
         loop {
-            let readline = rl.readline(">>> ");
+            let readline = rl.readline(">>> ".blue().to_string().as_str());
             match readline {
                 Ok(line) if !line.is_empty() => {
                     session_history.push(line.clone());
                     let _ = rl.add_history_entry(line.as_str());
                     let _ = rl.save_history(&history_file);
 
-                    match eval(&session_history.join(";\n"), &mut repl_state).await {
+                    match compile_rib_script(&session_history.join(";\n"), &mut repl_state).await {
                         Ok(result) => {
-                            println!("{}", result);
+                            let result = eval(result, &mut repl_state).await;
+                            match result {
+                                Ok(result) => {
+                                    session_history.pop();
+                                    self.rib_result_printer.print_rib_result(&result);
+                                }
+                                Err(err) => {
+                                    session_history.pop();
+                                    self.rib_result_printer.print_runtime_error(&err);
+                                }
+                            }
                         }
                         Err(err) => {
                             session_history.pop();
-                            eprintln!("Error: {}", err)
+                            self.rib_result_printer.print_compilation_error(&err);
                         }
                     }
                 }
@@ -88,22 +102,27 @@ impl RibRepl {
     }
 }
 
-async fn eval(rib_script: &str, repl_state: &mut ReplState) -> Result<String, String> {
-    let expr = Expr::from_text(rib_script).map_err(|e| format!("Parse error: {}", e))?;
-    let compiled = compile(expr, &repl_state.dependency.metadata)
-        .map_err(|e| format!("Compile error: {}", e))?;
+async fn compile_rib_script(rib_script: &str, repl_state: &mut ReplState) -> Result<RibByteCode, RibError> {
+    let expr = Expr::from_text(rib_script).map_err(|e| format!("parse error: {}", e)).map_err(
+        |e| RibError::InvalidRibScript(format!("Parse error: {}", e)),
+    )?;
+
+    let compiled = compile(expr, &repl_state.dependency.metadata)?;
+
     let new_byte_code = compiled.byte_code;
     let byte_code = new_byte_code.diff(&repl_state.byte_code);
 
     repl_state.byte_code = new_byte_code;
 
-    let result = repl_state
-        .interpreter
-        .run(byte_code)
-        .await
-        .map_err(|e| format!("Runtime error: {}", e))?;
+    Ok(byte_code)
+}
 
-    Ok(format!("{}", result))
+async fn eval(rib_byte_code: RibByteCode, repl_state: &mut ReplState) -> Result<RibResult, String> {
+    repl_state
+        .interpreter
+        .run(rib_byte_code)
+        .await
+        .map_err(|e| format!("Runtime error: {}", e))
 }
 
 fn get_default_history_file() -> PathBuf {

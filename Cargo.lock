@@ -3288,6 +3288,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "colored",
  "dirs",
  "golem-api-grpc",
  "golem-common",

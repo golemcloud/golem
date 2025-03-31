@@ -443,7 +443,6 @@ impl WorkerService for ForwardingWorkerService {
         invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
-        dbg!("invoke_and_await_typed");
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
             let result = self

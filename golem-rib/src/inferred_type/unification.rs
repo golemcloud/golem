@@ -1,6 +1,6 @@
 use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list};
 use crate::InferredType;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 
 #[derive(Clone, Debug)]
 pub struct Unified(InferredType);
@@ -572,7 +572,7 @@ pub fn unify_with_required(
                 Ok(InferredType::Result { ok, error })
             }
             (InferredType::Variant(a_variants), InferredType::Variant(b_variants)) => {
-                let mut variants = HashMap::new();
+                let mut variants = vec![];
                 for (a_name, a_type) in a_variants {
                     if let Some((_, b_type)) =
                         b_variants.iter().find(|(b_name, _)| b_name == a_name)
@@ -585,7 +585,7 @@ pub fn unify_with_required(
                             (Some(_), None) => None,
                             (None, Some(_)) => None,
                         };
-                        variants.insert(a_name.clone(), unified_type);
+                        variants.push((a_name.clone(), unified_type));
                     }
                 }
                 Ok(InferredType::Variant(
@@ -740,15 +740,6 @@ pub fn unify_with_required(
 mod internal {
     use crate::inferred_type::unification::Unified;
     use crate::InferredType;
-    use std::collections::HashMap;
-
-    pub(crate) fn sort_and_convert(
-        hashmap: HashMap<String, InferredType>,
-    ) -> Vec<(String, InferredType)> {
-        let mut vec: Vec<(String, InferredType)> = hashmap.into_iter().collect();
-        vec.sort_by(|a, b| a.0.cmp(&b.0));
-        vec
-    }
 
     pub(crate) fn validate_unified_type(inferred_type: &InferredType) -> Result<Unified, String> {
         match inferred_type {

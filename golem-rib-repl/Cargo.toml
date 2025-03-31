@@ -25,6 +25,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = 
 ] }
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0"}
 
+colored = "3.0.0"
 prometheus = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
