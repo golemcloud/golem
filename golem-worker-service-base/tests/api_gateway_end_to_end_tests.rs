@@ -2317,6 +2317,7 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 
 mod internal {
     use async_trait::async_trait;
+    use golem_common::model::component::VersionedComponentId;
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
@@ -2363,7 +2364,6 @@ mod internal {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    use golem_common::model::component::VersionedComponentId;
 
     pub struct TestApiDefinitionLookup {
         pub api_definition: CompiledHttpApiDefinition<DefaultNamespace>,

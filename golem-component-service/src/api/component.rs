@@ -15,6 +15,7 @@
 use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
 use golem_common::model::component::{DefaultComponentOwner, VersionedComponentId};
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginInstallation, PluginInstallationCreation,
     PluginInstallationUpdate,
@@ -38,7 +39,6 @@ use poem_openapi::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::Instrument;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
 
 pub struct ComponentApi {
     component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,

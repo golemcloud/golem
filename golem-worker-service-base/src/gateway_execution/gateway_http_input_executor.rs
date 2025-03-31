@@ -40,6 +40,7 @@ use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetada
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
 use crate::service::gateway::api_deployment::ApiDeploymentError;
 use async_trait::async_trait;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
@@ -57,7 +58,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::error;
-use golem_common::model::component::VersionedComponentId;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {

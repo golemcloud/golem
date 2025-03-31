@@ -515,10 +515,10 @@ mod tests {
     use crate::gateway_middleware::HttpCors;
     use crate::service::gateway::{ComponentView, ConversionContext};
     use async_trait::async_trait;
+    use golem_common::model::component::VersionedComponentId;
     use openapiv3::Operation;
     use serde_json::json;
     use uuid::uuid;
-    use golem_common::model::component::VersionedComponentId;
 
     struct TestConversionCtx;
 

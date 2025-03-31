@@ -16,6 +16,7 @@ use crate::service::{component::ComponentService, worker::WorkerService};
 use futures::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
@@ -42,7 +43,6 @@ use std::str::FromStr;
 use std::time::Duration;
 use tap::TapFallible;
 use tracing::Instrument;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
 
 const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);

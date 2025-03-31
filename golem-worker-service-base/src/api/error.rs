@@ -15,7 +15,9 @@
 use crate::service::component::ComponentServiceError;
 use crate::service::worker::WorkerServiceError;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::error::{ErrorBody, ErrorsBody, GolemError, GolemErrorBody, GolemErrorUnknown};
+use golem_common::model::error::{
+    ErrorBody, ErrorsBody, GolemError, GolemErrorBody, GolemErrorUnknown,
+};
 use golem_common::SafeDisplay;
 use poem_openapi::payload::Json;
 use poem_openapi::*;

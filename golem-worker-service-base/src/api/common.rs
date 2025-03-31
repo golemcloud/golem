@@ -17,10 +17,10 @@ use std::fmt::{Debug, Formatter};
 use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Union};
-use golem_common::model::error::{ErrorBody, ErrorsBody};
 
 #[derive(Union, Clone, Debug)]
 #[oai(discriminator_name = "type", one_of = true)]

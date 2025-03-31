@@ -22,8 +22,8 @@ use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    ComponentType, ComponentVersion, InitialComponentFile, ScanCursor,
-    Timestamp, WorkerFilter, WorkerId, WorkerStatus,
+    ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
+    WorkerId, WorkerStatus,
 };
 use golem_wasm_ast::analysis::analysed_type::{case, field, record, variant};
 use golem_wasm_ast::analysis::AnalysedType;
@@ -77,7 +77,6 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {

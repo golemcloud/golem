@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{BoxConversionContext, ComponentView, ConversionContext};
 use crate::gateway_api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     HttpApiDefinitionRequest, OpenApiHttpApiDefinition, RouteCompilationErrors,
@@ -29,6 +30,7 @@ use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySc
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, ComponentName};
@@ -39,8 +41,6 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 use tracing::{error, info};
-use golem_common::model::component::VersionedComponentId;
-use super::{BoxConversionContext, ComponentView, ConversionContext};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
