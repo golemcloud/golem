@@ -45,6 +45,7 @@ use golem_worker_service_base::service::gateway::http_api_definition_validator::
 
 use chrono::Utc;
 use golem_common::model::base64::Base64;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::redis::RedisPool;
 use golem_service_base::storage::sqlite::SqlitePool;
@@ -381,7 +382,7 @@ struct TestComponentService;
 impl TestComponentService {
     pub fn test_component() -> Component {
         use golem_common::model::component_metadata::ComponentMetadata;
-        use golem_service_base::model::{ComponentName, VersionedComponentId};
+        use golem_service_base::model::ComponentName;
 
         let id = VersionedComponentId {
             component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),

@@ -16,6 +16,7 @@ use crate::service::{component::ComponentService, worker::WorkerService};
 use futures::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
@@ -30,7 +30,7 @@ use golem_common::repo::RowMeta;
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{ComponentRecord, ComponentRepo};
 use golem_component_service_base::repo::plugin::PluginRepo;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use poem_openapi::NewType;

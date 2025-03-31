@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{IdempotencyKeyCompiled, WorkerNameCompiled};
-use golem_service_base::model::VersionedComponentId;
+use golem_common::model::component::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibError};
 

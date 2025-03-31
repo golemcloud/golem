@@ -44,6 +44,7 @@ pub mod base64;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod error;
 pub mod exports;
 pub mod invocation_context;
 pub mod lucene;

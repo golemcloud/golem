@@ -120,7 +120,7 @@ impl ComponentGrpcApi {
 
         let version = request.version;
 
-        let versioned_component_id = golem_service_base::model::VersionedComponentId {
+        let versioned_component_id = golem_common::model::component::VersionedComponentId {
             component_id: id,
             version,
         };

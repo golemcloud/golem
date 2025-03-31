@@ -14,10 +14,10 @@
 
 use crate::service::Services;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
 use golem_component_service_base::service::component::ComponentError as ComponentServiceError;
 use golem_component_service_base::service::plugin::PluginError;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem::endpoint::PrometheusExporter;
 use poem::error::ReadBodyError;
 use poem::Route;
