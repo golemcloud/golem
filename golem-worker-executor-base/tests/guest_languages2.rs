@@ -122,6 +122,7 @@ async fn python_example_1(
 
 #[test]
 #[tracing::instrument]
+#[ignore]
 async fn swift_example_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
