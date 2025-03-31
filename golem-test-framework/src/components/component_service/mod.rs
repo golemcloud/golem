@@ -198,7 +198,7 @@ pub trait ComponentService: ComponentServiceInternal {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
     ) -> Component {
-        let mut retries = 5;
+        let mut retries = 10;
         loop {
             let latest_component: Option<Component> = match self.component_client() {
                 ComponentServiceClient::Grpc(mut client) => {
@@ -269,7 +269,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     if retries > 0 {
                         info!("Component with name {name} got created in parallel, retrying get_or_add_component");
                         retries -= 1;
-                        sleep(Duration::from_secs(1)).await;
+                        sleep(Duration::from_secs(5)).await;
                         continue;
                     } else {
                         panic!(

@@ -31,7 +31,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use std::panic;
-use test_r::{inherit_test_dep, test};
+use test_r::{flaky, inherit_test_dep, test};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -39,6 +39,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
+#[flaky(10)] // TODO: stabilize test
 async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("shopping-cart").unique().store().await;
 

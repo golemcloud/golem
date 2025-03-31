@@ -17,6 +17,7 @@ use crate::analysis::analysed_type::{
 };
 use crate::analysis::AnalysisResult;
 use crate::component::{ComponentExternalKind, PrimitiveValueType};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
@@ -494,6 +495,15 @@ pub struct UnsupportedExportWarning {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+pub struct InterfaceCouldNotBeAnalyzedWarning {
+    pub name: String,
+    pub failure: AnalysisFailure,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "json", serde(tag = "type"))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
@@ -503,6 +513,24 @@ pub struct UnsupportedExportWarning {
 )]
 pub enum AnalysisWarning {
     UnsupportedExport(UnsupportedExportWarning),
+    InterfaceCouldNotBeAnalyzed(InterfaceCouldNotBeAnalyzedWarning),
+}
+
+impl Display for AnalysisWarning {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnalysisWarning::UnsupportedExport(warning) => {
+                write!(f, "Unsupported export: {:?} {}", warning.kind, warning.name)
+            }
+            AnalysisWarning::InterfaceCouldNotBeAnalyzed(warning) => {
+                write!(
+                    f,
+                    "Interface could not be analyzed: {} {}",
+                    warning.name, warning.failure.reason
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -533,6 +561,13 @@ impl AnalysisFailure {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::analysed_type::{bool, list, str};
+    use crate::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance,
+    };
+    use poem_openapi::types::ToJSON;
+    use test_r::test;
 
     #[cfg(feature = "poem_openapi")]
     #[cfg(feature = "json")]

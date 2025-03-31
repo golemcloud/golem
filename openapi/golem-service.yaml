@@ -7086,6 +7086,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
+        binaryWit:
+          type: string
+          format: bytes
+        rootPackageName:
+          type: string
+        rootPackageVersion:
+          type: string
         dynamicLinking:
           type: object
           additionalProperties:
@@ -7094,6 +7101,8 @@ components:
       - exports
       - producers
       - memories
+      - binaryWit
+      - rootPackageName
       - dynamicLinking
     ComponentPluginScope:
       type: object

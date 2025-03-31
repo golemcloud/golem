@@ -60,6 +60,8 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
     #[sqlx(skip)]
     pub installed_plugins:
         Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
+    pub root_package_name: String,
+    pub root_package_version: Option<String>,
 }
 
 impl<Owner: ComponentOwner> ComponentRecord<Owner> {
@@ -115,6 +117,8 @@ impl<Owner: ComponentOwner> ComponentRecord<Owner> {
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?,
+            root_package_name: value.metadata.root_package_name,
+            root_package_version: value.metadata.root_package_version,
         })
     }
 }
@@ -778,9 +782,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key)
+                (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                "#,
         )
             .bind(component.component_id)
@@ -792,6 +796,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .bind(component.available)
             .bind(&component.object_store_key)
             .bind(&component.transformed_object_store_key)
+            .bind(&component.root_package_name)
+            .bind(&component.root_package_version)
             .execute(&mut *transaction)
             .await?;
 
@@ -846,12 +852,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 let new_version = if let Some(component_type) = component_type {
                     sqlx::query(
                         r#"
-                              WITH prev AS (SELECT component_id, version, object_store_key, transformed_object_store_key
+                              WITH prev AS (SELECT component_id, version, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
                               RETURNING *
                               "#,
                     )
@@ -866,12 +872,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 } else {
                     sqlx::query(
                         r#"
-                              WITH prev AS (SELECT component_id, version, component_type, object_store_key, transformed_object_store_key
+                              WITH prev AS (SELECT component_id, version, component_type, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
                               RETURNING *
                               "#,
                     )
@@ -1036,7 +1042,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key as transformed_object_store_key
+                    cv.transformed_object_store_key as transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1072,7 +1080,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1107,7 +1117,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1141,7 +1153,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1176,7 +1190,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -1215,7 +1231,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -1255,7 +1273,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1294,7 +1314,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1332,7 +1354,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1368,7 +1392,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type,
                     cv.available AS available,
                     cv.object_store_key AS object_store_key,
-                    cv.transformed_object_store_key AS transformed_object_store_key
+                    cv.transformed_object_store_key AS transformed_object_store_key,
+                    cv.root_package_name AS root_package_name,
+                    cv.root_package_version AS root_package_version
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1647,12 +1673,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
               RETURNING *
               "#,
         )
@@ -1725,12 +1751,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
               RETURNING *
               "#,
         )
@@ -1798,12 +1824,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
               RETURNING *
               "#,
         )
