@@ -46,9 +46,34 @@ impl Completer for RibEdit {
         pos: usize,
         _ctx: &Context<'_>, // a context has access to only the current line
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-        let instance_variables = self.instance_variables.clone().map(|x| x.variable_names());
+        let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
+        let instance_variable_names: Option<Vec<String>> = instance_variables.clone().map(|x| x.variable_names());
 
         let mut completions = Vec::new();
+
+
+        if let Some(dot_pos) = line[..pos].rfind('.') {
+            let instance_var_name = &line[..dot_pos];
+
+            if let Some(instance_vars) = &instance_variables {
+                if let Some(func_dict) = instance_vars.instance_variables.get(instance_var_name) {
+                    let prefix = &line[dot_pos + 1..pos];
+
+                    for (name, tpe) in func_dict.map {
+                        dbg!(tpe.clone());
+
+                        if name.name().starts_with(prefix) {
+                            completions.push(name.name());
+                        }
+
+                    }
+
+                    return Ok((dot_pos + 1, completions)); // Return function completions
+                }
+            }
+        }
+
+
         let mut start = pos;
 
         while start > 0
@@ -62,7 +87,7 @@ impl Completer for RibEdit {
         let word = &line[start..pos];
 
         if !word.is_empty() {
-            if let Some(variables) = instance_variables {
+            if let Some(variables) = instance_variable_names {
                 for var in variables.iter() {
                     if var.starts_with(word) {
                         completions.push(var.clone());

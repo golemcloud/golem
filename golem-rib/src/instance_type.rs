@@ -459,6 +459,15 @@ pub struct FunctionDictionary {
     pub map: Vec<(FunctionName, FunctionType)>,
 }
 
+impl FunctionDictionary {
+    pub fn function_names(&self) -> Vec<String> {
+        self.map
+            .iter()
+            .map(|(f, _)| f.name())
+            .collect::<Vec<_>>()
+    }
+}
+
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ResourceMethodDictionary {
     pub map: Vec<(FullyQualifiedResourceMethod, FunctionType)>,

@@ -42,12 +42,12 @@ pub struct CompilerOutput {
 
 #[derive(Default, Clone)]
 pub struct InstanceVariables {
-    pub instance_variables: HashMap<VariableId, FunctionDictionary>,
+    pub instance_variables: HashMap<String, FunctionDictionary>,
 }
 
 impl InstanceVariables {
     pub fn variable_names(&self) -> Vec<String> {
-        self.instance_variables.keys().map(|id| id.name()).collect()
+        self.instance_variables.keys().map(|k| k.to_string()).collect()
     }
 }
 
@@ -65,7 +65,7 @@ pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariabl
                 variable_id, expr, ..
             } => {
                 if let InferredType::Instance { instance_type } = expr.inferred_type() {
-                    instance_variables.insert(variable_id.clone(), instance_type.function_dict());
+                    instance_variables.insert(variable_id.name(), instance_type.function_dict());
                 }
 
                 queue.push_front(expr)
