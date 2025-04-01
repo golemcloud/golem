@@ -7,6 +7,7 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::Path;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait RibDependencyManager {
@@ -39,26 +40,21 @@ pub struct ComponentDependency {
 // A default Rib dependency manager is mainly allowing rib to be used standalone
 // without the nuances of app manifest. This is mainly used for testing the REPL itself
 pub struct DefaultRibDependencyManager {
-    embedded_worker_executor: EmbeddedWorkerExecutor,
+    pub embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
 }
 
 impl DefaultRibDependencyManager {
-    pub async fn init() -> Result<Self, String> {
-        let dependencies = BootstrapDependencies::new().await;
-
-        let embedded_worker_executor = start(&dependencies)
-            .await
-            .expect("Failed to start embedded worker executor");
+    pub async fn new(embedded_worker_executor: Arc<EmbeddedWorkerExecutor>) -> Result<Self, String> {
 
         Ok(Self {
-            embedded_worker_executor,
+            embedded_worker_executor
         })
     }
 }
 
 #[async_trait]
 impl RibDependencyManager for DefaultRibDependencyManager {
-    async fn add_components(&self) -> Result<Vec<ComponentDependency>, String> {
+    async fn add_components(&self) -> Result<ReplDependencies, String> {
         Err("multiple components not supported in embedded mode".to_string())
     }
 
@@ -72,8 +68,6 @@ impl RibDependencyManager for DefaultRibDependencyManager {
             .component(component_name.as_str())
             .store()
             .await;
-
-        let source_path = source_path.join(format!("{component_name}.wasm"));
 
         let result = self
             .embedded_worker_executor

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::dependency_manager::ComponentDependency;
 use crate::embedded_executor::EmbeddedWorkerExecutor;
 use async_trait::async_trait;
@@ -19,10 +20,10 @@ pub trait WorkerFunctionInvoke {
 }
 
 pub struct DefaultWorkerFunctionInvoke {
-    embedded_worker_executor: EmbeddedWorkerExecutor,
+    embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
 }
-impl DefaultWorkerFunctionInvoke {
-    pub fn new(embedded_worker_executor: EmbeddedWorkerExecutor) -> Self {
+impl<'a> DefaultWorkerFunctionInvoke {
+    pub fn new(embedded_worker_executor: Arc<EmbeddedWorkerExecutor>) -> Self {
         Self {
             embedded_worker_executor,
         }

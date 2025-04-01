@@ -6,7 +6,7 @@ use crate::repl_state::ReplState;
 use crate::result_printer::{DefaultResultPrinter, ReplPrinter};
 use crate::rib_edit::RibEdit;
 use colored::Colorize;
-use rib::RibByteCode;
+use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
 use rib::RibFunctionInvoke;
 use rib::RibResult;
 use rustyline::error::ReadlineError;
@@ -14,11 +14,12 @@ use rustyline::history::History;
 use rustyline::{Config, Editor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use async_trait::async_trait;
 use tokio;
+use golem_wasm_rpc::ValueAndType;
 
 pub struct RibRepl {
     history_file_path: PathBuf,
-    worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     printer: Box<dyn ReplPrinter>,
     editor: Editor<RibEdit, RibReplHistory>,
     current_session_rib_texts: Vec<String>,
@@ -31,10 +32,13 @@ impl RibRepl {
     pub async fn bootstrap(
         history_file: Option<PathBuf>,
         dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
-        worker_function_invoke: Option<Arc<dyn WorkerFunctionInvoke + Sync + Send>>,
-        rib_result_printer: Option<Box<dyn ReplPrinter>>,
+        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+        printer: Box<dyn ReplPrinter>,
         component_details: Option<ComponentDetails>,
     ) -> Result<RibRepl, ReplBootstrapError> {
+
+        let history_file_path = history_file.unwrap_or_else(get_default_history_file);
+
         let rib_editor = RibEdit::init();
 
         let mut rl = Editor::<RibEdit, RibReplHistory>::with_history(
@@ -45,8 +49,8 @@ impl RibRepl {
 
         rl.set_helper(Some(rib_editor));
 
-        if history_file.exists() {
-            if let Err(err) = rl.load_history(&history_file) {
+        if history_file_path.exists() {
+            if let Err(err) = rl.load_history(&history_file_path) {
                 return Err(ReplBootstrapError::ReplHistoryFileError(format!(
                     "Failed to load history: {}. Starting with an empty history.",
                     err
@@ -82,13 +86,16 @@ impl RibRepl {
             }
         }?;
 
-        let repl_state = ReplState::new(&component_dependency, Arc::clone(&worker_function_invoke));
+        let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(
+            component_dependency.clone(),
+            worker_function_invoke,
+        ));
 
-        let printer = rib_result_printer.unwrap_or_else(|| Box::new(DefaultResultPrinter));
+        let repl_state = ReplState::new(&component_dependency, rib_function_invoke);
+
 
         Ok(RibRepl {
-            history_file_path: history_file.unwrap_or_else(get_default_history_file),
-            worker_function_invoke,
+            history_file_path,
             printer,
             editor: rl,
             component_dependency,
@@ -147,7 +154,9 @@ impl RibRepl {
 }
 
 pub struct ComponentDetails {
+    // Name of the component
     pub component_name: String,
+    // The complete path of the wasm source file
     pub source_path: PathBuf,
 }
 
@@ -176,4 +185,40 @@ pub enum ReplBootstrapError {
     ComponentLoadError(String),
     Internal(String),
     ReplHistoryFileError(String),
+}
+
+
+// As of now Rib interpreter can work with only one component, and the details
+// and hence it needs to only know about worker-name, which is optional, and function arguments
+// When Rib supports multiple component, the RibFunctionInvoke will come to know
+// about the component_id and the worker_name and this indirection can be avoided
+pub struct ReplRibFunctionInvoke {
+    component_dependency: ComponentDependency,
+    worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+}
+
+impl ReplRibFunctionInvoke {
+    pub fn new(
+        component_dependency: ComponentDependency,
+        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+    ) -> Self {
+        Self {
+            component_dependency,
+            worker_function_invoke,
+        }
+    }
+}
+
+#[async_trait]
+impl RibFunctionInvoke for ReplRibFunctionInvoke {
+    async fn invoke(&self, worker_name: Option<EvaluatedWorkerName>, function_name: EvaluatedFqFn, args: EvaluatedFnArgs) -> Result<ValueAndType, String> {
+        let component_id = self.component_dependency.component_id.clone();
+
+        self.worker_function_invoke.invoke(
+            component_id,
+            worker_name,
+            function_name,
+            args,
+        ).await
+    }
 }

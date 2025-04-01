@@ -11,6 +11,8 @@ use std::env;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use golem_test_framework::config::TestDependencies;
+use crate::result_printer::{DefaultResultPrinter, ReplPrinter};
 
 mod compiler;
 mod dependency_manager;
@@ -31,21 +33,45 @@ mod rib_repl;
 // cargo run
 #[tokio::main]
 async fn main() {
-    let default_dependency_manager = Arc::new(
-        dependency_manager::DefaultRibDependencyManager::init()
+    let dependencies = BootstrapDependencies::new().await;
+
+    let embedded_worker_executor = start(&dependencies)
+        .await
+        .expect("Failed to start embedded worker executor");
+
+    let shared_executor = Arc::new(embedded_worker_executor);
+
+    let worker_function_invoke = Arc::new(invoke::DefaultWorkerFunctionInvoke::new(
+       shared_executor.clone()
+    ));
+
+    let default_dependency_manager =
+        Arc::new(dependency_manager::DefaultRibDependencyManager::new(shared_executor.clone())
             .await
-            .expect("Failed to create default dependency manager"),
-    );
+            .expect("Failed to create default dependency manager"));
+
+
+    let printer = DefaultResultPrinter;
 
     let mut repl = RibRepl::bootstrap(
         None,
         default_dependency_manager,
-        None,
-        None,
+        worker_function_invoke,
+        Box::new(printer.clone()),
         Some(ComponentDetails {
             component_name: "shopping-cart".to_string(),
-            source_path: Path::new("../test-components/shopping-cart.wasm").to_path_buf(),
+            source_path: shared_executor.component_directory().join("shopping-cart.wasm"),
         }),
-    );
-    repl.run().await;
+    ).await;
+
+    match &mut repl {
+        Ok(repl) => {
+           repl.run().await
+        }
+        Err(err) => {
+            printer.print_bootstrap_error(&err);
+            return;
+        }
+    }
+
 }

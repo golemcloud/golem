@@ -9,6 +9,7 @@ pub trait ReplPrinter {
     fn print_runtime_error(&self, error: &str);
 }
 
+#[derive(Clone)]
 pub struct DefaultResultPrinter;
 
 impl ReplPrinter for DefaultResultPrinter {
@@ -47,8 +48,23 @@ impl ReplPrinter for DefaultResultPrinter {
         }
     }
 
-    fn print_bootstrap_error(&self, error: &str) {
-        println!("{} {}", "warn: bootstrap error".yellow(), error.white());
+    fn print_bootstrap_error(&self, error: &ReplBootstrapError) {
+        match error {
+            ReplBootstrapError::ReplHistoryFileError(msg) => {
+                println!("{} {}", "[warn]".yellow(), msg);
+            }
+            ReplBootstrapError::ComponentLoadError(msg)
+            | ReplBootstrapError::Internal(msg) => {
+                println!("{} {}", "[error]".red(), msg);
+            }
+            ReplBootstrapError::MultipleComponentsFound(_) => {
+                println!("{} {}", "[error]".red(), "multiple components found");
+                println!("{}", "specify the component name when bootstrapping repl".yellow());
+            }
+            ReplBootstrapError::NoComponentsFound => {
+                println!("{} {}", "[warn]".yellow(), "no components found in the repl context");
+            }
+        }
     }
 
     fn print_runtime_error(&self, error: &str) {
