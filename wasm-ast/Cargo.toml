@@ -16,11 +16,12 @@ mappable-rc = "0.1.1"
 poem-openapi = { workspace = true, optional = true }
 poem-openapi-derive = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
+semver = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
-wasmparser = { version = "0.219.1", optional = true }
-wasm-encoder = { version = "0.219.1", optional = true }
-wasm-metadata = { version = "0.219.1", optional = true }
+wasmparser = { version = "0.227.1", optional = true }
+wasm-encoder = { version = "0.227.1", optional = true }
+wasm-metadata = { version = "0.227.1", optional = true }
 wasm-wave = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
@@ -62,10 +63,10 @@ writer = ["dep:wasm-encoder"]
 component = []
 
 # Support for extracting producer and other metadata from a binary WASM module or component using the wasm-metadata library
-metadata = ["dep:wasm-metadata"]
+metadata = ["dep:wasm-metadata", "dep:semver"]
 
 # Enables some higher level analysis features built on top of the WASM AST
-analysis = ["component"]
+analysis = ["component", "metadata"]
 
 # Wave format representation
 wave = ["dep:wasm-wave"]

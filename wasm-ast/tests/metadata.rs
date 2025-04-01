@@ -29,7 +29,6 @@ fn metadata_shopping_cart_component() {
                 ],
             }],
         }),
-        registry_metadata: None,
     };
 
     assert_eq!(metadata, expected);
@@ -70,7 +69,6 @@ fn metadata_shopping_cart_component() {
                 },
             ],
         }),
-        registry_metadata: None,
     };
 
     assert_eq!(inner_module_metadata, expected);
