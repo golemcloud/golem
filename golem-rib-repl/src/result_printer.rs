@@ -1,16 +1,17 @@
 use colored::Colorize;
 use rib::{RibError, RibResult};
+use crate::bootstrap::ReplBootstrapError;
 
-pub trait ResultPrinter {
+pub trait ReplPrinter {
     fn print_rib_result(&self, result: &RibResult);
     fn print_compilation_error(&self, error: &RibError);
-    fn print_bootstrap_error(&self, error: &str);
+    fn print_bootstrap_error(&self, error: &ReplBootstrapError);
     fn print_runtime_error(&self, error: &str);
 }
 
 pub struct DefaultResultPrinter;
 
-impl ResultPrinter for DefaultResultPrinter {
+impl ReplPrinter for DefaultResultPrinter {
     fn print_rib_result(&self, result: &RibResult) {
         println!("{}", result.to_string().green());
     }

@@ -1,4 +1,4 @@
-use crate::local::{start, EmbeddedWorkerExecutor, LocalRunnerDependencies};
+use crate::embedded_executor::{start, EmbeddedWorkerExecutor, BootstrapDependencies};
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, ComponentType, TargetWorkerId};
 use golem_test_framework::config::TestDependencies;
@@ -6,18 +6,28 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::AnalysedExport;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::Path;
 
 #[async_trait]
 pub trait RibDependencyManager {
     // Deploy all components within the context, if not already registered with the golem engine
     // and returning the list of components that were registered.
-    async fn register_global(&self) -> Result<Vec<ComponentDependency>, String>;
+    // This is upto the client of REPL to decide on resolving the paths
+    // Rib (in future will) work with multiple components
+    async fn add_components(&self) -> Result<ReplDependencies, String>;
 
-    // Deploy a specific component if not done already with the Golem engine
-    async fn register_component(
+    // How to deploy a specific component, and this will come into action
+    // if we started the REPL pointing to a specific component, or dynamically
+    // load component during the usage of REPL using `:load` command.
+    async fn add_component_dependency(
         &self,
+        source_path: &Path,
         component_name: String,
     ) -> Result<ComponentDependency, String>;
+}
+
+pub struct ReplDependencies {
+    pub component_dependencies: Vec<ComponentDependency>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,12 +38,18 @@ pub struct ComponentDependency {
 
 // A default Rib dependency manager is mainly allowing rib to be used standalone
 // without the nuances of app manifest. This is mainly used for testing the REPL itself
-pub struct DefaultRibDependencyManager<'a> {
-    embedded_worker_executor: &'a EmbeddedWorkerExecutor,
+pub struct DefaultRibDependencyManager {
+    embedded_worker_executor: EmbeddedWorkerExecutor,
 }
 
-impl<'a> DefaultRibDependencyManager<'a> {
-    pub async fn new(embedded_worker_executor: &'a EmbeddedWorkerExecutor) -> Result<Self, String> {
+impl DefaultRibDependencyManager {
+    pub async fn init() -> Result<Self, String> {
+        let dependencies = BootstrapDependencies::new().await;
+
+        let embedded_worker_executor = start(&dependencies)
+            .await
+            .expect("Failed to start embedded worker executor");
+
         Ok(Self {
             embedded_worker_executor,
         })
@@ -41,13 +57,14 @@ impl<'a> DefaultRibDependencyManager<'a> {
 }
 
 #[async_trait]
-impl<'a> RibDependencyManager for DefaultRibDependencyManager<'a> {
-    async fn register_global(&self) -> Result<Vec<ComponentDependency>, String> {
-        Err("multiple components not supported in local mode".to_string())
+impl RibDependencyManager for DefaultRibDependencyManager {
+    async fn add_components(&self) -> Result<Vec<ComponentDependency>, String> {
+        Err("multiple components not supported in embedded mode".to_string())
     }
 
-    async fn register_component(
+    async fn add_component_dependency(
         &self,
+        source_path: &Path,
         component_name: String,
     ) -> Result<ComponentDependency, String> {
         let component_id = self
@@ -56,10 +73,7 @@ impl<'a> RibDependencyManager for DefaultRibDependencyManager<'a> {
             .store()
             .await;
 
-        let source_path = self
-            .embedded_worker_executor
-            .component_directory()
-            .join(format!("{component_name}.wasm"));
+        let source_path = source_path.join(format!("{component_name}.wasm"));
 
         let result = self
             .embedded_worker_executor
