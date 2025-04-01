@@ -27,7 +27,7 @@ use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
@@ -44,7 +44,7 @@ use golem_common::model::{
     InitialComponentFileKey,
 };
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;

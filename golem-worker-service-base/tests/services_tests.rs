@@ -44,6 +44,8 @@ use golem_worker_service_base::service::gateway::api_deployment::{
 use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 
 use chrono::Utc;
+use golem_common::model::base64::Base64;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::redis::RedisPool;
 use golem_service_base::storage::sqlite::SqlitePool;
@@ -311,8 +313,7 @@ async fn insert_and_get_with_redis(
 
     session_store
         .insert(session_id.clone(), data_key.clone(), data_value)
-        .await
-        .unwrap();
+        .await?;
 
     session_store.get(&session_id, &data_key).await
 }
@@ -381,7 +382,7 @@ struct TestComponentService;
 impl TestComponentService {
     pub fn test_component() -> Component {
         use golem_common::model::component_metadata::ComponentMetadata;
-        use golem_service_base::model::{ComponentName, VersionedComponentId};
+        use golem_service_base::model::ComponentName;
 
         let id = VersionedComponentId {
             component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
@@ -396,6 +397,9 @@ impl TestComponentService {
                 exports: Self::get_metadata(),
                 producers: vec![],
                 memories: vec![],
+                binary_wit: Base64(vec![]),
+                root_package_name: "golem:it".to_string(),
+                root_package_version: None,
                 dynamic_linking: HashMap::new(),
             },
             created_at: Some(Utc::now()),
@@ -1214,6 +1218,14 @@ impl IdentityProvider for TestIdentityProvider {
         ))
     }
 
+    async fn get_client(
+        &self,
+        security_scheme: &SecurityScheme,
+    ) -> Result<OpenIdClient, IdentityProviderError> {
+        let identity_provider = DefaultIdentityProvider;
+        identity_provider.get_client(security_scheme).await
+    }
+
     fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
         let provider = DefaultIdentityProvider;
         provider.get_id_token_verifier(client)
@@ -1244,14 +1256,6 @@ impl IdentityProvider for TestIdentityProvider {
             Some(CsrfToken::new("token".to_string())),
             Some(Nonce::new("nonce".to_string())),
         )
-    }
-
-    async fn get_client(
-        &self,
-        security_scheme: &SecurityScheme,
-    ) -> Result<OpenIdClient, IdentityProviderError> {
-        let identity_provider = DefaultIdentityProvider;
-        identity_provider.get_client(security_scheme).await
     }
 }
 

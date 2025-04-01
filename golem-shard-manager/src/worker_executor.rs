@@ -32,9 +32,9 @@ use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
+use golem_common::model::error::{GolemError, GolemErrorUnknown};
 use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
-use golem_service_base::model::{GolemError, GolemErrorUnknown};
 
 #[async_trait]
 pub trait WorkerExecutorService {

@@ -15,7 +15,7 @@
 use super::{IdempotencyKeyCompiled, InvocationContextCompiled, WorkerNameCompiled};
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
-use golem_service_base::model::VersionedComponentId;
+use golem_common::model::component::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibError, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
 use serde::{Deserialize, Serialize};

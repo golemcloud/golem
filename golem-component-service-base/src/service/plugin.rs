@@ -21,7 +21,7 @@ use crate::service::component::ComponentError;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::plugin::{
     AppPluginDefinition, LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
     PluginOwner, PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
@@ -29,7 +29,6 @@ use golem_common::model::plugin::{
 use golem_common::model::ComponentId;
 use golem_common::model::HasAccountId;
 use golem_common::SafeDisplay;
-use golem_service_base::model::VersionedComponentId;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedExport;

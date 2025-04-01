@@ -21,6 +21,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 
+use crate::model::invocation_context::InvocationContextStack;
 use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
@@ -38,11 +39,12 @@ use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
 pub use crate::base_model::*;
-use crate::model::invocation_context::InvocationContextStack;
 
+pub mod base64;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod error;
 pub mod exports;
 pub mod invocation_context;
 pub mod lucene;

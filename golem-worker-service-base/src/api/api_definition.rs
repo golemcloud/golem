@@ -27,8 +27,9 @@ use crate::gateway_security::{
     SecuritySchemeWithProviderMetadata,
 };
 use crate::service::gateway::BoxConversionContext;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::GatewayBindingType;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};

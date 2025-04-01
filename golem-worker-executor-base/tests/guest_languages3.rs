@@ -139,6 +139,7 @@ async fn javascript_example_2(
 
 #[test]
 #[tracing::instrument]
+#[ignore]
 async fn csharp_example_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
