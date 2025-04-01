@@ -60,7 +60,7 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
     #[sqlx(skip)]
     pub installed_plugins:
         Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
-    pub root_package_name: String,
+    pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 }
 

@@ -462,6 +462,7 @@ impl From<&PrimitiveValueType> for AnalysedType {
             PrimitiveValueType::F64 => f64(),
             PrimitiveValueType::Chr => chr(),
             PrimitiveValueType::Str => str(),
+            PrimitiveValueType::ErrorContext => panic!("ErrorContext is not supported yet"),
         }
     }
 }

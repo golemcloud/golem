@@ -3421,13 +3421,14 @@ dependencies = [
  "pretty_assertions",
  "prost",
  "prost-build",
+ "semver",
  "serde",
  "serde_json",
  "test-r",
- "wasm-encoder 0.219.2",
- "wasm-metadata 0.219.2",
+ "wasm-encoder 0.227.1",
+ "wasm-metadata 0.227.1",
  "wasm-wave",
- "wasmparser 0.219.2",
+ "wasmparser 0.227.1",
  "wasmprinter",
  "wit-component",
  "wit-parser 0.227.1",
@@ -3761,6 +3762,7 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash",
+ "serde",
 ]
 
 [[package]]
@@ -8881,22 +8883,6 @@ dependencies = [
 
 [[package]]
 name = "wasm-metadata"
-version = "0.219.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1ef51bd442042a2a7b562dddb6016ead52c4abab254c376dcffc83add2c9c34"
-dependencies = [
- "anyhow",
- "indexmap 2.8.0",
- "serde",
- "serde_derive",
- "serde_json",
- "spdx",
- "wasm-encoder 0.219.2",
- "wasmparser 0.219.2",
-]
-
-[[package]]
-name = "wasm-metadata"
 version = "0.227.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce1ef0faabbbba6674e97a56bee857ccddf942785a336c8b47b42373c922a91d"
@@ -8974,6 +8960,7 @@ dependencies = [
  "hashbrown 0.15.2",
  "indexmap 2.8.0",
  "semver",
+ "serde",
 ]
 
 [[package]]

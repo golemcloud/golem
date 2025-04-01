@@ -39,7 +39,7 @@ pub struct ComponentMetadata {
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
     pub binary_wit: Base64,
-    pub root_package_name: String,
+    pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 
     #[serde(default)]
@@ -203,12 +203,13 @@ impl From<RawComponentMetadata> for ComponentMetadata {
 }
 
 // Metadata of Component in terms of golem_wasm_ast types
+#[derive(Default)]
 pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<WasmAstProducers>,
     pub memories: Vec<Mem>,
     pub binary_wit: Vec<u8>,
-    pub root_package_name: String,
+    pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 }
 
@@ -235,9 +236,7 @@ impl RawComponentMetadata {
         let binary_wit = wit_analysis
             .serialized_interface_only()
             .map_err(ComponentProcessingError::Analysis)?;
-        let root_package = wit_analysis
-            .root_package_name()
-            .map_err(ComponentProcessingError::Analysis)?;
+        let root_package = wit_analysis.root_package_name();
 
         #[cfg(feature = "observability")]
         for warning in wit_analysis.warnings() {
@@ -260,22 +259,11 @@ impl RawComponentMetadata {
             producers,
             memories,
             binary_wit,
-            root_package_name: format!("{}:{}", root_package.namespace, root_package.name),
-            root_package_version: root_package.version.map(|v| v.to_string()),
+            root_package_name: root_package
+                .as_ref()
+                .map(|pkg| format!("{}:{}", pkg.namespace, pkg.name)),
+            root_package_version: root_package.and_then(|pkg| pkg.version.map(|v| v.to_string())),
         })
-    }
-}
-
-impl Default for RawComponentMetadata {
-    fn default() -> Self {
-        Self {
-            exports: vec![],
-            producers: vec![],
-            memories: vec![],
-            binary_wit: vec![],
-            root_package_name: "unknown:unknown".to_string(),
-            root_package_version: None,
-        }
     }
 }
 
