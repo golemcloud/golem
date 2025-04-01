@@ -27,7 +27,7 @@ use chrono::{DateTime, Utc};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{self, CommandFactory, Subcommand};
 use clap::{Args, Parser};
-use clap_verbosity_flag::Verbosity;
+use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
 use golem_wasm_rpc_stubgen::log::LogColorize;
 use lenient_bool::LenientBool;
@@ -50,46 +50,84 @@ pub struct GolemCliCommand {
     pub subcommand: GolemCliSubcommand,
 }
 
+// NOTE: inlined from clap-verbosity-flag, so we can override display order,
+//       check for possible changes when upgrading clap-verbosity-flag
+#[derive(clap::Args, Debug, Clone, Copy, Default)]
+#[command(about = None, long_about = None)]
+pub struct Verbosity<L: LogLevel = ErrorLevel> {
+    #[arg(
+        long,
+        short = 'v',
+        action = clap::ArgAction::Count,
+        global = true,
+        help = L::verbose_help(),
+        long_help = L::verbose_long_help(),
+        display_order = 201
+    )]
+    verbose: u8,
+
+    #[arg(
+        long,
+        short = 'q',
+        action = clap::ArgAction::Count,
+        global = true,
+        help = L::quiet_help(),
+        long_help = L::quiet_long_help(),
+        conflicts_with = "verbose",
+        display_order = 202
+    )]
+    quiet: u8,
+
+    #[arg(skip)]
+    phantom: std::marker::PhantomData<L>,
+}
+
+impl Verbosity {
+    pub fn as_clap_verbosity_flag(self) -> clap_verbosity_flag::Verbosity {
+        clap_verbosity_flag::Verbosity::new(self.verbose, self.quiet)
+    }
+}
+
 #[derive(Debug, Default, Args)]
 pub struct GolemCliGlobalFlags {
     /// Output format, defaults to text, unless specified by the selected profile
-    #[arg(long, short, global = true)]
+    #[arg(long, short, global = true, display_order = 101)]
     pub format: Option<Format>,
 
     /// Select Golem profile by name
-    #[arg(long, short, global = true, conflicts_with_all = ["local", "cloud"])]
+    #[arg(long, short, global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
     pub profile: Option<ProfileName>,
 
     /// Select builtin "local" profile, to use services provided by the "golem server" command
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "cloud"])]
+    #[arg(long, short, global = true, conflicts_with_all = ["profile", "cloud"], display_order = 103)]
     pub local: bool,
 
     /// Select builtin "cloud" profile to use Golem Cloud
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "local"])]
+    #[arg(long, short, global = true, conflicts_with_all = ["profile", "local"], display_order = 104)]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
-    #[arg(long, short, global = true)]
+    #[arg(long, short, global = true, display_order = 105)]
     pub app_manifest_path: Option<PathBuf>,
 
     /// Disable automatic searching for application manifests
-    #[arg(long, short = 'A', global = true)]
+    #[arg(long, short = 'A', global = true, display_order = 106)]
     pub disable_app_manifest_discovery: bool,
 
     /// Select build profile
-    #[arg(long, short, global = true)]
+    #[arg(long, short, global = true, display_order = 107)]
     pub build_profile: Option<BuildProfileName>,
 
     /// Custom path to the config directory (defaults to $HOME/.golem)
-    #[arg(long, global = true)]
+    #[arg(long, global = true, display_order = 108)]
     pub config_dir: Option<PathBuf>,
+
+    /// Automatically answer "yes" to any interactive confirm questions
+    #[arg(long, short, global = true, display_order = 109)]
+    pub yes: bool,
 
     #[command(flatten)]
     pub verbosity: Verbosity,
-
-    /// Automatically answer "yes" to any interactive confirm questions
-    #[arg(long, short, global = true)]
-    pub yes: bool,
 
     // The flags below can only be set through env vars, as they are mostly
     // useful for testing, so we do not want to pollute the flag space with them
@@ -185,6 +223,10 @@ impl GolemCliGlobalFlags {
             .clone()
             .unwrap_or_else(|| dirs::home_dir().unwrap().join(".golem"))
     }
+
+    pub fn verbosity(&self) -> clap_verbosity_flag::Verbosity {
+        self.verbosity.as_clap_verbosity_flag()
+    }
 }
 
 #[derive(Debug, Default, Parser)]
@@ -194,6 +236,36 @@ pub struct GolemCliFallbackCommand {
     pub global_flags: GolemCliGlobalFlags,
 
     pub positional_args: Vec<String>,
+
+    #[arg(skip)]
+    pub parse_error: Option<clap::Error>,
+}
+
+impl GolemCliFallbackCommand {
+    fn try_parse_from<I, T>(args: I, with_env_overrides: bool) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let args = args
+            .into_iter()
+            .map(|arg| arg.into())
+            .filter(|arg| arg != "-h" && arg != "--help")
+            .collect::<Vec<OsString>>();
+
+        let mut cmd = <Self as Parser>::try_parse_from(args).unwrap_or_else(|error| {
+            GolemCliFallbackCommand {
+                parse_error: Some(error),
+                ..Self::default()
+            }
+        });
+
+        if with_env_overrides {
+            cmd.global_flags = cmd.global_flags.with_env_overrides();
+        }
+
+        cmd
+    }
 }
 
 impl GolemCliCommand {
@@ -218,17 +290,23 @@ impl GolemCliCommand {
                 GolemCliCommandParseResult::FullMatch(command)
             }
             Err(error) => {
-                let fallback_command = {
-                    let mut fallback_command =
-                        GolemCliFallbackCommand::try_parse_from(args).unwrap_or_default();
-                    if with_env_overrides {
-                        fallback_command.global_flags =
-                            fallback_command.global_flags.with_env_overrides()
-                    }
-                    fallback_command
-                };
+                let fallback_command =
+                    GolemCliFallbackCommand::try_parse_from(&args, with_env_overrides);
 
                 let partial_match = match error.kind() {
+                    ErrorKind::DisplayHelp => {
+                        let positional_args = fallback_command
+                            .positional_args
+                            .iter()
+                            .map(|arg| arg.as_ref())
+                            .collect::<Vec<_>>();
+                        match positional_args.as_slice() {
+                            ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
+                            ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
+                            ["worker"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
+                            _ => None,
+                        }
+                    }
                     ErrorKind::MissingRequiredArgument => {
                         error.context().find_map(|context| match context {
                             (ContextKind::InvalidArg, ContextValue::Strings(args)) => {
@@ -391,12 +469,15 @@ pub enum GolemCliCommandParseResult {
 
 #[derive(Debug)]
 pub enum GolemCliCommandPartialMatch {
-    AppNewMissingLanguage,
+    AppHelp,
     AppMissingSubcommandHelp,
-    ComponentNewMissingTemplate,
+    AppNewMissingLanguage,
+    ComponentHelp,
     ComponentMissingSubcommandHelp,
-    WorkerInvokeMissingWorkerName,
+    ComponentNewMissingTemplate,
+    WorkerHelp,
     WorkerInvokeMissingFunctionName { worker_name: WorkerName },
+    WorkerInvokeMissingWorkerName,
 }
 
 #[derive(Debug, Subcommand)]
@@ -556,7 +637,8 @@ pub mod shared_args {
     #[derive(Debug, Args, Default)]
     pub struct WorkerUpdateOrRedeployArgs {
         /// Update existing workers with auto or manual update mode
-        #[clap(long, short, conflicts_with_all = ["redeploy_workers"])]
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_workers"], num_args = 0..=1
+        )]
         pub update_workers: Option<WorkerUpdateMode>,
         /// Delete and recreate existing workers
         #[clap(long, short, conflicts_with_all = ["update_workers"])]

@@ -118,6 +118,7 @@ impl Context {
                     path_override: global_flags.golem_rust_path.clone(),
                     version_override: global_flags.golem_rust_version.clone(),
                 },
+                wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             },
             http_batch_size: global_flags.http_batch_size.unwrap_or(50),
             auth_token_override: global_flags.auth_token,
@@ -487,6 +488,7 @@ struct ApplicationContextConfig {
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
     golem_rust_override: RustDependencyOverride,
+    wasm_rpc_client_build_offline: bool,
 }
 
 #[derive(Default)]
@@ -526,7 +528,7 @@ impl ApplicationContextState {
             },
             skip_up_to_date_checks: self.skip_up_to_date_checks,
             profile: config.build_profile.as_ref().map(|p| p.to_string().into()),
-            offline: false, // TODO:
+            offline: config.wasm_rpc_client_build_offline,
             extensions: PhantomData::<GolemComponentExtensions>,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),

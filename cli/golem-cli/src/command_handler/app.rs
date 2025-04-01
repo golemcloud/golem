@@ -369,7 +369,7 @@ impl AppCommandHandler {
             match self
                 .ctx
                 .component_handler()
-                .component_by_name(project.as_ref(), component_name)
+                .component_by_name(project.as_ref(), component_name, None)
                 .await?
             {
                 Some(component) => {

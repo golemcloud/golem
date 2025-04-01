@@ -117,8 +117,8 @@ impl WorkerCommandHandler {
                 )
                 .await
             }
-            WorkerSubcommand::Get { worker_name } => self.get(worker_name).await,
-            WorkerSubcommand::Delete { worker_name } => self.delete_by_name_arg(worker_name).await,
+            WorkerSubcommand::Get { worker_name } => self.cmd_get(worker_name).await,
+            WorkerSubcommand::Delete { worker_name } => self.cmd_delete(worker_name).await,
             WorkerSubcommand::List {
                 component_name,
                 filter: filters,
@@ -189,6 +189,7 @@ impl WorkerCommandHandler {
                 worker_name_match.project.as_ref(),
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
+                worker_name_match.worker_name.as_ref(),
             )
             .await?;
 
@@ -277,6 +278,7 @@ impl WorkerCommandHandler {
                 worker_name_match.project.as_ref(),
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
+                worker_name_match.worker_name.as_ref(),
             )
             .await?;
 
@@ -834,7 +836,7 @@ impl WorkerCommandHandler {
             match self
                 .ctx
                 .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name)
+                .component_by_name(selected_components.project.as_ref(), component_name, None)
                 .await?
             {
                 Some(component) => {
@@ -941,44 +943,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn new_worker(
-        &self,
-        component_id: Uuid,
-        worker_name: String,
-        args: Vec<String>,
-        env: HashMap<String, String>,
-    ) -> anyhow::Result<()> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .worker
-                .launch_new_worker(
-                    &component_id,
-                    &WorkerCreationRequestOss {
-                        name: worker_name,
-                        args,
-                        env,
-                    },
-                )
-                .await
-                .map(|_| ())
-                .map_service_error(),
-            GolemClients::Cloud(clients) => clients
-                .worker
-                .launch_new_worker(
-                    &component_id,
-                    &WorkerCreationRequestCloud {
-                        name: worker_name,
-                        args,
-                        env,
-                    },
-                )
-                .await
-                .map(|_| ())
-                .map_service_error(),
-        }
-    }
-
-    async fn get(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_get(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -1019,7 +984,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn delete_by_name_arg(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_delete(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -1045,6 +1010,73 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
+    async fn new_worker(
+        &self,
+        component_id: Uuid,
+        worker_name: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => clients
+                .worker
+                .launch_new_worker(
+                    &component_id,
+                    &WorkerCreationRequestOss {
+                        name: worker_name,
+                        args,
+                        env,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+            GolemClients::Cloud(clients) => clients
+                .worker
+                .launch_new_worker(
+                    &component_id,
+                    &WorkerCreationRequestCloud {
+                        name: worker_name,
+                        args,
+                        env,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_service_error(),
+        }
+    }
+
+    pub async fn worker_metadata(
+        &self,
+        component_id: Uuid,
+        component_name: &ComponentName,
+        worker_name: &WorkerName,
+    ) -> anyhow::Result<WorkerMetadata> {
+        let result = match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => {
+                let result = clients
+                    .worker
+                    .get_worker_metadata(&component_id, &worker_name.0)
+                    .await
+                    .map_service_error()?;
+
+                WorkerMetadata::from_oss(component_name.clone(), result)
+            }
+            GolemClients::Cloud(clients) => {
+                let result = clients
+                    .worker
+                    .get_worker_metadata(&component_id, &worker_name.0)
+                    .await
+                    .map_service_error()?;
+
+                WorkerMetadata::from_cloud(component_name.clone(), result)
+            }
+        };
+
+        Ok(result)
+    }
+
     async fn delete(&self, component_id: Uuid, worker_name: &str) -> anyhow::Result<()> {
         match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
@@ -1055,7 +1087,7 @@ impl WorkerCommandHandler {
                 .map_service_error(),
             GolemClients::Cloud(clients) => clients
                 .worker
-                .get_worker_metadata(&component_id, worker_name)
+                .delete_worker(&component_id, worker_name)
                 .await
                 .map(|_| ())
                 .map_service_error(),
@@ -1399,6 +1431,7 @@ impl WorkerCommandHandler {
             .component_by_name(
                 worker_name_match.project.as_ref(),
                 &worker_name_match.component_name,
+                worker_name_match.worker_name.as_ref(),
             )
             .await?;
 

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::cloud::CloudAuthenticationConfig;
+use crate::error::ContextInitHintError;
 use crate::model::{Format, HasFormatConfig};
 use anyhow::{anyhow, bail, Context};
-use golem_wasm_rpc_stubgen::log::LogColorize;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -244,7 +244,7 @@ impl Config {
             .unwrap_or_else(ProfileName::local)
     }
 
-    pub fn from_file(config_dir: &Path) -> anyhow::Result<Config> {
+    pub fn from_dir(config_dir: &Path) -> anyhow::Result<Config> {
         let config_path = Self::config_path(config_dir);
 
         if !config_path
@@ -343,7 +343,7 @@ impl Config {
         profile_name: ProfileName,
         config_dir: &Path,
     ) -> anyhow::Result<()> {
-        let mut config = Self::from_file(config_dir)?;
+        let mut config = Self::from_dir(config_dir)?;
 
         if !config.profiles.contains_key(&profile_name) {
             bail!(
@@ -363,7 +363,7 @@ impl Config {
         config_dir: &Path,
         selected_profile: Option<ProfileName>,
     ) -> anyhow::Result<NamedProfile> {
-        let mut config = Self::from_file(config_dir)?;
+        let mut config = Self::from_dir(config_dir)?;
 
         let name = selected_profile
             .unwrap_or_else(|| config.default_profile.unwrap_or_else(ProfileName::local));
@@ -374,14 +374,13 @@ impl Config {
                 profile,
             }),
             None => {
-                // TODO: add a hint error for this, and list profiles?
-                bail!("Profile {} not found!", name.0.log_color_highlight());
+                bail!(ContextInitHintError::ProfileNotFound(name));
             }
         }
     }
 
     pub fn get_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<Option<Profile>> {
-        let mut config = Self::from_file(config_dir)?;
+        let mut config = Self::from_dir(config_dir)?;
         Ok(config.profiles.remove(name))
     }
 
@@ -390,13 +389,13 @@ impl Config {
         profile: Profile,
         config_dir: &Path,
     ) -> anyhow::Result<()> {
-        let mut config = Self::from_file(config_dir)?;
+        let mut config = Self::from_dir(config_dir)?;
         config.profiles.insert(name, profile);
         config.store_file(config_dir)
     }
 
     pub fn delete_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<()> {
-        let mut config = Self::from_file(config_dir)?;
+        let mut config = Self::from_dir(config_dir)?;
         config.profiles.remove(name);
         config.store_file(config_dir)
     }

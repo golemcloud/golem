@@ -1,3 +1,4 @@
+use crate::config::ProfileName;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use strum_macros::Display;
@@ -17,7 +18,7 @@ impl Display for NonSuccessfulExit {
 
 impl Error for NonSuccessfulExit {}
 
-// Errors that should be handled by the command handler with showing hints or error messages
+/// Errors that should be handled by the command handler with showing hints or error messages
 #[derive(Debug, Display)]
 pub enum HintError {
     NoApplicationManifestFound,
@@ -26,7 +27,15 @@ pub enum HintError {
 
 impl Error for HintError {}
 
+#[derive(Debug, Display)]
+pub enum ContextInitHintError {
+    ProfileNotFound(ProfileName),
+}
+
+impl Error for ContextInitHintError {}
+
 pub mod service {
+    use crate::model::text::fmt::format_stack;
     use bytes::Bytes;
     use golem_client::model::{
         GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
@@ -193,6 +202,8 @@ pub mod service {
 
     pub trait AnyhowMapServiceError<R> {
         fn map_service_error(self) -> anyhow::Result<R>;
+
+        fn map_service_error_not_found_as_opt(self) -> anyhow::Result<Option<R>>;
     }
 
     impl<R, E> AnyhowMapServiceError<R> for Result<R, golem_client::Error<E>>
@@ -202,6 +213,23 @@ pub mod service {
         fn map_service_error(self) -> anyhow::Result<R> {
             self.map_err(|err| ServiceError::from(err).into())
         }
+
+        fn map_service_error_not_found_as_opt(self) -> anyhow::Result<Option<R>> {
+            match self {
+                Ok(result) => Ok(Some(result)),
+                Err(err) => {
+                    let service_error = ServiceError::from(err);
+                    match &service_error.kind {
+                        ServiceErrorKind::ErrorResponse(response)
+                            if response.status_code == 404 =>
+                        {
+                            Ok(None)
+                        }
+                        _ => Err(service_error.into()),
+                    }
+                }
+            }
+        }
     }
 
     impl<R, E> AnyhowMapServiceError<R> for Result<R, golem_cloud_client::Error<E>>
@@ -210,6 +238,23 @@ pub mod service {
     {
         fn map_service_error(self) -> anyhow::Result<R> {
             self.map_err(|err| ServiceError::from(err).into())
+        }
+
+        fn map_service_error_not_found_as_opt(self) -> anyhow::Result<Option<R>> {
+            match self {
+                Ok(result) => Ok(Some(result)),
+                Err(err) => {
+                    let service_error = ServiceError::from(err);
+                    match &service_error.kind {
+                        ServiceErrorKind::ErrorResponse(response)
+                            if response.status_code == 404 =>
+                        {
+                            Ok(None)
+                        }
+                        _ => Err(service_error.into()),
+                    }
+                }
+            }
         }
     }
 
@@ -1195,7 +1240,6 @@ pub mod service {
         }
     }
 
-    // TODO: re-add callstack highlighting here?
     pub fn display_golem_error(error: GolemError) -> String {
         match error {
             GolemError::InvalidRequest(GolemErrorInvalidRequest { details }) => {
@@ -1307,7 +1351,7 @@ pub mod service {
                 )
             }
             GolemError::RuntimeError(GolemErrorRuntimeError { details }) => {
-                format!("Runtime error: {}", details)
+                format!("Runtime error:\n{}", format_stack(&details))
             }
             GolemError::InvalidShardId(GolemErrorInvalidShardId {
                 shard_id,

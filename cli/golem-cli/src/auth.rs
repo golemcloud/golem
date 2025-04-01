@@ -17,7 +17,7 @@ use crate::cloud::{
 };
 use crate::config::{Config, Profile, ProfileName};
 use crate::error::service::AnyhowMapServiceError;
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use colored::Colorize;
 use golem_cloud_client::api::{LoginClient, LoginClientLive, LoginOauth2WebFlowPollError};
 use golem_cloud_client::model::{Token, TokenSecret, UnsafeToken, WebFlowAuthorizeUrlResponse};
@@ -25,7 +25,7 @@ use golem_cloud_client::Security;
 use golem_wasm_rpc_stubgen::log::LogColorize;
 use indoc::printdoc;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 impl From<&CloudAuthenticationConfig> for CloudAuthentication {
@@ -85,7 +85,7 @@ impl Auth {
         }
     }
 
-    fn save_auth_unsafe(
+    fn save_auth(
         &self,
         token: &UnsafeToken,
         profile_name: &ProfileName,
@@ -107,19 +107,10 @@ impl Auth {
                     profile_name.clone(),
                     Profile::GolemCloud(profile),
                     config_dir,
-                )?;
+                )
+                .with_context(|| "Failed to save auth token")?;
 
                 Ok(())
-            }
-        }
-    }
-
-    // TODO: do we need a safe one?
-    fn save_auth(&self, token: &UnsafeToken, profile_name: &ProfileName, config_dir: &Path) {
-        match self.save_auth_unsafe(token, profile_name, config_dir) {
-            Ok(_) => {}
-            Err(err) => {
-                warn!("Failed to save auth data: {err}")
             }
         }
     }
@@ -132,7 +123,7 @@ impl Auth {
         let data = self.start_oauth2().await?;
         inform_user(&data);
         let token = self.complete_oauth2(data.state).await?;
-        self.save_auth(&token, profile_name, config_dir);
+        self.save_auth(&token, profile_name, config_dir)?;
         Ok(CloudAuthentication(token))
     }
 

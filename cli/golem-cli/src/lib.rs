@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use clap_verbosity_flag::Verbosity;
-use log::Level;
 use shadow_rs::shadow;
 use tracing_subscriber::FmtSubscriber;
 
@@ -54,17 +53,9 @@ pub fn version() -> &'static str {
 }
 
 pub fn init_tracing(verbosity: Verbosity) {
-    if let Some(level) = verbosity.log_level() {
-        let tracing_level = match level {
-            Level::Error => tracing::Level::ERROR,
-            Level::Warn => tracing::Level::WARN,
-            Level::Info => tracing::Level::INFO,
-            Level::Debug => tracing::Level::DEBUG,
-            Level::Trace => tracing::Level::TRACE,
-        };
-
+    if let Some(level) = verbosity.tracing_level() {
         let subscriber = FmtSubscriber::builder()
-            .with_max_level(tracing_level)
+            .with_max_level(level)
             .with_writer(std::io::stderr)
             .finish();
 

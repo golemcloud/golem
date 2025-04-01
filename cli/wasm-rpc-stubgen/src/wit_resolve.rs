@@ -822,15 +822,54 @@ impl WitDepsResolver {
             }
         }
         bail!(
-            "Package {} not found, sources searched: {}",
+            "Package {} not found, wit source directories searched: {}",
             package_name.to_string().log_color_error_highlight(),
             if self.sources.is_empty() {
-                "no sources were provided".to_string()
+                "no wit source directories were provided".to_string()
             } else {
-                self.sources
+                let sources = self
+                    .sources
                     .iter()
                     .map(|s| s.log_color_highlight())
-                    .join(", ")
+                    .join(", ");
+
+                // TODO: add fuzzy search tips, once app is extracted from stubgen
+                let packages = &self
+                    .sources
+                    .iter()
+                    .flat_map(|source| self.packages.get(source).unwrap().keys())
+                    .collect::<BTreeSet<_>>();
+
+                let hint = {
+                    match packages.iter().find(|pn| {
+                        pn.namespace == package_name.namespace && pn.name == package_name.name
+                    }) {
+                        Some(package_name_match) => {
+                            format!(
+                                "Did you mean {}?\n\n",
+                                package_name_match.to_string().log_color_highlight()
+                            )
+                        }
+                        None => "".to_string(),
+                    }
+                };
+
+                let packages = packages
+                    .iter()
+                    .map(|package_name| format!("- {}", package_name))
+                    .join("\n");
+
+                if !packages.is_empty() {
+                    format!(
+                        "{}\n\n{}{}:\n{}",
+                        sources,
+                        hint,
+                        "Available packages".log_color_help_group(),
+                        packages
+                    )
+                } else {
+                    sources
+                }
             }
         )
     }

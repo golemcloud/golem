@@ -1429,7 +1429,8 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
                     ctx.common_wit_deps()
                         .with_context(|| {
                             format!(
-                                "Failed to add package dependencies: {}",
+                                "Failed to add package dependencies for {}, missing packages: {}",
+                                component_name.as_str().log_color_highlight(),
                                 missing_package_deps
                                     .iter()
                                     .map(|s| s.to_string().log_color_highlight())
@@ -1439,7 +1440,14 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
                         .add_packages_with_transitive_deps_to_wit_dir(
                             &missing_package_deps,
                             &component_generated_base_wit,
-                        )?;
+                        )
+                        .with_context(|| {
+                            format!(
+                                "Failed to add package dependencies for {} ({})",
+                                component_name.as_str().log_color_highlight(),
+                                component_source_wit.log_color_highlight()
+                            )
+                        })?;
                 }
             }
 

@@ -31,7 +31,8 @@ use crate::model::text::fmt::{log_error, log_text_view, log_warn};
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::to_cloud::ToCloud;
 use crate::model::{
-    ComponentName, ComponentNameMatchKind, ProjectNameAndId, SelectedComponents, WorkerUpdateMode,
+    ComponentName, ComponentNameMatchKind, ProjectNameAndId, SelectedComponents, WorkerName,
+    WorkerUpdateMode,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient as ComponentClientOss;
@@ -267,7 +268,6 @@ impl ComponentCommandHandler {
         let mut component_views = Vec::<ComponentView>::new();
 
         if selected_component_names.component_names.is_empty() {
-            // TODO: there is no pagination for components
             match self.ctx.golem_clients().await? {
                 GolemClients::Oss(clients) => {
                     let results = clients
@@ -398,16 +398,20 @@ impl ComponentCommandHandler {
                                 .component
                                 .get_component_metadata(&component_id.0, &version.to_string())
                                 .await
-                                .map_service_error()?;
-                            component_views.push(Component::from(result).into());
+                                .map_service_error_not_found_as_opt()?;
+                            if let Some(result) = result {
+                                component_views.push(Component::from(result).into());
+                            }
                         }
                         None => {
                             let result = clients
                                 .component
                                 .get_latest_component_metadata(&component_id.0)
                                 .await
-                                .map_service_error()?;
-                            component_views.push(Component::from(result).into());
+                                .map_service_error_not_found_as_opt()?;
+                            if let Some(result) = result {
+                                component_views.push(Component::from(result).into());
+                            }
                         }
                     },
                     GolemClients::Cloud(clients) => match version {
@@ -416,16 +420,20 @@ impl ComponentCommandHandler {
                                 .component
                                 .get_component_metadata(&component_id.0, &version.to_string())
                                 .await
-                                .map_service_error()?;
-                            component_views.push(Component::from(result).into());
+                                .map_service_error_not_found_as_opt()?;
+                            if let Some(result) = result {
+                                component_views.push(Component::from(result).into());
+                            }
                         }
                         None => {
                             let result = clients
                                 .component
                                 .get_latest_component_metadata(&component_id.0)
                                 .await
-                                .map_service_error()?;
-                            component_views.push(Component::from(result).into());
+                                .map_service_error_not_found_as_opt()?;
+                            if let Some(result) = result {
+                                component_views.push(Component::from(result).into());
+                            }
                         }
                     },
                 },
@@ -438,7 +446,6 @@ impl ComponentCommandHandler {
             }
         }
 
-        // TODO: code dup
         if component_views.is_empty() && component_name.is_some() {
             // Retry selection (this time with not allowing "not founds")
             // so we get error messages for app component names.
@@ -459,8 +466,56 @@ impl ComponentCommandHandler {
             logln("");
         }
 
-        // TODO: if it was a version request we can try to enumerate valid version numbers
         if no_matches {
+            if version.is_some() && selected_components.component_names.len() == 1 {
+                log_error("Component version not found");
+
+                let versions = match self.ctx.golem_clients().await? {
+                    GolemClients::Oss(client) => client
+                        .component
+                        .get_components(Some(&selected_components.component_names[0].0))
+                        .await
+                        .map_service_error()
+                        .map(|components| {
+                            components
+                                .into_iter()
+                                .map(Component::from)
+                                .collect::<Vec<_>>()
+                        }),
+                    GolemClients::Cloud(client) => client
+                        .component
+                        .get_components(
+                            selected_components
+                                .project
+                                .as_ref()
+                                .map(|p| &p.project_id.0),
+                            Some(&selected_components.component_names[0].0),
+                        )
+                        .await
+                        .map_service_error()
+                        .map(|components| {
+                            components
+                                .into_iter()
+                                .map(Component::from)
+                                .collect::<Vec<_>>()
+                        }),
+                };
+
+                if let Ok(versions) = versions {
+                    logln("");
+                    logln(
+                        "Available component versions:"
+                            .log_color_help_group()
+                            .to_string(),
+                    );
+                    for version in versions {
+                        logln(format!("- {}", version.versioned_component_id.version));
+                    }
+                }
+            } else {
+                log_error("Component not found");
+            }
+
             bail!(NonSuccessfulExit)
         }
 
@@ -735,7 +790,11 @@ impl ComponentCommandHandler {
         let mut components = Vec::with_capacity(selected_component_names.component_names.len());
         for component_name in &selected_component_names.component_names {
             match self
-                .component_by_name(selected_component_names.project.as_ref(), component_name)
+                .component_by_name(
+                    selected_component_names.project.as_ref(),
+                    component_name,
+                    None,
+                )
                 .await?
             {
                 Some(component) => {
@@ -967,8 +1026,12 @@ impl ComponentCommandHandler {
         project: Option<&ProjectNameAndId>,
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
+        worker_name: Option<&WorkerName>,
     ) -> anyhow::Result<Component> {
-        match self.component_by_name(project, component_name).await? {
+        match self
+            .component_by_name(project, component_name, worker_name)
+            .await?
+        {
             Some(component) => Ok(component),
             None => {
                 let should_deploy = match component_match_kind {
@@ -1000,7 +1063,6 @@ impl ComponentCommandHandler {
                 // TODO: we will need hashes to reliably detect if "update" deploy is needed
                 //       and for now we should not blindly keep updating, so for now
                 //       only missing ones are handled
-                // TODO: add confirm
 
                 if self
                     .ctx
@@ -1026,7 +1088,7 @@ impl ComponentCommandHandler {
                         .await?;
                     self.ctx
                         .component_handler()
-                        .component_by_name(project, component_name)
+                        .component_by_name(project, component_name, None)
                         .await?
                         .ok_or_else(|| {
                             anyhow!("Component ({}) not found after deployment", component_name)
@@ -1045,19 +1107,19 @@ impl ComponentCommandHandler {
         &self,
         project: Option<&ProjectNameAndId>,
         component_name: &ComponentName,
+        worker_name: Option<&WorkerName>,
     ) -> anyhow::Result<Option<Component>> {
-        match self.ctx.golem_clients().await? {
+        let component = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => {
-                assert!(project.is_none(), "Unexpected project id for OSS");
                 let mut components = clients
                     .component
                     .get_components(Some(&component_name.0))
                     .await
                     .map_service_error()?;
                 if !components.is_empty() {
-                    Ok(Some(Component::from(components.pop().unwrap())))
+                    Some(Component::from(components.pop().unwrap()))
                 } else {
-                    Ok(None)
+                    None
                 }
             }
             GolemClients::Cloud(clients) => {
@@ -1070,11 +1132,56 @@ impl ComponentCommandHandler {
                     .await
                     .map_service_error()?;
                 if !components.is_empty() {
-                    Ok(Some(Component::from(components.pop().unwrap())))
+                    Some(Component::from(components.pop().unwrap()))
                 } else {
-                    Ok(None)
+                    None
                 }
             }
+        };
+
+        match (component, worker_name) {
+            (Some(component), Some(worker_name)) => {
+                let worker_metadata = self
+                    .ctx
+                    .worker_handler()
+                    .worker_metadata(
+                        component.versioned_component_id.component_id,
+                        &component.component_name,
+                        worker_name,
+                    )
+                    .await
+                    .ok();
+
+                match worker_metadata {
+                    Some(worker_metadata) => {
+                        let component = match self.ctx.golem_clients().await? {
+                            GolemClients::Oss(clients) => clients
+                                .component
+                                .get_component_metadata(
+                                    &component.versioned_component_id.component_id,
+                                    &worker_metadata.component_version.to_string(),
+                                )
+                                .await
+                                .map_service_error()
+                                .map(Component::from)?,
+                            GolemClients::Cloud(clients) => clients
+                                .component
+                                .get_component_metadata(
+                                    &component.versioned_component_id.component_id,
+                                    &worker_metadata.component_version.to_string(),
+                                )
+                                .await
+                                .map_service_error()
+                                .map(Component::from)?,
+                        };
+
+                        Ok(Some(component))
+                    }
+                    None => Ok(Some(component)),
+                }
+            }
+            (Some(component), None) => Ok(Some(component)),
+            (None, _) => Ok(None),
         }
     }
 
@@ -1084,7 +1191,7 @@ impl ComponentCommandHandler {
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<ComponentId>> {
         Ok(self
-            .component_by_name(project, component_name)
+            .component_by_name(project, component_name, None)
             .await?
             .map(|c| ComponentId(c.versioned_component_id.component_id)))
     }

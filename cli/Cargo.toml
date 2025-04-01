@@ -41,7 +41,7 @@ cargo_metadata = "0.19.1"
 cargo_toml = "0.21.0"
 chrono = "0.4.39"
 clap = { version = "4.5.30", features = ["derive"] }
-clap-verbosity-flag = "3.0.2"
+clap-verbosity-flag = { version = "3.0.2", features = ["tracing"] }
 clap_complete = "4.5.45"
 cli-table = "0.4.9"
 colored = "3.0.0"

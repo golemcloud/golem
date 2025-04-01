@@ -742,7 +742,6 @@ pub mod component {
         fields.build()
     }
 
-    // TODO: rename all "add" to "create"
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct ComponentCreateView(pub ComponentView);
 
@@ -1844,6 +1843,7 @@ pub mod help {
         fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
+            // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
             fields.field(
                 "<WORKER>",
                 &indoc!(
@@ -1876,7 +1876,10 @@ pub mod help {
                 "<PROJECT>/<COMPONENT>/<WORKER>",
                 &indoc!(
                     "
-                    TODO
+                    Project and component specific worker name.
+
+                    Behaves the same as <COMPONENT>/<WORKER>, except it can refer to components in a
+                    specific project.
 
                     "
                 ),
@@ -1885,8 +1888,10 @@ pub mod help {
                 "<ACCOUNT>/<PROJECT>/<COMPONENT>/<WORKER>",
                 &indoc!(
                     "
-                    TODO
+                    Account, project and component specific worker name.
 
+                    Behaves the same as <COMPONENT>/<WORKER>, except it can refer to components in a
+                    specific project owned by another account
                     "
                 ),
             );
@@ -1915,6 +1920,7 @@ pub mod help {
         fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
+            // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
             fields.field(
                 "<COMPONENT>",
                 &indoc!(
@@ -1935,7 +1941,10 @@ pub mod help {
                 "<PROJECT>/<COMPONENT>",
                 &indoc!(
                     "
-                    TODO
+                    Project specific component name.
+
+                    Behaves the same as <COMPONENT>, except it can refer to components in a specific
+                    project.
 
                     "
                 ),
@@ -1944,8 +1953,10 @@ pub mod help {
                 "<ACCOUNT>/<PROJECT>/<COMPONENT>",
                 &indoc!(
                     "
-                    TODO
+                    Account and Project specific component name.
 
+                    Behaves the same as <COMPONENT>, except it can refer to components in a specific
+                    project owned by another account.
                     "
                 ),
             );

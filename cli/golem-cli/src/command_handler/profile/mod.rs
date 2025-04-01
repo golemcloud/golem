@@ -141,7 +141,7 @@ impl ProfileCommandHandler {
     }
 
     fn cmd_list(&self) -> anyhow::Result<()> {
-        let config = Config::from_file(self.ctx.config_dir())?;
+        let config = Config::from_dir(self.ctx.config_dir())?;
         let default_profile_name = config.default_profile_name();
 
         let profiles = config
