@@ -1,6 +1,7 @@
+/golem-temp
 *.wasm
 dist/
 node_modules/
-generated
+generated/
 wit-generated
 wit-deps/*/
