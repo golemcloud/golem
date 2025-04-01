@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use crate::dependency_manager::ComponentDependency;
 use crate::embedded_executor::EmbeddedWorkerExecutor;
 use async_trait::async_trait;
 use golem_common::base_model::TargetWorkerId;

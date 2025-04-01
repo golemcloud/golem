@@ -1,14 +1,9 @@
-use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
-use crate::embedded_executor::{start, BootstrapDependencies, EmbeddedWorkerExecutor};
+use crate::dependency_manager::{RibDependencyManager};
+use crate::embedded_executor::{start, BootstrapDependencies};
 use crate::invoke::WorkerFunctionInvoke;
 use crate::rib_repl::{ComponentDetails, RibRepl};
-use async_trait::async_trait;
-use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::ValueAndType;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke};
-use std::env;
-use std::path::Path;
+use rib::{RibFunctionInvoke};
 use std::str::FromStr;
 use std::sync::Arc;
 use golem_test_framework::config::TestDependencies;

@@ -1,6 +1,5 @@
 use rib::InferredExpr;
 use rustyline::history::{DefaultHistory, History, SearchDirection, SearchResult};
-use std::any::{Any, TypeId};
 use std::path::Path;
 
 pub struct RibReplHistory {

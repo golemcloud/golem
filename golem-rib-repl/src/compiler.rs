@@ -1,7 +1,7 @@
 use crate::repl_state::ReplState;
 use rib::{
-    CallType, Expr, ExprVisitor, FunctionDictionary, FunctionTypeRegistry, InferredExpr,
-    InferredType, InstanceCreationType, InstanceType, RibByteCode, RibError, VariableId,
+    Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr,
+    InferredType, RibByteCode, RibError, VariableId,
 };
 use std::collections::{HashMap, VecDeque};
 

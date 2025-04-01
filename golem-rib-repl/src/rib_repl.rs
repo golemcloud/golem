@@ -3,7 +3,7 @@ use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
 use crate::history::RibReplHistory;
 use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_state::ReplState;
-use crate::result_printer::{DefaultResultPrinter, ReplPrinter};
+use crate::result_printer::{ReplPrinter};
 use crate::rib_edit::RibEdit;
 use colored::Colorize;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
