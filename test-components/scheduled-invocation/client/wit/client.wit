@@ -1,9 +1,9 @@
 package it:scheduled-invocation-client;
 
 interface client-api {
-  test1: func(component-name: string, worker-name: string) -> ();
-  test2: func(component-name: string, worker-name: string) -> ();
-  test3: func() -> ();
+  test1: func(component-name: string, worker-name: string);
+  test2: func(component-name: string, worker-name: string);
+  test3: func();
 
   inc-global-by: func(value: u64);
   get-global-value: func() -> u64;
