@@ -147,7 +147,11 @@ impl BootstrapDependencies {
         }
     }
 
-    pub fn get_embedded_worker_executor_deps(&self, http_port: u16, grpc_port: u16) -> EmbeddedWorkerExecutorDependencies {
+    pub fn get_embedded_worker_executor_deps(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+    ) -> EmbeddedWorkerExecutorDependencies {
         // Connecting to the worker executor started in-process
         let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
@@ -226,9 +230,7 @@ pub async fn start(deps: &BootstrapDependencies) -> anyhow::Result<EmbeddedWorke
     start_limited(deps).await
 }
 
-pub async fn start_limited(
-    deps: &BootstrapDependencies,
-) -> anyhow::Result<EmbeddedWorkerExecutor> {
+pub async fn start_limited(deps: &BootstrapDependencies) -> anyhow::Result<EmbeddedWorkerExecutor> {
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::InMemory(KeyValueStorageInMemoryConfig {}),

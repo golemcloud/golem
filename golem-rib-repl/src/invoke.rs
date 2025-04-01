@@ -1,11 +1,11 @@
+use crate::dependency_manager::ComponentDependency;
+use crate::embedded_executor::EmbeddedWorkerExecutor;
 use async_trait::async_trait;
 use golem_common::base_model::TargetWorkerId;
 use golem_common::model::ComponentId;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::ValueAndType;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName};
-use crate::dependency_manager::ComponentDependency;
-use crate::embedded_executor::EmbeddedWorkerExecutor;
 
 #[async_trait]
 pub trait WorkerFunctionInvoke {
@@ -18,15 +18,11 @@ pub trait WorkerFunctionInvoke {
     ) -> Result<ValueAndType, String>;
 }
 
-
-struct DefaultWorkerFunctionInvoke {
+pub struct DefaultWorkerFunctionInvoke {
     embedded_worker_executor: EmbeddedWorkerExecutor,
 }
 impl DefaultWorkerFunctionInvoke {
-    pub fn new(
-        dependency: &ComponentDependency,
-        embedded_worker_executor: EmbeddedWorkerExecutor,
-    ) -> Self {
+    pub fn new(embedded_worker_executor: EmbeddedWorkerExecutor) -> Self {
         Self {
             embedded_worker_executor,
         }
@@ -60,4 +56,3 @@ impl WorkerFunctionInvoke for DefaultWorkerFunctionInvoke {
             .map_err(|e| format!("Failed to invoke function: {:?}", e))
     }
 }
-

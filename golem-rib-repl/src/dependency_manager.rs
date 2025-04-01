@@ -1,4 +1,4 @@
-use crate::embedded_executor::{start, EmbeddedWorkerExecutor, BootstrapDependencies};
+use crate::embedded_executor::{start, BootstrapDependencies, EmbeddedWorkerExecutor};
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, ComponentType, TargetWorkerId};
 use golem_test_framework::config::TestDependencies;

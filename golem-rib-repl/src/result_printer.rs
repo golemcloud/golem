@@ -1,6 +1,6 @@
+use crate::rib_repl::ReplBootstrapError;
 use colored::Colorize;
 use rib::{RibError, RibResult};
-use crate::rib_repl::ReplBootstrapError;
 
 pub trait ReplPrinter {
     fn print_rib_result(&self, result: &RibResult);
