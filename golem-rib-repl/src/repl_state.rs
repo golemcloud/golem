@@ -8,9 +8,23 @@ pub struct ReplState {
     byte_code: RibByteCode,
     interpreter: Interpreter,
     dependency: ComponentDependency,
+    current_session_rib_texts: Vec<String>,
 }
 
 impl ReplState {
+
+    pub fn current_rib_program(&self) -> String {
+        self.current_session_rib_texts.join(";")
+    }
+
+    pub fn update_rib_text(&mut self, rib_text: &str) {
+        self.current_session_rib_texts.push(rib_text.to_string());
+    }
+
+    pub fn pop_rib_text(&mut self) {
+        self.current_session_rib_texts.pop();
+    }
+
     pub fn interpreter(&mut self) -> &mut Interpreter {
         &mut self.interpreter
     }
@@ -41,6 +55,7 @@ impl ReplState {
                 Some(interpreter_env),
             ),
             dependency: dependency.clone(),
+            current_session_rib_texts: vec![],
         }
     }
 }

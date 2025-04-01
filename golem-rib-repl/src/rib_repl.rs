@@ -22,10 +22,7 @@ pub struct RibRepl {
     history_file_path: PathBuf,
     printer: Box<dyn ReplPrinter>,
     editor: Editor<RibEdit, RibReplHistory>,
-    current_session_rib_texts: Vec<String>,
     repl_state: ReplState,
-    // Rib Repl for now will only support component dependency
-    component_dependency: ComponentDependency,
 }
 
 impl RibRepl {
@@ -98,8 +95,6 @@ impl RibRepl {
             history_file_path,
             printer,
             editor: rl,
-            component_dependency,
-            current_session_rib_texts: vec![],
             repl_state,
         })
     }
@@ -109,7 +104,7 @@ impl RibRepl {
             let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
             match readline {
                 Ok(line) if !line.is_empty() => {
-                    self.current_session_rib_texts.push(line.clone());
+                    self.update_rib_text_in_session(line.as_str());
 
                     // Add every rib script into the history (in memory) and save it
                     // regardless of whether it compiles or not
@@ -118,7 +113,7 @@ impl RibRepl {
                     let _ = self.editor.save_history(&self.history_file_path);
 
                     match compile_rib_script(
-                        &self.current_session_rib_texts.join(";\n"),
+                        &self.current_rib_program(),
                         &mut self.repl_state,
                     ) {
                         Ok(compilation) => {
@@ -134,13 +129,13 @@ impl RibRepl {
                                     self.printer.print_rib_result(&result);
                                 }
                                 Err(err) => {
-                                    self.current_session_rib_texts.pop();
+                                    self.remove_rib_text_in_session();
                                     self.printer.print_runtime_error(&err);
                                 }
                             }
                         }
                         Err(err) => {
-                            self.current_session_rib_texts.pop();
+                            self.remove_rib_text_in_session();
                             self.printer.print_compilation_error(&err);
                         }
                     }
@@ -150,6 +145,18 @@ impl RibRepl {
                 Err(_) => continue,
             }
         }
+    }
+
+    fn update_rib_text_in_session(&mut self, rib_text: &str) {
+        self.repl_state.update_rib_text(rib_text);
+    }
+
+    fn remove_rib_text_in_session(&mut self) {
+        self.repl_state.pop_rib_text()
+    }
+
+    fn current_rib_program(&self) -> String {
+        self.repl_state.current_rib_program()
     }
 }
 
