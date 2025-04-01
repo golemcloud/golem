@@ -1,6 +1,8 @@
-use std::sync::Arc;
-use rib::{Interpreter, InterpreterEnv, InterpreterStack, RibByteCode, RibFunctionInvoke, RibInput};
 use crate::dependency_manager::ComponentDependency;
+use rib::{
+    Interpreter, InterpreterEnv, InterpreterStack, RibByteCode, RibFunctionInvoke, RibInput,
+};
+use std::sync::Arc;
 
 pub struct ReplState {
     byte_code: RibByteCode,

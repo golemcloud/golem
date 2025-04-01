@@ -1,11 +1,11 @@
+use rib::InferredExpr;
+use rustyline::history::{DefaultHistory, History, SearchDirection, SearchResult};
 use std::any::{Any, TypeId};
 use std::path::Path;
-use rustyline::history::{DefaultHistory, History, SearchDirection, SearchResult};
-use rib::{InferredExpr};
 
 pub struct RibReplHistory {
     pub current_compiled_expr: Option<InferredExpr>,
-    history: DefaultHistory
+    history: DefaultHistory,
 }
 
 impl Default for RibReplHistory {
@@ -22,7 +22,7 @@ impl RibReplHistory {
     pub fn new() -> Self {
         Self {
             current_compiled_expr: None,
-            history: DefaultHistory::new()
+            history: DefaultHistory::new(),
         }
     }
 }
@@ -76,11 +76,21 @@ impl History for RibReplHistory {
         self.history.clear()
     }
 
-    fn search(&self, term: &str, start: usize, dir: SearchDirection) -> rustyline::Result<Option<SearchResult>> {
+    fn search(
+        &self,
+        term: &str,
+        start: usize,
+        dir: SearchDirection,
+    ) -> rustyline::Result<Option<SearchResult>> {
         self.history.search(term, start, dir)
     }
 
-    fn starts_with(&self, term: &str, start: usize, dir: SearchDirection) -> rustyline::Result<Option<SearchResult>> {
+    fn starts_with(
+        &self,
+        term: &str,
+        start: usize,
+        dir: SearchDirection,
+    ) -> rustyline::Result<Option<SearchResult>> {
         self.history.starts_with(term, start, dir)
     }
 }

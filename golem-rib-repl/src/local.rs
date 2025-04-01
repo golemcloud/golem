@@ -119,7 +119,6 @@ impl Debug for LocalRunnerDependencies {
 
 impl LocalRunnerDependencies {
     pub async fn new() -> Self {
-
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
                 .await
@@ -223,9 +222,7 @@ impl TestDependencies for LocalRunnerDependencies {
     }
 }
 
-pub async fn start(
-    deps: &LocalRunnerDependencies,
-) -> anyhow::Result<EmbeddedWorkerExecutor> {
+pub async fn start(deps: &LocalRunnerDependencies) -> anyhow::Result<EmbeddedWorkerExecutor> {
     start_limited(deps).await
 }
 
@@ -272,7 +269,7 @@ pub async fn start_limited(
             let deps = deps.per_test(details.http_port, grpc_port);
             break Ok(EmbeddedWorkerExecutor {
                 _join_set: Some(join_set),
-                deps
+                deps,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));

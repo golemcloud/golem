@@ -1,25 +1,22 @@
-use std::str::FromStr;
 use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
 use crate::local::{start, EmbeddedWorkerExecutor, LocalRunnerDependencies};
 use crate::rib_repl::RibRepl;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_test_framework::dsl::{TestDslUnsafe};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_common::model::TargetWorkerId;
+use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_rpc::ValueAndType;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke};
+use std::str::FromStr;
 use std::sync::Arc;
-use uuid::Uuid;
-use golem_wasm_ast::analysis::analysed_type::{f32, field, record, str, u32};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
+mod compiler;
 mod dependency_manager;
 mod history;
 mod local;
-mod result_printer;
-mod rib_repl;
-mod rib_edit;
 mod repl_state;
-mod compiler;
+mod result_printer;
+mod rib_edit;
+mod rib_repl;
 
 #[tokio::main]
 async fn main() {

@@ -1,20 +1,20 @@
+use crate::compiler::{CompilerOutput, InstanceVariables};
+use colored::Colorize;
 use rib::{Expr, InferredExpr};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
+use rustyline::history::History;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
-use colored::Colorize;
-use rustyline::history::History;
-use crate::compiler::{CompilerOutput, InstanceVariables};
 
 #[derive(Default)]
 pub struct RibEdit {
     pub progressed_inferred_expr: Option<InferredExpr>,
     pub instance_variables: Option<InstanceVariables>,
     pub key_words: Vec<&'static str>,
-    pub function_names: Vec<&'static str>
+    pub function_names: Vec<&'static str>,
 }
 
 impl RibEdit {
@@ -23,21 +23,10 @@ impl RibEdit {
             progressed_inferred_expr: None,
             instance_variables: None,
             key_words: vec![
-                "let",
-                "if",
-                "else",
-                "match",
-                "for",
-                "in",
-                "true",
-                "false",
-                "yield",
-                "some",
-                "none",
-                "ok",
-                "err",
+                "let", "if", "else", "match", "for", "in", "true", "false", "yield", "some",
+                "none", "ok", "err",
             ],
-            function_names: vec!["instance"]
+            function_names: vec!["instance"],
         }
     }
     pub fn update_progression(&mut self, compiler_output: &CompilerOutput) {
@@ -57,9 +46,7 @@ impl Completer for RibEdit {
         pos: usize,
         _ctx: &Context<'_>, // a context has access to only the current line
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-
-        let instance_variables =
-            self.instance_variables.clone().map(|x| x.variable_names());
+        let instance_variables = self.instance_variables.clone().map(|x| x.variable_names());
 
         let mut completions = Vec::new();
         let mut start = pos;
@@ -102,7 +89,6 @@ impl Completer for RibEdit {
     }
 }
 
-
 impl Hinter for RibEdit {
     type Hint = String;
 }
@@ -114,16 +100,11 @@ impl Validator for RibEdit {
     ) -> rustyline::Result<ValidationResult> {
         // Implement validation logic here (e.g., check for balanced parentheses)
 
-        let expr =
-            Expr::from_text(context.input());
+        let expr = Expr::from_text(context.input());
 
         match expr {
-            Ok(_) => {
-                Ok(ValidationResult::Valid(None))
-            }
-            Err(e) => {
-                Ok(ValidationResult::Invalid(Some(e)))
-            }
+            Ok(_) => Ok(ValidationResult::Valid(None)),
+            Err(e) => Ok(ValidationResult::Invalid(Some(e))),
         }
     }
 }

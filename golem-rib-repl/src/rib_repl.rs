@@ -1,20 +1,20 @@
-use rib::{RibResult};
-use rib::{RibByteCode};
-use rib::{RibFunctionInvoke};
+use colored::Colorize;
+use rib::RibByteCode;
+use rib::RibFunctionInvoke;
+use rib::RibResult;
 use rustyline::error::ReadlineError;
 use rustyline::history::{DefaultHistory, History};
 use rustyline::{Config, Editor};
 use std::path::PathBuf;
 use std::sync::Arc;
-use colored::Colorize;
 use tokio;
 
-use crate::dependency_manager::ComponentDependency;
-use crate::result_printer::{DefaultResultPrinter, ResultPrinter};
-use crate::rib_edit::RibEdit;
 use crate::compiler::compile_rib_script;
+use crate::dependency_manager::ComponentDependency;
 use crate::history::RibReplHistory;
 use crate::repl_state::ReplState;
+use crate::result_printer::{DefaultResultPrinter, ResultPrinter};
+use crate::rib_edit::RibEdit;
 
 pub struct RibRepl {
     history_file_path: PathBuf,
@@ -43,11 +43,13 @@ impl RibRepl {
     }
 
     pub async fn run(&mut self) {
-
         let rib_editor = RibEdit::init();
 
-        let mut rl =
-            Editor::<RibEdit, RibReplHistory>::with_history(Config::default(), RibReplHistory::new()).unwrap();
+        let mut rl = Editor::<RibEdit, RibReplHistory>::with_history(
+            Config::default(),
+            RibReplHistory::new(),
+        )
+        .unwrap();
 
         rl.set_helper(Some(rib_editor));
 
