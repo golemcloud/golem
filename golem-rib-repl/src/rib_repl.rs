@@ -6,108 +6,142 @@ use rustyline::error::ReadlineError;
 use rustyline::history::{History};
 use rustyline::{Config, Editor};
 use std::path::{Path, PathBuf};
-use std::process::exit;
 use std::sync::Arc;
 use tokio;
-use crate::bootstrap::{bootstrap, ReplBootstrapError};
 use crate::compiler::compile_rib_script;
-use crate::dependency_manager::{RibDependencyManager};
+use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
 use crate::history::RibReplHistory;
+use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_state::ReplState;
 use crate::result_printer::{DefaultResultPrinter, ReplPrinter};
 use crate::rib_edit::RibEdit;
 
 pub struct RibRepl {
-    pub history_file_path: PathBuf,
-    pub dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
-    pub worker_function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
-    pub printer: Box<dyn ReplPrinter>,
-    // Dependency manager will deploy only this component if the REPL is specialised to just 1 component
-    pub component_details: Option<ComponentDetails>,
+     history_file_path: PathBuf,
+     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+     printer: Box<dyn ReplPrinter>,
+     editor: Editor<RibEdit, RibReplHistory>,
+     current_session_rib_texts: Vec<String>,
+     repl_state: ReplState,
+     // Rib Repl for now will only support component dependency
+     component_dependency: ComponentDependency,
 }
 
 impl RibRepl {
-    pub fn new(
+    pub async fn bootstrap(
         history_file: Option<PathBuf>,
-        component_dependency: Arc<dyn RibDependencyManager + Sync + Send>,
-        worker_function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+        dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
+        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
         rib_result_printer: Option<Box<dyn ReplPrinter>>,
-        component_name: Option<ComponentDetails>,
-    ) -> Self {
-        Self {
-            history_file_path: history_file.unwrap_or_else(|| get_default_history_file()),
-            dependency_manager: component_dependency,
-            worker_function_invoke,
-            printer: rib_result_printer
-                .unwrap_or_else(|| Box::new(DefaultResultPrinter)),
-            component_details: component_name,
-        }
-    }
+        component_details: Option<ComponentDetails>,
+    ) -> Result<RibRepl, ReplBootstrapError> {
 
-    pub async fn run(&mut self) {
+
         let rib_editor = RibEdit::init();
 
         let mut rl = Editor::<RibEdit, RibReplHistory>::with_history(
             Config::default(),
             RibReplHistory::new(),
         )
-        .unwrap();
+            .unwrap();
 
         rl.set_helper(Some(rib_editor));
 
-        let component_dependency =
-            bootstrap(&self, &mut rl).await.map_err(|e| {
-                match e {
-                    ReplBootstrapError::NoComponentsFound => {
-                        self.printer.print_bootstrap_error("No components found");
+
+        if history_file.exists() {
+            if let Err(err) = rl.load_history(&history_file) {
+                return Err(ReplBootstrapError::ReplHistoryFileError(
+                    format!("Failed to load history: {}. Starting with an empty history.", err),
+                ))
+            }
+        }
+
+        let component_dependency = match component_details {
+            Some(ref details) => {
+                dependency_manager
+                    .add_component_dependency(&details.source_path, details.component_name.clone())
+                    .await.map_err(ReplBootstrapError::ComponentLoadError)
+            }
+            None => {
+                let dependencies =
+                    dependency_manager.add_components()
+                        .await;
+
+                match dependencies {
+                    Ok(dependencies) => {
+                        let component_dependencies = dependencies.component_dependencies;
+
+                        match &component_dependencies.len() {
+                            0 => Err(ReplBootstrapError::NoComponentsFound),
+                            1 => Ok(component_dependencies[0].clone()),
+                            _ => Err(ReplBootstrapError::MultipleComponentsFound(
+                                "multiple components detected. Rib Repl currently support only a single component".to_string(),
+                            )),
+                        }
                     }
-                    _ => {
-                        self.printer.print_bootstrap_error(&format!("Failed to bootstrap: {}", e));
+                    Err(err) => {
+                        Err(ReplBootstrapError::ComponentLoadError(
+                            format!("Failed to register components: {}", err),
+                        ))
                     }
                 }
-                self.printer.print_bootstrap_error(&format!("Failed to bootstrap: {}", e));
-                exit(1);
-            });
+            }
+        }?;
 
-        let mut session_history = vec![];
-
-        let mut repl_state = ReplState::new(
+        let repl_state = ReplState::new(
             &component_dependency,
-            Arc::clone(&self.worker_function_invoke),
+            Arc::clone(&worker_function_invoke),
         );
 
+
+        let printer = rib_result_printer
+            .unwrap_or_else(|| Box::new(DefaultResultPrinter));
+
+        Ok (RibRepl {
+            history_file_path: history_file.unwrap_or_else(get_default_history_file),
+            worker_function_invoke,
+            printer,
+            editor: rl,
+            component_dependency,
+            current_session_rib_texts: vec![],
+            repl_state
+        })
+    }
+
+
+    pub async fn run(&mut self) {
         loop {
-            let readline = rl.readline(">>> ".magenta().to_string().as_str());
+            let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
             match readline {
                 Ok(line) if !line.is_empty() => {
-                    session_history.push(line.clone());
+                    self.current_session_rib_texts.push(line.clone());
 
                     // Add every rib script into the history (in memory) and save it
                     // regardless of whether it compiles or not
                     // History is never used for any progressive compilation or interpretation
-                    let _ = rl.add_history_entry(line.as_str());
-                    let _ = rl.save_history(&self.history_file_path);
+                    let _ = self.editor.add_history_entry(line.as_str());
+                    let _ = self.editor.save_history(&self.history_file_path);
 
-                    match compile_rib_script(&session_history.join(";\n"), &mut repl_state) {
+                    match compile_rib_script(&self.current_session_rib_texts.join(";\n"), &mut self.repl_state) {
                         Ok(compilation) => {
-                            let helper = rl.helper_mut().unwrap();
+                            let helper = self.editor.helper_mut().unwrap();
 
                             helper.update_progression(&compilation);
 
                             // Before evaluation
-                            let result = eval(compilation.rib_byte_code, &mut repl_state).await;
+                            let result = eval(compilation.rib_byte_code, &mut self.repl_state).await;
                             match result {
                                 Ok(result) => {
                                     self.printer.print_rib_result(&result);
                                 }
                                 Err(err) => {
-                                    session_history.pop();
+                                    self.current_session_rib_texts.pop();
                                     self.printer.print_runtime_error(&err);
                                 }
                             }
                         }
                         Err(err) => {
-                            session_history.pop();
+                            self.current_session_rib_texts.pop();
                             self.printer.print_compilation_error(&err);
                         }
                     }
@@ -137,4 +171,17 @@ fn get_default_history_file() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push(".rib_history");
     path
+}
+
+pub enum ReplBootstrapError {
+    // Currently not supported
+    // So either the context should have only 1 component
+    // or specifically specify the component when starting the REPL
+    // In future, when Rib supports multiple components (which may require the need
+    // of root package names being the component name)
+    MultipleComponentsFound(String),
+    NoComponentsFound,
+    ComponentLoadError(String),
+    Internal(String),
+    ReplHistoryFileError(String),
 }
