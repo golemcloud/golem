@@ -339,8 +339,9 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
         definition: &HttpApiDefinition,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<Component>, ApiDefinitionError> {
-        let component_ids = definition
-            .get_bindings()
+        let bindings = definition.get_bindings();
+        let component_ids = bindings
+            .clone()
             .into_iter()
             .filter_map(|binding| binding.get_component_id())
             .collect::<HashSet<_>>();
@@ -381,8 +382,7 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
         if !failures.is_empty() {
             Err(ApiDefinitionError::ComponentNotFoundError(failures))
         } else {
-            Ok(definition
-                .get_bindings()
+            Ok(bindings
                 .into_iter()
                 .filter_map(|binding| binding.get_component_id())
                 .map(|id| mapping.get(&id).unwrap().clone())
