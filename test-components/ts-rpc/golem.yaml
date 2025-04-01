@@ -10,3 +10,6 @@ includes:
 - components-*/*/golem.yaml
 witDeps:
 - wit/deps
+customCommands:
+  update-wit-deps:
+    - command: wit-deps -d wit/deps -m wit/deps.toml -l wit/deps.lock

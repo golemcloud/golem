@@ -3,5 +3,5 @@
 dist/
 node_modules/
 generated/
-wit-generated
-wit-deps/*/
+wit-generated/
+/wit/deps/
