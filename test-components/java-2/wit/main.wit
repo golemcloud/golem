@@ -24,13 +24,13 @@ world shopping-cart {
     success(order-confirmation),
   }
 
-  export initialize-cart: func(user-id: string) -> ();
+  export initialize-cart: func(user-id: string);
 
-  export add-item: func(item: product-item) -> ();
+  export add-item: func(item: product-item);
 
-  export remove-item: func(product-id: string) -> ();
+  export remove-item: func(product-id: string);
 
-  export update-item-quantity: func(product-id: string, quantity: u32) -> ();
+  export update-item-quantity: func(product-id: string, quantity: u32);
 
   export checkout: func() -> checkout-result;
 

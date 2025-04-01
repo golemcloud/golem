@@ -25,7 +25,7 @@ interface api {
     success,
   }
 
-  initialize: func(auction: auction) -> ();
+  initialize: func(auction: auction);
 
   bid: func(bidder-id: bidder-id, price: float32) -> bid-result;
 
