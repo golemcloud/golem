@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::Path;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use wasm_metadata::{Payload, Version};
 use wit_parser::decoding::DecodedWasm;
 use wit_parser::{
     Function, Handle, Interface, PackageName, Resolve, Type, TypeDef, TypeDefKind, WorldItem,
@@ -19,6 +21,8 @@ use wit_parser::{TypeId, TypeOwner as WitParserTypeOwner};
 
 pub struct WitAnalysisContext {
     wasm: DecodedWasm,
+    metadata_name: Option<String>,
+    metadata_version: Option<Version>,
     resource_ids: Rc<RefCell<HashMap<TypeId, AnalysedResourceId>>>,
     warnings: Rc<RefCell<Vec<AnalysisWarning>>>,
 }
@@ -28,8 +32,14 @@ impl WitAnalysisContext {
         let wasm = wit_parser::decoding::decode(component_bytes).map_err(|err| {
             AnalysisFailure::failed(format!("Failed to decode WASM component: {err:#}"))
         })?;
+        let payload = Payload::from_binary(component_bytes).map_err(|err| {
+            AnalysisFailure::failed(format!("Failed to decode WASM component metadata: {err:#}"))
+        })?;
+        let metadata = payload.metadata();
         Ok(Self {
             wasm,
+            metadata_name: metadata.name.clone(),
+            metadata_version: metadata.version.clone(),
             resource_ids: Rc::new(RefCell::new(HashMap::new())),
             warnings: Rc::new(RefCell::new(Vec::new())),
         })
@@ -90,14 +100,32 @@ impl WitAnalysisContext {
     }
 
     /// Gets the component's root package name
-    pub fn root_package_name(&self) -> AnalysisResult<PackageName> {
-        let package_id = self.wasm.package();
-        let resolve = self.wasm.resolve();
+    ///
+    /// Note that the root package name (from the original WIT) gets lost when encoding the component,
+    /// so here we use the metadata custom section's name and version fields in a Golem specific way
+    /// to recover this information. These fields are set by Golem specific build tooling. If they are not
+    /// present or not in a valid format, this function will return None.
+    pub fn root_package_name(&self) -> Option<PackageName> {
+        self.metadata_name.as_ref().and_then(|name| {
+            let parts = name.split(':').collect::<Vec<_>>();
 
-        let root_package =
-            AnalysisFailure::fail_on_missing(resolve.packages.get(package_id), "root package")?;
+            if parts.len() == 2 {
+                let namespace = parts[0].to_string();
+                let name = parts[1].to_string();
+                let version = self
+                    .metadata_version
+                    .as_ref()
+                    .and_then(|version| semver::Version::from_str(&version.to_string()).ok());
 
-        Ok(root_package.name.clone())
+                Some(PackageName {
+                    namespace,
+                    name,
+                    version,
+                })
+            } else {
+                None
+            }
+        })
     }
 
     /// Gets a binary WIT representation of the component's interface

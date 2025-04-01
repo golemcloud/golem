@@ -196,21 +196,11 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         }
 
         let mut results: Vec<AnalysedFunctionResult> = Vec::new();
-        match &func_type.result {
-            ComponentFuncResult::Unnamed(tpe) => {
-                results.push(AnalysedFunctionResult {
-                    name: None,
-                    typ: self.analyse_component_val_type(tpe)?,
-                });
-            }
-            ComponentFuncResult::Named(name_type_pairs) => {
-                for (result_name, result_type) in name_type_pairs {
-                    results.push(AnalysedFunctionResult {
-                        name: Some(result_name.clone()),
-                        typ: self.analyse_component_val_type(result_type)?,
-                    })
-                }
-            }
+        if let Some(tpe) = &func_type.result {
+            results.push(AnalysedFunctionResult {
+                name: None,
+                typ: self.analyse_component_val_type(tpe)?,
+            });
         }
 
         Ok(AnalysedFunction {
@@ -346,6 +336,12 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             ComponentDefinedType::Borrowed { type_idx } => {
                 self.analyse_component_type_idx(type_idx, Some(AnalysedResourceMode::Borrowed))
             }
+            ComponentDefinedType::Future { .. } => Err(AnalysisFailure::failed(
+                "Future types are not supported yet",
+            )),
+            ComponentDefinedType::Stream { .. } => Err(AnalysisFailure::failed(
+                "Stream types are not supported yet",
+            )),
         }
     }
 

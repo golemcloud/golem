@@ -398,7 +398,7 @@ impl TestComponentService {
                 producers: vec![],
                 memories: vec![],
                 binary_wit: Base64(vec![]),
-                root_package_name: "golem:it".to_string(),
+                root_package_name: Some("golem:it".to_string()),
                 root_package_version: None,
                 dynamic_linking: HashMap::new(),
             },
