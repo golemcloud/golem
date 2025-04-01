@@ -35,7 +35,6 @@ use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
-use nom::Parser;
 use rib::RibError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
