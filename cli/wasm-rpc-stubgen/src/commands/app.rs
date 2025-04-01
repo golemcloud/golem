@@ -16,17 +16,19 @@ use crate::wit_generate::{
     add_client_as_dependency_to_wit_dir, extract_exports_as_wit_dep, AddClientAsDepConfig,
     UpdateCargoToml,
 };
-use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
+use crate::wit_resolve::{ExportedFunction, ResolvedWitApplication, WitDepsResolver};
 use crate::{commands, naming};
 use anyhow::{anyhow, bail, Context, Error};
 use chrono::{DateTime, Utc};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use golem_wasm_rpc::WASM_RPC_VERSION;
+use heck::ToLowerCamelCase;
 use itertools::Itertools;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ffi::OsString;
 use std::fmt::{Display, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -614,11 +616,16 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             );
             let _indent = LogIndent::new();
 
+            let env_vars = self
+                .build_step_env_vars(component_name)
+                .context("Failed computing env vars for build step")?;
+
             for build_step in &component_properties.build {
                 execute_external_command(
                     self,
                     self.application.component_source_dir(component_name),
                     build_step,
+                    env_vars.clone(),
                 )?;
             }
         }
@@ -1032,7 +1039,9 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             let _indent = LogIndent::new();
 
             for step in &command.value {
-                if let Err(error) = execute_external_command(self, &command.source, step) {
+                if let Err(error) =
+                    execute_external_command(self, &command.source, step, HashMap::new())
+                {
                     return Err(CustomCommandError::CommandError { error });
                 }
             }
@@ -1058,6 +1067,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                         self,
                         self.application.component_source_dir(component_name),
                         step,
+                        HashMap::new(),
                     ) {
                         return Err(CustomCommandError::CommandError { error });
                     }
@@ -1066,6 +1076,62 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
         }
 
         Ok(())
+    }
+
+    fn build_step_env_vars(
+        &self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<HashMap<String, String>> {
+        let result = HashMap::from_iter(vec![(
+            "JCO_ASYNC_EXPORT_ARGS".to_string(),
+            self.jco_async_export_args(component_name)?.join(" "),
+        )]);
+
+        Ok(result)
+    }
+
+    fn jco_async_export_args(&self, component_name: &ComponentName) -> anyhow::Result<Vec<String>> {
+        let resolved = self
+            .wit
+            .component(component_name)?
+            .generated_wit_dir()
+            .ok_or(anyhow!("Failed to get generated wit dir"))?;
+
+        let exported_functions = resolved.exported_functions().context(format!(
+            "Failed to look up exported_functions for component {component_name}"
+        ))?;
+
+        let mut result = Vec::new();
+
+        for function in exported_functions {
+            match function {
+                ExportedFunction::Interface {
+                    interface_name,
+                    function_name,
+                } => {
+                    // This is not a typo, it's a workaround for https://github.com/bytecodealliance/jco/issues/622
+                    result.push("--async-imports".to_string());
+                    result.push(format!("{interface_name}#{function_name}"));
+                }
+                ExportedFunction::InlineInterface {
+                    export_name,
+                    function_name,
+                } => {
+                    // This is not a typo, it's a workaround for https://github.com/bytecodealliance/jco/issues/622
+                    result.push("--async-imports".to_string());
+                    let transformed = export_name.to_lower_camel_case();
+                    result.push(format!("{transformed}#{function_name}"));
+                }
+                ExportedFunction::InlineFunction {
+                    world_name,
+                    function_name,
+                } => {
+                    result.push("--async-exports".to_string());
+                    result.push(format!("{world_name}#{function_name}"));
+                }
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -1735,6 +1801,7 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
     base_build_dir: &Path,
     command: &app_raw::ExternalCommand,
+    additional_env_vars: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
@@ -1757,6 +1824,17 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
         command = ?command,
         "execute external command"
     );
+
+    let env_vars = {
+        let mut map = HashMap::new();
+        map.extend(valid_env_vars());
+        map.extend(additional_env_vars);
+        map
+    };
+
+    let command_string = envsubst::substitute(&command.command, &env_vars)
+        .context("Failed to substitute env vars in command")?;
+
     if !command.sources.is_empty() && !command.targets.is_empty() {
         let sources = compile_and_collect_globs(&build_dir, &command.sources)?;
         let targets = compile_and_collect_globs(&build_dir, &command.targets)?;
@@ -1764,7 +1842,7 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
         if is_up_to_date(skip_up_to_date_checks, || sources, || targets) {
             log_skipping_up_to_date(format!(
                 "executing external command '{}' in directory {}",
-                command.command.log_color_highlight(),
+                command_string.log_color_highlight(),
                 build_dir.log_color_highlight()
             ));
             return Ok(());
@@ -1775,7 +1853,7 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
         "Executing",
         format!(
             "external command '{}' in directory {}",
-            command.command.log_color_highlight(),
+            command_string.log_color_highlight(),
             build_dir.log_color_highlight()
         ),
     );
@@ -1803,8 +1881,8 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
             }
         }
 
-        let command_tokens = shlex::split(&command.command).ok_or_else(|| {
-            anyhow::anyhow!("Failed to parse external command: {}", command.command)
+        let command_tokens = shlex::split(&command_string).ok_or_else(|| {
+            anyhow::anyhow!("Failed to parse external command: {}", command_string)
         })?;
         if command_tokens.is_empty() {
             return Err(anyhow!("Empty command!"));
@@ -2038,4 +2116,34 @@ fn to_anyhow<T>(message: &str, result: ValidatedResult<T>) -> anyhow::Result<T> 
             errors,
         })),
     }
+}
+
+/// Similar std::env::vars() but silently drops invalid env vars instead of panicing.
+/// Additionally will ignore all env vars containing data incompatible with envsubst.
+fn valid_env_vars() -> HashMap<String, String> {
+    let mut result = HashMap::new();
+
+    fn validate(val: OsString) -> Option<String> {
+        let forbidden = &["$", "{", "}"];
+
+        let str = val.into_string().ok()?;
+        for c in forbidden {
+            if str.contains(c) {
+                return None;
+            }
+        }
+        Some(str)
+    }
+
+    for (k, v) in std::env::vars_os() {
+        if let (Some(k), Some(v)) = (validate(k.clone()), validate(v)) {
+            result.insert(k, v);
+        } else {
+            debug!(
+                "Env var `{}` contains invalid data and will be ignored",
+                k.to_string_lossy()
+            )
+        }
+    }
+    result
 }

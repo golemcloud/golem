@@ -31,6 +31,7 @@ cargo_toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
+envsubst = { workspace = true }
 fs_extra = { workspace = true }
 heck = { workspace = true }
 indexmap = { workspace = true }

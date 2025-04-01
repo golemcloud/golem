@@ -86,6 +86,72 @@ impl ResolvedWitDir {
 
         Ok(result)
     }
+
+    pub fn exported_functions(&self) -> anyhow::Result<Vec<ExportedFunction>> {
+        let mut result = Vec::new();
+        let main = self.main_package()?;
+        for (world_name, world_id) in &main.worlds {
+            let world = self
+                .resolve
+                .worlds
+                .get(*world_id)
+                .ok_or_else(|| anyhow!("Could not find world {world_name} in resolve"))?;
+            for (export_name, export) in world.exports.iter() {
+                match export {
+                    wit_parser::WorldItem::Function(function) => {
+                        let world_name = self.resolve.worlds[*world_id].name.clone();
+                        result.push(ExportedFunction::InlineFunction {
+                            world_name,
+                            function_name: function.name.clone(),
+                        });
+                    }
+                    wit_parser::WorldItem::Interface { id, .. } => {
+                        let iface = &self.resolve.interfaces[*id];
+                        match export_name {
+                            // inline interface
+                            wit_parser::WorldKey::Name(export_name) => {
+                                for (function_name, _) in iface.functions.iter() {
+                                    result.push(ExportedFunction::InlineInterface {
+                                        export_name: export_name.clone(),
+                                        function_name: function_name.clone(),
+                                    });
+                                }
+                            }
+                            // external interface
+                            wit_parser::WorldKey::Interface(iface_id) => {
+                                let interface_name = self.resolve.id_of(*iface_id).unwrap();
+                                for (function_name, _) in iface.functions.iter() {
+                                    result.push(ExportedFunction::Interface {
+                                        interface_name: interface_name.clone(),
+                                        function_name: function_name.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    WorldItem::Type(_) => {}
+                }
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ExportedFunction {
+    Interface {
+        interface_name: String,
+        function_name: String,
+    },
+    InlineInterface {
+        export_name: String,
+        function_name: String,
+    },
+    InlineFunction {
+        world_name: String,
+        function_name: String,
+    },
 }
 
 fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
@@ -204,6 +270,12 @@ pub struct ResolvedWitComponent {
     source_contained_package_deps: HashSet<PackageName>,
     source_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
     generated_component_deps: Option<HashSet<ComponentName>>,
+}
+
+impl ResolvedWitComponent {
+    pub fn generated_wit_dir(&self) -> Option<&ResolvedWitDir> {
+        self.resolved_generated_wit_dir.as_ref()
+    }
 }
 
 pub struct ResolvedWitApplication {
@@ -607,7 +679,10 @@ impl ResolvedWitApplication {
         self.component_order.clone()
     }
 
-    fn component(&self, component_name: &ComponentName) -> Result<&ResolvedWitComponent, Error> {
+    pub fn component(
+        &self,
+        component_name: &ComponentName,
+    ) -> Result<&ResolvedWitComponent, Error> {
         self.components.get(component_name).ok_or_else(|| {
             anyhow!(
                 "Component not found: {}",
@@ -833,5 +908,70 @@ impl WitDepsResolver {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{ExportedFunction, ResolvedWitDir};
+    use test_r::test;
+
+    #[test]
+    fn test_exported_functions() {
+        let resolved =
+            ResolvedWitDir::new(&PathBuf::from("test-data/wit/many-ways-to-export")).unwrap();
+        let mut exports = resolved.exported_functions().unwrap();
+        exports.sort();
+        assert_eq!(
+            exports,
+            vec![
+                ExportedFunction::Interface {
+                    interface_name: "test:exports/iface1".to_string(),
+                    function_name: "func2".to_string()
+                },
+                ExportedFunction::Interface {
+                    interface_name: "test:exports/iface6".to_string(),
+                    function_name: "func6".to_string()
+                },
+                ExportedFunction::Interface {
+                    interface_name: "test:exports/iface8".to_string(),
+                    function_name: "func8".to_string()
+                },
+                ExportedFunction::Interface {
+                    interface_name: "test:exports/iface9".to_string(),
+                    function_name: "func9".to_string()
+                },
+                ExportedFunction::Interface {
+                    interface_name: "test:sub/iface12".to_string(),
+                    function_name: "func12".to_string()
+                },
+                ExportedFunction::Interface {
+                    interface_name: "test:sub/iface13".to_string(),
+                    function_name: "func13".to_string()
+                },
+                ExportedFunction::Interface {
+                    interface_name: "test:sub/iface4".to_string(),
+                    function_name: "func5".to_string()
+                },
+                ExportedFunction::Interface {
+                    interface_name: "test:sub2/iface10".to_string(),
+                    function_name: "func10".to_string()
+                },
+                ExportedFunction::InlineInterface {
+                    export_name: "inline-iface".to_string(),
+                    function_name: "func4".to_string()
+                },
+                ExportedFunction::InlineFunction {
+                    world_name: "api".to_string(),
+                    function_name: "func1".to_string()
+                },
+                ExportedFunction::InlineFunction {
+                    world_name: "api".to_string(),
+                    function_name: "func2".to_string()
+                }
+            ]
+        )
     }
 }
