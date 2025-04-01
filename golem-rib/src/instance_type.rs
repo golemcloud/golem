@@ -354,7 +354,7 @@ impl InstanceType {
         }
     }
 
-    fn function_dict(&self) -> FunctionDictionary {
+    pub fn function_dict(&self) -> FunctionDictionary {
         match self {
             InstanceType::Global {
                 functions_global: function_dict,

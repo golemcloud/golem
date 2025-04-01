@@ -17,8 +17,9 @@ mod history;
 mod local;
 mod result_printer;
 mod rib_repl;
-mod syntax_highlighter;
+mod rib_edit;
 mod repl_state;
+mod compiler;
 
 #[tokio::main]
 async fn main() {
