@@ -123,8 +123,6 @@ impl Validator for RibEdit {
         &self,
         context: &mut rustyline::validate::ValidationContext,
     ) -> rustyline::Result<ValidationResult> {
-        // Implement validation logic here (e.g., check for balanced parentheses)
-
         let expr = Expr::from_text(context.input());
 
         match expr {
