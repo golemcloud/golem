@@ -12,7 +12,7 @@ pub trait RibDependencyManager {
     ///
     /// Note: It is the responsibility of the REPL client to resolve component paths.
     /// In the future, Rib may support multiple components.
-    async fn add_components(&self) -> Result<ReplDependencies, String>;
+    async fn get_dependencies(&self) -> Result<ReplDependencies, String>;
 
     /// Deploys a specific component if the REPL was started with a reference to it.
     ///
@@ -26,19 +26,19 @@ pub trait RibDependencyManager {
     /// # Returns
     ///
     /// Returns a `ComponentDependency` on success or an error message as a `String` if the operation fails.
-    async fn add_component_dependency(
+    async fn add_component(
         &self,
         source_path: &Path,
         component_name: String,
-    ) -> Result<ComponentDependency, String>;
+    ) -> Result<ComponentMetadata, String>;
 }
 
 pub struct ReplDependencies {
-    pub component_dependencies: Vec<ComponentDependency>,
+    pub component_dependencies: Vec<ComponentMetadata>,
 }
 
 #[derive(Clone, Debug)]
-pub struct ComponentDependency {
+pub struct ComponentMetadata {
     pub component_id: Uuid,
     pub metadata: Vec<AnalysedExport>,
 }

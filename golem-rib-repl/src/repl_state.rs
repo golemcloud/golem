@@ -1,4 +1,4 @@
-use crate::dependency_manager::ComponentDependency;
+use crate::dependency_manager::ComponentMetadata;
 use rib::{
     Interpreter, InterpreterEnv, InterpreterStack, RibByteCode, RibFunctionInvoke, RibInput,
 };
@@ -7,7 +7,7 @@ use std::sync::Arc;
 pub struct ReplState {
     byte_code: RibByteCode,
     interpreter: Interpreter,
-    dependency: ComponentDependency,
+    dependency: ComponentMetadata,
     current_session_rib_texts: Vec<String>,
 }
 
@@ -35,12 +35,12 @@ impl ReplState {
         self.byte_code = byte_code;
     }
 
-    pub fn dependency(&self) -> &ComponentDependency {
+    pub fn dependency(&self) -> &ComponentMetadata {
         &self.dependency
     }
 
     pub fn new(
-        dependency: &ComponentDependency,
+        dependency: &ComponentMetadata,
         invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
     ) -> Self {
         let interpreter_env = InterpreterEnv::from(&RibInput::default(), &invoke);

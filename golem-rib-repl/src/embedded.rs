@@ -1,4 +1,4 @@
-use crate::dependency_manager::{ComponentDependency, ReplDependencies, RibDependencyManager};
+use crate::dependency_manager::{ComponentMetadata, ReplDependencies, RibDependencyManager};
 use crate::invoke::WorkerFunctionInvoke;
 use anyhow::Error;
 use async_trait::async_trait;
@@ -1225,15 +1225,15 @@ impl EmbeddedDependencyManager {
 
 #[async_trait]
 impl RibDependencyManager for EmbeddedDependencyManager {
-    async fn add_components(&self) -> Result<ReplDependencies, String> {
+    async fn get_dependencies(&self) -> Result<ReplDependencies, String> {
         Err("multiple components not supported in embedded mode".to_string())
     }
 
-    async fn add_component_dependency(
+    async fn add_component(
         &self,
         source_path: &Path,
         component_name: String,
-    ) -> Result<ComponentDependency, String> {
+    ) -> Result<ComponentMetadata, String> {
         let component_id = self
             .embedded_worker_executor
             .component(component_name.as_str())
@@ -1253,7 +1253,7 @@ impl RibDependencyManager for EmbeddedDependencyManager {
             )
             .await;
 
-        Ok(ComponentDependency {
+        Ok(ComponentMetadata {
             component_id: component_id.0,
             metadata: result
                 .metadata

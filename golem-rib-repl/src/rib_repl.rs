@@ -1,5 +1,5 @@
 use crate::compiler::compile_rib_script;
-use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
+use crate::dependency_manager::{ComponentMetadata, RibDependencyManager};
 use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::ReplPrinter;
 use crate::repl_state::ReplState;
@@ -54,11 +54,11 @@ impl RibRepl {
 
         let component_dependency = match component_details {
             Some(ref details) => dependency_manager
-                .add_component_dependency(&details.source_path, details.component_name.clone())
+                .add_component(&details.source_path, details.component_name.clone())
                 .await
                 .map_err(ReplBootstrapError::ComponentLoadError),
             None => {
-                let dependencies = dependency_manager.add_components().await;
+                let dependencies = dependency_manager.get_dependencies().await;
 
                 match dependencies {
                     Ok(dependencies) => {
@@ -191,13 +191,13 @@ pub enum ReplBootstrapError {
 // When Rib supports multiple component, the RibFunctionInvoke will come to know
 // about the component_id and the worker_name and this indirection can be avoided
 pub struct ReplRibFunctionInvoke {
-    component_dependency: ComponentDependency,
+    component_dependency: ComponentMetadata,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
 }
 
 impl ReplRibFunctionInvoke {
     pub fn new(
-        component_dependency: ComponentDependency,
+        component_dependency: ComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     ) -> Self {
         Self {
