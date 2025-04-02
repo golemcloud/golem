@@ -30,15 +30,15 @@ pub trait RibDependencyManager {
         &self,
         source_path: &Path,
         component_name: String,
-    ) -> Result<ComponentMetadata, String>;
+    ) -> Result<RibComponentMetadata, String>;
 }
 
 pub struct ReplDependencies {
-    pub component_dependencies: Vec<ComponentMetadata>,
+    pub component_dependencies: Vec<RibComponentMetadata>,
 }
 
 #[derive(Clone, Debug)]
-pub struct ComponentMetadata {
+pub struct RibComponentMetadata {
     pub component_id: Uuid,
     pub metadata: Vec<AnalysedExport>,
 }

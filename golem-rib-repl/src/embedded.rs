@@ -1,4 +1,4 @@
-use crate::dependency_manager::{ComponentMetadata, ReplDependencies, RibDependencyManager};
+use crate::dependency_manager::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
 use crate::invoke::WorkerFunctionInvoke;
 use anyhow::Error;
 use async_trait::async_trait;
@@ -1233,7 +1233,7 @@ impl RibDependencyManager for EmbeddedDependencyManager {
         &self,
         source_path: &Path,
         component_name: String,
-    ) -> Result<ComponentMetadata, String> {
+    ) -> Result<RibComponentMetadata, String> {
         let component_id = self
             .embedded_worker_executor
             .component(component_name.as_str())
@@ -1253,7 +1253,7 @@ impl RibDependencyManager for EmbeddedDependencyManager {
             )
             .await;
 
-        Ok(ComponentMetadata {
+        Ok(RibComponentMetadata {
             component_id: component_id.0,
             metadata: result
                 .metadata
