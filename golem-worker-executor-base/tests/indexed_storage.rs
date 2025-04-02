@@ -120,9 +120,7 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
             .await
             .expect("Cannot create db options");
 
-        let pool = SqlitePool::new(sqlx_pool_sqlite)
-            .await
-            .expect("Cannot connect to sqlite db");
+        let pool = SqlitePool::new(sqlx_pool_sqlite.clone(), sqlx_pool_sqlite);
         let sis = SqliteIndexedStorage::new(pool).await.unwrap();
         Arc::new(sis)
     }

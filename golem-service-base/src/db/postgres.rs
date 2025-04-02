@@ -57,13 +57,6 @@ impl PostgresPool {
         PostgresPool::new(pool).await
     }
 
-    pub async fn execute(
-        &self,
-        query: Query<'_, Postgres, PgArguments>,
-    ) -> Result<PgQueryResult, RepoError> {
-        Ok(query.execute(&self.pool).await?)
-    }
-
     pub fn with(&self, svc_name: &'static str, api_name: &'static str) -> PostgresLabelledApi {
         PostgresLabelledApi {
             svc_name,
@@ -81,14 +74,11 @@ impl super::Pool for PostgresPool {
     type Db = Postgres;
     type Args<'a> = PgArguments;
 
-    async fn execute<'a>(
-        &self,
-        query: Query<'a, Postgres, PgArguments>,
-    ) -> Result<Self::QueryResult, RepoError> {
-        self.execute(query).await
+    fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
+        self.with(svc_name, api_name)
     }
 
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
+    fn with_rw(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
         self.with(svc_name, api_name)
     }
 }

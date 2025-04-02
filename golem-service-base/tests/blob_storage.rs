@@ -382,15 +382,13 @@ impl Debug for SqliteTest {
 impl GetBlobStorage for SqliteTest {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
         let sqlx_pool_sqlite = SqlitePoolOptions::new()
+            .min_connections(10)
             .max_connections(10)
             .connect("sqlite::memory:")
             .await
             .expect("Cannot create db options");
 
-        let pool = SqlitePool::new(sqlx_pool_sqlite)
-            .await
-            .expect("Cannot connect to sqlite db");
-
+        let pool = SqlitePool::new(sqlx_pool_sqlite.clone(), sqlx_pool_sqlite.clone());
         let sbs = SqliteBlobStorage::new(pool).await.unwrap();
         Arc::new(sbs)
     }

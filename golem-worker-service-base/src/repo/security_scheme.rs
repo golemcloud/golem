@@ -168,7 +168,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<golem_service_base::db::postgre
     async fn create(&self, security: &SecuritySchemeRecord) -> Result<(), RepoError> {
         let mut transaction = self
             .db_pool
-            .with("security_scheme", "create")
+            .with_rw("security_scheme", "create")
             .begin()
             .await?;
 
@@ -192,7 +192,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<golem_service_base::db::postgre
         transaction.execute(query).await?;
 
         self.db_pool
-            .with("security_scheme", "create")
+            .with_rw("security_scheme", "create")
             .commit(transaction)
             .await?;
         Ok(())
@@ -249,7 +249,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<golem_service_base::db::postgre
         .bind(security_scheme_id);
 
         self.db_pool
-            .with("security_scheme", "get")
+            .with_ro("security_scheme", "get")
             .fetch_optional_as(query)
             .await
     }

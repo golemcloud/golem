@@ -28,19 +28,18 @@ pub trait Pool: Debug {
     type Db: Database + Sync;
     type Args<'a>;
 
-    async fn execute<'a>(
-        &self,
-        query: Query<'a, Self::Db, Self::Args<'a>>,
-    ) -> Result<Self::QueryResult, RepoError>;
+    /// Gets a pooled database interface for READ ONLY operations
+    fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi;
 
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi;
+    /// Gets a pooled database interface for READ/WRITE operations
+    fn with_rw(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi;
 }
 
 #[async_trait]
 pub trait PoolApi {
     type QueryResult;
     type Row: Row;
-    type Db: Database + Sync;
+    type Db: Database;
     type Args<'a>;
 
     async fn execute<'a>(
@@ -55,7 +54,10 @@ pub trait PoolApi {
     where
         A: 'a + IntoArguments<'a, Self::Db>;
 
-    async fn fetch_one<'a, A>(&mut self, query: Query<'a, Self::Db, A>) -> Result<Self::Row, RepoError>
+    async fn fetch_one<'a, A>(
+        &mut self,
+        query: Query<'a, Self::Db, A>,
+    ) -> Result<Self::Row, RepoError>
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {

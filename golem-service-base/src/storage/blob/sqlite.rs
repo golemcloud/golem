@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use crate::db::sqlite::SqlitePool;
+use crate::db::DBValue;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
@@ -24,7 +25,6 @@ use chrono::NaiveDateTime;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_common::SafeDisplay;
-use crate::db::DBValue;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -39,7 +39,7 @@ impl SqliteBlobStorage {
     }
 
     async fn init(&self) -> Result<(), String> {
-        self.pool.execute(sqlx::query(r#"
+        self.pool.with_rw("blob_storage", "init").execute(sqlx::query(r#"
                 CREATE TABLE IF NOT EXISTS blob_storage (
                     namespace TEXT NOT NULL,                              -- 'Bucket' or namespace
                     parent TEXT NOT NULL,                                 -- Parent path
@@ -115,7 +115,7 @@ impl BlobStorage for SqliteBlobStorage {
             .bind(Self::name_string(path));
 
         self.pool
-            .with(target_label, op_label)
+            .with_ro(target_label, op_label)
             .fetch_optional_as::<DBValue, _>(query)
             .await
             .map(|r| r.map(|op| op.into_bytes()))
@@ -155,7 +155,7 @@ impl BlobStorage for SqliteBlobStorage {
             .bind(Self::name_string(path));
 
         self.pool
-            .with(target_label, op_label)
+            .with_ro(target_label, op_label)
             .fetch_optional_as::<DBMetadata, _>(query)
             .await
             .map(|r| r.map(|op| op.into_blob_metadata()))
@@ -185,7 +185,7 @@ impl BlobStorage for SqliteBlobStorage {
                     .bind(data.len() as i64);
 
         self.pool
-            .with(target_label, op_label)
+            .with_rw(target_label, op_label)
             .execute(query)
             .await
             .map(|_| ())
@@ -224,7 +224,7 @@ impl BlobStorage for SqliteBlobStorage {
         .bind(Self::parent_string(path))
         .bind(Self::name_string(path));
         self.pool
-            .with(target_label, op_label)
+            .with_rw(target_label, op_label)
             .execute(query)
             .await
             .map(|_| ())
@@ -249,7 +249,7 @@ impl BlobStorage for SqliteBlobStorage {
                 .bind(Self::parent_string(path))
                 .bind(Self::name_string(path));
         self.pool
-            .with(target_label, op_label)
+            .with_rw(target_label, op_label)
             .execute(query)
             .await
             .map(|_| ())
@@ -269,7 +269,7 @@ impl BlobStorage for SqliteBlobStorage {
                 .bind(path.to_string_lossy().to_string());
 
         self.pool
-            .with(target_label, op_label)
+            .with_ro(target_label, op_label)
             .fetch_all::<(String,), _>(query)
             .await
             .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())
@@ -297,7 +297,7 @@ impl BlobStorage for SqliteBlobStorage {
         .bind(name)
         .bind(parent_prefix);
         self.pool
-            .with(target_label, op_label)
+            .with_rw(target_label, op_label)
             .execute(query)
             .await
             .map(|result| result.rows_affected() > 0)
@@ -319,7 +319,7 @@ impl BlobStorage for SqliteBlobStorage {
         .bind(Self::name_string(path));
 
         self.pool
-            .with(target_label, op_label)
+            .with_ro(target_label, op_label)
             .fetch_optional_as(query)
             .await
             .map(|row| {

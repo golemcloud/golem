@@ -17,9 +17,9 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
 use serde::{Deserialize, Serialize};
+use sqlx::sqlite::SqliteJournalMode;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use sqlx::sqlite::SqliteJournalMode;
 use url::Url;
 
 const ENV_VAR_PREFIX: &str = "GOLEM__";

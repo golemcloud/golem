@@ -184,7 +184,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         if !deployments.is_empty() {
             let mut transaction = self
                 .db_pool
-                .with("api_deployment", "create")
+                .with_rw("api_deployment", "create")
                 .begin()
                 .await?;
             for deployment in deployments {
@@ -208,7 +208,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
             }
 
             self.db_pool
-                .with("api_deployment", "create")
+                .with_rw("api_deployment", "create")
                 .commit(transaction)
                 .await?;
         }
@@ -219,7 +219,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         if !deployments.is_empty() {
             let mut transaction = self
                 .db_pool
-                .with("api_deployment", "delete")
+                .with_rw("api_deployment", "delete")
                 .begin()
                 .await?;
             for deployment in deployments {
@@ -233,7 +233,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
                 transaction.execute(query).await?;
             }
             self.db_pool
-                .with("api_deployment", "delete")
+                .with_rw("api_deployment", "delete")
                 .commit(transaction)
                 .await?;
             Ok(true)
@@ -274,7 +274,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         .bind(namespace);
 
         self.db_pool
-            .with("api_deployment", "get_all")
+            .with_ro("api_deployment", "get_all")
             .fetch_all(query)
             .await
     }
@@ -320,7 +320,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         .bind(definition_id);
 
         self.db_pool
-            .with("api_deployment", "get_by_id")
+            .with_ro("api_deployment", "get_by_id")
             .fetch_all(query)
             .await
     }
@@ -370,7 +370,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         .bind(definition_version);
 
         self.db_pool
-            .with("api_deployment", "get_by_id_and_version")
+            .with_ro("api_deployment", "get_by_id_and_version")
             .fetch_all(query)
             .await
     }
@@ -409,7 +409,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         .bind(site);
 
         self.db_pool
-            .with("api_deployment", "get_by_site")
+            .with_ro("api_deployment", "get_by_site")
             .fetch_all(query)
             .await
     }
@@ -457,7 +457,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         .bind(site);
 
         self.db_pool
-            .with("api_deployment", "get_definitions_by_site")
+            .with_ro("api_deployment", "get_definitions_by_site")
             .fetch_all(query)
             .await
     }
@@ -501,7 +501,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         .bind(site);
 
         self.db_pool
-            .with("api_deployment", "get_all_definitions_by_site")
+            .with_ro("api_deployment", "get_all_definitions_by_site")
             .fetch_all(query)
             .await
     }

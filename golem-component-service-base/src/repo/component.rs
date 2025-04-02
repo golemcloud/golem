@@ -655,7 +655,7 @@ impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::Po
         .bind(component_id)
         .bind(version as i64);
         self.db_pool
-            .with("component", "get_files")
+            .with_ro("component", "get_files")
             .fetch_all(query)
             .await
     }
@@ -701,7 +701,7 @@ impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::Po
                 ComponentPluginInstallationTarget,
             >>();
         self.db_pool
-            .with("component", "get_installed_plugins_for_component")
+            .with_ro("component", "get_installed_plugins_for_component")
             .fetch_all(query)
             .await
     }
@@ -733,7 +733,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
     for DbComponentRepo<golem_service_base::db::postgres::PostgresPool, Owner>
 {
     async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError> {
-        let mut transaction = self.db_pool.with("component", "create").begin().await?;
+        let mut transaction = self.db_pool.with_rw("component", "create").begin().await?;
 
         let query = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
             .bind(component.component_id);
@@ -745,7 +745,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             let name: String = result.get("name");
             if namespace != component.namespace || name != component.name {
                 self.db_pool
-                    .with("component", "create")
+                    .with_rw("component", "create")
                     .rollback(transaction)
                     .await?;
                 return Err(RepoError::Internal(
@@ -771,7 +771,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                 // Without this explicit rollback, sqlite seems to be remain locked when a next
                 // incoming request comes in.
                 self.db_pool
-                    .with("component", "create")
+                    .with_rw("component", "create")
                     .rollback(transaction)
                     .await?;
                 return Err(err);
@@ -819,7 +819,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         }
 
         self.db_pool
-            .with("component", "create")
+            .with_rw("component", "create")
             .commit(transaction)
             .await?;
         Ok(())
@@ -835,7 +835,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
     ) -> Result<ComponentRecord<Owner>, RepoError> {
-        let mut transaction = self.db_pool.with("component", "update").begin().await?;
+        let mut transaction = self.db_pool.with_rw("component", "update").begin().await?;
 
         let query = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
             .bind(component_id);
@@ -846,7 +846,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             let existing_namespace: String = result.get("namespace");
             if existing_namespace != namespace {
                 self.db_pool
-                    .with("component", "update")
+                    .with_rw("component", "update")
                     .rollback(transaction)
                     .await?;
                 Err(RepoError::Internal(
@@ -978,7 +978,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                 }
 
                 self.db_pool
-                    .with("component", "update")
+                    .with_rw("component", "update")
                     .commit(transaction)
                     .await?;
 
@@ -992,7 +992,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             }
         } else {
             self.db_pool
-                .with("component", "update")
+                .with_rw("component", "update")
                 .rollback(transaction)
                 .await?;
             Err(RepoError::Internal(
@@ -1025,7 +1025,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             .bind(transformed_object_store_key);
 
         self.db_pool
-            .with("component", "activate")
+            .with_rw("component", "activate")
             .execute(query)
             .await?;
 
@@ -1106,7 +1106,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let components = self
             .db_pool
-            .with("component", "get")
+            .with_ro("component", "get")
             .fetch_all(query)
             .await?;
 
@@ -1184,7 +1184,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let components = self
             .db_pool
-            .with("component", "get_all")
+            .with_ro("component", "get_all")
             .fetch_all(query)
             .await?;
 
@@ -1270,7 +1270,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let component = self
             .db_pool
-            .with("component", "get_latest_version")
+            .with_ro("component", "get_latest_version")
             .fetch_optional_as(query)
             .await?;
 
@@ -1358,7 +1358,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let component = self
             .db_pool
-            .with("component", "get_by_version")
+            .with_ro("component", "get_by_version")
             .fetch_optional_as(query)
             .await?;
 
@@ -1442,7 +1442,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let components = self
             .db_pool
-            .with("component", "get_by_name")
+            .with_ro("component", "get_by_name")
             .fetch_all(query)
             .await?;
 
@@ -1458,7 +1458,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let result = self
             .db_pool
-            .with("component", "get_id_by_name")
+            .with_ro("component", "get_id_by_name")
             .fetch_optional(query)
             .await?;
 
@@ -1471,7 +1471,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let result = self
             .db_pool
-            .with("component", "get_namespace")
+            .with_ro("component", "get_namespace")
             .fetch_optional(query)
             .await?;
 
@@ -1481,7 +1481,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
         // TODO: delete plugin installations
 
-        let mut transaction = self.db_pool.with("component", "delete").begin().await?;
+        let mut transaction = self.db_pool.with_rw("component", "delete").begin().await?;
         let query = sqlx::query(
             r#"
                 DELETE FROM component_versions
@@ -1512,7 +1512,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         transaction.execute(query).await?;
 
         self.db_pool
-            .with("component", "delete")
+            .with_rw("component", "delete")
             .commit(transaction)
             .await?;
         Ok(())
@@ -1526,7 +1526,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
     ) -> Result<(), RepoError> {
         let mut transaction = self
             .db_pool
-            .with("component", "delete_constraints")
+            .with_rw("component", "delete_constraints")
             .begin()
             .await?;
 
@@ -1588,7 +1588,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         }
 
         self.db_pool
-            .with("component", "delete_constraints")
+            .with_rw("component", "delete_constraints")
             .commit(transaction)
             .await?;
 
@@ -1602,7 +1602,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         let component_constraint_record = component_constraint_record.clone();
         let mut transaction = self
             .db_pool
-            .with("component", "create_or_update_constraint")
+            .with_rw("component", "create_or_update_constraint")
             .begin()
             .await?;
 
@@ -1665,7 +1665,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         }
 
         self.db_pool
-            .with("component", "create_or_update_constraint")
+            .with_rw("component", "create_or_update_constraint")
             .commit(transaction)
             .await?;
 
@@ -1691,7 +1691,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let existing_record = self
             .db_pool
-            .with("component", "get_constraint")
+            .with_ro("component", "get_constraint")
             .fetch_optional_as(query)
             .await?;
 
@@ -1723,7 +1723,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>();
 
         self.db_pool
-            .with("component", "get_installed_plugins")
+            .with_ro("component", "get_installed_plugins")
             .fetch_all(query)
             .await
     }
@@ -1736,7 +1736,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let mut transaction = self
             .db_pool
-            .with("component", "install_plugin")
+            .with_rw("component", "install_plugin")
             .begin()
             .await?;
 
@@ -1804,7 +1804,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         }
 
         self.db_pool
-            .with("component", "install_plugin")
+            .with_rw("component", "install_plugin")
             .commit(transaction)
             .await?;
 
@@ -1819,7 +1819,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
     ) -> Result<u64, RepoError> {
         let mut transaction = self
             .db_pool
-            .with("component", "uninstall_plugin")
+            .with_rw("component", "uninstall_plugin")
             .begin()
             .await?;
 
@@ -1881,7 +1881,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         }
 
         self.db_pool
-            .with("component", "uninstall_plugin")
+            .with_rw("component", "uninstall_plugin")
             .commit(transaction)
             .await?;
 
@@ -1898,7 +1898,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
     ) -> Result<u64, RepoError> {
         let mut transaction = self
             .db_pool
-            .with("component", "update_plugin_installation")
+            .with_rw("component", "update_plugin_installation")
             .begin()
             .await?;
 
@@ -1974,7 +1974,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         }
 
         self.db_pool
-            .with("component", "update_plugin_installation")
+            .with_rw("component", "update_plugin_installation")
             .commit(transaction)
             .await?;
 

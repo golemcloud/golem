@@ -21,39 +21,50 @@ use sqlx::query::{Query, QueryAs};
 use sqlx::sqlite::{SqliteArguments, SqlitePoolOptions, SqliteQueryResult, SqliteRow};
 use sqlx::{Connection, Error, FromRow, IntoArguments, Sqlite, SqliteConnection};
 use std::time::Instant;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Clone, Debug)]
 pub struct SqlitePool {
-    pool: sqlx::SqlitePool,
+    read_pool: sqlx::SqlitePool,
+    write_pool: sqlx::SqlitePool,
 }
 
 impl SqlitePool {
-    pub async fn new(pool: sqlx::SqlitePool) -> Result<Self, anyhow::Error> {
-        Ok(Self { pool })
+    pub fn new(read_pool: sqlx::SqlitePool, write_pool: sqlx::SqlitePool) -> Self {
+        Self {
+            read_pool,
+            write_pool,
+        }
     }
 
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, anyhow::Error> {
-        let pool = SqlitePoolOptions::new()
+        let read_pool = SqlitePoolOptions::new()
+            .min_connections(config.max_connections)
             .max_connections(config.max_connections)
             .connect_with(config.connect_options())
             .await?;
+        let write_pool = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect_with(config.connect_options())
+            .await?;
 
-        SqlitePool::new(pool).await
+        Ok(Self::new(read_pool, write_pool))
     }
 
-    pub async fn execute<'a>(
-        &self,
-        query: Query<'a, Sqlite, SqliteArguments<'a>>,
-    ) -> Result<SqliteQueryResult, RepoError> {
-        Ok(query.execute(&self.pool).await?)
-    }
-
-    pub fn with(&self, svc_name: &'static str, api_name: &'static str) -> SqliteLabelledApi {
+    pub fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> SqliteLabelledApi {
         SqliteLabelledApi {
             svc_name,
             api_name,
-            pool: self.pool.clone(),
+            pool: self.read_pool.clone(),
+        }
+    }
+
+    pub fn with_rw(&self, svc_name: &'static str, api_name: &'static str) -> SqliteLabelledApi {
+        SqliteLabelledApi {
+            svc_name,
+            api_name,
+            pool: self.write_pool.clone(),
         }
     }
 }
@@ -66,15 +77,12 @@ impl super::Pool for SqlitePool {
     type Db = Sqlite;
     type Args<'a> = SqliteArguments<'a>;
 
-    async fn execute<'a>(
-        &self,
-        query: Query<'a, Sqlite, SqliteArguments<'a>>,
-    ) -> Result<Self::QueryResult, RepoError> {
-        Ok(self.execute(query).await?)
+    fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
+        self.with_ro(svc_name, api_name)
     }
 
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
-        self.with(svc_name, api_name)
+    fn with_rw(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
+        self.with_rw(svc_name, api_name)
     }
 }
 
@@ -256,12 +264,6 @@ impl SqliteLabelledApi {
         let end = Instant::now();
         match result {
             Ok(result) => {
-                debug!(
-                    svc_name = self.svc_name,
-                    api_name = self.api_name,
-                    duration = end.duration_since(start).as_millis(),
-                    "DB query executed successfully"
-                );
                 record_db_success(
                     "sqlite",
                     self.svc_name,

@@ -259,7 +259,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
         .bind(definition.created_at);
 
         self.db_pool
-            .with("api_definition", "create")
+            .with_rw("api_definition", "create")
             .execute(query)
             .await?;
 
@@ -282,7 +282,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
         .bind(definition.created_at);
 
         self.db_pool
-            .with("api_definition", "update")
+            .with_rw("api_definition", "update")
             .execute(query)
             .await?;
 
@@ -309,7 +309,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
         .bind(draft);
 
         self.db_pool
-            .with("api_definition", "set_draft")
+            .with_rw("api_definition", "set_draft")
             .execute(query)
             .await?;
 
@@ -347,7 +347,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
             .bind(version);
 
         self.db_pool
-            .with("api_definition", "get")
+            .with_ro("api_definition", "get")
             .fetch_optional_as(query)
             .await
     }
@@ -367,7 +367,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
 
         let result = self
             .db_pool
-            .with("api_definition", "get_draft")
+            .with_ro("api_definition", "get_draft")
             .fetch_optional(query)
             .await?;
 
@@ -384,7 +384,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
         .bind(version);
         let result = self
             .db_pool
-            .with("api_definition", "delete")
+            .with_rw("api_definition", "delete")
             .execute(query)
             .await?;
 
@@ -415,7 +415,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
             .bind(namespace);
 
         self.db_pool
-            .with("api_definition", "get_all")
+            .with_ro("api_definition", "get_all")
             .fetch_all(query)
             .await
     }
@@ -447,7 +447,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
             .bind(id);
 
         self.db_pool
-            .with("api_definition", "get_all_versions")
+            .with_ro("api_definition", "get_all_versions")
             .fetch_all(query)
             .await
     }

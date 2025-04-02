@@ -358,7 +358,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         owner.add_where_clause(&mut query);
 
         self.db_pool
-            .with("plugin", "get_all")
+            .with_ro("plugin", "get_all")
             .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
             .await
     }
@@ -407,7 +407,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         debug!("Built query for get_for_scope: {}", query.sql());
 
         self.db_pool
-            .with("plugin", "get_for_scope")
+            .with_ro("plugin", "get_for_scope")
             .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
             .await
     }
@@ -450,7 +450,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         debug!("Built query for get_all_with_name: {}", query.sql());
 
         self.db_pool
-            .with("plugin", "get_all_with_name")
+            .with_ro("plugin", "get_all_with_name")
             .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
             .await
     }
@@ -506,7 +506,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         debug!("Built query for create: {}", query.sql());
 
         self.db_pool
-            .with("plugin", "create")
+            .with_rw("plugin", "create")
             .execute(query.build())
             .await?;
 
@@ -551,7 +551,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         query.push_bind(version);
 
         self.db_pool
-            .with("plugin", "get")
+            .with_ro("plugin", "get")
             .fetch_optional_as(query.build_query_as::<PluginRecord<Owner, Scope>>())
             .await
     }
@@ -566,7 +566,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         owner.add_where_clause(&mut query);
 
         self.db_pool
-            .with("plugin", "delete")
+            .with_rw("plugin", "delete")
             .execute(query.build())
             .await?;
 
