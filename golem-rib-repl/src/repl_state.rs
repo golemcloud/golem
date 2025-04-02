@@ -12,7 +12,6 @@ pub struct ReplState {
 }
 
 impl ReplState {
-
     pub fn current_rib_program(&self) -> String {
         self.current_session_rib_texts.join(";")
     }

@@ -4,7 +4,6 @@ use golem_wasm_rpc::Value;
 pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
     match analysed_tpe {
         AnalysedType::Variant(typed_variant) => {
-
             let first_case = typed_variant.cases.first();
 
             if let Some(first_case) = first_case {
@@ -22,7 +21,6 @@ pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
                         case_value: None,
                     }
                 }
-
             } else {
                 Value::Variant {
                     case_idx: 0,
@@ -44,10 +42,8 @@ pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
                         let err_value = generate_value(err_tpe);
                         Value::Result(Err(Some(Box::new(err_value))))
                     }
-                    None => {
-                        Value::Result(Ok(None))
-                    }
-                }
+                    None => Value::Result(Ok(None)),
+                },
             }
         }
         AnalysedType::Option(typ) => {
@@ -56,9 +52,7 @@ pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
 
             Value::Option(Some(Box::new(inner_value)))
         }
-        AnalysedType::Enum(_) => {
-            Value::Enum(0)
-        }
+        AnalysedType::Enum(_) => Value::Enum(0),
 
         AnalysedType::Flags(flags) => {
             let mut bools = vec![];
@@ -79,7 +73,6 @@ pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
             }
 
             Value::Record(values)
-
         }
         AnalysedType::Tuple(tuple) => {
             let inner_types = &tuple.items;
@@ -105,50 +98,22 @@ pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
 
             Value::List(values)
         }
-        AnalysedType::Str(_) => {
-            Value::String("foo".to_string())
-        }
-        AnalysedType::Chr(_) => {
-            Value::Char('c')
-        }
-        AnalysedType::F64(_) => {
-            Value::F64(42.0)
-        }
-        AnalysedType::F32(_) => {
-            Value::F32(42.0)
-        }
-        AnalysedType::U64(_) => {
-            Value::U64(42)
-        }
-        AnalysedType::S64(_) => {
-            Value::S64(42)
-        }
-        AnalysedType::U32(_) => {
-            Value::U32(42)
-        }
-        AnalysedType::S32(_) => {
-            Value::S32(42)
-        }
-        AnalysedType::U16(_) => {
-            Value::U16(42)
-        }
-        AnalysedType::S16(_) => {
-            Value::S16(42)
-        }
-        AnalysedType::U8(_) => {
-            Value::U8(42)
-        }
-        AnalysedType::S8(_) => {
-            Value::S8(42)
-        }
-        AnalysedType::Bool(_) => {
-            Value::Bool(true)
-        }
-        AnalysedType::Handle(_) => {
-            Value::Handle {
-                uri: "".to_string(),
-                resource_id: 0
-            }
-        }
+        AnalysedType::Str(_) => Value::String("foo".to_string()),
+        AnalysedType::Chr(_) => Value::Char('c'),
+        AnalysedType::F64(_) => Value::F64(42.0),
+        AnalysedType::F32(_) => Value::F32(42.0),
+        AnalysedType::U64(_) => Value::U64(42),
+        AnalysedType::S64(_) => Value::S64(42),
+        AnalysedType::U32(_) => Value::U32(42),
+        AnalysedType::S32(_) => Value::S32(42),
+        AnalysedType::U16(_) => Value::U16(42),
+        AnalysedType::S16(_) => Value::S16(42),
+        AnalysedType::U8(_) => Value::U8(42),
+        AnalysedType::S8(_) => Value::S8(42),
+        AnalysedType::Bool(_) => Value::Bool(true),
+        AnalysedType::Handle(_) => Value::Handle {
+            uri: "".to_string(),
+            resource_id: 0,
+        },
     }
 }

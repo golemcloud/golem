@@ -1,5 +1,8 @@
 use crate::repl_state::ReplState;
-use rib::{Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr, InferredType, RibByteCode, RibError, VariableId};
+use rib::{
+    Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr, InferredType, RibByteCode,
+    RibError, VariableId,
+};
 use std::collections::{HashMap, VecDeque};
 
 pub fn compile_rib_script(
@@ -30,7 +33,7 @@ pub fn compile_rib_script(
         rib_byte_code: byte_code,
         inferred_expr,
         instance_variables,
-        identifiers
+        identifiers,
     })
 }
 
@@ -48,13 +51,14 @@ pub struct InstanceVariables {
 
 impl InstanceVariables {
     pub fn variable_names(&self) -> Vec<String> {
-        self.instance_variables.keys().map(|k| k.to_string()).collect()
+        self.instance_variables
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
     }
 }
 
-pub fn get_identifiers(
-    inferred_expr: &InferredExpr
-) -> Vec<VariableId> {
+pub fn get_identifiers(inferred_expr: &InferredExpr) -> Vec<VariableId> {
     let expr = inferred_expr.get_expr();
     let mut queue = VecDeque::new();
 
@@ -73,9 +77,7 @@ pub fn get_identifiers(
 
                 queue.push_back(expr);
             }
-            Expr::Identifier {
-                variable_id, ..
-            } => {
+            Expr::Identifier { variable_id, .. } => {
                 if !identifiers.contains(variable_id) {
                     identifiers.push(variable_id.clone());
                 }
@@ -84,7 +86,7 @@ pub fn get_identifiers(
         }
     }
 
-   identifiers
+    identifiers
 }
 
 pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariables {

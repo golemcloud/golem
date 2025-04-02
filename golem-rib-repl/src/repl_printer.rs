@@ -53,16 +53,22 @@ impl ReplPrinter for DefaultResultPrinter {
             ReplBootstrapError::ReplHistoryFileError(msg) => {
                 println!("{} {}", "[warn]".yellow(), msg);
             }
-            ReplBootstrapError::ComponentLoadError(msg)
-            | ReplBootstrapError::Internal(msg) => {
+            ReplBootstrapError::ComponentLoadError(msg) | ReplBootstrapError::Internal(msg) => {
                 println!("{} {}", "[error]".red(), msg);
             }
             ReplBootstrapError::MultipleComponentsFound(_) => {
                 println!("{} {}", "[error]".red(), "multiple components found");
-                println!("{}", "specify the component name when bootstrapping repl".yellow());
+                println!(
+                    "{}",
+                    "specify the component name when bootstrapping repl".yellow()
+                );
             }
             ReplBootstrapError::NoComponentsFound => {
-                println!("{} {}", "[warn]".yellow(), "no components found in the repl context");
+                println!(
+                    "{} {}",
+                    "[warn]".yellow(),
+                    "no components found in the repl context"
+                );
             }
         }
     }

@@ -1,27 +1,26 @@
 use crate::compiler::compile_rib_script;
 use crate::dependency_manager::{ComponentDependency, RibDependencyManager};
-use crate::history::RibReplHistory;
 use crate::invoke::WorkerFunctionInvoke;
+use crate::repl_printer::ReplPrinter;
 use crate::repl_state::ReplState;
-use crate::result_printer::{ReplPrinter};
 use crate::rib_edit::RibEdit;
+use async_trait::async_trait;
 use colored::Colorize;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
+use golem_wasm_rpc::ValueAndType;
 use rib::RibFunctionInvoke;
 use rib::RibResult;
+use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
 use rustyline::error::ReadlineError;
-use rustyline::history::History;
+use rustyline::history::{DefaultHistory, History};
 use rustyline::{Config, Editor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use async_trait::async_trait;
 use tokio;
-use golem_wasm_rpc::ValueAndType;
 
 pub struct RibRepl {
     history_file_path: PathBuf,
     printer: Box<dyn ReplPrinter>,
-    editor: Editor<RibEdit, RibReplHistory>,
+    editor: Editor<RibEdit, DefaultHistory>,
     repl_state: ReplState,
 }
 
@@ -33,14 +32,13 @@ impl RibRepl {
         printer: Box<dyn ReplPrinter>,
         component_details: Option<ComponentDetails>,
     ) -> Result<RibRepl, ReplBootstrapError> {
-
         let history_file_path = history_file.unwrap_or_else(get_default_history_file);
 
         let rib_editor = RibEdit::init();
 
-        let mut rl = Editor::<RibEdit, RibReplHistory>::with_history(
+        let mut rl = Editor::<RibEdit, DefaultHistory>::with_history(
             Config::default(),
-            RibReplHistory::new(),
+            DefaultHistory::new(),
         )
         .unwrap();
 
@@ -90,7 +88,6 @@ impl RibRepl {
 
         let repl_state = ReplState::new(&component_dependency, rib_function_invoke);
 
-
         Ok(RibRepl {
             history_file_path,
             printer,
@@ -112,10 +109,7 @@ impl RibRepl {
                     let _ = self.editor.add_history_entry(line.as_str());
                     let _ = self.editor.save_history(&self.history_file_path);
 
-                    match compile_rib_script(
-                        &self.current_rib_program(),
-                        &mut self.repl_state,
-                    ) {
+                    match compile_rib_script(&self.current_rib_program(), &mut self.repl_state) {
                         Ok(compilation) => {
                             let helper = self.editor.helper_mut().unwrap();
 
@@ -194,7 +188,6 @@ pub enum ReplBootstrapError {
     ReplHistoryFileError(String),
 }
 
-
 // As of now Rib interpreter can work with only one component, and the details
 // and hence it needs to only know about worker-name, which is optional, and function arguments
 // When Rib supports multiple component, the RibFunctionInvoke will come to know
@@ -218,14 +211,16 @@ impl ReplRibFunctionInvoke {
 
 #[async_trait]
 impl RibFunctionInvoke for ReplRibFunctionInvoke {
-    async fn invoke(&self, worker_name: Option<EvaluatedWorkerName>, function_name: EvaluatedFqFn, args: EvaluatedFnArgs) -> Result<ValueAndType, String> {
+    async fn invoke(
+        &self,
+        worker_name: Option<EvaluatedWorkerName>,
+        function_name: EvaluatedFqFn,
+        args: EvaluatedFnArgs,
+    ) -> Result<ValueAndType, String> {
         let component_id = self.component_dependency.component_id.clone();
 
-        self.worker_function_invoke.invoke(
-            component_id,
-            worker_name,
-            function_name,
-            args,
-        ).await
+        self.worker_function_invoke
+            .invoke(component_id, worker_name, function_name, args)
+            .await
     }
 }

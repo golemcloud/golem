@@ -1,21 +1,20 @@
-use crate::dependency_manager::{RibDependencyManager};
+use crate::dependency_manager::RibDependencyManager;
 use crate::embedded_executor::{start, BootstrapDependencies};
 use crate::invoke::WorkerFunctionInvoke;
+use crate::repl_printer::{DefaultResultPrinter, ReplPrinter};
 use crate::rib_repl::{ComponentDetails, RibRepl};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use rib::{RibFunctionInvoke};
+use rib::RibFunctionInvoke;
 use std::str::FromStr;
 use std::sync::Arc;
-use golem_test_framework::config::TestDependencies;
-use crate::result_printer::{DefaultResultPrinter, ReplPrinter};
 
 mod compiler;
 mod dependency_manager;
 mod embedded_executor;
-mod history;
 mod invoke;
+mod repl_printer;
 mod repl_state;
-mod result_printer;
 mod rib_edit;
 mod rib_repl;
 mod value_generator;
@@ -38,14 +37,14 @@ async fn main() {
     let shared_executor = Arc::new(embedded_worker_executor);
 
     let worker_function_invoke = Arc::new(invoke::DefaultWorkerFunctionInvoke::new(
-       shared_executor.clone()
+        shared_executor.clone(),
     ));
 
-    let default_dependency_manager =
-        Arc::new(dependency_manager::DefaultRibDependencyManager::new(shared_executor.clone())
+    let default_dependency_manager = Arc::new(
+        dependency_manager::DefaultRibDependencyManager::new(shared_executor.clone())
             .await
-            .expect("Failed to create default dependency manager"));
-
+            .expect("Failed to create default dependency manager"),
+    );
 
     let printer = DefaultResultPrinter;
 
@@ -56,18 +55,18 @@ async fn main() {
         Box::new(printer.clone()),
         Some(ComponentDetails {
             component_name: "shopping-cart".to_string(),
-            source_path: shared_executor.component_directory().join("shopping-cart.wasm"),
+            source_path: shared_executor
+                .component_directory()
+                .join("shopping-cart.wasm"),
         }),
-    ).await;
+    )
+    .await;
 
     match &mut repl {
-        Ok(repl) => {
-           repl.run().await
-        }
+        Ok(repl) => repl.run().await,
         Err(err) => {
             printer.print_bootstrap_error(&err);
             return;
         }
     }
-
 }

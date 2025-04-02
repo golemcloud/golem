@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use crate::embedded_executor::EmbeddedWorkerExecutor;
 use async_trait::async_trait;
 use golem_common::base_model::TargetWorkerId;
@@ -6,6 +5,7 @@ use golem_common::model::ComponentId;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::ValueAndType;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName};
+use std::sync::Arc;
 
 #[async_trait]
 pub trait WorkerFunctionInvoke {

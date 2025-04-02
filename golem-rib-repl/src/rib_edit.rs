@@ -1,5 +1,8 @@
 use crate::compiler::{CompilerOutput, InstanceVariables};
+use crate::value_generator::generate_value;
 use colored::Colorize;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::ValueAndType;
 use rib::{Expr, InferredExpr, VariableId};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
@@ -8,9 +11,6 @@ use rustyline::history::History;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
-use crate::value_generator::generate_value;
 
 #[derive(Default)]
 pub struct RibEdit {
@@ -46,9 +46,9 @@ impl RibEdit {
         let mut start = end_pos;
 
         while start > 0
-            && line[start - 1..start]
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' ||  c == '.' || c == '-' || c == '(' || c == ')')
+            && line[start - 1..start].chars().all(|c| {
+                c.is_alphanumeric() || c == '_' || c == '.' || c == '-' || c == '(' || c == ')'
+            })
         {
             start -= 1;
         }
@@ -89,10 +89,16 @@ impl RibEdit {
                     .parameter_types()
                     .iter()
                     .filter_map(|arg| AnalysedType::try_from(arg).ok())
-                    .map(|analysed_type| ValueAndType::new(generate_value(&analysed_type), analysed_type))
+                    .map(|analysed_type| {
+                        ValueAndType::new(generate_value(&analysed_type), analysed_type)
+                    })
                     .collect::<Vec<_>>();
 
-                let args_str = args.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+                let args_str = args
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 completions.push(format!("{})", args_str));
 
                 return Ok(Some((end_pos, completions))); // Only one possible completion, return early
@@ -106,7 +112,6 @@ impl RibEdit {
 
         Ok(Some((start + dot_pos + 1, completions)))
     }
-
 }
 
 impl Helper for RibEdit {}
@@ -121,11 +126,12 @@ impl Completer for RibEdit {
         _ctx: &Context<'_>, // a context has access to only the current line
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
         let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
-        let instance_variable_names: Option<Vec<String>> = instance_variables.clone().map(|x| x.variable_names());
+        let instance_variable_names: Option<Vec<String>> =
+            instance_variables.clone().map(|x| x.variable_names());
 
         let mut completions = Vec::new();
 
-        let start= Self::backtrack_and_get_start_pos(line, end_pos);
+        let start = Self::backtrack_and_get_start_pos(line, end_pos);
 
         let word = &line[start..end_pos];
 
@@ -176,7 +182,8 @@ impl Hinter for RibEdit {
 
     fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
         let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
-        let instance_variable_names: Option<Vec<String>> = instance_variables.clone().map(|x| x.variable_names());
+        let instance_variable_names: Option<Vec<String>> =
+            instance_variables.clone().map(|x| x.variable_names());
 
         let start = Self::backtrack_and_get_start_pos(line, pos);
         let word = &line[start..pos];
@@ -190,7 +197,7 @@ impl Hinter for RibEdit {
                 if var.starts_with(word) {
                     // return only remaining part of the variable name
                     let hint = &var[word.len()..];
-                    return Some(hint.to_string())
+                    return Some(hint.to_string());
                 }
             }
         }
@@ -199,7 +206,7 @@ impl Hinter for RibEdit {
             if var.name().starts_with(word) {
                 // return only remaining part of the variable name
                 let hint = &var.name()[word.len()..];
-                return Some(hint.to_string())
+                return Some(hint.to_string());
             }
         }
 

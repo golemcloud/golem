@@ -1,4 +1,4 @@
-use crate::embedded_executor::{EmbeddedWorkerExecutor};
+use crate::embedded_executor::EmbeddedWorkerExecutor;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_test_framework::config::TestDependencies;
@@ -55,10 +55,11 @@ pub struct DefaultRibDependencyManager {
 }
 
 impl DefaultRibDependencyManager {
-    pub async fn new(embedded_worker_executor: Arc<EmbeddedWorkerExecutor>) -> Result<Self, String> {
-
+    pub async fn new(
+        embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
+    ) -> Result<Self, String> {
         Ok(Self {
-            embedded_worker_executor
+            embedded_worker_executor,
         })
     }
 }
