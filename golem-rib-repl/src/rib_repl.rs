@@ -11,7 +11,7 @@ use rib::RibFunctionInvoke;
 use rib::RibResult;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
 use rustyline::error::ReadlineError;
-use rustyline::history::{DefaultHistory};
+use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
 use std::path::PathBuf;
 use std::sync::Arc;
