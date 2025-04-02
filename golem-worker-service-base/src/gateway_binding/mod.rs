@@ -19,7 +19,7 @@ use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
-use golem_service_base::model::VersionedComponentId;
+use golem_common::model::component::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibError, RibInputTypeInfo};
 pub use static_binding::*;

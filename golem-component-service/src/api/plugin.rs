@@ -13,18 +13,19 @@
 // limitations under the License.
 
 use crate::api::{ComponentError, Result};
+use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::ErrorBody;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
 use std::sync::Arc;
 use tracing::Instrument;
+
 pub struct PluginApi {
     pub plugin_service:
         Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,

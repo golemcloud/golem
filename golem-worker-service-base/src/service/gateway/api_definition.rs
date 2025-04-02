@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{BoxConversionContext, ComponentView, ConversionContext};
 use crate::gateway_api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     HttpApiDefinitionRequest, OpenApiHttpApiDefinition, RouteCompilationErrors,
@@ -29,18 +30,18 @@ use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySc
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{Component, ComponentName, VersionedComponentId};
+use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
 use rib::RibError;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 use tracing::{error, info};
-
-use super::{BoxConversionContext, ComponentView, ConversionContext};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
@@ -337,11 +338,15 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
         definition: &HttpApiDefinition,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<Component>, ApiDefinitionError> {
-        let get_components = definition
-            .get_bindings()
-            .iter()
-            .cloned()
+        let bindings = definition.get_bindings();
+        let component_ids = bindings
+            .clone()
+            .into_iter()
             .filter_map(|binding| binding.get_component_id())
+            .collect::<HashSet<_>>();
+
+        let futures = component_ids
+            .into_iter()
             .map(|id| async move {
                 self.component_service
                     .get_by_version(&id.component_id, id.version, auth_ctx)
@@ -357,23 +362,31 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
             })
             .collect::<Vec<_>>();
 
-        let components: Vec<Component> = {
-            let results = futures::future::join_all(get_components).await;
-            let (successes, errors) = results
-                .into_iter()
-                .partition::<Vec<_>, _>(|result| result.is_ok());
+        let results = ::futures::future::join_all(futures).await;
 
-            // Ensure that all components were retrieved.
-            if !errors.is_empty() {
-                let errors: Vec<VersionedComponentId> =
-                    errors.into_iter().map(|r| r.unwrap_err()).collect();
-                return Err(ApiDefinitionError::ComponentNotFoundError(errors));
+        let mut mapping = HashMap::new();
+        let mut failures = Vec::new();
+        for result in results {
+            match result {
+                Ok(component) => {
+                    mapping.insert(component.versioned_component_id.clone(), component);
+                }
+                Err(id) => {
+                    failures.push(id);
+                }
             }
+        }
+        failures.sort();
 
-            successes.into_iter().map(|r| r.unwrap()).collect()
-        };
-
-        Ok(components)
+        if !failures.is_empty() {
+            Err(ApiDefinitionError::ComponentNotFoundError(failures))
+        } else {
+            Ok(bindings
+                .into_iter()
+                .filter_map(|binding| binding.get_component_id())
+                .map(|id| mapping.get(&id).unwrap().clone())
+                .collect())
+        }
     }
 }
 

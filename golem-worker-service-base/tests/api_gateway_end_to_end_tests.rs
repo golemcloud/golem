@@ -2317,10 +2317,10 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 
 mod internal {
     use async_trait::async_trait;
+    use golem_common::model::component::VersionedComponentId;
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
-    use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -3178,6 +3178,24 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             ))
         }
 
+        async fn get_client(
+            &self,
+            security_scheme: &SecurityScheme,
+        ) -> Result<OpenIdClient, IdentityProviderError> {
+            let provider_metadata = self
+                .get_provider_metadata(&security_scheme.provider_type())
+                .await?;
+
+            let client = CoreClient::from_provider_metadata(
+                provider_metadata,
+                security_scheme.client_id().clone(),
+                Some(security_scheme.client_secret().clone()),
+            )
+            .set_redirect_uri(security_scheme.redirect_url());
+
+            Ok(OpenIdClient { client })
+        }
+
         // In real, this token verifier depends on the provider metadata
         // however, we simply use our own public key for testing
         // instead of relying providers public key.
@@ -3225,24 +3243,6 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
                 Some(CsrfToken::new("token".to_string())),
                 Some(Nonce::new("nonce".to_string())),
             )
-        }
-
-        async fn get_client(
-            &self,
-            security_scheme: &SecurityScheme,
-        ) -> Result<OpenIdClient, IdentityProviderError> {
-            let provider_metadata = self
-                .get_provider_metadata(&security_scheme.provider_type())
-                .await?;
-
-            let client = CoreClient::from_provider_metadata(
-                provider_metadata,
-                security_scheme.client_id().clone(),
-                Some(security_scheme.client_secret().clone()),
-            )
-            .set_redirect_uri(security_scheme.redirect_url());
-
-            Ok(OpenIdClient { client })
         }
     }
 

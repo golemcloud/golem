@@ -17,8 +17,8 @@ use std::fmt::{Debug, Formatter};
 use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Union};
 
@@ -308,7 +308,7 @@ mod conversion {
     impl From<ValidationErrors> for ApiEndpointError {
         fn from(error: ValidationErrors) -> Self {
             let error =
-                WorkerServiceErrorsBody::Validation(golem_service_base::model::ErrorsBody {
+                WorkerServiceErrorsBody::Validation(golem_common::model::error::ErrorsBody {
                     errors: error.errors,
                 });
 
