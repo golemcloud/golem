@@ -85,7 +85,7 @@ impl RibDependencyManager for DefaultRibDependencyManager {
             .embedded_worker_executor
             .component_service()
             .get_or_add_component(
-                &source_path,
+                source_path,
                 &component_name,
                 ComponentType::Durable,
                 &[],

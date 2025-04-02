@@ -4,7 +4,7 @@ use rib::{RibError, RibResult};
 
 pub trait ReplPrinter {
     fn print_rib_result(&self, result: &RibResult);
-    fn print_compilation_error(&self, error: &RibError);
+    fn print_rib_error(&self, error: &RibError);
     fn print_bootstrap_error(&self, error: &ReplBootstrapError);
     fn print_runtime_error(&self, error: &str);
 }
@@ -17,7 +17,7 @@ impl ReplPrinter for DefaultResultPrinter {
         println!("{}", result.to_string().green());
     }
 
-    fn print_compilation_error(&self, error: &RibError) {
+    fn print_rib_error(&self, error: &RibError) {
         match error {
             RibError::InternalError(msg) => {
                 println!("{} {}", "[internal rib error]".red(), msg.red());
@@ -57,11 +57,7 @@ impl ReplPrinter for DefaultResultPrinter {
                 println!("{} {}", "[error]".red(), msg);
             }
             ReplBootstrapError::MultipleComponentsFound(msg) => {
-                println!(
-                    "{} {}",
-                    "[error]".red(),
-                    msg
-                );
+                println!("{} {}", "[error]".red(), msg);
                 println!(
                     "{}",
                     "specify the component name when bootstrapping repl".yellow()
@@ -69,9 +65,8 @@ impl ReplPrinter for DefaultResultPrinter {
             }
             ReplBootstrapError::NoComponentsFound => {
                 println!(
-                    "{} {}",
-                    "[warn]".yellow(),
-                    "no components found in the repl context"
+                    "{} no components found in the repl context",
+                    "[warn]".yellow()
                 );
             }
         }

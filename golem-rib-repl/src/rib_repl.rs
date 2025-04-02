@@ -13,9 +13,8 @@ use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
 use rustyline::error::ReadlineError;
 use rustyline::history::{DefaultHistory, History};
 use rustyline::{Config, Editor};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio;
 
 pub struct RibRepl {
     history_file_path: PathBuf,
@@ -130,7 +129,7 @@ impl RibRepl {
                         }
                         Err(err) => {
                             self.remove_rib_text_in_session();
-                            self.printer.print_compilation_error(&err);
+                            self.printer.print_rib_error(&err);
                         }
                     }
                 }

@@ -1,6 +1,6 @@
 use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list};
 use crate::InferredType;
-use std::collections::{HashSet};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug)]
 pub struct Unified(InferredType);

@@ -461,10 +461,7 @@ pub struct FunctionDictionary {
 
 impl FunctionDictionary {
     pub fn function_names(&self) -> Vec<String> {
-        self.map
-            .iter()
-            .map(|(f, _)| f.name())
-            .collect::<Vec<_>>()
+        self.map.iter().map(|(f, _)| f.name()).collect::<Vec<_>>()
     }
 }
 

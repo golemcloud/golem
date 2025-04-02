@@ -19,9 +19,7 @@ use golem_test_framework::components::component_compilation_service::ComponentCo
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::rdb::Rdb;
-use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
@@ -57,8 +55,7 @@ use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceDisabledConfig, GolemConfig,
     IndexedStorageConfig, IndexedStorageInMemoryConfig, KeyValueStorageConfig,
-    KeyValueStorageInMemoryConfig, MemoryConfig, ShardManagerServiceConfig,
-    ShardManagerServiceSingleShardConfig,
+    KeyValueStorageInMemoryConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
@@ -96,8 +93,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, Weak};
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tonic::transport::Channel;
-use tracing::{debug, info, Level};
+use tracing::{debug, info};
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;

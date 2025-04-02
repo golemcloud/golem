@@ -1,12 +1,7 @@
-use crate::dependency_manager::RibDependencyManager;
 use crate::embedded_executor::{start, BootstrapDependencies};
-use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::{DefaultResultPrinter, ReplPrinter};
 use crate::rib_repl::{ComponentDetails, RibRepl};
 use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
-use rib::RibFunctionInvoke;
-use std::str::FromStr;
 use std::sync::Arc;
 
 mod compiler;
@@ -65,7 +60,7 @@ async fn main() {
     match &mut repl {
         Ok(repl) => repl.run().await,
         Err(err) => {
-            printer.print_bootstrap_error(&err);
+            printer.print_bootstrap_error(err);
             return;
         }
     }

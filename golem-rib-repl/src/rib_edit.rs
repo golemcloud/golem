@@ -232,9 +232,9 @@ impl Highlighter for RibEdit {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
         let mut highlighted = String::new();
         let mut word = String::new();
-        let mut chars = line.chars().peekable();
+        let chars = line.chars().peekable();
 
-        while let Some(c) = chars.next() {
+        for c in chars {
             if c.is_alphanumeric() || c == '_' {
                 word.push(c);
             } else {
