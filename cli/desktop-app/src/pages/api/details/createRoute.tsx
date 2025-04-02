@@ -53,9 +53,9 @@ const BindingType = z.enum(["default", "file-server", "cors-preflight"]);
 
 const GatewayBindingData = z.object({
   bindingType: BindingType,
-  componentId: z
+  component: z
     .object({
-      componentId: z.string(),
+      name: z.string(),
       version: z.number(),
     })
     .optional(),
@@ -157,8 +157,8 @@ const CreateRoute = () => {
       method: "Get",
       binding: {
         bindingType: "default",
-        componentId: {
-          componentId: "",
+        component: {
+          name: "",
           version: 0,
         },
         workerName: "",
@@ -195,22 +195,25 @@ const CreateRoute = () => {
               "binding.bindingType",
               route.binding.bindingType || "default",
             );
-            const componentId = route.binding.componentId?.componentId;
-            const versionId = route.binding.componentId?.version;
-            if (componentId && versionId) {
-              loadResponseSuggestions(
-                componentId,
-                String(versionId),
-                componentResponse,
-              );
-              form.setValue(
-                "binding.componentId.componentId",
-                route.binding.componentId?.componentId || "",
-              );
-              form.setValue(
-                "binding.componentId.version",
-                route.binding.componentId?.version || 0,
-              );
+            const componentName = route.binding.component?.name;
+            const versionId = route.binding.component?.version;
+            if (componentName && versionId) {
+              const componentId = getComponentIdByName(componentName, componentList);
+              if (componentId) {
+                loadResponseSuggestions(
+                    componentId,
+                    String(versionId),
+                    componentResponse,
+                );
+                form.setValue(
+                    "binding.component.name",
+                    route.binding.component?.name || "",
+                );
+                form.setValue(
+                    "binding.component.version",
+                    route.binding.component?.version || 0,
+                );
+              }
             }
             form.setValue("binding.workerName", route.binding.workerName || "");
             form.setValue("binding.response", route.binding.response || "");
@@ -289,6 +292,12 @@ const CreateRoute = () => {
     extractDynamicParams(value);
   };
 
+  const getComponentIdByName = (componentName: string, componentResponse: {
+    [key: string]: ComponentList;
+  }) => {
+    return Object.keys(componentResponse).find(key => componentResponse[key].componentName === componentName);
+  };
+
   const loadResponseSuggestions = async (
     componentId: string,
     version: string,
@@ -316,9 +325,12 @@ const CreateRoute = () => {
   };
 
   const onVersionChange = (version: string) => {
-    form.setValue("binding.componentId.version", Number(version));
-    const componentId = form.getValues("binding.componentId.componentId");
-    loadResponseSuggestions(componentId, version, componentList);
+    form.setValue("binding.component.version", Number(version));
+    const componentName = form.getValues("binding.component.name");
+    const componentId = getComponentIdByName(componentName, componentList);
+    if (componentId) {
+      loadResponseSuggestions(componentId, version, componentList);
+    }
   };
 
   const togglePopover = () => {
@@ -399,21 +411,24 @@ const CreateRoute = () => {
                   <div className="grid grid-cols-2 gap-4 mt-4">
                     <FormField
                       control={form.control}
-                      name="binding.componentId.componentId"
+                      name="binding.component.name"
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel required>Component</FormLabel>
                           <Select
-                            onValueChange={componentId => {
+                            onValueChange={name => {
                               form.setValue(
-                                "binding.componentId.componentId",
-                                componentId,
+                                "binding.component.name",
+                                  name,
                               );
-                              loadResponseSuggestions(
-                                componentId,
-                                "0",
-                                componentList,
-                              );
+                              const componentId = getComponentIdByName(name, componentList);
+                              if (componentId) {
+                                loadResponseSuggestions(
+                                    componentId,
+                                    "0",
+                                    componentList,
+                                );
+                              }
                             }}
                             value={field.value}
                           >
@@ -426,7 +441,7 @@ const CreateRoute = () => {
                               {Object.values(componentList).map(
                                 (data: ComponentList) => (
                                   <SelectItem
-                                    value={data.componentId || ""}
+                                    value={data.componentName || ""}
                                     key={data.componentName}
                                   >
                                     {data.componentName}
@@ -442,7 +457,7 @@ const CreateRoute = () => {
 
                     <FormField
                       control={form.control}
-                      name="binding.componentId.version"
+                      name="binding.component.version"
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel required>Version</FormLabel>
@@ -450,7 +465,7 @@ const CreateRoute = () => {
                             onValueChange={onVersionChange}
                             value={String(field.value)}
                             disabled={
-                              !form.watch("binding.componentId.componentId")
+                              !form.watch("binding.component.name")
                             }
                           >
                             <FormControl>
@@ -462,9 +477,9 @@ const CreateRoute = () => {
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
-                              {form.watch("binding.componentId") &&
+                              {form.watch("binding.component") &&
                                 componentList[
-                                  form.watch("binding.componentId.componentId")
+                                  form.watch("binding.component.name")
                                 ]?.versionList?.map((v: number) => (
                                   <SelectItem value={String(v)} key={v}>
                                     v{v}

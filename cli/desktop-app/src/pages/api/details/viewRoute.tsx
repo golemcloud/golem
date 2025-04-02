@@ -12,7 +12,6 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { API } from "@/service";
 import { Api, RouteRequestData } from "@/types/api";
-import { ComponentList } from "@/types/component";
 
 interface CodeBlockProps {
   code: string | string[];
@@ -135,9 +134,6 @@ export const ApiRoute = () => {
   const { apiName, version } = useParams();
   const [currentRoute, setCurrentRoute] = useState({} as RouteRequestData);
   const [apiResponse, setApiResponse] = useState({} as Api);
-  const [componentList, setComponentList] = useState<{
-    [key: string]: ComponentList;
-  }>({});
   const [queryParams] = useSearchParams();
   const path = queryParams.get("path");
   const method = queryParams.get("method");
@@ -146,11 +142,7 @@ export const ApiRoute = () => {
   useEffect(() => {
     const fetchData = async () => {
       if (apiName && version && path && method) {
-        const [apiResponse, componentResponse] = await Promise.all([
-          API.getApi(apiName),
-          API.getComponentByIdAsKey(),
-        ]);
-        setComponentList(componentResponse);
+        const apiResponse= await API.getApi(apiName);
         const selectedApi = apiResponse.find(api => api.version === version);
         if (selectedApi) {
           setApiResponse(selectedApi);
@@ -236,17 +228,15 @@ export const ApiRoute = () => {
             </div>
           </CardHeader>
           <CardContent className="space-y-6 pt-6">
-            {currentRoute?.binding?.componentId?.componentId && (
+            {currentRoute?.binding?.component?.name && (
               <div className="mb-6">
                 <h2 className="text-gray-800 dark:text-gray-200 mb-2">
                   Component
                 </h2>
                 <CodeBlock
                   code={`${
-                    componentList[
-                      currentRoute?.binding?.componentId?.componentId!
-                    ]?.componentName
-                  } / v${currentRoute?.binding?.componentId?.version}`}
+                      currentRoute?.binding?.component?.name
+                  } / v${currentRoute?.binding?.component?.version}`}
                   label="component name"
                   allowCopy={false}
                 />

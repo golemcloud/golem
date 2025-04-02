@@ -1,5 +1,3 @@
-import { VersionedComponentId } from "@/types/component.ts";
-
 export interface Api {
   createdAt?: string;
   draft: boolean;
@@ -31,11 +29,16 @@ export interface RouteRequestData {
 
 export interface GatewayBindingData {
   bindingType: GatewayBindingType;
-  componentId?: VersionedComponentId;
+  component?: GatewayBindingComponent;
   workerName?: string;
   idempotencyKey?: string;
   response?: string;
   corsPreflight?: HttpCors;
+}
+
+export interface GatewayBindingComponent {
+  name: string;
+  version?: number;
 }
 
 export interface HttpCors {
