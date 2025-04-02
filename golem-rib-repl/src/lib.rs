@@ -1,6 +1,6 @@
 mod compiler;
 pub mod dependency_manager;
-#[cfg(feature = "bin")]
+#[cfg(feature = "embedded")]
 pub mod embedded;
 pub mod invoke;
 pub mod repl_printer;

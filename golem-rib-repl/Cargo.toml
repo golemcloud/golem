@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-bin = ["golem-test-framework", "golem-worker-executor-base", "golem-service-base", "golem-api-grpc"]
+embedded = ["golem-test-framework", "golem-worker-executor-base", "golem-service-base", "golem-api-grpc"]
 
 [dependencies]
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }

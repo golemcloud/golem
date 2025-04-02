@@ -4,17 +4,17 @@ use golem_test_framework::config::TestDependencies;
 use std::process::exit;
 use std::sync::Arc;
 
-#[cfg(feature = "bin")]
+#[cfg(feature = "embedded")]
 use golem_rib_repl::embedded::*;
 
 // This is to experiment with the REPL through `cargo run --features embedded`
 #[tokio::main]
 async fn main() {
-    #[cfg(feature = "bin")]
+    #[cfg(feature = "embedded")]
     get_repl().await.run().await;
 }
 
-#[cfg(feature = "bin")]
+#[cfg(feature = "embedded")]
 async fn get_repl() -> RibRepl {
     let dependencies = BootstrapDependencies::new().await;
 

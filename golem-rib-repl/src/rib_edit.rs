@@ -7,7 +7,6 @@ use rib::{Expr, InferredExpr, VariableId};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
-use rustyline::history::History;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
