@@ -19,7 +19,7 @@ use bytes::Bytes;
 use fred::interfaces::RedisResult;
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_service_base::db::sqlite::SqlitePool;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -288,7 +288,8 @@ impl SqliteGatewaySession {
                   );
                 "#,
             ))
-            .await?;
+            .await
+            .map_err(|err| err.to_safe_string())?;
 
         info!("Initialized gateway session SQLite table");
 
@@ -322,6 +323,7 @@ impl SqliteGatewaySession {
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     pub fn current_time() -> i64 {

@@ -17,12 +17,11 @@ use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool};
 use std::fmt::Display;
-use std::ops::Deref;
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::{info_span, Instrument, Span};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDeploymentRecord {
@@ -98,48 +97,30 @@ impl<Repo: ApiDeploymentRepo> LoggedDeploymentRepo<Repo> {
         Self { repo }
     }
 
-    fn logged<R>(message: &'static str, result: Result<R, RepoError>) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!("{}", message),
-            Err(error) => error!(error = error.to_string(), "{message}"),
-        }
-        result
-    }
-
-    fn logged_with_id<R>(
-        message: &'static str,
-        namespace: &str,
-        api_definition_id: &str,
-        result: Result<R, RepoError>,
-    ) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!(
-                namespace = namespace,
-                api_definition_id = api_definition_id.to_string(),
-                "{}",
-                message
-            ),
-            Err(error) => error!(
-                namespace = namespace,
-                api_definition_id = api_definition_id.to_string(),
-                error = error.to_string(),
-                "{message}"
-            ),
-        }
-        result
+    fn span(namespace: &str, api_definition_id: &str) -> Span {
+        info_span!(
+            "API deployment repository",
+            namespace = namespace,
+            api_definition_id = api_definition_id
+        )
     }
 }
 
 #[async_trait]
 impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
-        let result = self.repo.create(deployments).await;
-        Self::logged("create", result)
+        self.repo.create(deployments).await
     }
 
     async fn delete(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError> {
-        let result = self.repo.delete(deployments).await;
-        Self::logged("delete", result)
+        self.repo.delete(deployments).await
+    }
+
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        self.repo
+            .get_all(namespace)
+            .instrument(Self::span(namespace, "*"))
+            .await
     }
 
     async fn get_by_id(
@@ -147,13 +128,10 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
         namespace: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        let result = self.repo.get_by_id(namespace, definition_id).await;
-        Self::logged_with_id("get_by_id", namespace, definition_id, result)
-    }
-
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        let result = self.repo.get_all(namespace).await;
-        Self::logged_with_id("get_all", namespace, "*", result)
+        self.repo
+            .get_by_id(namespace, definition_id)
+            .instrument(Self::span(namespace, definition_id))
+            .await
     }
 
     async fn get_by_id_and_version(
@@ -162,16 +140,14 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
         definition_id: &str,
         definition_version: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        let result = self
-            .repo
+        self.repo
             .get_by_id_and_version(namespace, definition_id, definition_version)
-            .await;
-        Self::logged_with_id("get_by_id_and_version", namespace, definition_id, result)
+            .instrument(Self::span(namespace, definition_id))
+            .await
     }
 
     async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        let result = self.repo.get_by_site(site).await;
-        Self::logged("get_by_site", result)
+        self.repo.get_by_site(site).await
     }
 
     async fn get_definitions_by_site(
@@ -179,37 +155,40 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
         namespace: &str,
         site: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let result = self.repo.get_definitions_by_site(namespace, site).await;
-        Self::logged("get_definitions_by_site", result)
+        self.repo.get_definitions_by_site(namespace, site).await
     }
 
     async fn get_all_definitions_by_site(
         &self,
         site: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let result = self.repo.get_all_definitions_by_site(site).await;
-        Self::logged("get_all_definitions_by_site", result)
+        self.repo.get_all_definitions_by_site(site).await
     }
 }
 
-pub struct DbApiDeploymentRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbApiDeploymentRepo<DB: Pool> {
+    db_pool: Arc<DB>,
 }
 
-impl<DB: Database> DbApiDeploymentRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbApiDeploymentRepo<DB> {
+    pub fn new(db_pool: Arc<DB>) -> Self {
         Self { db_pool }
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
+impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
         if !deployments.is_empty() {
-            let mut transaction = self.db_pool.begin().await?;
+            let mut transaction = self
+                .db_pool
+                .with("api_deployment", "create")
+                .begin()
+                .await?;
             for deployment in deployments {
-                sqlx::query(
+                let query = sqlx::query(
                     r#"
                       INSERT INTO api_deployments
                         (namespace, site, host, subdomain, definition_id, definition_version, created_at)
@@ -223,41 +202,51 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 .bind(deployment.subdomain.clone())
                 .bind(deployment.definition_id.clone())
                 .bind(deployment.definition_version.clone())
-                .bind(deployment.created_at)
-                .execute(&mut *transaction)
-                .await?;
+                .bind(deployment.created_at);
+
+                transaction.execute(query).await?;
             }
-            transaction.commit().await?;
+
+            self.db_pool
+                .with("api_deployment", "create")
+                .commit(transaction)
+                .await?;
         }
         Ok(())
     }
 
     async fn delete(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError> {
         if !deployments.is_empty() {
-            let mut transaction = self.db_pool.begin().await?;
+            let mut transaction = self
+                .db_pool
+                .with("api_deployment", "delete")
+                .begin()
+                .await?;
             for deployment in deployments {
-                sqlx::query(
+                let query = sqlx::query(
                     "DELETE FROM api_deployments WHERE namespace = $1 AND site = $2 AND definition_id = $3 AND definition_version = $4",
                 )
-                    .bind(deployment.namespace.clone())
-                    .bind(deployment.site.clone())
-                    .bind(deployment.definition_id.clone())
-                    .bind(deployment.definition_version.clone())
-                    .execute(&mut *transaction)
-                    .await?;
+                .bind(deployment.namespace.clone())
+                .bind(deployment.site.clone())
+                .bind(deployment.definition_id.clone())
+                .bind(deployment.definition_version.clone());
+                transaction.execute(query).await?;
             }
-            transaction.commit().await?;
+            self.db_pool
+                .with("api_deployment", "delete")
+                .commit(transaction)
+                .await?;
             Ok(true)
         } else {
             Ok(false)
         }
     }
-    #[when(sqlx::Postgres -> get_all)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_all)]
     async fn get_all_postgres(
         &self,
         namespace: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
                 FROM api_deployments
@@ -265,14 +254,16 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY site, host, subdomain, definition_id, definition_version
                 "#,
         )
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(namespace);
+
+        self.db_pool
+            .with("api_deployment", "get_all")
+            .fetch_all(query)
+            .await
     }
-    #[when(sqlx::Sqlite -> get_all)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_all)]
     async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
@@ -280,19 +271,21 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY site, host, subdomain, definition_id, definition_version
                 "#,
         )
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(namespace);
+
+        self.db_pool
+            .with("api_deployment", "get_all")
+            .fetch_all(query)
+            .await
     }
 
-    #[when(sqlx::Postgres -> get_by_id)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_by_id)]
     async fn get_by_id_postgres(
         &self,
         namespace: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
                 FROM api_deployments
@@ -301,19 +294,21 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 "#,
         )
         .bind(namespace)
-        .bind(definition_id)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(definition_id);
+
+        self.db_pool
+            .with("api_deployment", "get_by_id")
+            .fetch_all(query)
+            .await
     }
 
-    #[when(sqlx::Sqlite -> get_by_id)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_id)]
     async fn get_by_id_sqlite(
         &self,
         namespace: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
@@ -321,21 +316,23 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY site, host, subdomain, definition_version
                 "#,
         )
-            .bind(namespace)
-            .bind(definition_id)
-            .fetch_all(self.db_pool.deref())
+        .bind(namespace)
+        .bind(definition_id);
+
+        self.db_pool
+            .with("api_deployment", "get_by_id")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Postgres -> get_by_id_and_version)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_by_id_and_version)]
     async fn get_by_id_and_version_postgres(
         &self,
         namespace: &str,
         definition_id: &str,
         definition_version: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
                 FROM api_deployments
@@ -345,20 +342,22 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
         )
         .bind(namespace)
         .bind(definition_id)
-        .bind(definition_version)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(definition_version);
+
+        self.db_pool
+            .with("api_deployment", "get_by_id_and_version")
+            .fetch_all(query)
+            .await
     }
 
-    #[when(sqlx::Sqlite -> get_by_id_and_version)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_id_and_version)]
     async fn get_by_id_and_version_sqlite(
         &self,
         namespace: &str,
         definition_id: &str,
         definition_version: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
@@ -366,20 +365,22 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY site, host, subdomain
                 "#,
         )
-            .bind(namespace)
-            .bind(definition_id)
-            .bind(definition_version)
-            .fetch_all(self.db_pool.deref())
+        .bind(namespace)
+        .bind(definition_id)
+        .bind(definition_version);
+
+        self.db_pool
+            .with("api_deployment", "get_by_id_and_version")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Postgres -> get_by_site)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_by_site)]
     async fn get_by_site_postgres(
         &self,
         site: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
                 FROM api_deployments
@@ -387,15 +388,17 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY namespace, host, subdomain, definition_id, definition_version
                 "#,
         )
-        .bind(site)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(site);
+
+        self.db_pool
+            .with("api_deployment", "get_by_site")
+            .fetch_all(query)
+            .await
     }
 
-    #[when(sqlx::Sqlite -> get_by_site)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_site)]
     async fn get_by_site_sqlite(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>(
+        let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
@@ -403,19 +406,21 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY namespace, host, subdomain, definition_id, definition_version
                 "#,
         )
-            .bind(site)
-            .fetch_all(self.db_pool.deref())
+        .bind(site);
+
+        self.db_pool
+            .with("api_deployment", "get_by_site")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Postgres -> get_definitions_by_site)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_definitions_by_site)]
     async fn get_definitions_by_site_postgres(
         &self,
         namespace: &str,
         site: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>(
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
                 SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data AS data, api_definitions.created_at::timestamptz
                 FROM api_deployments
@@ -424,20 +429,22 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY api_definitions.namespace, api_definitions.id, api_definitions.version
                 "#
         )
-            .bind(namespace)
-            .bind(site)
-            .fetch_all(self.db_pool.deref())
+        .bind(namespace)
+        .bind(site);
+
+        self.db_pool
+            .with("api_deployment", "get_definitions_by_site")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Sqlite -> get_definitions_by_site)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_definitions_by_site)]
     async fn get_definitions_by_site_sqlite(
         &self,
         namespace: &str,
         site: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>(
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
                 SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data, api_definitions.created_at
                 FROM api_deployments
@@ -446,19 +453,21 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY api_definitions.namespace, api_definitions.id, api_definitions.version
                 "#
         )
-            .bind(namespace)
-            .bind(site)
-            .fetch_all(self.db_pool.deref())
+        .bind(namespace)
+        .bind(site);
+
+        self.db_pool
+            .with("api_deployment", "get_definitions_by_site")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Postgres -> get_all_definitions_by_site)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_all_definitions_by_site)]
     async fn get_all_definitions_by_site_postgres(
         &self,
         site: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>(
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
                 SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data AS data, api_definitions.created_at::timestamptz
                 FROM api_deployments
@@ -467,18 +476,20 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY api_definitions.namespace, api_definitions.id, api_definitions.version
                 "#
         )
-            .bind(site)
-            .fetch_all(self.db_pool.deref())
+        .bind(site);
+
+        self.db_pool
+            .with("api_deployment", "get_all_definitions_by_site")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Sqlite -> get_all_definitions_by_site)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_all_definitions_by_site)]
     async fn get_all_definitions_by_site_sqlite(
         &self,
         site: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>(
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
                 SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data, api_definitions.created_at
                 FROM api_deployments
@@ -487,9 +498,11 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 ORDER BY api_definitions.namespace, api_definitions.id, api_definitions.version
                 "#
         )
-            .bind(site)
-            .fetch_all(self.db_pool.deref())
+        .bind(site);
+
+        self.db_pool
+            .with("api_deployment", "get_all_definitions_by_site")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 }

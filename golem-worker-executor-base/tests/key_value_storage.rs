@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::AccountId;
 use golem_common::redis::RedisPool;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::storage::keyvalue::memory::InMemoryKeyValueStorage;

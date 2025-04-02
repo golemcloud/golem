@@ -19,6 +19,7 @@ use figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use sqlx::sqlite::SqliteJournalMode;
 use url::Url;
 
 const ENV_VAR_PREFIX: &str = "GOLEM__";
@@ -446,6 +447,16 @@ pub struct DbSqliteConfig {
     pub max_connections: u32,
 }
 
+impl DbSqliteConfig {
+    #[cfg(feature = "sql")]
+    pub fn connect_options(&self) -> sqlx::sqlite::SqliteConnectOptions {
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&self.database)
+            .journal_mode(SqliteJournalMode::Wal)
+            .create_if_missing(true)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DbPostgresConfig {
     pub host: String,
@@ -455,4 +466,16 @@ pub struct DbPostgresConfig {
     pub port: u16,
     pub max_connections: u32,
     pub schema: Option<String>,
+}
+
+impl DbPostgresConfig {
+    #[cfg(feature = "sql")]
+    pub fn connect_options(&self) -> sqlx::postgres::PgConnectOptions {
+        sqlx::postgres::PgConnectOptions::new()
+            .host(&self.host)
+            .port(self.port)
+            .database(&self.database)
+            .username(&self.username)
+            .password(&self.password)
+    }
 }

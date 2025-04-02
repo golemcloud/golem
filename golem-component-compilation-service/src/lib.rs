@@ -20,7 +20,7 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_worker_executor_base::services::compiled_component;
 use grpc::CompileGrpcService;
 use prometheus::Registry;

@@ -15,17 +15,16 @@
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+use crate::db::sqlite::SqlitePool;
 use crate::replayable_stream::ErasedReplayableStream;
-use crate::storage::sqlite::DBValue;
-use crate::storage::{
-    blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult},
-    sqlite::SqlitePool,
-};
+use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use golem_common::SafeDisplay;
+use crate::db::DBValue;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -51,7 +50,7 @@ impl SqliteBlobStorage {
                     is_directory BOOLEAN DEFAULT FALSE NOT NULL,          -- Flag indicating if the row represents a directory
                     PRIMARY KEY (namespace, parent, name)  -- Composite primary key
                 );
-                "#)).await?;
+                "#)).await.map_err(|err| err.to_safe_string())?;
         Ok(())
     }
 
@@ -120,6 +119,7 @@ impl BlobStorage for SqliteBlobStorage {
             .fetch_optional_as::<DBValue, _>(query)
             .await
             .map(|r| r.map(|op| op.into_bytes()))
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn get_stream(
@@ -158,7 +158,8 @@ impl BlobStorage for SqliteBlobStorage {
             .with(target_label, op_label)
             .fetch_optional_as::<DBMetadata, _>(query)
             .await
-            .map(|r| r.map(|op| op.into_blob_metadata()))?
+            .map(|r| r.map(|op| op.into_blob_metadata()))
+            .map_err(|err| err.to_safe_string())?
             .transpose()
     }
 
@@ -188,6 +189,7 @@ impl BlobStorage for SqliteBlobStorage {
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn put_stream(
@@ -226,6 +228,7 @@ impl BlobStorage for SqliteBlobStorage {
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn create_dir(
@@ -250,6 +253,7 @@ impl BlobStorage for SqliteBlobStorage {
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn list_dir(
@@ -269,6 +273,7 @@ impl BlobStorage for SqliteBlobStorage {
             .fetch_all::<(String,), _>(query)
             .await
             .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn delete_dir(
@@ -296,6 +301,7 @@ impl BlobStorage for SqliteBlobStorage {
             .execute(query)
             .await
             .map(|result| result.rows_affected() > 0)
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn exists(
@@ -327,6 +333,7 @@ impl BlobStorage for SqliteBlobStorage {
                     ExistsResult::DoesNotExist
                 }
             })
+            .map_err(|err| err.to_safe_string())
     }
 }
 
