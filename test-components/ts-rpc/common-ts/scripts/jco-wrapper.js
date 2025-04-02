@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 // Thin wrapper around jco, exposing additional options for type generation
 
 import { program, Option } from 'commander';

@@ -8,7 +8,7 @@
 templates:
   ts:
     build:
-    - command: ../../common-ts/scripts/jco-wrapper guest-types wit-generated --async-mode jspi --async-wasi-exports ${JCO_ASYNC_EXPORT_ARGS} -o src/generated
+    - command: node ../../common-ts/scripts/jco-wrapper.js guest-types wit-generated --async-mode jspi --async-wasi-exports ${JCO_ASYNC_EXPORT_ARGS} -o src/generated
       sources:
       - wit-generated
       targets:
