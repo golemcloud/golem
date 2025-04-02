@@ -777,7 +777,7 @@ impl Expr {
             type_annotation,
             expr: Box::new(expr),
             source_span: SourceSpan::default(),
-            inferred_type: InferredType::Unknown,
+            inferred_type: InferredType::Tuple(vec![]),
         }
     }
 
@@ -791,7 +791,7 @@ impl Expr {
             type_annotation,
             expr: Box::new(expr),
             source_span: SourceSpan::default(),
-            inferred_type: InferredType::Unknown,
+            inferred_type: InferredType::Tuple(vec![]),
         }
     }
 

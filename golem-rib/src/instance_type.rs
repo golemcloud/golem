@@ -354,7 +354,7 @@ impl InstanceType {
         }
     }
 
-    fn function_dict(&self) -> FunctionDictionary {
+    pub fn function_dict(&self) -> FunctionDictionary {
         match self {
             InstanceType::Global {
                 functions_global: function_dict,
@@ -457,6 +457,12 @@ pub struct Function {
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionDictionary {
     pub map: Vec<(FunctionName, FunctionType)>,
+}
+
+impl FunctionDictionary {
+    pub fn function_names(&self) -> Vec<String> {
+        self.map.iter().map(|(f, _)| f.name()).collect::<Vec<_>>()
+    }
 }
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
@@ -747,6 +753,16 @@ impl Display for FullyQualifiedFunctionName {
 pub struct FunctionType {
     parameter_types: Vec<InferredType>,
     return_type: Vec<InferredType>,
+}
+
+impl FunctionType {
+    pub fn parameter_types(&self) -> Vec<InferredType> {
+        self.parameter_types.clone()
+    }
+
+    pub fn return_type(&self) -> Vec<InferredType> {
+        self.return_type.clone()
+    }
 }
 
 fn search_function_in_instance(
