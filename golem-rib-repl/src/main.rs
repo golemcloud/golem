@@ -28,7 +28,7 @@ async fn get_repl() -> RibRepl {
         Arc::new(EmbeddedWorkerFunctionInvoke::new(shared_executor.clone()));
 
     let default_dependency_manager = Arc::new(
-        DefaultRibDependencyManager::new(shared_executor.clone())
+        EmbeddedDependencyManager::new(shared_executor.clone())
             .await
             .expect("Failed to create default dependency manager"),
     );

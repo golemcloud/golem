@@ -1,8 +1,9 @@
 use async_trait::async_trait;
-use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use std::fmt::Debug;
 use std::path::Path;
+use uuid::Uuid;
+
 /// Dependency manager for the Rib REPL environment.
 #[async_trait]
 pub trait RibDependencyManager {
@@ -38,6 +39,6 @@ pub struct ReplDependencies {
 
 #[derive(Clone, Debug)]
 pub struct ComponentDependency {
-    pub component_id: ComponentId,
+    pub component_id: Uuid,
     pub metadata: Vec<AnalysedExport>,
 }

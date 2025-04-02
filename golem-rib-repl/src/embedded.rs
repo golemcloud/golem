@@ -99,6 +99,7 @@ use std::sync::{Arc, RwLock, Weak};
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{debug, info};
+use uuid::Uuid;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
@@ -1208,11 +1209,11 @@ impl TestDependencies for EmbeddedWorkerExecutor {
 
 // A default Rib dependency manager is mainly allowing rib to be used standalone
 // without the nuances of app manifest. This is mainly used for testing the REPL itself
-pub struct DefaultRibDependencyManager {
+pub struct EmbeddedDependencyManager {
     pub embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
 }
 
-impl DefaultRibDependencyManager {
+impl EmbeddedDependencyManager {
     pub async fn new(
         embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
     ) -> Result<Self, String> {
@@ -1223,7 +1224,7 @@ impl DefaultRibDependencyManager {
 }
 
 #[async_trait]
-impl RibDependencyManager for DefaultRibDependencyManager {
+impl RibDependencyManager for EmbeddedDependencyManager {
     async fn add_components(&self) -> Result<ReplDependencies, String> {
         Err("multiple components not supported in embedded mode".to_string())
     }
@@ -1253,7 +1254,7 @@ impl RibDependencyManager for DefaultRibDependencyManager {
             .await;
 
         Ok(ComponentDependency {
-            component_id,
+            component_id: component_id.0,
             metadata: result
                 .metadata
                 .map(|metadata| {
@@ -1285,18 +1286,18 @@ impl EmbeddedWorkerFunctionInvoke {
 impl WorkerFunctionInvoke for EmbeddedWorkerFunctionInvoke {
     async fn invoke(
         &self,
-        component_id: ComponentId,
+        component_id: Uuid,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
     ) -> Result<ValueAndType, String> {
         let target_worker_id = worker_name
             .map(|w| TargetWorkerId {
-                component_id: component_id.clone(),
+                component_id: ComponentId(component_id),
                 worker_name: Some(w.0),
             })
             .unwrap_or_else(|| TargetWorkerId {
-                component_id,
+                component_id: ComponentId(component_id),
                 worker_name: None,
             });
 

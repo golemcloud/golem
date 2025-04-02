@@ -16,20 +16,18 @@ path = "src/main.rs"
 
 [features]
 default = []
-embedded = ["golem-test-framework", "golem-worker-executor-base", "golem-service-base", "golem-api-grpc"]
+embedded = ["golem-test-framework", "golem-worker-executor-base", "golem-service-base", "golem-api-grpc", "golem-common"]
 
 [dependencies]
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
-
 golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
     "analysis",
     "bincode",
 ] }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
 
-
-# Binary only dependencies
+# Dependencies only for embedded repl binary
+golem-common = { path = "../golem-common", version = "=0.0.0" , optional = true}
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0", optional = true}
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0", optional = true}
 golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0", optional = true}
