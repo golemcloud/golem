@@ -358,7 +358,6 @@ mod tests {
                 None,
                 InferredType::U64,
             ), // The number in let expression is identified to be a U64
-            InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
         );
 
         let call_expr = call(
@@ -407,7 +406,6 @@ mod tests {
                 None,
                 InferredType::U64,
             ),
-            InferredType::Unknown,
         );
 
         let let_binding2 = let_binding(
@@ -420,7 +418,6 @@ mod tests {
                 None,
                 InferredType::U32,
             ),
-            InferredType::Unknown,
         );
 
         let call_expr1 = call(
@@ -487,7 +484,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 identifier(VariableId::local("x", 0), None, InferredType::U64),
             ],
@@ -511,12 +507,7 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::literal("1"),
-                    InferredType::Unknown,
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::literal("1")),
                 identifier(VariableId::local("x", 0), None, InferredType::Str),
             ],
             InferredType::Str,
@@ -553,7 +544,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("y", 0),
@@ -565,7 +555,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 greater_than(
                     identifier(VariableId::local("x", 0), None, InferredType::U64),
@@ -734,18 +723,8 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::literal("1"),
-                    InferredType::Unknown,
-                ),
-                let_binding(
-                    VariableId::local("y", 0),
-                    None,
-                    Expr::literal("2"),
-                    InferredType::Unknown,
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::literal("1")),
+                let_binding(VariableId::local("y", 0), None, Expr::literal("2")),
                 concat(
                     vec![
                         identifier(VariableId::local("x", 0), None, InferredType::Str),
@@ -774,12 +753,7 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::boolean(true),
-                    InferredType::Unknown,
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::boolean(true)),
                 identifier(VariableId::local("x", 0), None, InferredType::Bool),
             ],
             InferredType::Bool,
@@ -814,7 +788,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("y", 0),
@@ -826,20 +799,9 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
-                let_binding(
-                    VariableId::local("res1", 0),
-                    None,
-                    Expr::literal("foo"),
-                    InferredType::Unknown,
-                ),
-                let_binding(
-                    VariableId::local("res2", 0),
-                    None,
-                    Expr::literal("bar"),
-                    InferredType::Unknown,
-                ),
+                let_binding(VariableId::local("res1", 0), None, Expr::literal("foo")),
+                let_binding(VariableId::local("res2", 0), None, Expr::literal("bar")),
                 cond(
                     greater_than(
                         identifier(VariableId::local("x", 0), None, InferredType::U64),
@@ -872,17 +834,11 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::literal("1"),
-                    InferredType::Unknown,
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::literal("1")),
                 let_binding(
                     VariableId::local("y", 0),
                     None,
                     identifier(VariableId::local("x", 0), None, InferredType::Str),
-                    InferredType::Unknown,
                 ),
                 identifier(VariableId::local("y", 0), None, InferredType::Str),
             ],
@@ -918,19 +874,16 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("y", 0),
                     None,
                     identifier(VariableId::local("x", 0), None, InferredType::U64),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("z", 0),
                     None,
                     identifier(VariableId::local("y", 0), None, InferredType::U64),
-                    InferredType::Unknown,
                 ),
                 identifier(VariableId::local("z", 0), None, InferredType::U64),
             ],
@@ -984,7 +937,6 @@ mod tests {
                         None,
                         InferredType::List(Box::new(InferredType::U64)),
                     ),
-                    InferredType::Unknown,
                 ),
                 identifier(
                     VariableId::local("x", 0),
@@ -1042,7 +994,6 @@ mod tests {
                         None,
                         InferredType::List(Box::new(InferredType::U64)),
                     ),
-                    InferredType::Unknown,
                 ),
                 select_dynamic(
                     identifier(
@@ -1092,7 +1043,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("x", 0),
@@ -1104,7 +1054,6 @@ mod tests {
                         )],
                         InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                     ),
-                    InferredType::Unknown,
                 ),
                 select_field(
                     identifier(
@@ -1153,7 +1102,6 @@ mod tests {
                         ],
                         InferredType::Tuple(vec![InferredType::U64, InferredType::Str]),
                     ),
-                    InferredType::Unknown,
                 ),
                 identifier(
                     VariableId::local("x", 0),
@@ -1196,7 +1144,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("z", 0),
@@ -1210,7 +1157,6 @@ mod tests {
                         None,
                         InferredType::Option(Box::new(InferredType::U64)),
                     ),
-                    InferredType::Unknown,
                 ),
                 pattern_match(
                     identifier(
@@ -1275,7 +1221,6 @@ mod tests {
                 None,
                 InferredType::U64,
             ),
-            InferredType::Unknown,
         );
 
         let let_binding2 = let_binding(
@@ -1288,7 +1233,6 @@ mod tests {
                 None,
                 InferredType::U32,
             ),
-            InferredType::Unknown,
         );
 
         let match_expr_expected = pattern_match(
@@ -1401,7 +1345,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("y", 0),
@@ -1413,7 +1356,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 pattern_match(
                     option(
@@ -1505,7 +1447,6 @@ mod tests {
                         vec![("foo".to_string(), Expr::literal("bar"))],
                         InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                     ),
-                    InferredType::Unknown,
                 ),
                 pattern_match(
                     option(
@@ -1580,7 +1521,6 @@ mod tests {
                         vec![("foo".to_string(), Expr::literal("bar"))],
                         InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                     ),
-                    InferredType::Unknown,
                 ),
                 pattern_match(
                     option(
@@ -1667,7 +1607,6 @@ mod tests {
                         vec![("foo".to_string(), Expr::literal("bar"))],
                         InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("y", 0),
@@ -1699,7 +1638,6 @@ mod tests {
                         None,
                         InferredType::List(Box::new(InferredType::U64)),
                     ),
-                    InferredType::Unknown,
                 ),
                 pattern_match(
                     option(
@@ -1835,7 +1773,6 @@ mod tests {
                         None,
                         InferredType::Option(Box::new(InferredType::U64)),
                     ),
-                    InferredType::Unknown,
                 ),
                 identifier(
                     VariableId::local("x", 0),
@@ -1878,7 +1815,6 @@ mod tests {
                         None,
                         InferredType::Option(Box::new(InferredType::U64)),
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("y", 0),
@@ -1894,7 +1830,6 @@ mod tests {
                             InferredType::U64,
                         )))),
                     ),
-                    InferredType::Unknown,
                 ),
                 identifier(
                     VariableId::local("y", 0),
@@ -1935,7 +1870,6 @@ mod tests {
                         None,
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("x", 0),
@@ -1947,7 +1881,6 @@ mod tests {
                         )],
                         InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                     ),
-                    InferredType::Unknown,
                 ),
                 identifier(
                     VariableId::local("x", 0),
@@ -1999,7 +1932,6 @@ mod tests {
                         ),
                         InferredType::U64,
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("y", 0),
@@ -2023,7 +1955,6 @@ mod tests {
                                         InferredType::U64,
                                     )]),
                                 ),
-                                InferredType::Unknown,
                             ),
                             identifier(
                                 VariableId::local("z", 0),
@@ -2033,7 +1964,6 @@ mod tests {
                         ],
                         InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
                     ),
-                    InferredType::Unknown,
                 ),
                 identifier(
                     VariableId::local("y", 0),
@@ -2121,7 +2051,6 @@ mod tests {
                         None,
                         InferredType::List(Box::new(InferredType::U64)),
                     ),
-                    InferredType::Unknown,
                 ),
                 Expr::typed_list_reduce(
                     VariableId::list_reduce_identifier("z"),
@@ -2154,7 +2083,6 @@ mod tests {
                                     ),
                                     InferredType::U64,
                                 ),
-                                InferredType::Unknown,
                             ),
                             identifier(VariableId::local("result", 0), None, InferredType::U64),
                         ],
@@ -2195,7 +2123,6 @@ mod tests {
                         None,
                         InferredType::List(Box::new(InferredType::Str)),
                     ),
-                    InferredType::Unknown,
                 ),
                 Expr::list_comprehension_typed(
                     VariableId::list_comprehension_identifier("i"),
@@ -2246,7 +2173,6 @@ mod tests {
                             error: Some(Box::new(InferredType::Str)),
                         },
                     ),
-                    InferredType::Unknown,
                 ),
                 let_binding(
                     VariableId::local("q", 0),
@@ -2259,7 +2185,6 @@ mod tests {
                             error: Some(Box::new(InferredType::Unknown)),
                         },
                     ),
-                    InferredType::Unknown,
                 ),
                 record(
                     vec![
@@ -2582,13 +2507,12 @@ mod tests {
             variable_id: VariableId,
             type_annotation: Option<TypeName>,
             expr: Expr,
-            inferred_type: InferredType,
         ) -> Expr {
             Expr::Let {
                 variable_id,
                 type_annotation,
                 expr: Box::new(expr),
-                inferred_type,
+                inferred_type: InferredType::Tuple(vec![]),
                 source_span: SourceSpan::default(),
             }
         }
@@ -2721,7 +2645,6 @@ mod tests {
                             None,
                             InferredType::Str,
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("query1", 0),
@@ -2736,7 +2659,6 @@ mod tests {
                                 "foo-bar".to_string(),
                             ]),
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("query2", 0),
@@ -2751,7 +2673,6 @@ mod tests {
                                 "foo-bar".to_string(),
                             ]),
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("query3", 0),
@@ -2766,7 +2687,6 @@ mod tests {
                                 "foo-bar".to_string(),
                             ]),
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("result", 0),
@@ -2815,7 +2735,6 @@ mod tests {
                                 "in-progress".to_string(),
                             ]),
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("x", 0),
@@ -2896,7 +2815,6 @@ mod tests {
                             ],
                             InferredType::Str,
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("y", 0),
@@ -2977,7 +2895,6 @@ mod tests {
                             ],
                             InferredType::Str,
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("z", 0),
@@ -3058,7 +2975,6 @@ mod tests {
                             ],
                             InferredType::Str,
                         ),
-                        InferredType::Unknown,
                     ),
                     record(
                         vec![
@@ -3230,6 +3146,12 @@ mod tests {
                                         ),
                                     ],
                                     InferredType::Record(vec![
+                                        ("id".to_string(), InferredType::Str),
+                                        ("name".to_string(), InferredType::Str),
+                                        (
+                                            "titles".to_string(),
+                                            InferredType::List(Box::new(InferredType::Str)),
+                                        ),
                                         (
                                             "address".to_string(),
                                             InferredType::Record(vec![
@@ -3237,18 +3159,18 @@ mod tests {
                                                 ("city".to_string(), InferredType::Str),
                                             ]),
                                         ),
-                                        ("id".to_string(), InferredType::Str),
-                                        ("name".to_string(), InferredType::Str),
-                                        (
-                                            "titles".to_string(),
-                                            InferredType::List(Box::new(InferredType::Str)),
-                                        ),
                                     ]),
                                 ),
                             )],
                             InferredType::Record(vec![(
                                 "body".to_string(),
                                 InferredType::Record(vec![
+                                    ("id".to_string(), InferredType::Str),
+                                    ("name".to_string(), InferredType::Str),
+                                    (
+                                        "titles".to_string(),
+                                        InferredType::List(Box::new(InferredType::Str)),
+                                    ),
                                     (
                                         "address".to_string(),
                                         InferredType::Record(vec![
@@ -3256,16 +3178,9 @@ mod tests {
                                             ("city".to_string(), InferredType::Str),
                                         ]),
                                     ),
-                                    ("id".to_string(), InferredType::Str),
-                                    ("name".to_string(), InferredType::Str),
-                                    (
-                                        "titles".to_string(),
-                                        InferredType::List(Box::new(InferredType::Str)),
-                                    ),
                                 ]),
                             )]),
                         ),
-                        InferredType::Unknown,
                     ),
                     let_binding(
                         VariableId::local("result", 0),
@@ -3284,18 +3199,18 @@ mod tests {
                                 InferredType::Record(vec![(
                                     "body".to_string(),
                                     InferredType::Record(vec![
+                                        ("id".to_string(), InferredType::Str),
+                                        ("name".to_string(), InferredType::Str),
+                                        (
+                                            "titles".to_string(),
+                                            InferredType::List(Box::new(InferredType::Str)),
+                                        ),
                                         (
                                             "address".to_string(),
                                             InferredType::Record(vec![
                                                 ("street".to_string(), InferredType::Str),
                                                 ("city".to_string(), InferredType::Str),
                                             ]),
-                                        ),
-                                        ("id".to_string(), InferredType::Str),
-                                        ("name".to_string(), InferredType::Str),
-                                        (
-                                            "titles".to_string(),
-                                            InferredType::List(Box::new(InferredType::Str)),
                                         ),
                                     ]),
                                 )]),
@@ -3304,7 +3219,6 @@ mod tests {
                                 InferredType::Str,
                             )))),
                         ),
-                        InferredType::Unknown,
                     ),
                     pattern_match(
                         identifier(
@@ -3340,6 +3254,14 @@ mod tests {
                                                 InferredType::Record(vec![(
                                                     "body".to_string(),
                                                     InferredType::Record(vec![
+                                                        ("id".to_string(), InferredType::Str),
+                                                        ("name".to_string(), InferredType::Str),
+                                                        (
+                                                            "titles".to_string(),
+                                                            InferredType::List(Box::new(
+                                                                InferredType::Str,
+                                                            )),
+                                                        ),
                                                         (
                                                             "address".to_string(),
                                                             InferredType::Record(vec![
@@ -3353,32 +3275,24 @@ mod tests {
                                                                 ),
                                                             ]),
                                                         ),
-                                                        ("id".to_string(), InferredType::Str),
-                                                        ("name".to_string(), InferredType::Str),
-                                                        (
-                                                            "titles".to_string(),
-                                                            InferredType::List(Box::new(
-                                                                InferredType::Str,
-                                                            )),
-                                                        ),
                                                     ]),
                                                 )]),
                                             ),
                                             "body".to_string(),
                                             None,
                                             InferredType::Record(vec![
+                                                ("id".to_string(), InferredType::Str),
+                                                ("name".to_string(), InferredType::Str),
+                                                (
+                                                    "titles".to_string(),
+                                                    InferredType::List(Box::new(InferredType::Str)),
+                                                ),
                                                 (
                                                     "address".to_string(),
                                                     InferredType::Record(vec![
                                                         ("street".to_string(), InferredType::Str),
                                                         ("city".to_string(), InferredType::Str),
                                                     ]),
-                                                ),
-                                                ("id".to_string(), InferredType::Str),
-                                                ("name".to_string(), InferredType::Str),
-                                                (
-                                                    "titles".to_string(),
-                                                    InferredType::List(Box::new(InferredType::Str)),
                                                 ),
                                             ]),
                                         ),

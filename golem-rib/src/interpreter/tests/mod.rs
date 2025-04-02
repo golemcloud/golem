@@ -2244,7 +2244,12 @@ mod comprehensive_test {
                 functions_and_result,
             });
 
-            Interpreter::new(&RibInput::new(interpreter_env_input), dynamic_worker_invoke)
+            Interpreter::new(
+                &RibInput::new(interpreter_env_input),
+                dynamic_worker_invoke,
+                None,
+                None,
+            )
         }
 
         struct DynamicRibFunctionInvoke {

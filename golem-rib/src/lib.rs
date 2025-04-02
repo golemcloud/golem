@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use call_type::*;
 pub use compiler::*;
 pub use expr::*;
 pub use function_name::*;
 pub use inferred_type::*;
+pub use instance_type::*;
 pub use interpreter::*;
 pub use parser::type_name::TypeName;
 pub use text::*;

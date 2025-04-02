@@ -1,0 +1,54 @@
+[package]
+name = "golem-rib-repl"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Repl for Rib language"
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+name = "golem-rib-repl"
+path = "src/main.rs"
+harness = false
+
+[features]
+default = []
+embedded = ["golem-test-framework", "golem-worker-executor-base", "golem-service-base", "golem-api-grpc", "golem-common"]
+
+[dependencies]
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
+    "analysis",
+    "bincode",
+] }
+
+# Dependencies only for embedded repl binary
+golem-common = { path = "../golem-common", version = "=0.0.0", optional = true }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0", optional = true }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0", optional = true }
+golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0", optional = true }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "=0.0.0", optional = true }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+colored = { workspace = true }
+dirs = { workspace = true }
+prometheus = { workspace = true }
+rustyline = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

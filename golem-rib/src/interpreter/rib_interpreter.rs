@@ -18,9 +18,13 @@ use crate::interpreter::stack::InterpreterStack;
 use crate::{RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
 use std::sync::Arc;
 
+use super::interpreter_stack_value::RibInterpreterStackValue;
+
 pub struct Interpreter {
     pub input: RibInput,
     pub invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+    pub custom_stack: Option<InterpreterStack>,
+    pub custom_env: Option<InterpreterEnv>,
 }
 
 impl Default for Interpreter {
@@ -28,31 +32,63 @@ impl Default for Interpreter {
         Interpreter {
             input: RibInput::default(),
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            custom_stack: None,
+            custom_env: None,
         }
     }
 }
 
 impl Interpreter {
-    pub fn new(input: &RibInput, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>) -> Self {
+    pub fn new(
+        input: &RibInput,
+        invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+        custom_stack: Option<InterpreterStack>,
+        custom_env: Option<InterpreterEnv>,
+    ) -> Self {
         Interpreter {
             input: input.clone(),
             invoke,
+            custom_stack,
+            custom_env,
         }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
-    pub fn pure(input: &RibInput) -> Self {
+    pub fn pure(
+        input: &RibInput,
+        custom_stack: Option<InterpreterStack>,
+        custom_env: Option<InterpreterEnv>,
+    ) -> Self {
         Interpreter {
             input: input.clone(),
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            custom_stack,
+            custom_env,
         }
+    }
+
+    // Override rib input helps with incremental interpretation
+    // where a rib script is now trying to access a specific input
+    // such that the compiler already knows the required global variable and its types,
+    // to later override the interpreter with this input. The previous inputs will be completely
+    // discard as they are either loaded in as variables, or if they are accessed again, the inputs
+    // will be or can be overriden back
+    pub fn override_rib_input(&mut self, rib_input: RibInput) {
+        self.input = rib_input;
     }
 
     pub async fn run(&mut self, instructions0: RibByteCode) -> Result<RibResult, String> {
         let mut byte_code_cursor = RibByteCodeCursor::from_rib_byte_code(instructions0);
-        let mut stack = InterpreterStack::new();
-        let mut interpreter_env = InterpreterEnv::from(&self.input, &self.invoke);
+        let stack = match &mut self.custom_stack {
+            Some(custom) => custom,
+            None => &mut InterpreterStack::default(),
+        };
+
+        let interpreter_env = match &mut self.custom_env {
+            Some(custom) => custom,
+            None => &mut InterpreterEnv::from(&self.input, &self.invoke),
+        };
 
         while let Some(instruction) = byte_code_cursor.get_instruction() {
             match instruction {
@@ -65,134 +101,117 @@ impl Interpreter {
                 }
 
                 RibIR::CreateAndPushRecord(analysed_type) => {
-                    internal::run_create_record_instruction(analysed_type, &mut stack)?;
+                    internal::run_create_record_instruction(analysed_type, stack)?;
                 }
 
                 RibIR::UpdateRecord(field_name) => {
-                    internal::run_update_record_instruction(field_name, &mut stack)?;
+                    internal::run_update_record_instruction(field_name, stack)?;
                 }
 
                 RibIR::PushList(analysed_type, arg_size) => {
-                    internal::run_push_list_instruction(arg_size, analysed_type, &mut stack)?;
+                    internal::run_push_list_instruction(arg_size, analysed_type, stack)?;
                 }
 
                 RibIR::EqualTo => {
-                    internal::run_compare_instruction(&mut stack, |left, right| left == right)?;
+                    internal::run_compare_instruction(stack, |left, right| left == right)?;
                 }
 
                 RibIR::GreaterThan => {
-                    internal::run_compare_instruction(&mut stack, |left, right| left > right)?;
+                    internal::run_compare_instruction(stack, |left, right| left > right)?;
                 }
 
                 RibIR::LessThan => {
-                    internal::run_compare_instruction(&mut stack, |left, right| left < right)?;
+                    internal::run_compare_instruction(stack, |left, right| left < right)?;
                 }
 
                 RibIR::GreaterThanOrEqualTo => {
-                    internal::run_compare_instruction(&mut stack, |left, right| left >= right)?;
+                    internal::run_compare_instruction(stack, |left, right| left >= right)?;
                 }
 
                 RibIR::LessThanOrEqualTo => {
-                    internal::run_compare_instruction(&mut stack, |left, right| left <= right)?;
+                    internal::run_compare_instruction(stack, |left, right| left <= right)?;
                 }
                 RibIR::Plus(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut stack,
+                        stack,
                         |left, right| left + right,
                         &analysed_type,
                     )?;
                 }
                 RibIR::Minus(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut stack,
+                        stack,
                         |left, right| left - right,
                         &analysed_type,
                     )?;
                 }
                 RibIR::Divide(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut stack,
-                        |left, right| left - right,
+                        stack,
+                        |left, right| left / right,
                         &analysed_type,
                     )?;
                 }
                 RibIR::Multiply(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut stack,
+                        stack,
                         |left, right| left * right,
                         &analysed_type,
                     )?;
                 }
 
                 RibIR::AssignVar(variable_id) => {
-                    internal::run_assign_var_instruction(
-                        variable_id,
-                        &mut stack,
-                        &mut interpreter_env,
-                    )?;
+                    internal::run_assign_var_instruction(variable_id, stack, interpreter_env)?;
                 }
 
                 RibIR::LoadVar(variable_id) => {
-                    internal::run_load_var_instruction(
-                        variable_id,
-                        &mut stack,
-                        &mut interpreter_env,
-                    )?;
+                    internal::run_load_var_instruction(variable_id, stack, interpreter_env)?;
                 }
 
                 RibIR::IsEmpty => {
-                    internal::run_is_empty_instruction(&mut stack)?;
+                    internal::run_is_empty_instruction(stack)?;
                 }
 
                 RibIR::JumpIfFalse(instruction_id) => {
                     internal::run_jump_if_false_instruction(
                         instruction_id,
                         &mut byte_code_cursor,
-                        &mut stack,
+                        stack,
                     )?;
                 }
 
                 RibIR::SelectField(field_name) => {
-                    internal::run_select_field_instruction(field_name, &mut stack)?;
+                    internal::run_select_field_instruction(field_name, stack)?;
                 }
 
                 RibIR::SelectIndex(index) => {
-                    internal::run_select_index_instruction(&mut stack, index)?;
+                    internal::run_select_index_instruction(stack, index)?;
                 }
 
                 RibIR::SelectIndexV1 => {
-                    internal::run_select_index_v1_instruction(&mut stack)?;
+                    internal::run_select_index_v1_instruction(stack)?;
                 }
 
                 RibIR::CreateFunctionName(site, function_type) => {
-                    internal::run_create_function_name_instruction(
-                        site,
-                        function_type,
-                        &mut stack,
-                    )?;
+                    internal::run_create_function_name_instruction(site, function_type, stack)?;
                 }
 
                 RibIR::InvokeFunction(worker_type, arg_size, _) => {
-                    internal::run_call_instruction(
-                        arg_size,
-                        worker_type,
-                        &mut stack,
-                        &mut interpreter_env,
-                    )
-                    .await?;
+                    internal::run_call_instruction(arg_size, worker_type, stack, interpreter_env)
+                        .await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
                     internal::run_variant_construction_instruction(
                         variant_name,
                         analysed_type,
-                        &mut stack,
+                        stack,
                     )
                     .await?;
                 }
 
                 RibIR::PushEnum(enum_name, analysed_type) => {
-                    internal::run_push_enum_instruction(&mut stack, enum_name, analysed_type)?;
+                    internal::run_push_enum_instruction(stack, enum_name, analysed_type)?;
                 }
 
                 RibIR::Throw(message) => {
@@ -200,11 +219,11 @@ impl Interpreter {
                 }
 
                 RibIR::GetTag => {
-                    internal::run_get_tag_instruction(&mut stack)?;
+                    internal::run_get_tag_instruction(stack)?;
                 }
 
                 RibIR::Deconstruct => {
-                    internal::run_deconstruct_instruction(&mut stack)?;
+                    internal::run_deconstruct_instruction(stack)?;
                 }
 
                 RibIR::Jump(instruction_id) => {
@@ -217,62 +236,62 @@ impl Interpreter {
                 }
 
                 RibIR::PushSome(analysed_type) => {
-                    internal::run_create_some_instruction(&mut stack, analysed_type)?;
+                    internal::run_create_some_instruction(stack, analysed_type)?;
                 }
                 RibIR::PushNone(analysed_type) => {
-                    internal::run_create_none_instruction(&mut stack, analysed_type)?;
+                    internal::run_create_none_instruction(stack, analysed_type)?;
                 }
                 RibIR::PushOkResult(analysed_type) => {
-                    internal::run_create_ok_instruction(&mut stack, analysed_type)?;
+                    internal::run_create_ok_instruction(stack, analysed_type)?;
                 }
                 RibIR::PushErrResult(analysed_type) => {
-                    internal::run_create_err_instruction(&mut stack, analysed_type)?;
+                    internal::run_create_err_instruction(stack, analysed_type)?;
                 }
                 RibIR::Concat(arg_size) => {
-                    internal::run_concat_instruction(&mut stack, arg_size)?;
+                    internal::run_concat_instruction(stack, arg_size)?;
                 }
                 RibIR::PushTuple(analysed_type, arg_size) => {
-                    internal::run_push_tuple_instruction(arg_size, analysed_type, &mut stack)?;
+                    internal::run_push_tuple_instruction(arg_size, analysed_type, stack)?;
                 }
                 RibIR::Negate => {
-                    internal::run_negate_instruction(&mut stack)?;
+                    internal::run_negate_instruction(stack)?;
                 }
 
                 RibIR::Label(_) => {}
 
                 RibIR::And => {
-                    internal::run_and_instruction(&mut stack)?;
+                    internal::run_and_instruction(stack)?;
                 }
 
                 RibIR::Or => {
-                    internal::run_or_instruction(&mut stack)?;
+                    internal::run_or_instruction(stack)?;
                 }
                 RibIR::ToIterator => {
-                    internal::run_to_iterator(&mut stack)?;
+                    internal::run_to_iterator(stack)?;
                 }
                 RibIR::CreateSink(analysed_type) => {
-                    internal::run_create_sink_instruction(&mut stack, &analysed_type)?
+                    internal::run_create_sink_instruction(stack, &analysed_type)?
                 }
                 RibIR::AdvanceIterator => {
-                    internal::run_advance_iterator_instruction(&mut stack)?;
+                    internal::run_advance_iterator_instruction(stack)?;
                 }
                 RibIR::PushToSink => {
-                    internal::run_push_to_sink_instruction(&mut stack)?;
+                    internal::run_push_to_sink_instruction(stack)?;
                 }
 
                 RibIR::SinkToList => {
-                    internal::run_sink_to_list_instruction(&mut stack)?;
+                    internal::run_sink_to_list_instruction(stack)?;
                 }
 
                 RibIR::Length => {
-                    internal::run_length_instruction(&mut stack)?;
+                    internal::run_length_instruction(stack)?;
                 }
             }
         }
 
         let stack_value = stack
             .pop()
-            .ok_or_else(|| "Empty stack after running the instructions".to_string())?;
+            .unwrap_or_else(|| RibInterpreterStackValue::Unit);
 
         let rib_result = RibResult::from_rib_interpreter_stack_value(&stack_value)
             .ok_or_else(|| "Failed to obtain a valid result from rib execution".to_string())?;
@@ -797,7 +816,7 @@ mod internal {
         let result = left.evaluate_math_op(&right, compare_fn)?;
         let numerical_type = result.cast_to(target_numerical_type).ok_or_else(|| {
             format!(
-                "Failed to cast number {} to {:?}",
+                "failed to cast number {} to {:?}",
                 result, target_numerical_type
             )
         })?;
@@ -1535,7 +1554,7 @@ mod tests {
         };
 
         let result = interpreter.run(instructions).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1554,7 +1573,7 @@ mod tests {
         };
 
         let result = interpreter.run(instructions).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -3658,9 +3677,9 @@ mod tests {
             field(
                 "args0",
                 record(vec![
+                    field("product-id", str()),
                     field("name", str()),
                     field("price", f32()),
-                    field("product-id", str()),
                     field("quantity", u32()),
                 ]),
             ),
@@ -3672,7 +3691,7 @@ mod tests {
               {
                  worker-name: some("my-worker"),
                  function-name: "golem:it/api.{cart(\"bar\").add-item}",
-                 args0: {name: "macbook", price: 1.0, product-id: "mac", quantity: 1}
+                 args0: {product-id: "mac", name: "macbook", price: 1.0, quantity: 1}
               }
             "#,
         );
@@ -4583,6 +4602,8 @@ mod tests {
             Interpreter {
                 input: input.unwrap_or_default(),
                 invoke,
+                custom_stack: None,
+                custom_env: None,
             }
         }
 
@@ -4599,6 +4620,8 @@ mod tests {
             Interpreter {
                 input: rib_input.unwrap_or_default(),
                 invoke,
+                custom_stack: None,
+                custom_env: None,
             }
         }
 

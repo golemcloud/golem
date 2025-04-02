@@ -1123,7 +1123,8 @@ mod internal {
                 actual_type: ActualType::Inferred(right_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
-                    "math expression consist of operands that are not valid numbers".to_string(),
+                    "type mismatch in mathematical expression: operands have incompatible types."
+                        .to_string(),
                 ],
             })?;
             let left_number_type = left_expr_type.as_number().map_err(|_| TypeMismatchError {
@@ -1133,7 +1134,8 @@ mod internal {
                 actual_type: ActualType::Inferred(left_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
-                    "math expression consist of operands that are not valid numbers".to_string(),
+                    "type mismatch in mathematical expression: operands have incompatible types."
+                        .to_string(),
                 ],
             })?;
 
@@ -1156,7 +1158,7 @@ mod internal {
                     actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
                     field_path: Default::default(),
                     additional_error_detail: vec![
-                        "math expression consist of operands that are not valid numbers"
+                        "type mismatch in mathematical expression: operands have incompatible types. "
                             .to_string(),
                     ],
                 });
