@@ -3315,6 +3315,7 @@ dependencies = [
  "prometheus",
  "rustyline",
  "serde_json",
+ "test-r",
  "tokio",
  "tonic",
  "tracing",
