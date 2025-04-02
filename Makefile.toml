@@ -494,11 +494,11 @@ dependencies = [
     "publish-golem-wasm-rpc",
     "publish-golem-api-grpc",
     "publish-golem-rib",
-    "publish-golem-rib-repl",
     "publish-golem-common",
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
+    "publish-golem-rib-repl"
 ]
 
 [tasks.set-version]
