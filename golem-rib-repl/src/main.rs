@@ -1,9 +1,12 @@
+#[cfg(feature = "embedded")]
 use golem_rib_repl::repl_printer::{DefaultResultPrinter, ReplPrinter};
+#[cfg(feature = "embedded")]
 use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
-
 #[cfg(feature = "embedded")]
 use golem_test_framework::config::TestDependencies;
+#[cfg(feature = "embedded")]
 use std::process::exit;
+#[cfg(feature = "embedded")]
 use std::sync::Arc;
 
 #[cfg(feature = "embedded")]
