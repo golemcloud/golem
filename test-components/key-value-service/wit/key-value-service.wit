@@ -1,9 +1,9 @@
 package golem:it;
 
 interface api {
-  delete: func(bucket: string, key: string) -> ();
+  delete: func(bucket: string, key: string);
 
-  delete-many: func(bucket: string, keys: list<string>) -> ();
+  delete-many: func(bucket: string, keys: list<string>);
 
   exists: func(bucket: string, key: string) -> bool;
 
@@ -13,9 +13,9 @@ interface api {
 
   get-many: func(bucket: string, keys: list<string>) -> option<list<list<u8>>>;
 
-  set: func(bucket: string, key: string, value: list<u8>) -> ();
+  set: func(bucket: string, key: string, value: list<u8>);
 
-  set-many: func(bucket: string, key-values: list<tuple<string, list<u8>>>) -> ();
+  set-many: func(bucket: string, key-values: list<tuple<string, list<u8>>>);
 }
 
 world key-value-service {
