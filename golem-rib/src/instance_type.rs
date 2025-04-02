@@ -758,6 +758,16 @@ pub struct FunctionType {
     return_type: Vec<InferredType>,
 }
 
+impl FunctionType {
+    pub fn parameter_types(&self) -> Vec<InferredType> {
+        self.parameter_types.clone()
+    }
+
+    pub fn return_type(&self) -> Vec<InferredType> {
+        self.return_type.clone()
+    }
+}
+
 fn search_function_in_instance(
     instance: &InstanceType,
     function_name: &str,

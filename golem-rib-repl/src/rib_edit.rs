@@ -8,6 +8,10 @@ use rustyline::history::History;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
+use crate::value_generator::generate_value;
 
 #[derive(Default)]
 pub struct RibEdit {
@@ -43,7 +47,7 @@ impl Completer for RibEdit {
     fn complete(
         &self,
         line: &str,
-        pos: usize,
+        end_pos: usize,
         _ctx: &Context<'_>, // a context has access to only the current line
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
         let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
@@ -51,40 +55,59 @@ impl Completer for RibEdit {
 
         let mut completions = Vec::new();
 
-
-        if let Some(dot_pos) = line[..pos].rfind('.') {
-            let instance_var_name = &line[..dot_pos];
-
-            if let Some(instance_vars) = &instance_variables {
-                if let Some(func_dict) = instance_vars.instance_variables.get(instance_var_name) {
-                    let prefix = &line[dot_pos + 1..pos];
-
-                    for (name, tpe) in func_dict.map {
-                        dbg!(tpe.clone());
-
-                        if name.name().starts_with(prefix) {
-                            completions.push(name.name());
-                        }
-
-                    }
-
-                    return Ok((dot_pos + 1, completions)); // Return function completions
-                }
-            }
-        }
-
-
-        let mut start = pos;
+        let mut start = end_pos;
 
         while start > 0
             && line[start - 1..start]
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_')
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' ||  c == '.' || c == '-' || c == '(' || c == ')')
         {
             start -= 1;
         }
 
-        let word = &line[start..pos];
+        let word = &line[start..end_pos];
+
+        if word.contains('.') {
+            let dot_pos = word.rfind('.').unwrap();
+            let possible_instance_variable_name = &word[..dot_pos];
+            let possible_method_name = &word[dot_pos + 1..];
+
+            if let Some(instance_vars) = &instance_variables {
+                if let Some(func_dict) = instance_vars.instance_variables.get(possible_instance_variable_name) {
+                    for (fqfn, tpe) in func_dict.map.iter() {
+                        // Allow completion only if user has typed in `(`
+                        let name_with_paren = format!("{}(", fqfn.name());
+
+                        if name_with_paren == possible_method_name {
+                            let args = tpe.parameter_types();
+                            let mut arg_values = vec![];
+
+                            for arg in args {
+                                let analysed_type = AnalysedType::try_from(arg).ok();
+
+                                if let Some(analysed_type) = analysed_type {
+                                    let value = generate_value(&analysed_type);
+                                    arg_values.push(ValueAndType::new(value, analysed_type));
+                                }
+                            }
+
+                            let args =
+                                arg_values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+
+                            let with_paren = format!("{})",  args);
+                            completions.push(with_paren);
+                            // we break here because there is only one choice of args
+                            return Ok((end_pos, completions));
+
+                        } else if fqfn.name().starts_with(possible_method_name) {
+                            completions.push(fqfn.name());
+                        }
+                    }
+
+                    return Ok((start + dot_pos + 1, completions)); // Return function completions
+                }
+            }
+        }
 
         if !word.is_empty() {
             if let Some(variables) = instance_variable_names {
@@ -106,7 +129,7 @@ impl Completer for RibEdit {
                 self.function_names
                     .iter()
                     .filter(|&&fn_name| fn_name.starts_with(word))
-                    .map(|&fn_name| format!("{}(", fn_name)),
+                    .map(|&fn_name| fn_name.to_string()),
             )
         }
 

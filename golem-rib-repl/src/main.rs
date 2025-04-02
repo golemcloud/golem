@@ -18,6 +18,7 @@ mod repl_state;
 mod result_printer;
 mod rib_edit;
 mod rib_repl;
+mod value_generator;
 
 // This is only available for testing purposes
 // and is not a public binary artefact
