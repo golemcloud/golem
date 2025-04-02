@@ -69,12 +69,12 @@ impl RibRepl {
                             0 => Err(ReplBootstrapError::NoComponentsFound),
                             1 => Ok(component_dependencies[0].clone()),
                             _ => Err(ReplBootstrapError::MultipleComponentsFound(
-                                "multiple components detected. Rib Repl currently support only a single component".to_string(),
+                                "multiple components detected. rib repl currently support only a single component".to_string(),
                             )),
                         }
                     }
                     Err(err) => Err(ReplBootstrapError::ComponentLoadError(format!(
-                        "Failed to register components: {}",
+                        "failed to register components: {}",
                         err
                     ))),
                 }
@@ -184,7 +184,6 @@ pub enum ReplBootstrapError {
     MultipleComponentsFound(String),
     NoComponentsFound,
     ComponentLoadError(String),
-    Internal(String),
     ReplHistoryFileError(String),
 }
 

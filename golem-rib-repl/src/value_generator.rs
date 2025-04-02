@@ -90,11 +90,7 @@ pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
             let inner_type = &typ.inner;
             let inner_value = generate_value(inner_type);
 
-            let mut values = Vec::new();
-            for i in 0..3 {
-                let value = inner_value.clone();
-                values.push(value);
-            }
+            let values = vec![inner_value.clone(); 3];
 
             Value::List(values)
         }

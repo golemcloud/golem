@@ -333,7 +333,7 @@ mod internal {
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{str, tuple, u64};
+    use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
