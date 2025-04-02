@@ -9,8 +9,8 @@ use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
+use rib::RibResult::Val;
 use crate::value_generator::generate_value;
 
 #[derive(Default)]
@@ -37,6 +37,21 @@ impl RibEdit {
         self.progressed_inferred_expr = Some(compiler_output.inferred_expr.clone());
         self.instance_variables = Some(compiler_output.instance_variables.clone());
     }
+
+    fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {
+        let mut start = end_pos;
+
+        while start > 0
+            && line[start - 1..start]
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' ||  c == '.' || c == '-' || c == '(' || c == ')')
+        {
+            start -= 1;
+        }
+
+        start
+    }
+
 }
 
 impl Helper for RibEdit {}
@@ -55,15 +70,7 @@ impl Completer for RibEdit {
 
         let mut completions = Vec::new();
 
-        let mut start = end_pos;
-
-        while start > 0
-            && line[start - 1..start]
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' ||  c == '.' || c == '-' || c == '(' || c == ')')
-        {
-            start -= 1;
-        }
+        let start= Self::backtrack_and_get_start_pos(line, end_pos);
 
         let word = &line[start..end_pos];
 
@@ -74,9 +81,9 @@ impl Completer for RibEdit {
 
             if let Some(instance_vars) = &instance_variables {
                 if let Some(func_dict) = instance_vars.instance_variables.get(possible_instance_variable_name) {
-                    for (fqfn, tpe) in func_dict.map.iter() {
+                    for (function, tpe) in func_dict.map.iter() {
                         // Allow completion only if user has typed in `(`
-                        let name_with_paren = format!("{}(", fqfn.name());
+                        let name_with_paren = format!("{}(", function.name());
 
                         if name_with_paren == possible_method_name {
                             let args = tpe.parameter_types();
@@ -99,8 +106,8 @@ impl Completer for RibEdit {
                             // we break here because there is only one choice of args
                             return Ok((end_pos, completions));
 
-                        } else if fqfn.name().starts_with(possible_method_name) {
-                            completions.push(fqfn.name());
+                        } else if function.name().starts_with(possible_method_name) {
+                            completions.push(function.name());
                         }
                     }
 
