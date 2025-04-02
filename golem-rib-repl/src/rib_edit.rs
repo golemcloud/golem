@@ -1,6 +1,6 @@
 use crate::compiler::{CompilerOutput, InstanceVariables};
 use colored::Colorize;
-use rib::{Expr, InferredExpr};
+use rib::{Expr, InferredExpr, VariableId};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -10,15 +10,15 @@ use rustyline::{Context, Helper};
 use std::borrow::Cow;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
-use rib::RibResult::Val;
 use crate::value_generator::generate_value;
 
 #[derive(Default)]
 pub struct RibEdit {
     pub progressed_inferred_expr: Option<InferredExpr>,
     pub instance_variables: Option<InstanceVariables>,
+    pub identifiers: Vec<VariableId>,
     pub key_words: Vec<&'static str>,
-    pub function_names: Vec<&'static str>,
+    pub std_function_names: Vec<&'static str>,
 }
 
 impl RibEdit {
@@ -30,12 +30,16 @@ impl RibEdit {
                 "let", "if", "else", "match", "for", "in", "true", "false", "yield", "some",
                 "none", "ok", "err",
             ],
-            function_names: vec!["instance"],
+            std_function_names: vec!["instance"],
+            identifiers: vec![],
         }
     }
     pub fn update_progression(&mut self, compiler_output: &CompilerOutput) {
+        dbg!(compiler_output.inferred_expr.clone());
         self.progressed_inferred_expr = Some(compiler_output.inferred_expr.clone());
         self.instance_variables = Some(compiler_output.instance_variables.clone());
+        self.identifiers = compiler_output.identifiers.clone();
+        dbg!(&self.identifiers);
     }
 
     fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {
@@ -125,7 +129,6 @@ impl Completer for RibEdit {
 
         let word = &line[start..end_pos];
 
-
         // Check if the word is a method call
         if let Some((new_start, new_completions)) =
             Self::complete_method_calls(word, instance_variables.as_ref(), start, end_pos)?
@@ -143,6 +146,12 @@ impl Completer for RibEdit {
                 }
             }
 
+            for var in self.identifiers.iter() {
+                if var.name().starts_with(word) {
+                    completions.push(var.name());
+                }
+            }
+
             completions.extend(
                 self.key_words
                     .iter()
@@ -151,7 +160,7 @@ impl Completer for RibEdit {
             );
 
             completions.extend(
-                self.function_names
+                self.std_function_names
                     .iter()
                     .filter(|&&fn_name| fn_name.starts_with(word))
                     .map(|&fn_name| fn_name.to_string()),
@@ -164,6 +173,38 @@ impl Completer for RibEdit {
 
 impl Hinter for RibEdit {
     type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
+        let instance_variable_names: Option<Vec<String>> = instance_variables.clone().map(|x| x.variable_names());
+
+        let start = Self::backtrack_and_get_start_pos(line, pos);
+        let word = &line[start..pos];
+
+        if word.is_empty() {
+            return None;
+        }
+
+        if let Some(variables) = instance_variable_names {
+            for var in variables.iter() {
+                if var.starts_with(word) {
+                    // return only remaining part of the variable name
+                    let hint = &var[word.len()..];
+                    return Some(hint.to_string())
+                }
+            }
+        }
+
+        for var in self.identifiers.iter() {
+            if var.name().starts_with(word) {
+                // return only remaining part of the variable name
+                let hint = &var.name()[word.len()..];
+                return Some(hint.to_string())
+            }
+        }
+
+        None
+    }
 }
 
 impl Validator for RibEdit {
@@ -175,7 +216,7 @@ impl Validator for RibEdit {
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
-            Err(e) => Ok(ValidationResult::Invalid(Some(e.color("red").to_string()))),
+            Err(e) => Ok(ValidationResult::Invalid(Some(e))),
         }
     }
 }
@@ -193,7 +234,7 @@ impl Highlighter for RibEdit {
                 if !word.is_empty() {
                     if self.key_words.contains(&word.as_str()) {
                         highlighted.push_str(&format!("{}", word.blue()));
-                    } else if self.function_names.contains(&word.as_str()) {
+                    } else if self.std_function_names.contains(&word.as_str()) {
                         highlighted.push_str(&format!("{}", word.cyan()));
                     } else if word.chars().all(|ch| ch.is_numeric()) {
                         highlighted.push_str(&format!("{}", word.yellow()));

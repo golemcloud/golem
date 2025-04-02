@@ -1,8 +1,5 @@
 use crate::repl_state::ReplState;
-use rib::{
-    Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr,
-    InferredType, RibByteCode, RibError, VariableId,
-};
+use rib::{Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr, InferredType, RibByteCode, RibError, VariableId};
 use std::collections::{HashMap, VecDeque};
 
 pub fn compile_rib_script(
@@ -20,6 +17,8 @@ pub fn compile_rib_script(
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 
+    let identifiers = get_identifiers(&inferred_expr);
+
     let new_byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(|e| RibError::InternalError(e.to_string()))?;
 
@@ -31,6 +30,7 @@ pub fn compile_rib_script(
         rib_byte_code: byte_code,
         inferred_expr,
         instance_variables,
+        identifiers
     })
 }
 
@@ -38,6 +38,7 @@ pub struct CompilerOutput {
     pub rib_byte_code: RibByteCode,
     pub inferred_expr: InferredExpr,
     pub instance_variables: InstanceVariables,
+    pub identifiers: Vec<VariableId>,
 }
 
 #[derive(Default, Clone)]
@@ -49,6 +50,41 @@ impl InstanceVariables {
     pub fn variable_names(&self) -> Vec<String> {
         self.instance_variables.keys().map(|k| k.to_string()).collect()
     }
+}
+
+pub fn get_identifiers(
+    inferred_expr: &InferredExpr
+) -> Vec<VariableId> {
+    let expr = inferred_expr.get_expr();
+    let mut queue = VecDeque::new();
+
+    queue.push_back(expr);
+
+    let mut identifiers = Vec::new();
+
+    while let Some(expr) = queue.pop_back() {
+        match expr {
+            Expr::Let {
+                variable_id, expr, ..
+            } => {
+                if !identifiers.contains(variable_id) {
+                    identifiers.push(variable_id.clone());
+                }
+
+                queue.push_back(expr);
+            }
+            Expr::Identifier {
+                variable_id, ..
+            } => {
+                if !identifiers.contains(variable_id) {
+                    identifiers.push(variable_id.clone());
+                }
+            }
+            _ => expr.visit_children_bottom_up(&mut queue),
+        }
+    }
+
+   identifiers
 }
 
 pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariables {
