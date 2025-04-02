@@ -35,11 +35,9 @@ impl RibEdit {
         }
     }
     pub fn update_progression(&mut self, compiler_output: &CompilerOutput) {
-        dbg!(compiler_output.inferred_expr.clone());
         self.progressed_inferred_expr = Some(compiler_output.inferred_expr.clone());
         self.instance_variables = Some(compiler_output.instance_variables.clone());
         self.identifiers = compiler_output.identifiers.clone();
-        dbg!(&self.identifiers);
     }
 
     fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {

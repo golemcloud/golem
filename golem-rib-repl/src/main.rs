@@ -1,21 +1,21 @@
-use golem_rib_repl::embedded_executor::{start, BootstrapDependencies};
 use golem_rib_repl::repl_printer::{DefaultResultPrinter, ReplPrinter};
 use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
-use golem_rib_repl::invoke;
-use golem_rib_repl::dependency_manager;
 use golem_test_framework::config::TestDependencies;
+use std::process::exit;
 use std::sync::Arc;
 
+#[cfg(feature = "bin")]
+use golem_rib_repl::embedded::*;
 
-// This is only available for testing purposes
-// and is not a public binary artefact
-// and doesn't need a formalised command line arguments here
-// simply do `cargo run -- <component_name> <source_path>`
-// Local testing of REPL (example, if golem developers need to test a component quickly with golem)
-// without a published REPL, they can do as follows
-// cargo run
+// This is to experiment with the REPL through `cargo run --features embedded`
 #[tokio::main]
 async fn main() {
+    #[cfg(feature = "bin")]
+    get_repl().await.run().await;
+}
+
+#[cfg(feature = "bin")]
+async fn get_repl() -> RibRepl {
     let dependencies = BootstrapDependencies::new().await;
 
     let embedded_worker_executor = start(&dependencies)
@@ -24,19 +24,18 @@ async fn main() {
 
     let shared_executor = Arc::new(embedded_worker_executor);
 
-    let worker_function_invoke = Arc::new(invoke::DefaultWorkerFunctionInvoke::new(
-        shared_executor.clone(),
-    ));
+    let worker_function_invoke =
+        Arc::new(EmbeddedWorkerFunctionInvoke::new(shared_executor.clone()));
 
     let default_dependency_manager = Arc::new(
-        dependency_manager::DefaultRibDependencyManager::new(shared_executor.clone())
+        DefaultRibDependencyManager::new(shared_executor.clone())
             .await
             .expect("Failed to create default dependency manager"),
     );
 
     let printer = DefaultResultPrinter;
 
-    let mut repl = RibRepl::bootstrap(
+    let repl = RibRepl::bootstrap(
         None,
         default_dependency_manager,
         worker_function_invoke,
@@ -50,11 +49,15 @@ async fn main() {
     )
     .await;
 
-    match &mut repl {
-        Ok(repl) => repl.run().await,
+    if let Err(err) = &repl {
+        printer.print_bootstrap_error(&err);
+    }
+
+    match repl {
+        Ok(repl) => repl,
         Err(err) => {
-            printer.print_bootstrap_error(err);
-            return;
+            printer.print_bootstrap_error(&err);
+            exit(1);
         }
     }
 }

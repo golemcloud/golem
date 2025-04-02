@@ -1,9 +1,10 @@
+mod compiler;
 pub mod dependency_manager;
-pub mod embedded_executor;
+#[cfg(feature = "bin")]
+pub mod embedded;
 pub mod invoke;
 pub mod repl_printer;
-pub mod rib_repl;
-mod compiler;
 mod repl_state;
 mod rib_edit;
+pub mod rib_repl;
 mod value_generator;

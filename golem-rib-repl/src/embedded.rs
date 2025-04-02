@@ -1,14 +1,16 @@
+use crate::dependency_manager::{ComponentDependency, ReplDependencies, RibDependencyManager};
+use crate::invoke::WorkerFunctionInvoke;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::base_model::PluginInstallationId;
+use golem_common::base_model::{ComponentId, PluginInstallationId};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId, TargetWorkerId,
-    WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -28,12 +30,14 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -87,7 +91,8 @@ use golem_worker_executor_base::workerctx::{
 };
 use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes, RunDetails};
 use prometheus::Registry;
-use std::collections::HashSet;
+use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, Weak};
@@ -1196,5 +1201,110 @@ impl TestDependencies for EmbeddedWorkerExecutor {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.deps.plugin_wasm_files_service()
+    }
+}
+
+// Embedded Dependency Manger
+
+// A default Rib dependency manager is mainly allowing rib to be used standalone
+// without the nuances of app manifest. This is mainly used for testing the REPL itself
+pub struct DefaultRibDependencyManager {
+    pub embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
+}
+
+impl DefaultRibDependencyManager {
+    pub async fn new(
+        embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            embedded_worker_executor,
+        })
+    }
+}
+
+#[async_trait]
+impl RibDependencyManager for DefaultRibDependencyManager {
+    async fn add_components(&self) -> Result<ReplDependencies, String> {
+        Err("multiple components not supported in embedded mode".to_string())
+    }
+
+    async fn add_component_dependency(
+        &self,
+        source_path: &Path,
+        component_name: String,
+    ) -> Result<ComponentDependency, String> {
+        let component_id = self
+            .embedded_worker_executor
+            .component(component_name.as_str())
+            .store()
+            .await;
+
+        let result = self
+            .embedded_worker_executor
+            .component_service()
+            .get_or_add_component(
+                source_path,
+                &component_name,
+                ComponentType::Durable,
+                &[],
+                &HashMap::new(),
+                false,
+            )
+            .await;
+
+        Ok(ComponentDependency {
+            component_id,
+            metadata: result
+                .metadata
+                .map(|metadata| {
+                    metadata
+                        .exports
+                        .iter()
+                        .map(|m| AnalysedExport::try_from(m.clone()).unwrap())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+    }
+}
+
+// Embedded RibFunctionInvoke implementation
+pub struct EmbeddedWorkerFunctionInvoke {
+    embedded_worker_executor: Arc<EmbeddedWorkerExecutor>,
+}
+
+impl EmbeddedWorkerFunctionInvoke {
+    pub fn new(embedded_worker_executor: Arc<EmbeddedWorkerExecutor>) -> Self {
+        Self {
+            embedded_worker_executor,
+        }
+    }
+}
+
+#[async_trait]
+impl WorkerFunctionInvoke for EmbeddedWorkerFunctionInvoke {
+    async fn invoke(
+        &self,
+        component_id: ComponentId,
+        worker_name: Option<EvaluatedWorkerName>,
+        function_name: EvaluatedFqFn,
+        args: EvaluatedFnArgs,
+    ) -> Result<ValueAndType, String> {
+        let target_worker_id = worker_name
+            .map(|w| TargetWorkerId {
+                component_id: component_id.clone(),
+                worker_name: Some(w.0),
+            })
+            .unwrap_or_else(|| TargetWorkerId {
+                component_id,
+                worker_name: None,
+            });
+
+        let function_name = function_name.0;
+
+        self.embedded_worker_executor
+            .invoke_and_await_typed(target_worker_id, function_name.as_str(), args.0)
+            .await
+            .map_err(|e| format!("Failed to invoke function: {:?}", e))
     }
 }
