@@ -12,107 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::Utc;
-use golem_common::model::GatewayBindingType;
-use golem_wasm_ast::analysis::{
-    AnalysedType, NameTypePair, TypeF32, TypeRecord, TypeStr, TypeU32, TypeU64,
-};
-use golem_worker_service_base::api::api_definition::{
-    GatewayBindingResponseData, HttpApiDefinitionResponseData, ResolvedGatewayBindingComponent,
-    RouteResponseData,
-};
-use golem_worker_service_base::gateway_api_definition::http::{
-    api_oas_convert::OpenApiHttpApiDefinitionResponse, MethodPattern,
-};
-use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use rib::{RibInputTypeInfo, RibOutputTypeInfo};
+use golem_worker_service_base::api::api_definition::HttpApiDefinitionResponseData;
+use golem_worker_service_base::gateway_api_definition::http::api_oas_convert::OpenApiHttpApiDefinitionResponse;
 use serde_json::from_str;
-use std::collections::HashMap;
 
-#[test]
-fn test_oas_conversion_end_to_end() {
-    // Create a sample API definition
-    let api_definition = HttpApiDefinitionResponseData {
-        id: ApiDefinitionId("test-api".to_string()),
-        version: ApiVersion("0.1.0".to_string()),
-        routes: vec![
-            RouteResponseData {
-                method: MethodPattern::Get,
-                path: "/v0.1.0/products".to_string(),
-                security: None,
-                binding: GatewayBindingResponseData {
-                    binding_type: Some(GatewayBindingType::Default),
-                    component: Some(ResolvedGatewayBindingComponent {
-                        name: "product-service".to_string(),
-                        version: 0,
-                    }),
-                    worker_name: Some("\"product-worker\"".to_string()),
-                    worker_name_input: None,
-                    idempotency_key: None,
-                    idempotency_key_input: None,
-                    response: Some("let products = golem:product/api.{get-products}(); {status: 200u64, body: products}".to_string()),
-                    response_mapping_input: None,
-                    response_mapping_output: None,
-                    cors_preflight: None,
-                },
-            },
-            RouteResponseData {
-                method: MethodPattern::Post,
-                path: "/v0.1.0/products".to_string(),
-                security: None,
-                binding: GatewayBindingResponseData {
-                    binding_type: Some(GatewayBindingType::Default),
-                    component: Some(ResolvedGatewayBindingComponent {
-                        name: "product-service".to_string(),
-                        version: 0,
-                    }),
-                    worker_name: Some("\"product-worker\"".to_string()),
-                    worker_name_input: None,
-                    idempotency_key: None,
-                    idempotency_key_input: None,
-                    response: Some("let product = request.body; {status: 201u64, body: {success: true, id: product.id}}".to_string()),
-                    response_mapping_input: None,
-                    response_mapping_output: None,
-                    cors_preflight: None,
-                },
-            }
-        ],
-        draft: false,
-        created_at: None,
-    };
-
-    // Convert to OpenAPI
-    let oas_response =
-        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&api_definition)
-            .expect("Failed to convert API definition to OpenAPI");
-
-    // Verify basic properties
-    assert_eq!(oas_response.id, ApiDefinitionId("test-api".to_string()));
-    assert_eq!(oas_response.version, ApiVersion("0.1.0".to_string()));
-
-    // Verify OpenAPI YAML content
-    let yaml_str = oas_response.openapi_yaml;
-    assert!(yaml_str.contains("openapi: 3.0.0"));
-    assert!(yaml_str.contains("x-golem-api-definition-id: test-api"));
-    assert!(yaml_str.contains("x-golem-api-definition-version: 0.1.0"));
-
-    // Verify paths
-    assert!(yaml_str.contains("/v0.1.0/products:"));
-    assert!(yaml_str.contains("get:"));
-    assert!(yaml_str.contains("post:"));
-
-    // Verify component binding information
-    assert!(yaml_str.contains("component-name: product-service"));
-    assert!(yaml_str.contains("component-version: 0"));
-
-    // Verify response mappings
-    assert!(yaml_str.contains("let products = golem:product/api.{get-products}()"));
-    assert!(yaml_str.contains("let product = request.body"));
-
-    // Verify worker name
-    assert!(yaml_str.contains("\"product-worker\""));
-}
-
+// Test that the conversion works for a simple API definition with no routes,
+// Test yaml values to confirm the structure is correct
 #[test]
 fn test_simple_conversion() {
     // Sample JSON input
@@ -131,301 +36,24 @@ fn test_simple_conversion() {
         OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
             .unwrap();
 
-    // Verify the ID and version
-    assert_eq!(
-        openapi_response.id,
-        ApiDefinitionId("shopping-cart".to_string())
-    );
-    assert_eq!(openapi_response.version, ApiVersion("0.0.1".to_string()));
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
-    // Verify the OpenAPI YAML contains the correct ID and version
-    let yaml_str = openapi_response.openapi_yaml;
-    assert!(yaml_str.contains("x-golem-api-definition-id: shopping-cart"));
-    assert!(yaml_str.contains("x-golem-api-definition-version: 0.0.1"));
+    // Verify basic properties
+    assert_eq!(yaml_value["openapi"], "3.0.0");
+    assert_eq!(yaml_value["info"]["title"], "shopping-cart");
+    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+    assert_eq!(yaml_value["x-golem-api-definition-id"], "shopping-cart");
+    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
+
+    // Verify empty paths
+    assert!(yaml_value["paths"].is_mapping());
+    assert!(yaml_value["paths"].as_mapping().unwrap().is_empty());
 }
 
-#[test]
-fn test_route_conversion_basic_fields() {
-    // Sample JSON input with a single route
-    let json_data = r#"
-    {
-        "id": "shopping-cart",
-        "version": "0.0.1",
-        "routes": [
-            {
-                "method": "Post",
-                "path": "/v0.0.1/{user}/add-item",
-                "binding": {
-                    "bindingType": "default",
-                    "component": {
-                        "name": "shopping-cart",
-                        "version": 0
-                    },
-                    "response": "let item = request.body.item; let result = golem:shoppingcart/api.{add-item}(item); {status: 200u64, body: \"Item added\"}",
-                    "workerName": "let user: string = request.path.user; \"worker-${user}\""
-                }
-            }
-        ]
-    }"#;
-
-    // Parse the JSON
-    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
-
-    // Convert to OpenAPI
-    let openapi_response =
-        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
-            .unwrap();
-
-    // Verify the OpenAPI YAML contains the correct route information
-    let yaml_str = openapi_response.openapi_yaml;
-    assert!(yaml_str.contains("component-name: shopping-cart"));
-    assert!(yaml_str.contains("component-version: 0"));
-    assert!(yaml_str.contains("let item = request.body.item; let result = golem:shoppingcart/api.{add-item}(item); {status: 200u64, body: \"Item added\"}"));
-    assert!(yaml_str.contains("let user: string = request.path.user; \"worker-${user}\""));
-}
-
-#[test]
-fn test_cors_and_swagger_binding_types() {
-    // Sample JSON input with CORS and Swagger routes
-    let json_data = r#"
-    {
-        "id": "shopping-cart",
-        "version": "0.0.1",
-        "routes": [
-            {
-                "method": "Get",
-                "path": "/v0.0.1/swagger-shopping-cart",
-                "binding": {
-                    "bindingType": "swagger-ui"
-                }
-            },
-            {
-                "method": "Options",
-                "path": "/v0.0.1/{user}/add-item",
-                "binding": {
-                    "bindingType": "cors-preflight",
-                    "corsPreflight": {
-                        "allowHeaders": "Content-Type, Authorization",
-                        "allowMethods": "GET, POST, PUT, DELETE, OPTIONS",
-                        "allowOrigin": "*"
-                    }
-                }
-            }
-        ]
-    }"#;
-
-    // Parse the JSON
-    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
-
-    // Convert to OpenAPI
-    let openapi_response =
-        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
-            .unwrap();
-
-    // Verify the OpenAPI YAML contains the correct binding types and CORS configuration
-    let yaml_str = openapi_response.openapi_yaml;
-
-    // Check Swagger binding
-    assert!(yaml_str.contains("binding-type: swagger-ui"));
-
-    // Check CORS binding and configuration
-    assert!(yaml_str.contains("binding-type: cors-preflight"));
-    assert!(yaml_str.contains("Access-Control-Allow-Headers: \"Content-Type, Authorization\""));
-    assert!(yaml_str.contains("Access-Control-Allow-Methods: \"GET, POST, PUT, DELETE, OPTIONS\""));
-    assert!(yaml_str.contains("Access-Control-Allow-Origin: \"*\""));
-}
-
-#[test]
-fn test_request_body_schema_generation() {
-    // Sample JSON input with a POST route that takes a request body
-    let json_data = r#"
-    {
-        "id": "product-service",
-        "version": "0.1.0",
-        "routes": [
-            {
-                "method": "Post",
-                "path": "/v0.1.0/products",
-                "binding": {
-                    "bindingType": "default",
-                    "component": {
-                        "name": "product-service",
-                        "version": 0
-                    },
-                    "response": "let product = request.body; {status: 201u64, body: {success: true, id: product.id}}",
-                    "responseMappingInput": {
-                        "types": {
-                            "request": {
-                                "fields": [
-                                    {
-                                        "name": "body",
-                                        "typ": {
-                                            "fields": [
-                                                {
-                                                    "name": "id",
-                                                    "typ": {
-                                                        "type": "Str"
-                                                    }
-                                                },
-                                                {
-                                                    "name": "name",
-                                                    "typ": {
-                                                        "type": "Str"
-                                                    }
-                                                },
-                                                {
-                                                    "name": "price",
-                                                    "typ": {
-                                                        "type": "F32"
-                                                    }
-                                                }
-                                            ],
-                                            "type": "Record"
-                                        }
-                                    }
-                                ],
-                                "type": "Record"
-                            }
-                        }
-                    }
-                }
-            }
-        ]
-    }"#;
-
-    // Parse the JSON
-    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
-
-    // Convert to OpenAPI
-    let openapi_response =
-        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
-            .unwrap();
-
-    // Verify the OpenAPI YAML contains the correct request body schema
-    let yaml_str = openapi_response.openapi_yaml;
-
-    // Check request body schema
-    assert!(yaml_str.contains("requestBody:"));
-    assert!(yaml_str.contains("required: true"));
-    assert!(yaml_str.contains("application/json:"));
-    assert!(yaml_str.contains("type: object"));
-    assert!(yaml_str.contains("properties:"));
-    assert!(yaml_str.contains("id:"));
-    assert!(yaml_str.contains("type: string"));
-    assert!(yaml_str.contains("name:"));
-    assert!(yaml_str.contains("type: string"));
-    assert!(yaml_str.contains("price:"));
-    assert!(yaml_str.contains("type: number"));
-    assert!(yaml_str.contains("format: float"));
-}
-
-#[test]
-fn test_response_schema_type_strictness() {
-    // Sample JSON input with a GET route that returns a specific response structure
-    let json_data = r#"
-    {
-        "id": "cart-service",
-        "version": "0.1.0",
-        "routes": [
-            {
-                "method": "Get",
-                "path": "/v0.1.0/cart-items",
-                "binding": {
-                    "bindingType": "default",
-                    "component": {
-                        "name": "cart-service",
-                        "version": 0
-                    },
-                    "response": "let cart_items = golem:shoppingcart/api.{get-cart-contents}(); {status: 200u64, body: cart_items}",
-                    "responseMappingOutput": {
-                        "analysed_type": {
-                            "fields": [
-                                {
-                                    "name": "body",
-                                    "typ": {
-                                        "type": "List",
-                                        "inner": {
-                                            "fields": [
-                                                {
-                                                    "name": "product-id",
-                                                    "typ": {
-                                                        "type": "Str"
-                                                    }
-                                                },
-                                                {
-                                                    "name": "name",
-                                                    "typ": {
-                                                        "type": "Str"
-                                                    }
-                                                },
-                                                {
-                                                    "name": "price",
-                                                    "typ": {
-                                                        "type": "F32"
-                                                    }
-                                                },
-                                                {
-                                                    "name": "quantity",
-                                                    "typ": {
-                                                        "type": "U32"
-                                                    }
-                                                }
-                                            ],
-                                            "type": "Record"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "status",
-                                    "typ": {
-                                        "type": "U64"
-                                    }
-                                }
-                            ],
-                            "type": "Record"
-                        }
-                    }
-                }
-            }
-        ]
-    }"#;
-
-    // Parse the JSON
-    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
-
-    // Convert to OpenAPI
-    let openapi_response =
-        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
-            .unwrap();
-
-    // Verify the OpenAPI YAML contains the correct response schema
-    let yaml_str = openapi_response.openapi_yaml;
-
-    // Check response schema
-    assert!(yaml_str.contains("responses:"), "Missing responses section");
-    assert!(yaml_str.contains("'200':"), "Missing 200 status code");
-    assert!(yaml_str.contains("type: object"));
-    assert!(yaml_str.contains("properties:"));
-    assert!(yaml_str.contains("body:"));
-    assert!(yaml_str.contains("type: array"));
-    assert!(yaml_str.contains("items:"));
-    assert!(yaml_str.contains("type: object"));
-    assert!(yaml_str.contains("product-id:"));
-    assert!(yaml_str.contains("type: string"));
-    assert!(yaml_str.contains("name:"));
-    assert!(yaml_str.contains("type: string"));
-    assert!(yaml_str.contains("price:"));
-    assert!(yaml_str.contains("type: integer"));
-    assert!(yaml_str.contains("format: float"));
-    assert!(yaml_str.contains("quantity:"));
-    assert!(yaml_str.contains("type: integer"));
-    assert!(yaml_str.contains("format: int32"));
-    assert!(yaml_str.contains("minimum: 0"));
-    assert!(yaml_str.contains("status:"));
-    assert!(yaml_str.contains("type: integer"));
-    assert!(yaml_str.contains("minimum: 0"));
-}
-
+// Test that the conversion works for a CORS preflight route
+// Test cors-preflight is converted to rib valid response string
 #[test]
 fn test_cors_preflight_response_formatting() {
     // Sample JSON input with a CORS preflight route
@@ -460,136 +88,544 @@ fn test_cors_preflight_response_formatting() {
         OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
             .unwrap();
 
-    // Verify the OpenAPI YAML contains the correct CORS configuration
-    let yaml_str = openapi_response.openapi_yaml;
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
-    // Check CORS configuration
-    assert!(yaml_str.contains("binding-type: cors-preflight"));
-    assert!(yaml_str.contains("Access-Control-Allow-Headers: \"Content-Type, Authorization\""));
-    assert!(yaml_str.contains("Access-Control-Allow-Methods: \"GET, POST, PUT, DELETE, OPTIONS\""));
-    assert!(yaml_str.contains("Access-Control-Allow-Origin: \"*\""));
-    assert!(yaml_str.contains("Access-Control-Expose-Headers: \"X-Request-ID\""));
-    assert!(yaml_str.contains("Access-Control-Allow-Credentials: true"));
-    assert!(yaml_str.contains("Access-Control-Max-Age: 8400"));
-}
+    // Verify CORS binding
+    let cors_binding =
+        &yaml_value["paths"]["/v0.1.0/api/resource"]["options"]["x-golem-api-gateway-binding"];
+    assert_eq!(cors_binding["binding-type"], "cors-preflight");
 
-#[test]
-fn test_from_http_api_definition_response_data() {
-    // Create a sample HttpApiDefinitionResponseData similar to shopping-cart example
-    let response_data = create_sample_response_data();
+    // Verify the entire CORS response string
+    // The response is properly within path/binding,
+    // and converts the cors-preflight data to a string
+    let expected_response = r#"{
+  Access-Control-Allow-Headers: "Content-Type, Authorization",
+  Access-Control-Allow-Methods: "GET, POST, PUT, DELETE, OPTIONS",
+  Access-Control-Allow-Origin: "*",
+  Access-Control-Expose-Headers: "X-Request-ID",
+  Access-Control-Allow-Credentials: true,
+  Access-Control-Max-Age: 8400u64
+}"#;
+    assert_eq!(
+        cors_binding["response"].as_str().unwrap(),
+        expected_response
+    );
 
-    // Convert the response data to OpenAPI
-    let result =
-        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data);
-
-    // Verify the conversion was successful
-    assert!(result.is_ok());
-    let openapi_response = result.unwrap();
-
-    // Verify the basic properties were transferred correctly
-    assert_eq!(openapi_response.id, response_data.id);
-    assert_eq!(openapi_response.version, response_data.version);
-
-    // The YAML should be a non-empty string
-    assert!(!openapi_response.openapi_yaml.is_empty());
-
-    // Parse the YAML to verify it's valid OpenAPI
-    let openapi_yaml_result =
-        serde_yaml::from_str::<serde_yaml::Value>(&openapi_response.openapi_yaml);
-    assert!(openapi_yaml_result.is_ok());
-
-    // Verify the OpenAPI version
-    let yaml_value = openapi_yaml_result.unwrap();
-    assert_eq!(yaml_value["openapi"], "3.0.0");
-
-    // Verify the extension fields were added
-    assert_eq!(yaml_value["x-golem-api-definition-id"], "test-api");
-    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
-
-    // Verify the paths section was created and contains our endpoint
-    assert!(yaml_value["paths"]["/v0.0.1/{user}/get-items"].is_mapping());
-    assert!(yaml_value["paths"]["/v0.0.1/{user}/get-items"]["get"].is_mapping());
-
-    // Verify parameters for the path parameter
-    let parameters = &yaml_value["paths"]["/v0.0.1/{user}/get-items"]["get"]["parameters"];
-    assert!(parameters.is_sequence());
-    assert_eq!(parameters.as_sequence().unwrap().len(), 1);
-    assert_eq!(parameters[0]["name"], "user");
-    assert_eq!(parameters[0]["in"], "path");
-    assert_eq!(parameters[0]["required"], true);
-
-    // Verify responses
-    let responses = &yaml_value["paths"]["/v0.0.1/{user}/get-items"]["get"]["responses"];
+    // Verify the response structure matches the YAML example
+    let responses = &yaml_value["paths"]["/v0.1.0/api/resource"]["options"]["responses"];
     assert!(responses.is_mapping());
     assert!(responses["200"].is_mapping());
     assert_eq!(responses["200"]["description"], "OK");
 
-    // Verify binding information in extensions
-    let binding =
-        &yaml_value["paths"]["/v0.0.1/{user}/get-items"]["get"]["x-golem-api-gateway-binding"];
-    assert!(binding.is_mapping());
-    assert_eq!(binding["binding-type"], "default");
-    assert_eq!(binding["component-name"], "test-component");
-    assert_eq!(binding["component-version"], 1);
+    // Verify the content type
+    let content = &responses["200"]["content"]["application/json"];
+    assert!(content.is_mapping());
+
+    // Verify the schema
+    let schema = &content["schema"];
+    assert_eq!(schema["type"], "object");
 }
 
+// Test that the conversion works for a simple route without response mapping
+// Test dynamic path parameters, binding, workername, and response
 #[test]
-fn test_request_body_mapping() {
-    // Create a sample with request body mapping
-    let response_data = create_sample_with_request_body();
+fn test_route_conversion_basic_fields() {
+    // Sample JSON input with a single route
+    let json_data = r#"
+    {
+        "id": "shopping-cart",
+        "version": "0.0.1",
+        "routes": [
+            {
+                "method": "Post",
+                "path": "/v0.0.1/{user}/add-item",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "shopping-cart",
+                        "version": 0
+                    },
+                    "response": "let item = request.body.item; let result = golem:shoppingcart/api.{add-item}(item); {status: 200u64, body: \"Item added\"}",
+                    "workerName": "let user: string = request.path.user; \"worker-${user}\"",
+                    "workerNameInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "path",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "user",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    }"#;
 
-    // Convert the response data to OpenAPI
-    let result =
-        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data);
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
 
-    // Verify the conversion was successful
-    assert!(result.is_ok());
-    let openapi_response = result.unwrap();
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
 
-    // Parse the YAML to verify it's valid OpenAPI
-    let openapi_yaml_result =
-        serde_yaml::from_str::<serde_yaml::Value>(&openapi_response.openapi_yaml);
-    assert!(openapi_yaml_result.is_ok());
-    let yaml_value = openapi_yaml_result.unwrap();
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
-    // Verify the POST route was created
+    // Verify basic properties
+    assert_eq!(yaml_value["openapi"], "3.0.0");
+    assert_eq!(yaml_value["info"]["title"], "shopping-cart");
+    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+    assert_eq!(yaml_value["x-golem-api-definition-id"], "shopping-cart");
+    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
+
+    // Verify path exists
     assert!(yaml_value["paths"]["/v0.0.1/{user}/add-item"].is_mapping());
-    assert!(yaml_value["paths"]["/v0.0.1/{user}/add-item"]["post"].is_mapping());
 
-    // Verify request body exists
-    let request_body = &yaml_value["paths"]["/v0.0.1/{user}/add-item"]["post"]["requestBody"];
-    assert!(request_body.is_mapping());
-    assert_eq!(request_body["required"], true);
+    // Verify POST operation
+    let post_op = &yaml_value["paths"]["/v0.0.1/{user}/add-item"]["post"];
+    assert!(post_op.is_mapping());
 
-    // Verify the content type is JSON
-    assert!(request_body["content"]["application/json"].is_mapping());
+    // Verify parameters
+    let parameters = &post_op["parameters"];
+    assert!(parameters.is_sequence());
+    assert_eq!(parameters[0]["name"], "user");
+    assert_eq!(parameters[0]["in"], "path");
+    assert_eq!(parameters[0]["required"], true);
+    assert_eq!(parameters[0]["schema"]["type"], "string");
 
-    // Verify the schema exists and has the expected structure
-    let schema = &request_body["content"]["application/json"]["schema"];
-    assert!(schema.is_mapping());
-    assert!(schema["type"] == "object");
-
-    // Verify the item property exists in the schema
-    let properties = &schema["properties"];
-    assert!(properties.is_mapping());
-    assert!(properties["item"].is_mapping());
-
-    // Verify the item schema has the expected properties
-    let item_properties = &properties["item"]["properties"];
-    assert!(item_properties.is_mapping());
-    assert!(item_properties["name"].is_mapping());
-    assert!(
-        item_properties["productId"].is_mapping() || item_properties["product-id"].is_mapping()
+    // Verify binding information
+    let binding = &post_op["x-golem-api-gateway-binding"];
+    assert_eq!(binding["binding-type"], "default");
+    assert_eq!(binding["component-name"], "shopping-cart");
+    assert_eq!(binding["component-version"], 0);
+    assert_eq!(
+        binding["worker-name"],
+        "let user: string = request.path.user; \"worker-${user}\""
     );
-    assert!(item_properties["price"].is_mapping());
-    assert!(item_properties["quantity"].is_mapping());
-
-    // Verify the required fields are listed
-    assert!(schema["required"].is_sequence());
-    let required = schema["required"].as_sequence().unwrap();
-    assert!(required.contains(&serde_yaml::Value::String("item".to_string())));
+    assert_eq!(binding["response"], "let item = request.body.item; let result = golem:shoppingcart/api.{add-item}(item); {status: 200u64, body: \"Item added\"}");
 }
 
+// Test that the conversion works for a basic types with a echo function
+// Test u64, bool, record, and enum, Does not test path parameters
+// Test that the input and output types are converted to the correct types
+#[test]
+fn test_basic_types_and_record_conversion() {
+    // Sample JSON input with routes for basic types, record, and enum
+    let json_data = r#"
+    {
+        "id": "simple-echo",
+        "version": "0.0.1",
+        "routes": [
+            {
+                "method": "Post",
+                "path": "/v0.0.1/{user}/u64",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "simple-echo",
+                        "version": 0
+                    },
+                    "response": "let input: u64 = request.body.input; let result = golem:simpleecho/api.{echo-u64}(input); {status: 200u64, body: result}",
+                    "responseMappingInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "body",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "input",
+                                                    "typ": {
+                                                        "type": "U64"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                },
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                }
+                            ],
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": "let user: string = request.path.user; \"worker-${user}\""
+                }
+            },
+            {
+                "method": "Post",
+                "path": "/v0.0.1/{user}/bool",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "simple-echo",
+                        "version": 0
+                    },
+                    "response": "let input: bool = request.body.input; let result = golem:simpleecho/api.{echo-bool}(input); {status: 200u64, body: result}",
+                    "responseMappingInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "body",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "input",
+                                                    "typ": {
+                                                        "type": "Bool"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "type": "Bool"
+                                    }
+                                },
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                }
+                            ],
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": "let user: string = request.path.user; \"worker-${user}\""
+                }
+            },
+            {
+                "method": "Post",
+                "path": "/v0.0.1/{user}/record",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "simple-echo",
+                        "version": 0
+                    },
+                    "response": "let input = {name: \"testbot\", id: 30: u32, active: true}; let result = golem:simpleecho/api.{echo-record}(input); {status: 200u64, body: result}",
+                    "responseMappingInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "body",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "id",
+                                                    "typ": {
+                                                        "type": "U32"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "name",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "active",
+                                                    "typ": {
+                                                        "type": "Bool"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "fields": [
+                                            {
+                                                "name": "id",
+                                                "typ": {
+                                                    "type": "U32"
+                                                }
+                                            },
+                                            {
+                                                "name": "name",
+                                                "typ": {
+                                                    "type": "Str"
+                                                }
+                                            },
+                                            {
+                                                "name": "active",
+                                                "typ": {
+                                                    "type": "Bool"
+                                                }
+                                            }
+                                        ],
+                                        "type": "Record"
+                                    }
+                                },
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                }
+                            ],
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": "let user: string = request.path.user; \"worker-${user}\""
+                }
+            },
+            {
+                "method": "Post",
+                "path": "/v0.0.1/{user}/priority",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "simple-echo",
+                        "version": 0
+                    },
+                    "response": "let input: string = request.body.input; let result = golem:simpleecho/api.{echo-priority}(input); {status: 200u64, body: result}",
+                    "responseMappingInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "body",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "input",
+                                                    "typ": {
+                                                        "type": "Enum",
+                                                        "cases": ["low", "medium", "high"]
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "type": "Enum",
+                                        "cases": ["low", "medium", "high"]
+                                    }
+                                },
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                }
+                            ],
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": "let user: string = request.path.user; \"worker-${user}\""
+                }
+            }
+        ]
+    }"#;
+
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
+
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
+
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+
+    // Verify basic properties
+    assert_eq!(yaml_value["openapi"], "3.0.0");
+    assert_eq!(yaml_value["info"]["title"], "simple-echo");
+    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+
+    // Verify u64 route, request body, and response
+    let u64_route = &yaml_value["paths"]["/v0.0.1/{user}/u64"]["post"];
+
+    let u64_schema = &u64_route["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(u64_schema["type"], "object");
+    assert_eq!(u64_schema["properties"]["input"]["type"], "integer");
+    assert_eq!(u64_schema["properties"]["input"]["format"], "int64");
+    assert_eq!(
+        u64_schema["required"],
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("input".to_string())])
+    );
+
+    let u64_response = &u64_route["responses"]["201"]["content"]["application/json"]["schema"];
+    assert_eq!(u64_response["type"], "integer");
+    assert_eq!(u64_response["format"], "int64");
+
+    // Verify bool route, request body, and response
+    let bool_route = &yaml_value["paths"]["/v0.0.1/{user}/bool"]["post"];
+
+    let bool_schema = &bool_route["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(bool_schema["type"], "object");
+    assert_eq!(bool_schema["properties"]["input"]["type"], "boolean");
+    assert_eq!(
+        bool_schema["required"],
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("input".to_string())])
+    );
+
+    let bool_response = &bool_route["responses"]["201"]["content"]["application/json"]["schema"];
+    assert_eq!(bool_response["type"], "boolean");
+
+    // Verify record route, request body, and response
+    let record_route = &yaml_value["paths"]["/v0.0.1/{user}/record"]["post"];
+
+    let record_schema = &record_route["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(record_schema["type"], "object");
+    assert_eq!(record_schema["properties"]["id"]["type"], "integer");
+    assert_eq!(record_schema["properties"]["id"]["format"], "int32");
+    assert_eq!(record_schema["properties"]["name"]["type"], "string");
+    assert_eq!(record_schema["properties"]["active"]["type"], "boolean");
+
+    // Verify priority enum route, request body, and response
+    let priority_route = &yaml_value["paths"]["/v0.0.1/{user}/priority"]["post"];
+
+    let priority_schema = &priority_route["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(priority_schema["type"], "object");
+    assert_eq!(priority_schema["properties"]["input"]["type"], "string");
+    assert_eq!(
+        priority_schema["properties"]["input"]["enum"],
+        serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String("low".to_string()),
+            serde_yaml::Value::String("medium".to_string()),
+            serde_yaml::Value::String("high".to_string())
+        ])
+    );
+    assert_eq!(
+        priority_schema["required"],
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("input".to_string())])
+    );
+
+    let priority_response =
+        &priority_route["responses"]["201"]["content"]["application/json"]["schema"];
+    assert_eq!(priority_response["type"], "string");
+    assert_eq!(
+        priority_response["enum"],
+        serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String("low".to_string()),
+            serde_yaml::Value::String("medium".to_string()),
+            serde_yaml::Value::String("high".to_string())
+        ])
+    );
+}
+
+// Test that the conversion works for a swagger-ui binding type
+// Todo: Add test for file-server binding type, and any other new binding types
+#[test]
+fn test_swagger_ui_binding() {
+    // Sample JSON input with Swagger UI route
+    let json_data = r#"
+    {
+        "id": "swagger-api",
+        "version": "0.1.0",
+        "routes": [
+            {
+                "method": "Get",
+                "path": "/v0.1.0/swagger-ui",
+                "binding": {
+                    "bindingType": "swagger-ui"
+                }
+            }
+        ]
+    }"#;
+
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
+
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
+
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+
+    // Verify Swagger binding
+    let swagger_binding =
+        &yaml_value["paths"]["/v0.1.0/swagger-ui"]["get"]["x-golem-api-gateway-binding"];
+    assert_eq!(swagger_binding["binding-type"], "swagger-ui");
+
+    // Verify responses section exists
+    let responses = &yaml_value["paths"]["/v0.1.0/swagger-ui"]["get"]["responses"];
+    assert!(responses.is_mapping());
+    assert!(responses["200"].is_mapping());
+    assert_eq!(responses["200"]["description"], "OK");
+}
+
+// Test for if security is converted properly
+// Only test the security part of the conversion
 #[test]
 fn test_security_conversion() {
     // Sample JSON input with security on routes
@@ -637,324 +673,700 @@ fn test_security_conversion() {
         OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
             .unwrap();
 
-    // Parse the YAML to verify security schemes and requirements
-    let yaml_str = openapi_response.openapi_yaml;
-    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_str).unwrap();
+    // Expected OpenAPI YAML structure
+    let expected_yaml = r#"
+components:
+  securitySchemes:
+    api-key-auth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: API key security scheme for api-key-auth
+    jwt-auth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: API key security scheme for jwt-auth
+paths:
+  /v0.1.0/secure-resource:
+    get:
+      security:
+        - api-key-auth: []
+  /v0.1.0/another-secure-resource:
+    post:
+      security:
+        - jwt-auth: []
+security:
+  - api-key-auth: []
+  - jwt-auth: []
+"#;
 
-    // Verify security schemes in components
-    assert!(yaml_value["components"].is_mapping());
-    assert!(yaml_value["components"]["securitySchemes"].is_mapping());
-    assert!(yaml_value["components"]["securitySchemes"]["api-key-auth"].is_mapping());
-    assert!(yaml_value["components"]["securitySchemes"]["jwt-auth"].is_mapping());
+    // Parse both YAMLs for comparison
+    let actual_yaml: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
+        .expect("Failed to parse actual OpenAPI YAML");
+    let expected_yaml: serde_yaml::Value =
+        serde_yaml::from_str(expected_yaml).expect("Failed to parse expected OpenAPI YAML");
 
-    // Verify security schemes are of type apiKey
+    // Compare the relevant sections
     assert_eq!(
-        yaml_value["components"]["securitySchemes"]["api-key-auth"]["type"],
-        "apiKey"
+        actual_yaml["components"]["securitySchemes"],
+        expected_yaml["components"]["securitySchemes"]
     );
     assert_eq!(
-        yaml_value["components"]["securitySchemes"]["jwt-auth"]["type"],
-        "apiKey"
-    );
-
-    // Verify security scheme locations
-    assert_eq!(
-        yaml_value["components"]["securitySchemes"]["api-key-auth"]["in"],
-        "header"
+        actual_yaml["paths"]["/v0.1.0/secure-resource"]["get"]["security"],
+        expected_yaml["paths"]["/v0.1.0/secure-resource"]["get"]["security"]
     );
     assert_eq!(
-        yaml_value["components"]["securitySchemes"]["jwt-auth"]["in"],
-        "header"
+        actual_yaml["paths"]["/v0.1.0/another-secure-resource"]["post"]["security"],
+        expected_yaml["paths"]["/v0.1.0/another-secure-resource"]["post"]["security"]
     );
-
-    // Verify security scheme names
-    assert_eq!(
-        yaml_value["components"]["securitySchemes"]["api-key-auth"]["name"],
-        "Authorization"
-    );
-    assert_eq!(
-        yaml_value["components"]["securitySchemes"]["jwt-auth"]["name"],
-        "Authorization"
-    );
-
-    // Verify path operations have security requirements
-    assert!(yaml_value["paths"]["/v0.1.0/secure-resource"]["get"]["security"].is_sequence());
-    assert!(
-        yaml_value["paths"]["/v0.1.0/secure-resource"]["get"]["security"][0]["api-key-auth"]
-            .is_sequence()
-    );
-    assert!(
-        yaml_value["paths"]["/v0.1.0/secure-resource"]["get"]["security"][0]["api-key-auth"]
-            .as_sequence()
-            .unwrap()
-            .is_empty()
-    );
-
-    assert!(
-        yaml_value["paths"]["/v0.1.0/another-secure-resource"]["post"]["security"].is_sequence()
-    );
-    assert!(
-        yaml_value["paths"]["/v0.1.0/another-secure-resource"]["post"]["security"][0]["jwt-auth"]
-            .is_sequence()
-    );
-    assert!(
-        yaml_value["paths"]["/v0.1.0/another-secure-resource"]["post"]["security"][0]["jwt-auth"]
-            .as_sequence()
-            .unwrap()
-            .is_empty()
-    );
-
-    // Verify global security is defined
-    assert!(yaml_value["security"].is_sequence());
-    assert_eq!(yaml_value["security"].as_sequence().unwrap().len(), 2);
-    assert!(yaml_value["security"][0]["api-key-auth"].is_sequence());
-    assert!(yaml_value["security"][1]["jwt-auth"].is_sequence());
+    assert_eq!(actual_yaml["security"], expected_yaml["security"]);
 }
 
-fn create_sample_response_data() -> HttpApiDefinitionResponseData {
-    // Create a sample mapping output that represents a list of items
-    let response_mapping_output = Some(RibOutputTypeInfo {
-        analysed_type: AnalysedType::Record(TypeRecord {
-            fields: vec![
-                NameTypePair {
-                    name: "body".to_string(),
-                    typ: AnalysedType::List(golem_wasm_ast::analysis::TypeList {
-                        inner: Box::new(AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr {}),
+// Test for if optional and oneOf are converted properly
+// Verify required fields are properly converted
+// Complete todo-list structure, which test for record, enum, optional, and oneOf
+#[test]
+fn test_complete_todo_structure_with_optional_and_oneof() {
+    // Sample JSON input with complete todo-list structure
+    let json_data = r#"
+    {
+        "id": "todo-list",
+        "version": "0.0.1",
+        "routes": [
+            {
+                "method": "Post",
+                "path": "/v0.0.1/{user}/add",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "todo-list",
+                        "version": 0
+                    },
+                    "response": "let input = request.body.input;\nlet result = golem:todolist/api.{add}(input);\n{status: 200: u64, body: result}",
+                    "responseMappingInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "body",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "input",
+                                                    "typ": {
+                                                        "fields": [
+                                                            {
+                                                                "name": "title",
+                                                                "typ": {
+                                                                    "type": "Str"
+                                                                }
+                                                            },
+                                                            {
+                                                                "name": "priority",
+                                                                "typ": {
+                                                                    "cases": [
+                                                                        "low",
+                                                                        "medium",
+                                                                        "high"
+                                                                    ],
+                                                                    "type": "Enum"
+                                                                }
+                                                            },
+                                                            {
+                                                                "name": "deadline",
+                                                                "typ": {
+                                                                    "inner": {
+                                                                        "type": "Str"
+                                                                    },
+                                                                    "type": "Option"
+                                                                }
+                                                            }
+                                                        ],
+                                                        "type": "Record"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "err": {
+                                            "type": "Str"
+                                        },
+                                        "ok": {
+                                            "fields": [
+                                                {
+                                                    "name": "id",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "title",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "priority",
+                                                    "typ": {
+                                                        "cases": [
+                                                            "low",
+                                                            "medium",
+                                                            "high"
+                                                        ],
+                                                        "type": "Enum"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "status",
+                                                    "typ": {
+                                                        "cases": [
+                                                            "backlog",
+                                                            "in-progress",
+                                                            "done"
+                                                        ],
+                                                        "type": "Enum"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "created-timestamp",
+                                                    "typ": {
+                                                        "type": "S64"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "updated-timestamp",
+                                                    "typ": {
+                                                        "type": "S64"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "deadline",
+                                                    "typ": {
+                                                        "inner": {
+                                                            "type": "S64"
+                                                        },
+                                                        "type": "Option"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        },
+                                        "type": "Result"
+                                    }
                                 },
-                                NameTypePair {
-                                    name: "name".to_string(),
-                                    typ: AnalysedType::Str(TypeStr {}),
-                                },
-                                NameTypePair {
-                                    name: "price".to_string(),
-                                    typ: AnalysedType::F32(TypeF32 {}),
-                                },
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                }
                             ],
-                        })),
-                    }),
-                },
-                NameTypePair {
-                    name: "status".to_string(),
-                    typ: AnalysedType::U64(TypeU64 {}),
-                },
-            ],
-        }),
-    });
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": "let user: string = request.path.user;\n\"${user}\"",
+                    "workerNameInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "path",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "user",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    }"#;
 
-    // Create a sample worker name input with path parameter type info
-    let worker_name_input = Some(RibInputTypeInfo {
-        types: HashMap::from([
-            (
-                "request".to_string(),
-                AnalysedType::Record(TypeRecord {
-                    fields: vec![NameTypePair {
-                        name: "path".to_string(),
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![NameTypePair {
-                                name: "user".to_string(),
-                                typ: AnalysedType::Str(TypeStr {}),
-                            }],
-                        }),
-                    }],
-                }),
-            ),
-            (
-                "request.path.user".to_string(),
-                AnalysedType::Str(TypeStr {}),
-            ),
-        ]),
-    });
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
 
-    // Create a route similar to the shopping cart example
-    let route = RouteResponseData {
-        method: MethodPattern::Get,
-        path: "/v0.0.1/{user}/get-items".to_string(),
-        security: None,
-        binding: GatewayBindingResponseData {
-            binding_type: Some(GatewayBindingType::Default),
-            component: Some(ResolvedGatewayBindingComponent {
-                name: "test-component".to_string(),
-                version: 1,
-            }),
-            worker_name: Some("let user = request.path.user; `worker-${user}`".to_string()),
-            worker_name_input,
-            idempotency_key: None,
-            idempotency_key_input: None,
-            response: Some(
-                "let items = golem:testapi/api.{get-items}(); {status: 200u64, body: items}"
-                    .to_string(),
-            ),
-            response_mapping_input: None,
-            response_mapping_output,
-            cors_preflight: None,
-        },
-    };
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
 
-    // Create the HttpApiDefinitionResponseData
-    HttpApiDefinitionResponseData {
-        id: ApiDefinitionId("test-api".to_string()),
-        version: ApiVersion("0.0.1".to_string()),
-        routes: vec![route],
-        draft: false,
-        created_at: Some(Utc::now()),
-    }
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+
+    // Verify basic OpenAPI structure
+    assert_eq!(yaml_value["openapi"], "3.0.0");
+    assert_eq!(yaml_value["info"]["title"], "todo-list");
+    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+
+    // Verify path exists
+    let path = &yaml_value["paths"]["/v0.0.1/{user}/add"];
+    assert!(path.is_mapping());
+
+    // Verify POST operation
+    let post_op = &path["post"];
+    assert!(post_op.is_mapping());
+
+    // Verify parameters
+    let parameters = &post_op["parameters"];
+    assert!(parameters.is_sequence());
+    assert_eq!(parameters[0]["name"], "user");
+    assert_eq!(parameters[0]["in"], "path");
+    assert_eq!(parameters[0]["required"], true);
+    assert_eq!(parameters[0]["schema"]["type"], "string");
+
+    // Verify request body
+    let request_body = &post_op["requestBody"];
+    assert!(request_body["required"].as_bool().unwrap());
+
+    // Verify request body schema
+    let request_schema = &request_body["content"]["application/json"]["schema"];
+    assert_eq!(request_schema["type"], "object");
+
+    // Verify required input field
+    assert_eq!(
+        request_schema["required"],
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("input".to_string())])
+    );
+
+    // Verify input properties
+    let input_props = &request_schema["properties"]["input"]["properties"];
+
+    // Required fields, no deadline
+    assert_eq!(input_props["title"]["type"], "string");
+    assert_eq!(input_props["priority"]["type"], "string");
+    assert_eq!(
+        input_props["priority"]["enum"],
+        serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String("low".to_string()),
+            serde_yaml::Value::String("medium".to_string()),
+            serde_yaml::Value::String("high".to_string())
+        ])
+    );
+
+    // Optional field (deadline)
+    assert_eq!(input_props["deadline"]["nullable"], true);
+    assert_eq!(input_props["deadline"]["type"], "string");
+
+    // Verify responses
+    let responses = &post_op["responses"];
+    assert!(responses.is_mapping());
+    assert!(responses["201"].is_mapping());
+
+    // Verify response schema
+    let response_schema = &responses["201"]["content"]["application/json"]["schema"];
+
+    // Verify OneOf structure
+    assert!(response_schema["oneOf"].is_sequence());
+    assert_eq!(response_schema["oneOf"].as_sequence().unwrap().len(), 2);
+
+    // Verify success case (ok)
+    let ok_schema = &response_schema["oneOf"][0];
+    assert!(ok_schema["properties"]["ok"].is_mapping());
+
+    // Verify required fields in success case
+    let ok_props = &ok_schema["properties"]["ok"]["properties"];
+    assert_eq!(ok_props["id"]["type"], "string");
+    assert_eq!(ok_props["title"]["type"], "string");
+    assert_eq!(ok_props["priority"]["type"], "string");
+    assert_eq!(ok_props["status"]["type"], "string");
+    assert_eq!(ok_props["created-timestamp"]["type"], "integer");
+    assert_eq!(ok_props["updated-timestamp"]["type"], "integer");
+
+    // Verify optional field (deadline) in success case
+    assert_eq!(ok_props["deadline"]["nullable"], true);
+    assert_eq!(ok_props["deadline"]["type"], "integer");
+    assert_eq!(ok_props["deadline"]["format"], "int64");
+
+    // Verify error case (err)
+    let err_schema = &response_schema["oneOf"][1];
+    assert!(err_schema["properties"]["err"].is_mapping());
+    assert_eq!(err_schema["properties"]["err"]["type"], "string");
 }
 
-fn create_sample_with_request_body() -> HttpApiDefinitionResponseData {
-    // Create a sample request body type info
-    let response_mapping_input = Some(RibInputTypeInfo {
-        types: HashMap::from([
-            (
-                "request".to_string(),
-                AnalysedType::Record(TypeRecord {
-                    fields: vec![
-                        NameTypePair {
-                            name: "body".to_string(),
-                            typ: AnalysedType::Record(TypeRecord {
-                                fields: vec![NameTypePair {
-                                    name: "item".to_string(),
-                                    typ: AnalysedType::Record(TypeRecord {
-                                        fields: vec![
-                                            NameTypePair {
-                                                name: "product-id".to_string(),
-                                                typ: AnalysedType::Str(TypeStr {}),
-                                            },
-                                            NameTypePair {
-                                                name: "name".to_string(),
-                                                typ: AnalysedType::Str(TypeStr {}),
-                                            },
-                                            NameTypePair {
-                                                name: "price".to_string(),
-                                                typ: AnalysedType::F32(TypeF32 {}),
-                                            },
-                                            NameTypePair {
-                                                name: "quantity".to_string(),
-                                                typ: AnalysedType::U32(TypeU32 {}),
-                                            },
-                                        ],
-                                    }),
-                                }],
-                            }),
-                        },
-                        NameTypePair {
-                            name: "path".to_string(),
-                            typ: AnalysedType::Record(TypeRecord {
-                                fields: vec![NameTypePair {
-                                    name: "user".to_string(),
-                                    typ: AnalysedType::Str(TypeStr {}),
-                                }],
-                            }),
-                        },
-                    ],
-                }),
-            ),
-            (
-                "request.body".to_string(),
-                AnalysedType::Record(TypeRecord {
-                    fields: vec![NameTypePair {
-                        name: "item".to_string(),
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "product-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr {}),
+// Test for delay-echo, path parameter has {user} and {time}
+// {user} is from workerNameInput, {time} is from responseMappingInput
+#[test]
+fn test_user_time_conversion() {
+    // Sample JSON input with a single route
+    let json_data = r#"
+    {
+        "id": "delay-echo",
+        "version": "0.0.1",
+        "routes": [
+            {
+                "method": "Post",
+                "path": "/v0.0.1/{user}/{time}/delay-echo",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "delay-echo",
+                        "version": 0
+                    },
+                    "response": "let user: string = request.path.user; let time: u32 = request.path.time; let result = golem:delayecho/api.{echo}(\"worker-${user}\", time); {status: 200u64, body: result}",
+                    "workerName": "let user: string = request.path.user; \"worker-${user}\"",
+                    "workerNameInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "path",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "user",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "time",
+                                                    "typ": {
+                                                        "type": "U32"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    }"#;
+
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
+
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
+
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+
+    // Verify basic properties
+    assert_eq!(yaml_value["openapi"], "3.0.0");
+    assert_eq!(yaml_value["info"]["title"], "delay-echo");
+    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+    assert_eq!(yaml_value["x-golem-api-definition-id"], "delay-echo");
+    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
+
+    // Verify path exists
+    assert!(yaml_value["paths"]["/v0.0.1/{user}/{time}/delay-echo"].is_mapping());
+
+    // Verify POST operation
+    let post_op = &yaml_value["paths"]["/v0.0.1/{user}/{time}/delay-echo"]["post"];
+    assert!(post_op.is_mapping());
+
+    // Verify parameters
+    let parameters = &post_op["parameters"];
+    assert!(parameters.is_sequence());
+    assert_eq!(parameters[0]["name"], "user");
+    assert_eq!(parameters[0]["in"], "path");
+    assert_eq!(parameters[0]["required"], true);
+    assert_eq!(parameters[1]["name"], "time");
+    assert_eq!(parameters[1]["in"], "path");
+    assert_eq!(parameters[1]["required"], true);
+
+    // Verify binding information
+    let binding = &post_op["x-golem-api-gateway-binding"];
+    assert_eq!(binding["binding-type"], "default");
+    assert_eq!(binding["component-name"], "delay-echo");
+    assert_eq!(binding["component-version"], 0);
+    assert_eq!(
+        binding["worker-name"],
+        "let user: string = request.path.user; \"worker-${user}\""
+    );
+    assert_eq!(binding["response"], "let user: string = request.path.user; let time: u32 = request.path.time; let result = golem:delayecho/api.{echo}(\"worker-${user}\", time); {status: 200u64, body: result}");
+}
+
+// Test full structure of shopping-cart, tested as a single output openapi schema
+// Test for cors-preflight, swagger-ui, default bindings
+// Test for no request body, and array object as response
+#[test]
+fn test_oas_conversion_full_structure_shopping_cart() {
+    // Sample JSON input with complete shopping-cart structure
+    let json_data = r#"
+    {
+        "id": "shopping-cart",
+        "version": "0.0.1",
+        "routes": [
+            {
+                "binding": {
+                    "bindingType": "swagger-ui",
+                    "component": null,
+                    "corsPreflight": null,
+                    "idempotencyKey": null,
+                    "idempotencyKeyInput": null,
+                    "response": null,
+                    "responseMappingInput": null,
+                    "responseMappingOutput": null,
+                    "workerName": null,
+                    "workerNameInput": null
+                },
+                "method": "Get",
+                "path": "/v0.0.1/swagger-shopping-cart",
+                "security": null
+            },
+            {
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "shopping-cart",
+                        "version": 0
+                    },
+                    "corsPreflight": null,
+                    "idempotencyKey": null,
+                    "idempotencyKeyInput": null,
+                    "response": "let result = golem:shoppingcart/api.{get-cart-contents}();\n{status: 200: u64, body: result}",
+                    "responseMappingInput": {
+                        "types": {}
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "inner": {
+                                            "fields": [
+                                                {
+                                                    "name": "product-id",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "name",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "price",
+                                                    "typ": {
+                                                        "type": "F32"
+                                                    }
+                                                },
+                                                {
+                                                    "name": "quantity",
+                                                    "typ": {
+                                                        "type": "U32"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        },
+                                        "type": "List"
+                                    }
                                 },
-                                NameTypePair {
-                                    name: "name".to_string(),
-                                    typ: AnalysedType::Str(TypeStr {}),
-                                },
-                                NameTypePair {
-                                    name: "price".to_string(),
-                                    typ: AnalysedType::F32(TypeF32 {}),
-                                },
-                                NameTypePair {
-                                    name: "quantity".to_string(),
-                                    typ: AnalysedType::U32(TypeU32 {}),
-                                },
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                }
                             ],
-                        }),
-                    }],
-                }),
-            ),
-            (
-                "request.path.user".to_string(),
-                AnalysedType::Str(TypeStr {}),
-            ),
-        ]),
-    });
-
-    // Create response output type info
-    let response_mapping_output = Some(RibOutputTypeInfo {
-        analysed_type: AnalysedType::Record(TypeRecord {
-            fields: vec![
-                NameTypePair {
-                    name: "body".to_string(),
-                    typ: AnalysedType::Str(TypeStr {}),
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": "let user: string = request.path.user;\n\"worker-${user}\"",
+                    "workerNameInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "path",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "user",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    }
                 },
-                NameTypePair {
-                    name: "status".to_string(),
-                    typ: AnalysedType::U64(TypeU64 {}),
+                "method": "Post",
+                "path": "/v0.0.1/{user}/get-cart-contents",
+                "security": null
+            },
+            {
+                "binding": {
+                    "bindingType": "cors-preflight",
+                    "component": null,
+                    "corsPreflight": {
+                        "allowCredentials": null,
+                        "allowHeaders": "Content-Type, Authorization",
+                        "allowMethods": "GET, POST, PUT, DELETE, OPTIONS",
+                        "allowOrigin": "*",
+                        "exposeHeaders": null,
+                        "maxAge": null
+                    },
+                    "idempotencyKey": null,
+                    "idempotencyKeyInput": null,
+                    "response": null,
+                    "responseMappingInput": null,
+                    "responseMappingOutput": null,
+                    "workerName": null,
+                    "workerNameInput": null
                 },
-            ],
-        }),
-    });
+                "method": "Options",
+                "path": "/v0.0.1/{user}/get-cart-contents",
+                "security": null
+            }
+        ]
+    }"#;
 
-    // Create worker name input with path parameter type info
-    let worker_name_input = Some(RibInputTypeInfo {
-        types: HashMap::from([
-            (
-                "request".to_string(),
-                AnalysedType::Record(TypeRecord {
-                    fields: vec![NameTypePair {
-                        name: "path".to_string(),
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![NameTypePair {
-                                name: "user".to_string(),
-                                typ: AnalysedType::Str(TypeStr {}),
-                            }],
-                        }),
-                    }],
-                }),
-            ),
-            (
-                "request.path.user".to_string(),
-                AnalysedType::Str(TypeStr {}),
-            ),
-        ]),
-    });
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
 
-    // Create a route similar to the shopping cart add-item example
-    let route = RouteResponseData {
-        method: MethodPattern::Post,
-        path: "/v0.0.1/{user}/add-item".to_string(),
-        security: None,
-        binding: GatewayBindingResponseData {
-            binding_type: Some(GatewayBindingType::Default),
-            component: Some(ResolvedGatewayBindingComponent {
-                name: "test-component".to_string(),
-                version: 1,
-            }),
-            worker_name: Some("let user = request.path.user; `worker-${user}`".to_string()),
-            worker_name_input,
-            idempotency_key: None,
-            idempotency_key_input: None,
-            response: Some("let item = request.body.item; let result = golem:testapi/api.{add-item}(item); {status: 200u64, body: \"Item added\"}".to_string()),
-            response_mapping_input,
-            response_mapping_output,
-            cors_preflight: None,
-        },
-    };
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
 
-    // Create the HttpApiDefinitionResponseData
-    HttpApiDefinitionResponseData {
-        id: ApiDefinitionId("test-api".to_string()),
-        version: ApiVersion("0.0.1".to_string()),
-        routes: vec![route],
-        draft: false,
-        created_at: Some(Utc::now()),
-    }
+    // Define expected YAML structure
+    // The response should only contains the body part, from <status, body>
+    let expected_yaml = r#"
+openapi: 3.0.0
+info:
+  title: shopping-cart
+  version: 0.0.1
+paths:
+  /v0.0.1/swagger-shopping-cart:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: swagger-ui
+  /v0.0.1/{user}/get-cart-contents:
+    post:
+      parameters:
+      - in: path
+        name: user
+        description: 'Path parameter: user'
+        required: true
+        schema:
+          type: string
+        explode: false
+        style: simple
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    product-id:
+                      type: string
+                    name:
+                      type: string
+                    price:
+                      type: number
+                      format: float
+                    quantity:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  required:
+                  - product-id
+                  - name
+                  - price
+                  - quantity
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: shopping-cart
+        component-version: 0
+        response: |-
+          let result = golem:shoppingcart/api.{get-cart-contents}();
+          {status: 200: u64, body: result}
+        worker-name: |-
+          let user: string = request.path.user;
+          "worker-${user}"
+    options:
+      parameters:
+      - in: path
+        name: user
+        description: 'Path parameter: user'
+        required: true
+        schema:
+          type: string
+        explode: false
+        style: simple
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: cors-preflight
+        response: |-
+          {
+            Access-Control-Allow-Headers: "Content-Type, Authorization",
+            Access-Control-Allow-Methods: "GET, POST, PUT, DELETE, OPTIONS",
+            Access-Control-Allow-Origin: "*"
+          }
+components: {}
+x-golem-api-definition-id: shopping-cart
+x-golem-api-definition-version: 0.0.1
+"#;
+
+    // Parse both YAMLs for comparison
+    let actual_yaml: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
+        .expect("Failed to parse actual OpenAPI YAML");
+    let expected_yaml: serde_yaml::Value =
+        serde_yaml::from_str(expected_yaml).expect("Failed to parse expected OpenAPI YAML");
+
+    // Single assert comparing the complete structure
+    assert_eq!(actual_yaml, expected_yaml);
 }
