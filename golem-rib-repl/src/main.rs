@@ -12,9 +12,6 @@ use std::sync::Arc;
 #[cfg(feature = "embedded")]
 use golem_rib_repl::embedded::*;
 
-#[cfg(test)]
-test_r::enable!();
-
 // This is to experiment with the REPL through `cargo run --features embedded`
 #[tokio::main]
 async fn main() {
