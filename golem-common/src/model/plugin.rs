@@ -1,14 +1,15 @@
+use super::PoemMultipartTypeRequirements;
 use crate::model::{
     AccountId, ComponentId, ComponentVersion, Empty, HasAccountId, PluginInstallationId,
     PoemTypeRequirements,
 };
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
-
-use super::PoemMultipartTypeRequirements;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -87,7 +88,7 @@ impl poem_openapi::types::ParseFromMultipartField for DefaultPluginScope {
                 let s = field.text().await?;
                 Self::parse_from_parameter(&s)
             }
-            None => ::std::result::Result::Err(poem_openapi::types::ParseError::expected_input()),
+            None => Err(poem_openapi::types::ParseError::expected_input()),
         }
     }
 }
@@ -197,10 +198,9 @@ pub trait PluginOwner:
         + 'static;
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
 pub struct DefaultPluginOwner;
 
 impl Display for DefaultPluginOwner {
@@ -230,6 +230,42 @@ impl HasAccountId for DefaultPluginOwner {
 impl PluginOwner for DefaultPluginOwner {
     #[cfg(feature = "sql")]
     type Row = crate::repo::plugin::DefaultPluginOwnerRow;
+}
+
+impl Serialize for DefaultPluginOwner {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = serializer.serialize_struct("DefaultPluginOwner", 0)?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DefaultPluginOwner {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct UnitVisitor;
+
+        impl<'de> Visitor<'de> for UnitVisitor {
+            type Value = DefaultPluginOwner;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("struct DefaultPluginOwner")
+            }
+
+            fn visit_map<A>(self, _map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                Ok(DefaultPluginOwner)
+            }
+        }
+
+        deserializer.deserialize_struct("DefaultPluginOwner", &[], UnitVisitor)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -649,5 +685,20 @@ mod protobuf {
                 blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::plugin::DefaultPluginOwner;
+    use poem_openapi::types::ToJSON;
+    use test_r::test;
+
+    #[test]
+    fn default_plugin_owner_serialization_poem_serde_equivalence() {
+        let owner = DefaultPluginOwner;
+        let serialized = owner.to_json_string();
+        let deserialized: DefaultPluginOwner = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(owner, deserialized);
     }
 }

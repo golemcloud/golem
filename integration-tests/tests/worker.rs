@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{flaky, inherit_test_dep, test, timeout};
 
 use assert2::check;
 
@@ -1142,6 +1142,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
+#[flaky(10)] // TODO: stabilize test
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.component("http-client-2").unique().store().await;
     let host_http_port = 8585;

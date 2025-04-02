@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::{ComponentId, ComponentVersion};
 use crate::model::plugin::{DefaultPluginOwner, PluginOwner};
 use crate::model::{AccountId, HasAccountId, PoemTypeRequirements};
+use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
@@ -90,4 +92,54 @@ impl ComponentOwner for DefaultComponentOwner {
     #[cfg(feature = "sql")]
     type Row = crate::repo::component::DefaultComponentOwnerRow;
     type PluginOwner = DefaultPluginOwner;
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+
+pub struct VersionedComponentId {
+    pub component_id: ComponentId,
+    pub version: ComponentVersion,
+}
+
+impl Display for VersionedComponentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}#{}", self.component_id, self.version)
+    }
+}
+
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::model::component::VersionedComponentId;
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
+        for VersionedComponentId
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::VersionedComponentId,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                component_id: value
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                version: value.version,
+            })
+        }
+    }
+
+    impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
+        fn from(value: VersionedComponentId) -> Self {
+            Self {
+                component_id: Some(value.component_id.into()),
+                version: value.version,
+            }
+        }
+    }
 }

@@ -40,13 +40,13 @@ use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetada
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
 use crate::service::gateway::api_deployment::ApiDeploymentError;
 use async_trait::async_trait;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
-use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;

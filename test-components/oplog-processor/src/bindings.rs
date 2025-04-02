@@ -10582,6 +10582,86 @@ pub mod golem {
                     }
                 }
             }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Parses a UUID from a string
+            pub fn parse_uuid(uuid: &str) -> Result<Uuid, _rt::String> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let vec0 = uuid;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "parse-uuid"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i64>();
+                                let l4 = *ptr1.add(16).cast::<i64>();
+                                Uuid {
+                                    high_bits: l3 as u64,
+                                    low_bits: l4 as u64,
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = *ptr1.add(8).cast::<*mut u8>();
+                                let l6 = *ptr1.add(12).cast::<usize>();
+                                let len7 = l6;
+                                let bytes7 = _rt::Vec::from_raw_parts(
+                                    l5.cast(),
+                                    len7,
+                                    len7,
+                                );
+                                _rt::string_lift(bytes7)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Converts a UUID to a string
+            pub fn uuid_to_string(uuid: Uuid) -> _rt::String {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let Uuid { high_bits: high_bits0, low_bits: low_bits0 } = uuid;
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "uuid-to-string"]
+                        fn wit_import(_: i64, _: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(_rt::as_i64(high_bits0), _rt::as_i64(low_bits0), ptr1);
+                    let l2 = *ptr1.add(0).cast::<*mut u8>();
+                    let l3 = *ptr1.add(4).cast::<usize>();
+                    let len4 = l3;
+                    let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
+                    _rt::string_lift(bytes4)
+                }
+            }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn new(worker_id: &WorkerId) -> Self {
@@ -18437,6 +18517,20 @@ mod _rt {
     pub use alloc_crate::vec::Vec;
     pub use alloc_crate::alloc;
     pub use alloc_crate::string::String;
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
+    pub unsafe fn invalid_enum_discriminant<T>() -> T {
+        if cfg!(debug_assertions) {
+            panic!("invalid enum discriminant")
+        } else {
+            core::hint::unreachable_unchecked()
+        }
+    }
     pub fn as_i64<T: AsI64>(t: T) -> i64 {
         t.as_i64()
     }
@@ -18553,13 +18647,6 @@ mod _rt {
             self as f64
         }
     }
-    pub unsafe fn invalid_enum_discriminant<T>() -> T {
-        if cfg!(debug_assertions) {
-            panic!("invalid enum discriminant")
-        } else {
-            core::hint::unreachable_unchecked()
-        }
-    }
     pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
         if size == 0 {
             return;
@@ -18572,13 +18659,6 @@ mod _rt {
             core::char::from_u32(val).unwrap()
         } else {
             core::char::from_u32_unchecked(val)
-        }
-    }
-    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
-        if cfg!(debug_assertions) {
-            String::from_utf8(bytes).unwrap()
-        } else {
-            String::from_utf8_unchecked(bytes)
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -18624,15 +18704,15 @@ pub(crate) use __export_oplog_processor_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:component:oplog-processor:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10553] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb3Q\x01A\x02\x01A%\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10616] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf2Q\x01A\x02\x01A%\x01\
 B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\
 \x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-cloc\
 k@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\
 \x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[me\
 thod]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04pol\
 l\x01\x06\x03\0\x12wasi:io/poll@0.2.0\x05\x01\x02\x03\0\0\x08datetime\x02\x03\0\x01\
-\x08pollable\x01BS\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
+\x08pollable\x01BX\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
 \x03\x04\0\x08pollable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uu\
 id\x03\0\x04\x01r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0cco\
 mponent-id\x07\x0bworker-names\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0anode-i\
@@ -18670,175 +18750,176 @@ heduled-time\x01\x0dfunction-names\x0ffunction-params4\0<\x04\0/[method]wasm-rpc
 .schedule-cancelable-invocation\x01=\x01h.\x01i\x03\x01@\x01\x04self>\0?\x04\0&[\
 method]future-invoke-result.subscribe\x01@\x01k5\x01@\x01\x04self>\0\xc1\0\x04\0\
 \x20[method]future-invoke-result.get\x01B\x01h/\x01@\x01\x04self\xc3\0\x01\0\x04\
-\0![method]cancellation-token.cancel\x01D\x01@\x01\x03vnt*\0(\x04\0\x0dextract-v\
-alue\x01E\x01@\x01\x03vnt*\0\x1d\x04\0\x0cextract-type\x01F\x03\0\x15golem:rpc/t\
-ypes@0.2.0\x05\x04\x01B\x0f\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01w\x04\
-\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03n\
-ow\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\
-\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12su\
-bscribe-duration\x01\x0a\x03\0!wasi:clocks/monotonic-clock@0.2.0\x05\x05\x02\x03\
-\0\x03\x08duration\x02\x03\0\x02\x0ccomponent-id\x02\x03\0\x02\x04uuid\x02\x03\0\
-\x02\x09worker-id\x01Bu\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\
-\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\
-\x04\x02\x03\x02\x01\x09\x04\0\x09worker-id\x03\0\x06\x01w\x04\0\x0boplog-index\x03\
-\0\x08\x01r\x02\x09worker-id\x07\x09oplog-idx\x09\x04\0\x0apromise-id\x03\0\x0a\x01\
-w\x04\0\x11component-version\x03\0\x0c\x01r\x01\x05values\x04\0\x0aaccount-id\x03\
-\0\x0e\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amult\
-iplieru\x11max-jitter-factor\x10\x04\0\x0cretry-policy\x03\0\x11\x01q\x03\x0fper\
-sist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persis\
-tence-level\x03\0\x13\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mo\
-de\x03\0\x15\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-\
-equal\x04less\x04\0\x11filter-comparator\x03\0\x17\x01m\x04\x05equal\x09not-equa\
-l\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x19\x01m\x07\x07ru\
-nning\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0d\
-worker-status\x03\0\x1b\x01r\x02\x0acomparator\x1a\x05values\x04\0\x12worker-nam\
-e-filter\x03\0\x1d\x01r\x02\x0acomparator\x18\x05value\x1c\x04\0\x14worker-statu\
-s-filter\x03\0\x1f\x01r\x02\x0acomparator\x18\x05valuew\x04\0\x15worker-version-\
-filter\x03\0!\x01r\x02\x0acomparator\x18\x05valuew\x04\0\x18worker-created-at-fi\
-lter\x03\0#\x01r\x03\x04names\x0acomparator\x1a\x05values\x04\0\x11worker-env-fi\
-lter\x03\0%\x01q\x05\x04name\x01\x1e\0\x06status\x01\x20\0\x07version\x01\"\0\x0a\
-created-at\x01$\0\x03env\x01&\0\x04\0\x16worker-property-filter\x03\0'\x01p(\x01\
-r\x01\x07filters)\x04\0\x11worker-all-filter\x03\0*\x01p+\x01r\x01\x07filters,\x04\
-\0\x11worker-any-filter\x03\0-\x01ps\x01o\x02ss\x01p0\x01r\x06\x09worker-id\x07\x04\
-args/\x03env1\x06status\x1c\x11component-versionw\x0bretry-countw\x04\0\x0fworke\
-r-metadata\x03\02\x04\0\x0bget-workers\x03\x01\x01q\x02\x15revert-to-oplog-index\
-\x01\x09\0\x17revert-last-invocations\x01w\0\x04\0\x14revert-worker-target\x03\0\
-5\x01k.\x01i4\x01@\x03\x0ccomponent-id\x03\x06filter7\x07precise\x7f\08\x04\0\x18\
-[constructor]get-workers\x019\x01h4\x01p3\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[m\
-ethod]get-workers.get-next\x01=\x01@\0\0\x0b\x04\0\x0ecreate-promise\x01>\x01p}\x01\
-@\x01\x0apromise-id\x0b\0?\x04\0\x0dawait-promise\x01@\x01k?\x01@\x01\x0apromise\
--id\x0b\0\xc1\0\x04\0\x0cpoll-promise\x01B\x01@\x02\x0apromise-id\x0b\x04data?\0\
-\x7f\x04\0\x10complete-promise\x01C\x01@\x01\x0apromise-id\x0b\x01\0\x04\0\x0ede\
-lete-promise\x01D\x01@\0\0\x09\x04\0\x0fget-oplog-index\x01E\x01@\x01\x09oplog-i\
-dx\x09\x01\0\x04\0\x0fset-oplog-index\x01F\x01@\x01\x08replicas}\x01\0\x04\0\x0c\
-oplog-commit\x01G\x04\0\x14mark-begin-operation\x01E\x01@\x01\x05begin\x09\x01\0\
-\x04\0\x12mark-end-operation\x01H\x01@\0\0\x12\x04\0\x10get-retry-policy\x01I\x01\
-@\x01\x10new-retry-policy\x12\x01\0\x04\0\x10set-retry-policy\x01J\x01@\0\0\x14\x04\
-\0\x1bget-oplog-persistence-level\x01K\x01@\x01\x15new-persistence-level\x14\x01\
-\0\x04\0\x1bset-oplog-persistence-level\x01L\x01@\0\0\x7f\x04\0\x14get-idempoten\
-ce-mode\x01M\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01N\
-\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01O\x01@\x03\x09worker-id\x07\x0e\
-target-version\x0d\x04mode\x16\x01\0\x04\0\x0dupdate-worker\x01P\x01@\0\03\x04\0\
-\x11get-self-metadata\x01Q\x01k3\x01@\x01\x09worker-id\x07\0\xd2\0\x04\0\x13get-\
-worker-metadata\x01S\x01@\x03\x10source-worker-id\x07\x10target-worker-id\x07\x11\
-oplog-idx-cut-off\x09\x01\0\x04\0\x0bfork-worker\x01T\x01@\x02\x09worker-id\x07\x0d\
-revert-target6\x01\0\x04\0\x0drevert-worker\x01U\x01k\x03\x01@\x01\x13component-\
-references\0\xd6\0\x04\0\x14resolve-component-id\x01W\x01k\x07\x01@\x02\x13compo\
-nent-references\x0bworker-names\0\xd8\0\x04\0\x11resolve-worker-id\x01Y\x04\0\x18\
-resolve-worker-id-strict\x01Y\x03\0\x14golem:api/host@1.1.6\x05\x0a\x01B7\x02\x03\
-\x02\x01\x02\x04\0\x08datetime\x03\0\0\x04\0\x04span\x03\x01\x04\0\x12invocation\
--context\x03\x01\x01q\x01\x06string\x01s\0\x04\0\x0fattribute-value\x03\0\x04\x01\
-r\x02\x03keys\x05value\x05\x04\0\x09attribute\x03\0\x06\x01p\x05\x01r\x02\x03key\
-s\x06values\x08\x04\0\x0fattribute-chain\x03\0\x09\x01s\x04\0\x08trace-id\x03\0\x0b\
-\x01s\x04\0\x07span-id\x03\0\x0d\x01h\x02\x01@\x01\x04self\x0f\0\x01\x04\0\x17[m\
-ethod]span.started-at\x01\x10\x01@\x03\x04self\x0f\x04names\x05value\x05\x01\0\x04\
-\0\x1a[method]span.set-attribute\x01\x11\x01p\x07\x01@\x02\x04self\x0f\x0aattrib\
-utes\x12\x01\0\x04\0\x1b[method]span.set-attributes\x01\x13\x01@\x01\x04self\x0f\
-\x01\0\x04\0\x13[method]span.finish\x01\x14\x01h\x03\x01@\x01\x04self\x15\0\x0c\x04\
-\0#[method]invocation-context.trace-id\x01\x16\x01@\x01\x04self\x15\0\x0e\x04\0\"\
-[method]invocation-context.span-id\x01\x17\x01i\x03\x01k\x18\x01@\x01\x04self\x15\
-\0\x19\x04\0![method]invocation-context.parent\x01\x1a\x01k\x05\x01@\x03\x04self\
-\x15\x03keys\x09inherited\x7f\0\x1b\x04\0([method]invocation-context.get-attribu\
-te\x01\x1c\x01@\x02\x04self\x15\x09inherited\x7f\0\x12\x04\0)[method]invocation-\
-context.get-attributes\x01\x1d\x01@\x02\x04self\x15\x03keys\0\x08\x04\0.[method]\
-invocation-context.get-attribute-chain\x01\x1e\x01p\x0a\x01@\x01\x04self\x15\0\x1f\
-\x04\0/[method]invocation-context.get-attribute-chains\x01\x20\x01o\x02ss\x01p!\x01\
-@\x01\x04self\x15\0\"\x04\00[method]invocation-context.trace-context-headers\x01\
-#\x01i\x02\x01@\x01\x04names\0$\x04\0\x0astart-span\x01%\x01@\0\0\x18\x04\0\x0fc\
-urrent-context\x01&\x01@\x01\x05allow\x7f\0\x7f\x04\0&allow-forwarding-trace-con\
-text-headers\x01'\x03\0\x17golem:api/context@1.1.6\x05\x0b\x02\x03\0\x02\x09wit-\
-value\x02\x03\0\x04\x0aaccount-id\x02\x03\0\x04\x11component-version\x02\x03\0\x04\
-\x0boplog-index\x02\x03\0\x04\x0cretry-policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\
-\x09worker-id\x02\x03\0\x05\x09attribute\x02\x03\0\x05\x0fattribute-value\x02\x03\
-\0\x05\x07span-id\x02\x03\0\x05\x08trace-id\x01B\x82\x01\x02\x03\x02\x01\x02\x04\
-\0\x08datetime\x03\0\0\x02\x03\x02\x01\x0c\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\
-\x01\x0d\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01\x0e\x04\0\x11component-ve\
-rsion\x03\0\x06\x02\x03\x02\x01\x0f\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\
-\x10\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01\x11\x04\0\x04uuid\x03\0\x0c\
-\x02\x03\x02\x01\x12\x04\0\x09worker-id\x03\0\x0e\x02\x03\x02\x01\x13\x04\0\x09a\
-ttribute\x03\0\x10\x02\x03\x02\x01\x14\x04\0\x0fattribute-value\x03\0\x12\x02\x03\
-\x02\x01\x15\x04\0\x07span-id\x03\0\x14\x02\x03\x02\x01\x16\x04\0\x08trace-id\x03\
-\0\x16\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\
-\x0cwrite-remote\0\0\x14write-remote-batched\x01\x18\0\x04\0\x15wrapped-function\
--type\x03\0\x19\x01o\x02ss\x01p\x1b\x01r\x04\x0finstallation-id\x0d\x04names\x07\
-versions\x0aparameters\x1c\x04\0\x1fplugin-installation-description\x03\0\x1d\x01\
-ps\x01k\x0f\x01p\x1e\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component-ver\
-sion\x07\x04args\x1f\x03env\x1c\x0aaccount-id\x05\x06parent\x20\x0ecomponent-siz\
-ew\x20initial-total-linear-memory-sizew\x16initial-active-plugins!\x04\0\x11crea\
-te-parameters\x03\0\"\x01r\x05\x09timestamp\x01\x0dfunction-names\x07request\x03\
-\x08response\x03\x15wrapped-function-type\x1a\x04\0$imported-function-invoked-pa\
-rameters\x03\0$\x01k\x15\x01kw\x01p\x11\x01r\x06\x07span-id\x15\x05start\x01\x06\
-parent&\x0elinked-context'\x0aattributes(\x09inherited\x7f\x04\0\x0flocal-span-d\
-ata\x03\0)\x01r\x01\x07span-id\x15\x04\0\x12external-span-data\x03\0+\x01q\x02\x0a\
-local-span\x01*\0\x0dexternal-span\x01,\0\x04\0\x09span-data\x03\0-\x01p\x03\x01\
-p.\x01p0\x01r\x07\x09timestamp\x01\x0dfunction-names\x07request/\x0fidempotency-\
-keys\x08trace-id\x17\x0ctrace-states\x1f\x12invocation-context1\x04\0$exported-f\
-unction-invoked-parameters\x03\02\x01r\x03\x09timestamp\x01\x08response\x03\x0dc\
-onsumed-fuelx\x04\0&exported-function-completed-parameters\x03\04\x01r\x02\x09ti\
-mestamp\x01\x05errors\x04\0\x10error-parameters\x03\06\x01r\x03\x09timestamp\x01\
-\x05start\x09\x03end\x09\x04\0\x0fjump-parameters\x03\08\x01r\x02\x09timestamp\x01\
-\x0cretry-policy\x0b\x04\0\x1echange-retry-policy-parameters\x03\0:\x01r\x02\x09\
-timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-parameters\x03\0<\x01\
-r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remote-write-parameters\x03\
-\0>\x01k/\x01r\x03\x0fidempotency-keys\x0dfunction-names\x05input\xc0\0\x04\0'ex\
-ported-function-invocation-parameters\x03\0A\x01q\x02\x11exported-function\x01\xc2\
-\0\0\x0dmanual-update\x01\x07\0\x04\0\x11worker-invocation\x03\0C\x01r\x02\x09ti\
-mestamp\x01\x0ainvocation\xc4\0\x04\0$pending-worker-invocation-parameters\x03\0\
-E\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot-based\x01\xc7\0\0\x04\0\x12updat\
-e-description\x03\0H\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x12update-d\
-escription\xc9\0\x04\0\x19pending-update-parameters\x03\0J\x01r\x04\x09timestamp\
-\x01\x0etarget-version\x07\x12new-component-sizew\x12new-active-plugins!\x04\0\x1c\
-successful-update-parameters\x03\0L\x01ks\x01r\x03\x09timestamp\x01\x0etarget-ve\
-rsion\x07\x07details\xce\0\x04\0\x18failed-update-parameters\x03\0O\x01r\x02\x09\
-timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\x03\0Q\x01w\x04\0\x12wor\
-ker-resource-id\x03\0S\x01r\x02\x09timestamp\x01\x0bresource-id\xd4\0\x04\0\x1ac\
-reate-resource-parameters\x03\0U\x01r\x02\x09timestamp\x01\x0bresource-id\xd4\0\x04\
-\0\x18drop-resource-parameters\x03\0W\x01r\x04\x09timestamp\x01\x0bresource-id\xd4\
-\0\x0dresource-names\x0fresource-params/\x04\0\x1cdescribe-resource-parameters\x03\
-\0Y\x01m\x08\x06stdout\x06stderr\x05trace\x05debug\x04info\x04warn\x05error\x08c\
-ritical\x04\0\x09log-level\x03\0[\x01r\x04\x09timestamp\x01\x05level\xdc\0\x07co\
-ntexts\x07messages\x04\0\x0elog-parameters\x03\0]\x01r\x02\x09timestamp\x01\x06p\
-lugin\x1e\x04\0\x1aactivate-plugin-parameters\x03\0_\x01r\x02\x09timestamp\x01\x06\
-plugin\x1e\x04\0\x1cdeactivate-plugin-parameters\x03\0a\x01r\x03\x09timestamp\x01\
-\x05start\x09\x03end\x09\x04\0\x11revert-parameters\x03\0c\x01r\x02\x09timestamp\
-\x01\x0fidempotency-keys\x04\0\x1ccancel-invocation-parameters\x03\0e\x01r\x05\x09\
-timestamp\x01\x07span-id\x15\x06parent&\x0elinked-context&\x0aattributes(\x04\0\x15\
-start-span-parameters\x03\0g\x01r\x02\x09timestamp\x01\x07span-id\x15\x04\0\x16f\
-inish-span-parameters\x03\0i\x01r\x04\x09timestamp\x01\x07span-id\x15\x03keys\x05\
-value\x13\x04\0\x1dset-span-attribute-parameters\x03\0k\x01q\x20\x06create\x01#\0\
-\x19imported-function-invoked\x01%\0\x19exported-function-invoked\x013\0\x1bexpo\
-rted-function-completed\x015\0\x07suspend\x01\x01\0\x05error\x017\0\x05no-op\x01\
-\x01\0\x04jump\x019\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13change-ret\
-ry-policy\x01;\0\x13begin-atomic-region\x01\x01\0\x11end-atomic-region\x01=\0\x12\
-begin-remote-write\x01\x01\0\x10end-remote-write\x01?\0\x19pending-worker-invoca\
-tion\x01\xc6\0\0\x0epending-update\x01\xcb\0\0\x11successful-update\x01\xcd\0\0\x0d\
-failed-update\x01\xd0\0\0\x0bgrow-memory\x01\xd2\0\0\x0fcreate-resource\x01\xd6\0\
-\0\x0ddrop-resource\x01\xd8\0\0\x11describe-resource\x01\xda\0\0\x03log\x01\xde\0\
-\0\x07restart\x01\x01\0\x0factivate-plugin\x01\xe0\0\0\x11deactivate-plugin\x01\xe2\
-\0\0\x06revert\x01\xe4\0\0\x11cancel-invocation\x01\xe6\0\0\x0astart-span\x01\xe8\
-\0\0\x0bfinish-span\x01\xea\0\0\x12set-span-attribute\x01\xec\0\0\x04\0\x0boplog\
--entry\x03\0m\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01io\x01\
-@\x02\x09worker-id\x0f\x05start\x09\0\xf1\0\x04\0\x16[constructor]get-oplog\x01r\
-\x01ho\x01p\xee\0\x01k\xf4\0\x01@\x01\x04self\xf3\0\0\xf5\0\x04\0\x1a[method]get\
--oplog.get-next\x01v\x01ip\x01@\x02\x09worker-id\x0f\x04texts\0\xf7\0\x04\0\x19[\
-constructor]search-oplog\x01x\x01hp\x01o\x02\x09\xee\0\x01p\xfa\0\x01k\xfb\0\x01\
-@\x01\x04self\xf9\0\0\xfc\0\x04\0\x1d[method]search-oplog.get-next\x01}\x03\0\x15\
-golem:api/oplog@1.1.6\x05\x17\x01B\x03\x01ps\x01@\0\0\0\x04\0\x15get-invoked-fun\
-ctions\x01\x01\x04\0\x13golem:component/api\x05\x18\x02\x03\0\x04\x0fworker-meta\
-data\x02\x03\0\x06\x0boplog-entry\x01B\x1d\x02\x03\x02\x01\x02\x04\0\x08datetime\
-\x03\0\0\x02\x03\x02\x01\x0c\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0d\x04\
-\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01\x0f\x04\0\x0boplog-index\x03\0\x06\x02\
-\x03\x02\x01\x19\x04\0\x0fworker-metadata\x03\0\x08\x02\x03\x02\x01\x1a\x04\0\x0b\
-oplog-entry\x03\0\x0a\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x0c\x02\x03\
-\x02\x01\x09\x04\0\x09worker-id\x03\0\x0e\x01r\x01\x0aaccount-id\x05\x04\0\x0cac\
-count-info\x03\0\x10\x04\0\x09processor\x03\x01\x01o\x02ss\x01p\x13\x01i\x12\x01\
-@\x03\x0caccount-info\x11\x0ccomponent-id\x0d\x06config\x14\0\x15\x04\0\x16[cons\
-tructor]processor\x01\x16\x01h\x12\x01p\x0b\x01j\0\x01s\x01@\x05\x04self\x17\x09\
-worker-id\x0f\x08metadata\x09\x11first-entry-index\x07\x07entries\x18\0\x19\x04\0\
-\x19[method]processor.process\x01\x1a\x04\0\x1fgolem:api/oplog-processor@1.1.6\x05\
-\x1b\x04\0\x1fgolem:component/oplog-processor\x04\0\x0b\x15\x01\0\x0foplog-proce\
-ssor\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\
-\x10wit-bindgen-rust\x060.36.0";
+\0![method]cancellation-token.cancel\x01D\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc5\
+\0\x04\0\x0aparse-uuid\x01F\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01G\
+\x01@\x01\x03vnt*\0(\x04\0\x0dextract-value\x01H\x01@\x01\x03vnt*\0\x1d\x04\0\x0c\
+extract-type\x01I\x03\0\x15golem:rpc/types@0.2.0\x05\x04\x01B\x0f\x02\x03\x02\x01\
+\x03\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08dur\
+ation\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresoluti\
+on\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\
+\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clock\
+s/monotonic-clock@0.2.0\x05\x05\x02\x03\0\x03\x08duration\x02\x03\0\x02\x0ccompo\
+nent-id\x02\x03\0\x02\x04uuid\x02\x03\0\x02\x09worker-id\x01Bu\x02\x03\x02\x01\x06\
+\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\
+\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x09worker-id\x03\
+\0\x06\x01w\x04\0\x0boplog-index\x03\0\x08\x01r\x02\x09worker-id\x07\x09oplog-id\
+x\x09\x04\0\x0apromise-id\x03\0\x0a\x01w\x04\0\x11component-version\x03\0\x0c\x01\
+r\x01\x05values\x04\0\x0aaccount-id\x03\0\x0e\x01ku\x01r\x05\x0cmax-attemptsy\x09\
+min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x10\x04\0\x0c\
+retry-policy\x03\0\x11\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-ef\
+fects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x13\x01m\x02\x09automati\
+c\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x15\x01m\x06\x05equal\x09not-equa\
+l\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\
+\0\x17\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter\
+-comparator\x03\0\x19\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08\
+retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1b\x01r\x02\x0acompar\
+ator\x1a\x05values\x04\0\x12worker-name-filter\x03\0\x1d\x01r\x02\x0acomparator\x18\
+\x05value\x1c\x04\0\x14worker-status-filter\x03\0\x1f\x01r\x02\x0acomparator\x18\
+\x05valuew\x04\0\x15worker-version-filter\x03\0!\x01r\x02\x0acomparator\x18\x05v\
+aluew\x04\0\x18worker-created-at-filter\x03\0#\x01r\x03\x04names\x0acomparator\x1a\
+\x05values\x04\0\x11worker-env-filter\x03\0%\x01q\x05\x04name\x01\x1e\0\x06statu\
+s\x01\x20\0\x07version\x01\"\0\x0acreated-at\x01$\0\x03env\x01&\0\x04\0\x16worke\
+r-property-filter\x03\0'\x01p(\x01r\x01\x07filters)\x04\0\x11worker-all-filter\x03\
+\0*\x01p+\x01r\x01\x07filters,\x04\0\x11worker-any-filter\x03\0-\x01ps\x01o\x02s\
+s\x01p0\x01r\x06\x09worker-id\x07\x04args/\x03env1\x06status\x1c\x11component-ve\
+rsionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\02\x04\0\x0bget-workers\x03\x01\
+\x01q\x02\x15revert-to-oplog-index\x01\x09\0\x17revert-last-invocations\x01w\0\x04\
+\0\x14revert-worker-target\x03\05\x01k.\x01i4\x01@\x03\x0ccomponent-id\x03\x06fi\
+lter7\x07precise\x7f\08\x04\0\x18[constructor]get-workers\x019\x01h4\x01p3\x01k;\
+\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0b\x04\
+\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0b\0?\x04\0\x0dawait-pro\
+mise\x01@\x01k?\x01@\x01\x0apromise-id\x0b\0\xc1\0\x04\0\x0cpoll-promise\x01B\x01\
+@\x02\x0apromise-id\x0b\x04data?\0\x7f\x04\0\x10complete-promise\x01C\x01@\x01\x0a\
+promise-id\x0b\x01\0\x04\0\x0edelete-promise\x01D\x01@\0\0\x09\x04\0\x0fget-oplo\
+g-index\x01E\x01@\x01\x09oplog-idx\x09\x01\0\x04\0\x0fset-oplog-index\x01F\x01@\x01\
+\x08replicas}\x01\0\x04\0\x0coplog-commit\x01G\x04\0\x14mark-begin-operation\x01\
+E\x01@\x01\x05begin\x09\x01\0\x04\0\x12mark-end-operation\x01H\x01@\0\0\x12\x04\0\
+\x10get-retry-policy\x01I\x01@\x01\x10new-retry-policy\x12\x01\0\x04\0\x10set-re\
+try-policy\x01J\x01@\0\0\x14\x04\0\x1bget-oplog-persistence-level\x01K\x01@\x01\x15\
+new-persistence-level\x14\x01\0\x04\0\x1bset-oplog-persistence-level\x01L\x01@\0\
+\0\x7f\x04\0\x14get-idempotence-mode\x01M\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\
+\x14set-idempotence-mode\x01N\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01\
+O\x01@\x03\x09worker-id\x07\x0etarget-version\x0d\x04mode\x16\x01\0\x04\0\x0dupd\
+ate-worker\x01P\x01@\0\03\x04\0\x11get-self-metadata\x01Q\x01k3\x01@\x01\x09work\
+er-id\x07\0\xd2\0\x04\0\x13get-worker-metadata\x01S\x01@\x03\x10source-worker-id\
+\x07\x10target-worker-id\x07\x11oplog-idx-cut-off\x09\x01\0\x04\0\x0bfork-worker\
+\x01T\x01@\x02\x09worker-id\x07\x0drevert-target6\x01\0\x04\0\x0drevert-worker\x01\
+U\x01k\x03\x01@\x01\x13component-references\0\xd6\0\x04\0\x14resolve-component-i\
+d\x01W\x01k\x07\x01@\x02\x13component-references\x0bworker-names\0\xd8\0\x04\0\x11\
+resolve-worker-id\x01Y\x04\0\x18resolve-worker-id-strict\x01Y\x03\0\x14golem:api\
+/host@1.1.6\x05\x0a\x01B7\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x04\0\x04\
+span\x03\x01\x04\0\x12invocation-context\x03\x01\x01q\x01\x06string\x01s\0\x04\0\
+\x0fattribute-value\x03\0\x04\x01r\x02\x03keys\x05value\x05\x04\0\x09attribute\x03\
+\0\x06\x01p\x05\x01r\x02\x03keys\x06values\x08\x04\0\x0fattribute-chain\x03\0\x09\
+\x01s\x04\0\x08trace-id\x03\0\x0b\x01s\x04\0\x07span-id\x03\0\x0d\x01h\x02\x01@\x01\
+\x04self\x0f\0\x01\x04\0\x17[method]span.started-at\x01\x10\x01@\x03\x04self\x0f\
+\x04names\x05value\x05\x01\0\x04\0\x1a[method]span.set-attribute\x01\x11\x01p\x07\
+\x01@\x02\x04self\x0f\x0aattributes\x12\x01\0\x04\0\x1b[method]span.set-attribut\
+es\x01\x13\x01@\x01\x04self\x0f\x01\0\x04\0\x13[method]span.finish\x01\x14\x01h\x03\
+\x01@\x01\x04self\x15\0\x0c\x04\0#[method]invocation-context.trace-id\x01\x16\x01\
+@\x01\x04self\x15\0\x0e\x04\0\"[method]invocation-context.span-id\x01\x17\x01i\x03\
+\x01k\x18\x01@\x01\x04self\x15\0\x19\x04\0![method]invocation-context.parent\x01\
+\x1a\x01k\x05\x01@\x03\x04self\x15\x03keys\x09inherited\x7f\0\x1b\x04\0([method]\
+invocation-context.get-attribute\x01\x1c\x01@\x02\x04self\x15\x09inherited\x7f\0\
+\x12\x04\0)[method]invocation-context.get-attributes\x01\x1d\x01@\x02\x04self\x15\
+\x03keys\0\x08\x04\0.[method]invocation-context.get-attribute-chain\x01\x1e\x01p\
+\x0a\x01@\x01\x04self\x15\0\x1f\x04\0/[method]invocation-context.get-attribute-c\
+hains\x01\x20\x01o\x02ss\x01p!\x01@\x01\x04self\x15\0\"\x04\00[method]invocation\
+-context.trace-context-headers\x01#\x01i\x02\x01@\x01\x04names\0$\x04\0\x0astart\
+-span\x01%\x01@\0\0\x18\x04\0\x0fcurrent-context\x01&\x01@\x01\x05allow\x7f\0\x7f\
+\x04\0&allow-forwarding-trace-context-headers\x01'\x03\0\x17golem:api/context@1.\
+1.6\x05\x0b\x02\x03\0\x02\x09wit-value\x02\x03\0\x04\x0aaccount-id\x02\x03\0\x04\
+\x11component-version\x02\x03\0\x04\x0boplog-index\x02\x03\0\x04\x0cretry-policy\
+\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-id\x02\x03\0\x05\x09attribute\x02\
+\x03\0\x05\x0fattribute-value\x02\x03\0\x05\x07span-id\x02\x03\0\x05\x08trace-id\
+\x01B\x82\x01\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x0c\x04\
+\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0d\x04\0\x0aaccount-id\x03\0\x04\x02\x03\
+\x02\x01\x0e\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x01\x0f\x04\0\x0bo\
+plog-index\x03\0\x08\x02\x03\x02\x01\x10\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\
+\x02\x01\x11\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01\x12\x04\0\x09worker-id\x03\0\
+\x0e\x02\x03\x02\x01\x13\x04\0\x09attribute\x03\0\x10\x02\x03\x02\x01\x14\x04\0\x0f\
+attribute-value\x03\0\x12\x02\x03\x02\x01\x15\x04\0\x07span-id\x03\0\x14\x02\x03\
+\x02\x01\x16\x04\0\x08trace-id\x03\0\x16\x01k\x09\x01q\x05\x0aread-local\0\0\x0b\
+write-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\
+\x18\0\x04\0\x15wrapped-function-type\x03\0\x19\x01o\x02ss\x01p\x1b\x01r\x04\x0f\
+installation-id\x0d\x04names\x07versions\x0aparameters\x1c\x04\0\x1fplugin-insta\
+llation-description\x03\0\x1d\x01ps\x01k\x0f\x01p\x1e\x01r\x0a\x09timestamp\x01\x09\
+worker-id\x0f\x11component-version\x07\x04args\x1f\x03env\x1c\x0aaccount-id\x05\x06\
+parent\x20\x0ecomponent-sizew\x20initial-total-linear-memory-sizew\x16initial-ac\
+tive-plugins!\x04\0\x11create-parameters\x03\0\"\x01r\x05\x09timestamp\x01\x0dfu\
+nction-names\x07request\x03\x08response\x03\x15wrapped-function-type\x1a\x04\0$i\
+mported-function-invoked-parameters\x03\0$\x01k\x15\x01kw\x01p\x11\x01r\x06\x07s\
+pan-id\x15\x05start\x01\x06parent&\x0elinked-context'\x0aattributes(\x09inherite\
+d\x7f\x04\0\x0flocal-span-data\x03\0)\x01r\x01\x07span-id\x15\x04\0\x12external-\
+span-data\x03\0+\x01q\x02\x0alocal-span\x01*\0\x0dexternal-span\x01,\0\x04\0\x09\
+span-data\x03\0-\x01p\x03\x01p.\x01p0\x01r\x07\x09timestamp\x01\x0dfunction-name\
+s\x07request/\x0fidempotency-keys\x08trace-id\x17\x0ctrace-states\x1f\x12invocat\
+ion-context1\x04\0$exported-function-invoked-parameters\x03\02\x01r\x03\x09times\
+tamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-function-completed-par\
+ameters\x03\04\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10error-parameters\x03\
+\06\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0fjump-parameters\x03\
+\08\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1echange-retry-policy-p\
+arameters\x03\0:\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomi\
+c-region-parameters\x03\0<\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1b\
+end-remote-write-parameters\x03\0>\x01k/\x01r\x03\x0fidempotency-keys\x0dfunctio\
+n-names\x05input\xc0\0\x04\0'exported-function-invocation-parameters\x03\0A\x01q\
+\x02\x11exported-function\x01\xc2\0\0\x0dmanual-update\x01\x07\0\x04\0\x11worker\
+-invocation\x03\0C\x01r\x02\x09timestamp\x01\x0ainvocation\xc4\0\x04\0$pending-w\
+orker-invocation-parameters\x03\0E\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot\
+-based\x01\xc7\0\0\x04\0\x12update-description\x03\0H\x01r\x03\x09timestamp\x01\x0e\
+target-version\x07\x12update-description\xc9\0\x04\0\x19pending-update-parameter\
+s\x03\0J\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12new-component-sizew\x12\
+new-active-plugins!\x04\0\x1csuccessful-update-parameters\x03\0L\x01ks\x01r\x03\x09\
+timestamp\x01\x0etarget-version\x07\x07details\xce\0\x04\0\x18failed-update-para\
+meters\x03\0O\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameter\
+s\x03\0Q\x01w\x04\0\x12worker-resource-id\x03\0S\x01r\x02\x09timestamp\x01\x0bre\
+source-id\xd4\0\x04\0\x1acreate-resource-parameters\x03\0U\x01r\x02\x09timestamp\
+\x01\x0bresource-id\xd4\0\x04\0\x18drop-resource-parameters\x03\0W\x01r\x04\x09t\
+imestamp\x01\x0bresource-id\xd4\0\x0dresource-names\x0fresource-params/\x04\0\x1c\
+describe-resource-parameters\x03\0Y\x01m\x08\x06stdout\x06stderr\x05trace\x05deb\
+ug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\0[\x01r\x04\x09ti\
+mestamp\x01\x05level\xdc\0\x07contexts\x07messages\x04\0\x0elog-parameters\x03\0\
+]\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1aactivate-plugin-parameters\x03\
+\0_\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1cdeactivate-plugin-parameter\
+s\x03\0a\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x11revert-param\
+eters\x03\0c\x01r\x02\x09timestamp\x01\x0fidempotency-keys\x04\0\x1ccancel-invoc\
+ation-parameters\x03\0e\x01r\x05\x09timestamp\x01\x07span-id\x15\x06parent&\x0el\
+inked-context&\x0aattributes(\x04\0\x15start-span-parameters\x03\0g\x01r\x02\x09\
+timestamp\x01\x07span-id\x15\x04\0\x16finish-span-parameters\x03\0i\x01r\x04\x09\
+timestamp\x01\x07span-id\x15\x03keys\x05value\x13\x04\0\x1dset-span-attribute-pa\
+rameters\x03\0k\x01q\x20\x06create\x01#\0\x19imported-function-invoked\x01%\0\x19\
+exported-function-invoked\x013\0\x1bexported-function-completed\x015\0\x07suspen\
+d\x01\x01\0\x05error\x017\0\x05no-op\x01\x01\0\x04jump\x019\0\x0binterrupted\x01\
+\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01;\0\x13begin-atomic-region\x01\
+\x01\0\x11end-atomic-region\x01=\0\x12begin-remote-write\x01\x01\0\x10end-remote\
+-write\x01?\0\x19pending-worker-invocation\x01\xc6\0\0\x0epending-update\x01\xcb\
+\0\0\x11successful-update\x01\xcd\0\0\x0dfailed-update\x01\xd0\0\0\x0bgrow-memor\
+y\x01\xd2\0\0\x0fcreate-resource\x01\xd6\0\0\x0ddrop-resource\x01\xd8\0\0\x11des\
+cribe-resource\x01\xda\0\0\x03log\x01\xde\0\0\x07restart\x01\x01\0\x0factivate-p\
+lugin\x01\xe0\0\0\x11deactivate-plugin\x01\xe2\0\0\x06revert\x01\xe4\0\0\x11canc\
+el-invocation\x01\xe6\0\0\x0astart-span\x01\xe8\0\0\x0bfinish-span\x01\xea\0\0\x12\
+set-span-attribute\x01\xec\0\0\x04\0\x0boplog-entry\x03\0m\x04\0\x09get-oplog\x03\
+\x01\x04\0\x0csearch-oplog\x03\x01\x01io\x01@\x02\x09worker-id\x0f\x05start\x09\0\
+\xf1\0\x04\0\x16[constructor]get-oplog\x01r\x01ho\x01p\xee\0\x01k\xf4\0\x01@\x01\
+\x04self\xf3\0\0\xf5\0\x04\0\x1a[method]get-oplog.get-next\x01v\x01ip\x01@\x02\x09\
+worker-id\x0f\x04texts\0\xf7\0\x04\0\x19[constructor]search-oplog\x01x\x01hp\x01\
+o\x02\x09\xee\0\x01p\xfa\0\x01k\xfb\0\x01@\x01\x04self\xf9\0\0\xfc\0\x04\0\x1d[m\
+ethod]search-oplog.get-next\x01}\x03\0\x15golem:api/oplog@1.1.6\x05\x17\x01B\x03\
+\x01ps\x01@\0\0\0\x04\0\x15get-invoked-functions\x01\x01\x04\0\x13golem:componen\
+t/api\x05\x18\x02\x03\0\x04\x0fworker-metadata\x02\x03\0\x06\x0boplog-entry\x01B\
+\x1d\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x0c\x04\0\x09\
+wit-value\x03\0\x02\x02\x03\x02\x01\x0d\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\
+\x01\x0f\x04\0\x0boplog-index\x03\0\x06\x02\x03\x02\x01\x19\x04\0\x0fworker-meta\
+data\x03\0\x08\x02\x03\x02\x01\x1a\x04\0\x0boplog-entry\x03\0\x0a\x02\x03\x02\x01\
+\x07\x04\0\x0ccomponent-id\x03\0\x0c\x02\x03\x02\x01\x09\x04\0\x09worker-id\x03\0\
+\x0e\x01r\x01\x0aaccount-id\x05\x04\0\x0caccount-info\x03\0\x10\x04\0\x09process\
+or\x03\x01\x01o\x02ss\x01p\x13\x01i\x12\x01@\x03\x0caccount-info\x11\x0ccomponen\
+t-id\x0d\x06config\x14\0\x15\x04\0\x16[constructor]processor\x01\x16\x01h\x12\x01\
+p\x0b\x01j\0\x01s\x01@\x05\x04self\x17\x09worker-id\x0f\x08metadata\x09\x11first\
+-entry-index\x07\x07entries\x18\0\x19\x04\0\x19[method]processor.process\x01\x1a\
+\x04\0\x1fgolem:api/oplog-processor@1.1.6\x05\x1b\x04\0\x1fgolem:component/oplog\
+-processor\x04\0\x0b\x15\x01\0\x0foplog-processor\x03\0\0\0G\x09producers\x01\x0c\
+processed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

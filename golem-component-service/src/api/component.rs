@@ -14,7 +14,8 @@
 
 use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
-use golem_common::model::component::DefaultComponentOwner;
+use golem_common::model::component::{DefaultComponentOwner, VersionedComponentId};
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginInstallation, PluginInstallationCreation,
     PluginInstallationUpdate,

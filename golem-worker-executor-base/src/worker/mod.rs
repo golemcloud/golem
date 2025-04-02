@@ -1510,7 +1510,10 @@ impl RunningWorker {
     }
 
     fn interrupt(&self, kind: InterruptKind) {
-        self.sender.send(WorkerCommand::Interrupt(kind)).unwrap();
+        // In some cases it is possible that the invocation loop is already quitting and the receiver gets
+        // dropped when we get here. In this case the send fails, but we ignore it as the running worker got
+        // interrupted anyway.
+        let _ = self.sender.send(WorkerCommand::Interrupt(kind));
     }
 
     async fn create_instance<Ctx: WorkerCtx>(

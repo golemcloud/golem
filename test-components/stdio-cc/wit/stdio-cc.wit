@@ -1,5 +1,5 @@
 package golem:it;
 
 world stdio-cc {
-  export run: func() -> ();
+  export run: func();
 }

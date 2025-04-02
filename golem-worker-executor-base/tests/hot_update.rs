@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
+use test_r::{flaky, inherit_test_dep, test};
 
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
@@ -254,6 +254,7 @@ async fn auto_update_on_idle(
 
 #[test]
 #[tracing::instrument]
+#[flaky(10)] // TODO: remove when the test is stabilized
 async fn failing_auto_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -26,12 +26,12 @@ interface api {
 
   resource cart {
     constructor(user-id: string);
-    add-item: func(item: product-item) -> ();
-    remove-item: func(product-id: string) -> ();
-    update-item-quantity: func(product-id: string, quantity: u32) -> ();
+    add-item: func(item: product-item);
+    remove-item: func(product-id: string);
+    update-item-quantity: func(product-id: string, quantity: u32);
     checkout: func() -> checkout-result;
     get-cart-contents: func() -> list<product-item>;
-    merge-with: func(other-cart: borrow<cart>) -> ();
+    merge-with: func(other-cart: borrow<cart>);
   }
 }
 

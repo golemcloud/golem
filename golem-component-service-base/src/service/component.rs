@@ -27,7 +27,7 @@ use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
@@ -44,7 +44,7 @@ use golem_common::model::{
     InitialComponentFileKey,
 };
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
@@ -115,6 +115,10 @@ pub enum ComponentError {
     FailedToDownloadFile,
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
+    #[error(
+        "The component name {actual} did not match the component's root package name: {expected}"
+    )]
+    InvalidComponentName { expected: String, actual: String },
 }
 
 impl ComponentError {
@@ -191,6 +195,7 @@ impl SafeDisplay for ComponentError {
             ComponentError::PluginApplicationFailed(_) => self.to_string(),
             ComponentError::FailedToDownloadFile => self.to_string(),
             ComponentError::InvalidFilePath(_) => self.to_string(),
+            ComponentError::InvalidComponentName { .. } => self.to_string(),
         }
     }
 }
@@ -286,6 +291,11 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
             ComponentError::InvalidFilePath(_) => {
                 component_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
+                })
+            }
+            ComponentError::InvalidComponentName { .. } => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
                 })
             }
         };
@@ -709,6 +719,15 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         let mut transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
             .map_err(ComponentError::ComponentProcessingError)?;
         transformed_metadata.dynamic_linking = component.metadata.dynamic_linking.clone();
+
+        if let Some(known_root_package_name) = &transformed_metadata.root_package_name {
+            if &component_name.0 != known_root_package_name {
+                Err(ComponentError::InvalidComponentName {
+                    actual: component_name.0.clone(),
+                    expected: known_root_package_name.clone(),
+                })?;
+            }
+        }
 
         tokio::try_join!(
             self.upload_user_component(&component, data),

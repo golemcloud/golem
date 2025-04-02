@@ -25,6 +25,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
@@ -32,4 +33,4 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "=0.0.14"
+golem-openapi-client-generator = "=0.0.15"
