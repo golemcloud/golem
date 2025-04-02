@@ -507,11 +507,7 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::literal("1"),
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::literal("1")),
                 identifier(VariableId::local("x", 0), None, InferredType::Str),
             ],
             InferredType::Str,
@@ -727,16 +723,8 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::literal("1"),
-                ),
-                let_binding(
-                    VariableId::local("y", 0),
-                    None,
-                    Expr::literal("2"),
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::literal("1")),
+                let_binding(VariableId::local("y", 0), None, Expr::literal("2")),
                 concat(
                     vec![
                         identifier(VariableId::local("x", 0), None, InferredType::Str),
@@ -765,11 +753,7 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::boolean(true),
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::boolean(true)),
                 identifier(VariableId::local("x", 0), None, InferredType::Bool),
             ],
             InferredType::Bool,
@@ -816,16 +800,8 @@ mod tests {
                         InferredType::U64,
                     ),
                 ),
-                let_binding(
-                    VariableId::local("res1", 0),
-                    None,
-                    Expr::literal("foo"),
-                ),
-                let_binding(
-                    VariableId::local("res2", 0),
-                    None,
-                    Expr::literal("bar"),
-                ),
+                let_binding(VariableId::local("res1", 0), None, Expr::literal("foo")),
+                let_binding(VariableId::local("res2", 0), None, Expr::literal("bar")),
                 cond(
                     greater_than(
                         identifier(VariableId::local("x", 0), None, InferredType::U64),
@@ -858,11 +834,7 @@ mod tests {
 
         let expected = expr_block(
             vec![
-                let_binding(
-                    VariableId::local("x", 0),
-                    None,
-                    Expr::literal("1"),
-                ),
+                let_binding(VariableId::local("x", 0), None, Expr::literal("1")),
                 let_binding(
                     VariableId::local("y", 0),
                     None,
