@@ -55,11 +55,11 @@ pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
         AnalysedType::Enum(_) => Value::Enum(0),
 
         AnalysedType::Flags(flags) => {
-            let mut bools = vec![];
-            for _ in &flags.names {
-                bools.push(true);
-            }
-            Value::Flags(bools)
+            let flag_names = &flags.names;
+            let length = flag_names.len();
+            let flags = vec![true; length];
+
+            Value::Flags(flags)
         }
         AnalysedType::Record(typed_record) => {
             let fields = &typed_record.fields;

@@ -1,18 +1,11 @@
-use crate::embedded_executor::{start, BootstrapDependencies};
-use crate::repl_printer::{DefaultResultPrinter, ReplPrinter};
-use crate::rib_repl::{ComponentDetails, RibRepl};
+use golem_rib_repl::embedded_executor::{start, BootstrapDependencies};
+use golem_rib_repl::repl_printer::{DefaultResultPrinter, ReplPrinter};
+use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
+use golem_rib_repl::invoke;
+use golem_rib_repl::dependency_manager;
 use golem_test_framework::config::TestDependencies;
 use std::sync::Arc;
 
-mod compiler;
-mod dependency_manager;
-mod embedded_executor;
-mod invoke;
-mod repl_printer;
-mod repl_state;
-mod rib_edit;
-mod rib_repl;
-mod value_generator;
 
 // This is only available for testing purposes
 // and is not a public binary artefact
