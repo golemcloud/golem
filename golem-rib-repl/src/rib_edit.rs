@@ -52,6 +52,57 @@ impl RibEdit {
         start
     }
 
+    fn complete_method_calls(
+        word: &str,
+        instance_variables: Option<&InstanceVariables>,
+        start: usize,
+        end_pos: usize,
+    ) -> rustyline::Result<Option<(usize, Vec<String>)>> {
+        if !word.contains('.') {
+            return Ok(None);
+        }
+
+        let dot_pos = word.rfind('.').unwrap();
+        let instance_var_name = &word[..dot_pos];
+        let method_prefix = &word[dot_pos + 1..];
+
+        let Some(instance_vars) = instance_variables else {
+            return Ok(None);
+        };
+
+        let Some(func_dict) = instance_vars.instance_variables.get(instance_var_name) else {
+            return Ok(None);
+        };
+
+        let mut completions = Vec::new();
+
+        for (function, tpe) in &func_dict.map {
+            let name_with_paren = format!("{}(", function.name());
+
+            // If user has typed in `(`, complete the method call with arguments
+            if name_with_paren == method_prefix {
+                let args = tpe
+                    .parameter_types()
+                    .iter()
+                    .filter_map(|arg| AnalysedType::try_from(arg).ok())
+                    .map(|analysed_type| ValueAndType::new(generate_value(&analysed_type), analysed_type))
+                    .collect::<Vec<_>>();
+
+                let args_str = args.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+                completions.push(format!("{})", args_str));
+
+                return Ok(Some((end_pos, completions))); // Only one possible completion, return early
+            }
+
+            // Otherwise, suggest method names
+            if function.name().starts_with(method_prefix) {
+                completions.push(function.name());
+            }
+        }
+
+        Ok(Some((start + dot_pos + 1, completions)))
+    }
+
 }
 
 impl Helper for RibEdit {}
@@ -74,46 +125,13 @@ impl Completer for RibEdit {
 
         let word = &line[start..end_pos];
 
-        if word.contains('.') {
-            let dot_pos = word.rfind('.').unwrap();
-            let possible_instance_variable_name = &word[..dot_pos];
-            let possible_method_name = &word[dot_pos + 1..];
 
-            if let Some(instance_vars) = &instance_variables {
-                if let Some(func_dict) = instance_vars.instance_variables.get(possible_instance_variable_name) {
-                    for (function, tpe) in func_dict.map.iter() {
-                        // Allow completion only if user has typed in `(`
-                        let name_with_paren = format!("{}(", function.name());
-
-                        if name_with_paren == possible_method_name {
-                            let args = tpe.parameter_types();
-                            let mut arg_values = vec![];
-
-                            for arg in args {
-                                let analysed_type = AnalysedType::try_from(arg).ok();
-
-                                if let Some(analysed_type) = analysed_type {
-                                    let value = generate_value(&analysed_type);
-                                    arg_values.push(ValueAndType::new(value, analysed_type));
-                                }
-                            }
-
-                            let args =
-                                arg_values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-
-                            let with_paren = format!("{})",  args);
-                            completions.push(with_paren);
-                            // we break here because there is only one choice of args
-                            return Ok((end_pos, completions));
-
-                        } else if function.name().starts_with(possible_method_name) {
-                            completions.push(function.name());
-                        }
-                    }
-
-                    return Ok((start + dot_pos + 1, completions)); // Return function completions
-                }
-            }
+        // Check if the word is a method call
+        if let Some((new_start, new_completions)) =
+            Self::complete_method_calls(word, instance_variables.as_ref(), start, end_pos)?
+        {
+            completions.extend(new_completions);
+            return Ok((new_start, completions));
         }
 
         if !word.is_empty() {
@@ -157,7 +175,7 @@ impl Validator for RibEdit {
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
-            Err(e) => Ok(ValidationResult::Invalid(Some(e))),
+            Err(e) => Ok(ValidationResult::Invalid(Some(e.color("red").to_string()))),
         }
     }
 }
