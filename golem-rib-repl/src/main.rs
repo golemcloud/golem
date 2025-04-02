@@ -1,5 +1,7 @@
 use golem_rib_repl::repl_printer::{DefaultResultPrinter, ReplPrinter};
 use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
+
+#[cfg(feature = "embedded")]
 use golem_test_framework::config::TestDependencies;
 use std::process::exit;
 use std::sync::Arc;

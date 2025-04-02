@@ -215,7 +215,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
     ) -> Result<ValueAndType, String> {
-        let component_id = self.component_dependency.component_id.clone();
+        let component_id = self.component_dependency.component_id;
 
         self.worker_function_invoke
             .invoke(component_id, worker_name, function_name, args)
