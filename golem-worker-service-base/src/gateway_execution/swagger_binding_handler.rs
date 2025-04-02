@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_service_base::auth::EmptyAuthCtx;
 use http::StatusCode;
+use indexmap::IndexMap;
 use openapiv3;
 use poem::Body;
 use tracing::error;
@@ -62,6 +63,7 @@ impl From<SwaggerBindingError> for poem::Response {
     }
 }
 
+/// Default implementation of the SwaggerBindingHandler trait
 pub struct DefaultSwaggerBindingHandler<Namespace> {
     pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
     pub definition_service:
@@ -82,12 +84,65 @@ impl<Namespace> DefaultSwaggerBindingHandler<Namespace> {
             definition_service,
         }
     }
+
+    // Filters paths in the OpenAPI specification based on gateway binding types.
+    fn filter_paths(
+        paths: &mut IndexMap<String, openapiv3::ReferenceOr<openapiv3::PathItem>>,
+    ) -> Vec<String> {
+        let mut paths_to_remove = Vec::new();
+
+        for (path, path_item) in paths.iter_mut() {
+            if let openapiv3::ReferenceOr::Item(path_item) = path_item {
+                // Check all possible HTTP operations
+                let operations = vec![
+                    &mut path_item.get,
+                    &mut path_item.post,
+                    &mut path_item.put,
+                    &mut path_item.delete,
+                    &mut path_item.patch,
+                    &mut path_item.options,
+                ];
+
+                // Filter operations based on binding type
+                for operation in operations {
+                    if let Some(op) = operation {
+                        if let Some(binding) = op.extensions.get(GOLEM_API_GATEWAY_BINDING) {
+                            if let Some(binding_type) = binding.get("binding-type") {
+                                if binding_type != "default" {
+                                    *operation = None;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // If all operations are removed, mark the path for removal
+                if path_item.get.is_none()
+                    && path_item.post.is_none()
+                    && path_item.put.is_none()
+                    && path_item.delete.is_none()
+                    && path_item.patch.is_none()
+                    && path_item.options.is_none()
+                {
+                    paths_to_remove.push(path.clone());
+                }
+            }
+        }
+
+        paths_to_remove
+    }
 }
 
 #[async_trait]
 impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
     for DefaultSwaggerBindingHandler<Namespace>
 {
+    /// Handles a Swagger binding request by:
+    /// 1. Looking up the appropriate API definition
+    /// 2. Converting it to OpenAPI format
+    /// 3. Filtering and modifying the OpenAPI spec
+    /// 4. Generating and returning Swagger UI HTML
+    /// Todo: Implement caching of the openapi spec
     async fn handle_swagger_binding_request(
         &self,
         namespace: &Namespace,
@@ -126,7 +181,8 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
                     )
             })
         });
-
+        // Filters dynamic paths, as it wont match the request path
+        // /{user}/swagger will not match irl /test/swagger
         let api_def = match api_def {
             Some(def) => def,
             None => {
@@ -197,7 +253,7 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             }
         };
 
-        // Add server information
+        // Add server information to the OpenAPI spec
         let mut spec = openapi_req.0;
         if spec.servers.is_empty() {
             spec.servers = Vec::new();
@@ -209,49 +265,9 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             extensions: Default::default(),
         });
 
-        // First collect paths to remove
-        let mut paths_to_remove = Vec::new();
-
-        // Filter paths - remove non-default binding types
-        for (path, path_item) in spec.paths.paths.iter_mut() {
-            if let openapiv3::ReferenceOr::Item(path_item) = path_item {
-                // Create a vector of mutable references to all operations
-                let operations = vec![
-                    &mut path_item.get,
-                    &mut path_item.post,
-                    &mut path_item.put,
-                    &mut path_item.delete,
-                    &mut path_item.patch,
-                    &mut path_item.options,
-                ];
-
-                // Process each operation
-                for operation in operations {
-                    if let Some(op) = operation {
-                        if let Some(binding) = op.extensions.get(GOLEM_API_GATEWAY_BINDING) {
-                            if let Some(binding_type) = binding.get("binding-type") {
-                                if binding_type != "default" {
-                                    // Set the operation to None by taking the value
-                                    *operation = None;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Check if the path has no operations left
-                if path_item.get.is_none()
-                    && path_item.post.is_none()
-                    && path_item.put.is_none()
-                    && path_item.delete.is_none()
-                    && path_item.patch.is_none()
-                    && path_item.options.is_none()
-                {
-                    // Mark this path for removal
-                    paths_to_remove.push(path.clone());
-                }
-            }
-        }
+        // First collect paths to remove based on binding types
+        let paths_to_remove =
+            DefaultSwaggerBindingHandler::<Namespace>::filter_paths(&mut spec.paths.paths);
 
         // Remove empty paths from the spec
         for path in paths_to_remove {

@@ -13,17 +13,25 @@
 // limitations under the License.
 
 use crate::api::api_definition::HttpApiDefinitionResponseData;
+use crate::api::RouteResponseData;
 use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
+use crate::gateway_api_definition::http::MethodPattern;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use crate::gateway_middleware::HttpCors;
 use golem_common::model::GatewayBindingType;
 use golem_wasm_ast::analysis::AnalysedType;
+use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
 
-// Add constants from oas_api_definition.rs
+// Constants for OpenAPI extensions
 const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
 const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
 const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
+// OpenApiHttpApiDefinitionResponse had id, version and open api schema as yaml string
+// OpenApiHttpApiDefinitionResponse is a wrapper around OpenApiHttpApiDefinition
+// OpenApiHttpApiDefinition struct is defined using crate openapiv3 as OPENAPI+GOLEMEXTENSIONS
+// openapiv3 does not have Json(T) trait, so we convert to yaml string and wrap it
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
 pub struct OpenApiHttpApiDefinitionResponse {
     pub id: ApiDefinitionId,
@@ -31,6 +39,7 @@ pub struct OpenApiHttpApiDefinitionResponse {
     pub openapi_yaml: String,
 }
 
+// OpenApiHttpApiDefinitionResponse implementation
 impl OpenApiHttpApiDefinitionResponse {
     pub fn from_http_api_definition_response_data(
         response_data: &HttpApiDefinitionResponseData,
@@ -48,681 +57,207 @@ impl OpenApiHttpApiDefinitionResponse {
     }
 }
 
-// Function moved from oas_api_definition.rs
+// Convert HttpApiDefinitionResponseData to OpenHttpApiDefinition
 impl OpenApiHttpApiDefinition {
     pub fn from_http_api_definition_response_data(
         response_data: &HttpApiDefinitionResponseData,
     ) -> Result<Self, String> {
-        // Initialize open_api directly with openapi version and info
-        let mut open_api = openapiv3::OpenAPI {
-            openapi: "3.0.0".to_string(),
-            info: openapiv3::Info {
-                title: response_data.id.0.clone(),
-                description: None,
-                terms_of_service: None,
-                contact: None,
-                license: None,
-                version: response_data.version.0.clone(),
-                extensions: Default::default(),
-            },
-            ..Default::default() // Use struct update syntax for the rest
-        };
-
-        open_api.extensions.insert(
-            GOLEM_API_DEFINITION_ID_EXTENSION.to_string(),
-            serde_json::Value::String(response_data.id.0.clone()),
-        );
-        open_api.extensions.insert(
-            GOLEM_API_DEFINITION_VERSION.to_string(),
-            serde_json::Value::String(response_data.version.0.clone()),
-        );
-
+        let mut open_api = create_base_openapi(response_data);
         let mut paths = std::collections::BTreeMap::new();
-
-        // Create components section if it doesn't exist
-        if open_api.components.is_none() {
-            open_api.components = Some(openapiv3::Components::default());
-        }
-
-        // Collect all security schemes from routes
         let mut security_schemes = indexmap::IndexMap::new();
 
+        // Process each route and build paths
         for route in &response_data.routes {
-            let path_str = route.path.to_string();
-            let path_item = paths
-                .entry(path_str.clone())
-                .or_insert_with(openapiv3::PathItem::default);
-
-            let mut operation = openapiv3::Operation::default();
-
-            // Add path parameters
-            let params = extract_path_parameters(&path_str);
-            for param_name in params {
-                // Check if we have parameter type information available from worker_name_input or response_mapping_input
-                let param_type = if let (Some(worker_name_input), true) = (
-                    &route.binding.worker_name_input,
-                    route.binding.worker_name_input.is_some(),
-                ) {
-                    // Check if this path parameter is used in the worker name expression
-                    if let Some(analysed_type) = worker_name_input
-                        .types
-                        .get(&format!("request.path.{}", param_name))
-                    {
-                        create_schema_from_analysed_type(analysed_type)
-                    } else {
-                        // Default to string if not found
-                        openapiv3::Schema {
-                            schema_data: Default::default(),
-                            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                                Default::default(),
-                            )),
-                        }
-                    }
-                } else if let (Some(response_mapping_input), true) = (
-                    &route.binding.response_mapping_input,
-                    route.binding.response_mapping_input.is_some(),
-                ) {
-                    // Check if this path parameter is used in the response mapping expression
-                    if let Some(analysed_type) = response_mapping_input
-                        .types
-                        .get(&format!("request.path.{}", param_name))
-                    {
-                        create_schema_from_analysed_type(analysed_type)
-                    } else {
-                        // Default to string if not found
-                        openapiv3::Schema {
-                            schema_data: Default::default(),
-                            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                                Default::default(),
-                            )),
-                        }
-                    }
-                } else {
-                    // Default to string if no type info available
-                    openapiv3::Schema {
-                        schema_data: Default::default(),
-                        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                            Default::default(),
-                        )),
-                    }
-                };
-
-                let parameter = openapiv3::Parameter::Path {
-                    parameter_data: openapiv3::ParameterData {
-                        name: param_name.clone(),
-                        description: Some(format!("Path parameter: {}", param_name)),
-                        required: true,
-                        deprecated: None,
-                        explode: Some(false),
-                        format: openapiv3::ParameterSchemaOrContent::Schema(
-                            openapiv3::ReferenceOr::Item(param_type),
-                        ),
-                        example: None,
-                        examples: Default::default(),
-                        extensions: Default::default(),
-                    },
-                    style: openapiv3::PathStyle::Simple,
-                };
-                operation
-                    .parameters
-                    .push(openapiv3::ReferenceOr::Item(parameter));
-            }
-
-            // Add request body based on responseMappingInput
-            if let (Some(response_mapping_input), true) = (
-                &route.binding.response_mapping_input,
-                route.binding.response_mapping_input.is_some(),
-            ) {
-                // If types is not empty, we may need a request body
-                if !response_mapping_input.types.is_empty() {
-                    // Check if the response uses request.body
-                    let uses_request_body = if let Some(response) = &route.binding.response {
-                        response.contains("request.body")
-                    } else {
-                        false
-                    };
-
-                    // If the response uses request.body or if request structure exists, create a request body
-                    if uses_request_body || response_mapping_input.types.contains_key("request") {
-                        // Extract the schema from the nested structure in "request" -> fields -> "body"
-                        let body_schema = if let Some(request_type) =
-                            response_mapping_input.types.get("request")
-                        {
-                            if let golem_wasm_ast::analysis::AnalysedType::Record(request_record) =
-                                request_type
-                            {
-                                if let Some(body_field) =
-                                    request_record.fields.iter().find(|f| f.name == "body")
-                                {
-                                    // Now we have the body field type
-                                    // Create a schema that accurately represents the request body structure
-                                    create_schema_from_analysed_type(&body_field.typ)
-                                } else {
-                                    // Default to object if body field not found in request record
-                                    openapiv3::Schema {
-                                        schema_data: Default::default(),
-                                        schema_kind: openapiv3::SchemaKind::Type(
-                                            openapiv3::Type::Object(Default::default()),
-                                        ),
-                                    }
-                                }
-                            } else {
-                                // Default to object if request is not a record
-                                openapiv3::Schema {
-                                    schema_data: Default::default(),
-                                    schema_kind: openapiv3::SchemaKind::Type(
-                                        openapiv3::Type::Object(Default::default()),
-                                    ),
-                                }
-                            }
-                        } else if let Some(body_type) =
-                            response_mapping_input.types.get("request.body")
-                        {
-                            // Directly get request.body if available
-                            create_schema_from_analysed_type(body_type)
-                        } else {
-                            // Default to object if neither structure found
-                            openapiv3::Schema {
-                                schema_data: Default::default(),
-                                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(
-                                    Default::default(),
-                                )),
-                            }
-                        };
-
-                        // Initialize media_type directly with schema
-                        let media_type = openapiv3::MediaType {
-                            schema: Some(openapiv3::ReferenceOr::Item(body_schema)),
-                            ..Default::default() // Use struct update syntax
-                        };
-
-                        let mut content = indexmap::IndexMap::new();
-                        content.insert("application/json".to_string(), media_type);
-
-                        // Determine if request body should be required
-                        // POST/PUT/PATCH typically require a body, for others like GET/DELETE it's based on usage
-                        let required = match route.method {
-                            crate::gateway_api_definition::http::MethodPattern::Post
-                            | crate::gateway_api_definition::http::MethodPattern::Put
-                            | crate::gateway_api_definition::http::MethodPattern::Patch => true,
-                            _ => uses_request_body, // For GET/DELETE/etc, only require if explicitly used
-                        };
-
-                        let request_body = openapiv3::RequestBody {
-                            description: Some("Request payload".to_string()),
-                            content,
-                            required,
-                            extensions: Default::default(),
-                        };
-
-                        operation.request_body = Some(openapiv3::ReferenceOr::Item(request_body));
-                    }
-                }
-            }
-
-            // Add default response based on method
-            let default_status = match route.method {
-                crate::gateway_api_definition::http::MethodPattern::Get => 200,
-                crate::gateway_api_definition::http::MethodPattern::Post => 201,
-                crate::gateway_api_definition::http::MethodPattern::Put => {
-                    match route.binding.binding_type {
-                        Some(GatewayBindingType::Default)
-                        | Some(GatewayBindingType::FileServer) => {
-                            if let Some(response) = &route.binding.response {
-                                if response.trim().is_empty() {
-                                    204
-                                } else {
-                                    200
-                                }
-                            } else {
-                                204
-                            }
-                        }
-                        _ => 204,
-                    }
-                }
-                crate::gateway_api_definition::http::MethodPattern::Delete => 204,
-                crate::gateway_api_definition::http::MethodPattern::Options => 200,
-                crate::gateway_api_definition::http::MethodPattern::Head => 200,
-                crate::gateway_api_definition::http::MethodPattern::Patch => {
-                    match route.binding.binding_type {
-                        Some(GatewayBindingType::Default)
-                        | Some(GatewayBindingType::FileServer) => {
-                            if let Some(response) = &route.binding.response {
-                                if response.trim().is_empty() {
-                                    204
-                                } else {
-                                    200
-                                }
-                            } else {
-                                200
-                            }
-                        }
-                        _ => 200,
-                    }
-                }
-                crate::gateway_api_definition::http::MethodPattern::Trace => 200,
-                _ => 200,
-            };
-
-            // Check if response expression might include multiple status codes
-            let might_have_multiple_status_codes = if let (
-                Some(GatewayBindingType::Default) | Some(GatewayBindingType::FileServer),
-                Some(response),
-            ) =
-                (&route.binding.binding_type, &route.binding.response)
-            {
-                // Simple heuristic to detect if the response might have multiple status codes
-                // TODO: This is a simple heuristic and might not be 100% accurate
-                response.contains("status:")
-                    && (response.contains("match")
-                        || response.contains("if")
-                        || response.contains("?"))
-            } else {
-                false
-            };
-
-            // Define status codes to include in responses
-            let status_codes = if might_have_multiple_status_codes {
-                // Common status codes for success/error responses
-                vec![200, 201, 204, 400, 404, 500]
-            } else {
-                vec![default_status]
-            };
-
-            // Create responses for each status code
-            for status_code in &status_codes {
-                // Initialize response directly with description
-                let mut response = openapiv3::Response {
-                    description: match *status_code {
-                        204 => "No Content".to_string(),
-                        201 => "Created".to_string(),
-                        200 => "OK".to_string(),
-                        400 => "Bad Request".to_string(),
-                        404 => "Not Found".to_string(),
-                        500 => "Internal Server Error".to_string(),
-                        _ => "Response".to_string(),
-                    },
-                    ..Default::default() // Use struct update syntax
-                };
-
-                if status_code != &204 {
-                    let mut content = indexmap::IndexMap::new();
-                    let mut media = openapiv3::MediaType::default();
-
-                    // Check if we have response body type information available from response_mapping_output
-                    let response_schema = if let (Some(response_mapping_output), true) = (
-                        &route.binding.response_mapping_output,
-                        route.binding.response_mapping_output.is_some(),
-                    ) {
-                        // Check if the response is a record with status and body fields
-                        if let AnalysedType::Record(record) = &response_mapping_output.analysed_type
-                        {
-                            let has_status = record.fields.iter().any(|f| f.name == "status");
-                            let has_body = record.fields.iter().any(|f| f.name == "body");
-
-                            match (has_status, has_body) {
-                                // If both status and body exist, use only the body's type
-                                (true, true) => {
-                                    if let Some(body_field) =
-                                        record.fields.iter().find(|f| f.name == "body")
-                                    {
-                                        create_schema_from_analysed_type(&body_field.typ)
-                                    } else {
-                                        // Fallback to empty object if body field not found
-                                        openapiv3::Schema {
-                                            schema_data: Default::default(),
-                                            schema_kind: openapiv3::SchemaKind::Type(
-                                                openapiv3::Type::Object(Default::default()),
-                                            ),
-                                        }
-                                    }
-                                }
-                                // If only status exists, use empty object
-                                (true, false) => openapiv3::Schema {
-                                    schema_data: Default::default(),
-                                    schema_kind: openapiv3::SchemaKind::Type(
-                                        openapiv3::Type::Object(Default::default()),
-                                    ),
-                                },
-                                // If neither exists, use the whole response type
-                                _ => create_schema_from_analysed_type(
-                                    &response_mapping_output.analysed_type,
-                                ),
-                            }
-                        } else {
-                            // If not a record, use the whole response type
-                            create_schema_from_analysed_type(&response_mapping_output.analysed_type)
-                        }
-                    } else {
-                        // Default to object if no type info available
-                        openapiv3::Schema {
-                            schema_data: Default::default(),
-                            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(
-                                Default::default(),
-                            )),
-                        }
-                    };
-
-                    media.schema = Some(openapiv3::ReferenceOr::Item(response_schema));
-                    content.insert("application/json".to_string(), media);
-                    response.content = content;
-                }
-
-                operation.responses.responses.insert(
-                    openapiv3::StatusCode::Code(*status_code),
-                    openapiv3::ReferenceOr::Item(response),
-                );
-            }
-
-            // Create binding info based on route.binding
-            let mut binding_info = serde_json::Map::new();
-
-            match route.binding.binding_type {
-                Some(GatewayBindingType::Default) => {
-                    binding_info.insert(
-                        "binding-type".to_string(),
-                        serde_json::Value::String("default".to_string()),
-                    );
-
-                    if let Some(worker_name) = &route.binding.worker_name {
-                        binding_info.insert(
-                            "worker-name".to_string(),
-                            serde_json::Value::String(worker_name.clone()),
-                        );
-                    }
-
-                    if let Some(versioned_component) = &route.binding.component {
-                        binding_info.insert(
-                            "component-name".to_string(),
-                            serde_json::Value::String(versioned_component.name.clone()),
-                        );
-                        binding_info.insert(
-                            "component-version".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(
-                                versioned_component.version,
-                            )),
-                        );
-                    }
-
-                    if let Some(key) = &route.binding.idempotency_key {
-                        binding_info.insert(
-                            "idempotency-key".to_string(),
-                            serde_json::Value::String(key.clone()),
-                        );
-                    }
-
-                    if let Some(response) = &route.binding.response {
-                        binding_info.insert(
-                            "response".to_string(),
-                            serde_json::Value::String(response.clone()),
-                        );
-                    }
-                }
-                Some(GatewayBindingType::HttpHandler) => {
-                    binding_info.insert(
-                        "binding-type".to_string(),
-                        serde_json::Value::String("http-handler".to_string()),
-                    );
-
-                    if let Some(worker_name) = &route.binding.worker_name {
-                        binding_info.insert(
-                            "worker-name".to_string(),
-                            serde_json::Value::String(worker_name.clone()),
-                        );
-                    }
-
-                    if let Some(versioned_component) = &route.binding.component {
-                        binding_info.insert(
-                            "component-name".to_string(),
-                            serde_json::Value::String(versioned_component.name.clone()),
-                        );
-                        binding_info.insert(
-                            "component-version".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(
-                                versioned_component.version,
-                            )),
-                        );
-                    }
-
-                    if let Some(key) = &route.binding.idempotency_key {
-                        binding_info.insert(
-                            "idempotency-key".to_string(),
-                            serde_json::Value::String(key.clone()),
-                        );
-                    }
-                }
-                Some(GatewayBindingType::CorsPreflight) => {
-                    binding_info.insert(
-                        "binding-type".to_string(),
-                        serde_json::Value::String("cors-preflight".to_string()),
-                    );
-
-                    if let Some(cors) = &route.binding.cors_preflight {
-                        let mut response_lines = Vec::new();
-
-                        // Opening brace
-                        response_lines.push("{".to_string());
-
-                        // Create a list of all headers to be included
-                        let mut headers = Vec::new();
-                        headers.push(format!(
-                            "Access-Control-Allow-Headers: \"{}\"",
-                            cors.get_allow_headers()
-                        ));
-                        headers.push(format!(
-                            "Access-Control-Allow-Methods: \"{}\"",
-                            cors.get_allow_methods()
-                        ));
-                        headers.push(format!(
-                            "Access-Control-Allow-Origin: \"{}\"",
-                            cors.get_allow_origin()
-                        ));
-
-                        if let Some(expose_headers) = cors.get_expose_headers() {
-                            headers.push(format!(
-                                "Access-Control-Expose-Headers: \"{}\"",
-                                expose_headers
-                            ));
-                        }
-
-                        if let Some(allow_credentials) = cors.get_allow_credentials() {
-                            headers.push(format!(
-                                "Access-Control-Allow-Credentials: {}",
-                                allow_credentials
-                            ));
-                        }
-
-                        if let Some(max_age) = cors.get_max_age() {
-                            headers.push(format!("Access-Control-Max-Age: {}u64", max_age));
-                        }
-
-                        // Add all headers with appropriate indentation and commas
-                        for (i, header) in headers.iter().enumerate() {
-                            let comma = if i < headers.len() - 1 { "," } else { "" };
-                            response_lines.push(format!("  {}{}", header, comma));
-                        }
-
-                        // Closing brace
-                        response_lines.push("}".to_string());
-
-                        // Join with newlines
-                        let formatted_response = response_lines.join("\n");
-                        binding_info.insert(
-                            "response".to_string(),
-                            serde_json::Value::String(formatted_response),
-                        );
-                    } else {
-                        // Empty JSON object as placeholder
-                        binding_info.insert(
-                            "response".to_string(),
-                            serde_json::Value::String("{\n}".to_string()),
-                        );
-                    }
-                }
-                Some(GatewayBindingType::FileServer) => {
-                    binding_info.insert(
-                        "binding-type".to_string(),
-                        serde_json::Value::String("file-server".to_string()),
-                    );
-
-                    if let Some(worker_name) = &route.binding.worker_name {
-                        binding_info.insert(
-                            "worker-name".to_string(),
-                            serde_json::Value::String(worker_name.clone()),
-                        );
-                    }
-
-                    if let Some(versioned_component) = &route.binding.component {
-                        binding_info.insert(
-                            "component-name".to_string(),
-                            serde_json::Value::String(versioned_component.name.clone()),
-                        );
-                        binding_info.insert(
-                            "component-version".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(
-                                versioned_component.version,
-                            )),
-                        );
-                    }
-
-                    if let Some(key) = &route.binding.idempotency_key {
-                        binding_info.insert(
-                            "idempotency-key".to_string(),
-                            serde_json::Value::String(key.clone()),
-                        );
-                    }
-
-                    if let Some(response) = &route.binding.response {
-                        binding_info.insert(
-                            "response".to_string(),
-                            serde_json::Value::String(response.clone()),
-                        );
-                    }
-                }
-                Some(GatewayBindingType::SwaggerUi) => {
-                    binding_info.insert(
-                        "binding-type".to_string(),
-                        serde_json::Value::String("swagger-ui".to_string()),
-                    );
-                }
-                None => {
-                    // Default to a simple binding type
-                    binding_info.insert(
-                        "binding-type".to_string(),
-                        serde_json::Value::String("default".to_string()),
-                    );
-                }
-            }
-
-            // Add binding info to operation
-            operation.extensions.insert(
-                GOLEM_API_GATEWAY_BINDING.to_string(),
-                serde_json::Value::Object(binding_info),
-            );
-
-            // Add security if present
-            if let Some(security_ref) = &route.security {
-                let mut req = indexmap::IndexMap::new();
-                req.insert(security_ref.clone(), Vec::<String>::new());
-                operation.security = Some(vec![req]);
-            }
-
-            // There is no CORS information in RouteResponseData, so we'll skip this
-            // TODO: If CORS information becomes available in RouteResponseData, handle it here
-
-            // Add operation to path item based on method
-            match route.method {
-                crate::gateway_api_definition::http::MethodPattern::Get => {
-                    path_item.get = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Post => {
-                    path_item.post = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Put => {
-                    path_item.put = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Delete => {
-                    path_item.delete = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Options => {
-                    path_item.options = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Head => {
-                    path_item.head = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Patch => {
-                    path_item.patch = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Trace => {
-                    path_item.trace = Some(operation);
-                }
-                crate::gateway_api_definition::http::MethodPattern::Connect => {
-                    return Err(
-                        "CONNECT method is not supported in OpenAPI v3 specification".to_string(),
-                    );
-                }
-            }
-
-            // Collect security schemes from route
-            if let Some(security_ref) = &route.security {
-                // Add security scheme if not already present
-                if !security_schemes.contains_key::<str>(security_ref) {
-                    let security_scheme = openapiv3::SecurityScheme::APIKey {
-                        location: openapiv3::APIKeyLocation::Header,
-                        name: "Authorization".to_string(),
-                        description: Some(format!("API key security scheme for {}", security_ref)),
-                        extensions: indexmap::IndexMap::new(), // Add empty extensions
-                    };
-                    // Wrap in ReferenceOr::Item
-                    security_schemes.insert(
-                        security_ref.clone(),
-                        openapiv3::ReferenceOr::Item(security_scheme),
-                    );
-                }
-            }
+            process_route(route, &mut paths, &mut security_schemes)?;
         }
 
-        open_api.paths = openapiv3::Paths {
-            paths: paths
-                .into_iter()
-                .map(|(k, v)| (k, openapiv3::ReferenceOr::Item(v)))
-                .collect(),
-            extensions: Default::default(),
-        };
-
-        // Add security schemes to components
-        if !security_schemes.is_empty() {
-            open_api.components.as_mut().unwrap().security_schemes = security_schemes;
-        }
-
-        // Handle global security
-        let mut global_security = Vec::new();
-
-        // Collect all unique security requirements
-        let mut seen_requirements = std::collections::HashSet::new();
-        for route in &response_data.routes {
-            if let Some(security_ref) = &route.security {
-                if !seen_requirements.contains::<str>(security_ref) {
-                    let mut req = indexmap::IndexMap::new();
-                    req.insert(security_ref.clone(), Vec::<String>::new());
-                    global_security.push(req);
-                    seen_requirements.insert(security_ref.clone());
-                }
-            }
-        }
-
-        // Set global security if any requirements were found
-        if !global_security.is_empty() {
-            // Wrap the Vec in Some
-            open_api.security = Some(global_security);
-        }
+        // Set paths and security in OpenAPI spec
+        finalize_openapi(&mut open_api, paths, security_schemes, response_data);
 
         Ok(OpenApiHttpApiDefinition(open_api))
     }
 }
 
-// Helper functions moved from oas_api_definition.rs
+// Helper function: Base OpenAPI structure
+fn create_base_openapi(response_data: &HttpApiDefinitionResponseData) -> openapiv3::OpenAPI {
+    let mut open_api = openapiv3::OpenAPI {
+        openapi: "3.0.0".to_string(),
+        info: openapiv3::Info {
+            title: response_data.id.0.clone(),
+            description: None,
+            terms_of_service: None,
+            contact: None,
+            license: None,
+            version: response_data.version.0.clone(),
+            extensions: Default::default(),
+        },
+        ..Default::default()
+    };
+
+    // Add Golem extensions
+    open_api.extensions.insert(
+        GOLEM_API_DEFINITION_ID_EXTENSION.to_string(),
+        serde_json::Value::String(response_data.id.0.clone()),
+    );
+    open_api.extensions.insert(
+        GOLEM_API_DEFINITION_VERSION.to_string(),
+        serde_json::Value::String(response_data.version.0.clone()),
+    );
+
+    // Initialize components
+    open_api.components = Some(openapiv3::Components::default());
+
+    open_api
+}
+
+// Helper function: Handles each route in the HttpApiDefinitionResponseData
+fn process_route(
+    route: &RouteResponseData,
+    paths: &mut std::collections::BTreeMap<String, openapiv3::PathItem>,
+    security_schemes: &mut indexmap::IndexMap<
+        String,
+        openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
+    >,
+) -> Result<(), String> {
+    let path_str = route.path.to_string();
+    let path_item = paths.entry(path_str.clone()).or_default();
+
+    let operation = create_operation(route, security_schemes)?;
+
+    // Add operation to path item based on method
+    add_operation_to_path_item(path_item, &route.method, operation)?;
+
+    Ok(())
+}
+
+// Helper function: Creates an operation for a route
+fn create_operation(
+    route: &RouteResponseData,
+    security_schemes: &mut indexmap::IndexMap<
+        String,
+        openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
+    >,
+) -> Result<openapiv3::Operation, String> {
+    let mut operation = openapiv3::Operation::default();
+
+    // Add path parameters
+    add_path_parameters(&mut operation, route);
+
+    // Add request body
+    add_request_body(&mut operation, route);
+
+    // Add responses
+    add_responses(&mut operation, route);
+
+    // Add binding info
+    add_binding_info(&mut operation, route);
+
+    // Add security
+    add_security(&mut operation, route, security_schemes);
+
+    Ok(operation)
+}
+
+// Helper function: Adds path parameters to the operation
+fn add_path_parameters(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+    // Extract path parameters from the route path
+    let params = extract_path_parameters(&route.path.to_string());
+    for param_name in params {
+        let param_type = determine_parameter_type(route, &param_name);
+        let parameter = create_path_parameter(&param_name, param_type);
+        operation
+            .parameters
+            .push(openapiv3::ReferenceOr::Item(parameter));
+    }
+}
+
+// Helper function: Adds request body to the operation
+fn add_request_body(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+    // Only add request body if response_mapping_input is present
+    if let Some(response_mapping_input) = &route.binding.response_mapping_input {
+        if !response_mapping_input.types.is_empty() {
+            let request_body = create_request_body(route, response_mapping_input);
+            operation.request_body = Some(openapiv3::ReferenceOr::Item(request_body));
+        }
+    }
+}
+
+// Helper function: Adds responses to the operation
+fn add_responses(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+    let default_status = get_default_status_code(&route.method);
+    let status_codes = determine_status_codes(route, default_status);
+
+    for status_code in status_codes {
+        let response = create_response(status_code, route);
+        operation.responses.responses.insert(
+            openapiv3::StatusCode::Code(status_code),
+            openapiv3::ReferenceOr::Item(response),
+        );
+    }
+}
+
+// Helper function: Adds binding info to the operation
+fn add_binding_info(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+    let binding_info = create_binding_info(route);
+    operation.extensions.insert(
+        GOLEM_API_GATEWAY_BINDING.to_string(),
+        serde_json::Value::Object(binding_info),
+    );
+}
+
+// Helper function: Adds security to the operation
+fn add_security(
+    operation: &mut openapiv3::Operation,
+    route: &RouteResponseData,
+    security_schemes: &mut indexmap::IndexMap<
+        String,
+        openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
+    >,
+) {
+    if let Some(security_ref) = &route.security {
+        // Add security scheme if not already present
+        if !security_schemes.contains_key::<str>(security_ref) {
+            let security_scheme = create_security_scheme(security_ref);
+            security_schemes.insert(
+                security_ref.to_string(),
+                openapiv3::ReferenceOr::Item(security_scheme),
+            );
+        }
+
+        // Add security requirement to operation
+        let mut req = indexmap::IndexMap::new();
+        req.insert(security_ref.to_string(), Vec::<String>::new());
+        operation.security = Some(vec![req]);
+    }
+}
+
+// Helper function: Finalizes OpenAPI specification
+fn finalize_openapi(
+    open_api: &mut openapiv3::OpenAPI,
+    paths: std::collections::BTreeMap<String, openapiv3::PathItem>,
+    security_schemes: indexmap::IndexMap<String, openapiv3::ReferenceOr<openapiv3::SecurityScheme>>,
+    response_data: &HttpApiDefinitionResponseData,
+) {
+    // Set paths
+    open_api.paths = openapiv3::Paths {
+        paths: paths
+            .into_iter()
+            .map(|(k, v)| (k, openapiv3::ReferenceOr::Item(v)))
+            .collect(),
+        extensions: Default::default(),
+    };
+
+    // Add security schemes to components if any exist
+    if !security_schemes.is_empty() {
+        open_api.components.as_mut().unwrap().security_schemes = security_schemes;
+    }
+
+    // Set global security if needed
+    set_global_security(open_api, response_data);
+}
+
+// Helper function: Extracts path parameters from the route path
+// Todo: Query parameters should be handled here
 fn extract_path_parameters(path: &str) -> Vec<String> {
     let mut params = Vec::new();
     for segment in path.split('/') {
@@ -733,171 +268,523 @@ fn extract_path_parameters(path: &str) -> Vec<String> {
     params
 }
 
-// Helper function to convert AnalysedType to OpenAPI Schema
+// Helper function to determine parameter type
+fn determine_parameter_type(route: &RouteResponseData, param_name: &str) -> openapiv3::Schema {
+    use golem_wasm_ast::analysis::AnalysedType;
+
+    // Check worker_name_input first, then check request key and then look for path field within the request
+    if let Some(worker_name_input) = &route.binding.worker_name_input {
+        if let Some(AnalysedType::Record(request_record)) = worker_name_input.types.get("request") {
+            if let Some(path_field) = request_record
+                .fields
+                .iter()
+                .find(|field| field.name == "path")
+            {
+                if let AnalysedType::Record(path_record) = &path_field.typ {
+                    if let Some(param_type) = path_record
+                        .fields
+                        .iter()
+                        .find(|field| field.name == param_name)
+                    {
+                        return create_schema_from_analysed_type(&param_type.typ);
+                    }
+                }
+            }
+        }
+    }
+
+    // Check response_mapping_input, request key and then look for path field within the request
+    if let Some(response_mapping_input) = &route.binding.response_mapping_input {
+        if let Some(AnalysedType::Record(request_record)) =
+            response_mapping_input.types.get("request")
+        {
+            if let Some(path_field) = request_record
+                .fields
+                .iter()
+                .find(|field| field.name == "path")
+            {
+                if let AnalysedType::Record(path_record) = &path_field.typ {
+                    if let Some(param_type) = path_record
+                        .fields
+                        .iter()
+                        .find(|field| field.name == param_name)
+                    {
+                        return create_schema_from_analysed_type(&param_type.typ);
+                    }
+                }
+            }
+        }
+    }
+
+    // Default to string if no type information is available
+    openapiv3::Schema {
+        schema_data: openapiv3::SchemaData {
+            nullable: false,
+            ..Default::default()
+        },
+        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
+            openapiv3::StringType::default(),
+        )),
+    }
+}
+
+// Helper function: Creates a path parameter
+fn create_path_parameter(param_name: &str, param_type: openapiv3::Schema) -> openapiv3::Parameter {
+    openapiv3::Parameter::Path {
+        parameter_data: openapiv3::ParameterData {
+            name: param_name.to_string(),
+            description: Some(format!("Path parameter: {}", param_name)),
+            required: true,
+            deprecated: None,
+            explode: Some(false),
+            format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
+                param_type,
+            )),
+            example: None,
+            examples: Default::default(),
+            extensions: Default::default(),
+        },
+        style: openapiv3::PathStyle::Simple,
+    }
+}
+
+// Helper function: Creates a request body
+fn create_request_body(
+    _route: &RouteResponseData,
+    response_mapping_input: &RibInputTypeInfo,
+) -> openapiv3::RequestBody {
+    let body_schema = determine_request_body_schema(response_mapping_input);
+    let media_type = openapiv3::MediaType {
+        schema: Some(openapiv3::ReferenceOr::Item(body_schema)),
+        ..Default::default()
+    };
+
+    let mut content = indexmap::IndexMap::new();
+    content.insert("application/json".to_string(), media_type);
+
+    // If we have response_mapping_input, body is always required
+    let required = true;
+
+    openapiv3::RequestBody {
+        description: Some("Request payload".to_string()),
+        content,
+        required,
+        extensions: Default::default(),
+    }
+}
+
+// Helper function: Determines request body schema
+fn determine_request_body_schema(response_mapping_input: &RibInputTypeInfo) -> openapiv3::Schema {
+    // Check request key and then look for body field within the request
+    if let Some(AnalysedType::Record(request_record)) = response_mapping_input.types.get("request")
+    {
+        if let Some(body_field) = request_record.fields.iter().find(|f| f.name == "body") {
+            return create_schema_from_analysed_type(&body_field.typ);
+        }
+    }
+
+    // Fallback to default object schema if no body is found
+    create_default_object_schema()
+}
+
+// Helper function: Gets default status code based on method
+fn get_default_status_code(method: &MethodPattern) -> u16 {
+    match method {
+        MethodPattern::Get => 200,
+        MethodPattern::Post => 201,
+        MethodPattern::Put => 204,
+        MethodPattern::Delete => 204,
+        MethodPattern::Options => 200,
+        MethodPattern::Head => 200,
+        MethodPattern::Patch => 200,
+        MethodPattern::Trace => 200,
+        _ => 200,
+    }
+}
+
+// Helper function: Determines status codes to include
+fn determine_status_codes(route: &RouteResponseData, default_status: u16) -> Vec<u16> {
+    use golem_wasm_ast::analysis::AnalysedType;
+
+    // Check if response mapping output has a variant or result type
+    let has_multiple_responses =
+        if let Some(response_mapping_output) = &route.binding.response_mapping_output {
+            matches!(
+                &response_mapping_output.analysed_type,
+                AnalysedType::Variant(_) | AnalysedType::Result(_)
+            )
+        } else {
+            false
+        };
+
+    if has_multiple_responses {
+        // Include common 2xx, 4xx and 5xx status codes
+        vec![200, 201, 204, 400, 404, 500]
+    } else {
+        // Just use the default status code
+        vec![default_status]
+    }
+}
+
+// Helper function: Create response
+fn create_response(status_code: u16, route: &RouteResponseData) -> openapiv3::Response {
+    let mut response = openapiv3::Response {
+        description: get_status_description(status_code),
+        ..Default::default()
+    };
+
+    // Only add content for non-204 responses
+    if status_code != 204 {
+        let mut content = indexmap::IndexMap::new();
+        let media = openapiv3::MediaType {
+            schema: Some(openapiv3::ReferenceOr::Item(determine_response_schema(
+                route,
+            ))),
+            ..Default::default()
+        };
+        content.insert("application/json".to_string(), media);
+        response.content = content;
+    }
+
+    response
+}
+
+// Helper function: Gets status code description
+fn get_status_description(status_code: u16) -> String {
+    match status_code {
+        204 => "No Content".to_string(),
+        201 => "Created".to_string(),
+        200 => "OK".to_string(),
+        400 => "Bad Request".to_string(),
+        404 => "Not Found".to_string(),
+        500 => "Internal Server Error".to_string(),
+        _ => "Response".to_string(),
+    }
+}
+
+// Helper function: Determines response schema
+fn determine_response_schema(route: &RouteResponseData) -> openapiv3::Schema {
+    // We check if it has both status and body fields, then use the body field
+    if let Some(response_mapping_output) = &route.binding.response_mapping_output {
+        if let AnalysedType::Record(record) = &response_mapping_output.analysed_type {
+            let has_status = record.fields.iter().any(|f| f.name == "status");
+            let has_body = record.fields.iter().any(|f| f.name == "body");
+
+            return match (has_status, has_body) {
+                (true, true) => record
+                    .fields
+                    .iter()
+                    .find(|f| f.name == "body")
+                    .map(|body_field| create_schema_from_analysed_type(&body_field.typ))
+                    .unwrap_or_else(create_default_object_schema),
+                (true, false) => create_default_object_schema(),
+                _ => create_schema_from_analysed_type(&response_mapping_output.analysed_type),
+            };
+        }
+        create_schema_from_analysed_type(&response_mapping_output.analysed_type)
+    } else {
+        create_default_object_schema()
+    }
+}
+
+// Helper function: Creates binding info
+// fileserver, default, http-handler and swagger-ui binding info are handled by common binding info
+// cors-preflight binding info is handled by cors-preflight binding info
+fn create_binding_info(route: &RouteResponseData) -> serde_json::Map<String, serde_json::Value> {
+    let mut binding_info = serde_json::Map::new();
+
+    match route.binding.binding_type {
+        Some(GatewayBindingType::Default) => {
+            binding_info.insert(
+                "binding-type".to_string(),
+                serde_json::Value::String("default".to_string()),
+            );
+            add_common_binding_info(&mut binding_info, route);
+        }
+        Some(GatewayBindingType::HttpHandler) => {
+            binding_info.insert(
+                "binding-type".to_string(),
+                serde_json::Value::String("http-handler".to_string()),
+            );
+            add_common_binding_info(&mut binding_info, route);
+        }
+        Some(GatewayBindingType::FileServer) => {
+            binding_info.insert(
+                "binding-type".to_string(),
+                serde_json::Value::String("file-server".to_string()),
+            );
+            add_common_binding_info(&mut binding_info, route);
+        }
+        Some(GatewayBindingType::CorsPreflight) => {
+            add_cors_preflight_binding_info(&mut binding_info, route);
+        }
+        Some(GatewayBindingType::SwaggerUi) => {
+            binding_info.insert(
+                "binding-type".to_string(),
+                serde_json::Value::String("swagger-ui".to_string()),
+            );
+        }
+        None => {
+            binding_info.insert(
+                "binding-type".to_string(),
+                serde_json::Value::String("default".to_string()),
+            );
+        }
+    }
+
+    binding_info
+}
+
+// Helper function: Adds common binding info
+fn add_common_binding_info(
+    binding_info: &mut serde_json::Map<String, serde_json::Value>,
+    route: &RouteResponseData,
+) {
+    if let Some(worker_name) = &route.binding.worker_name {
+        binding_info.insert(
+            "worker-name".to_string(),
+            serde_json::Value::String(worker_name.clone()),
+        );
+    }
+
+    if let Some(versioned_component) = &route.binding.component {
+        binding_info.insert(
+            "component-name".to_string(),
+            serde_json::Value::String(versioned_component.name.clone()),
+        );
+        binding_info.insert(
+            "component-version".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(versioned_component.version)),
+        );
+    }
+
+    if let Some(key) = &route.binding.idempotency_key {
+        binding_info.insert(
+            "idempotency-key".to_string(),
+            serde_json::Value::String(key.clone()),
+        );
+    }
+
+    if let Some(response) = &route.binding.response {
+        binding_info.insert(
+            "response".to_string(),
+            serde_json::Value::String(response.clone()),
+        );
+    }
+}
+
+// Helper function: Adds cors-preflight binding info
+// Converts the cors-preflight binding info to a response string
+fn add_cors_preflight_binding_info(
+    binding_info: &mut serde_json::Map<String, serde_json::Value>,
+    route: &RouteResponseData,
+) {
+    binding_info.insert(
+        "binding-type".to_string(),
+        serde_json::Value::String("cors-preflight".to_string()),
+    );
+
+    if let Some(cors) = &route.binding.cors_preflight {
+        let formatted_response = create_cors_response(cors);
+        binding_info.insert(
+            "response".to_string(),
+            serde_json::Value::String(formatted_response),
+        );
+    } else {
+        binding_info.insert(
+            "response".to_string(),
+            serde_json::Value::String("{\n}".to_string()),
+        );
+    }
+}
+
+// Helper function: Creates a CORS response
+fn create_cors_response(cors: &HttpCors) -> String {
+    let mut headers = vec![
+        format!(
+            "Access-Control-Allow-Headers: \"{}\"",
+            cors.get_allow_headers()
+        ),
+        format!(
+            "Access-Control-Allow-Methods: \"{}\"",
+            cors.get_allow_methods()
+        ),
+        format!(
+            "Access-Control-Allow-Origin: \"{}\"",
+            cors.get_allow_origin()
+        ),
+    ];
+
+    if let Some(expose_headers) = cors.get_expose_headers() {
+        headers.push(format!(
+            "Access-Control-Expose-Headers: \"{}\"",
+            expose_headers
+        ));
+    }
+
+    if let Some(allow_credentials) = cors.get_allow_credentials() {
+        headers.push(format!(
+            "Access-Control-Allow-Credentials: {}",
+            allow_credentials
+        ));
+    }
+    if let Some(max_age) = cors.get_max_age() {
+        headers.push(format!("Access-Control-Max-Age: {}u64", max_age));
+    }
+
+    let mut response_lines = vec!["{".to_string()];
+    for (i, header) in headers.iter().enumerate() {
+        let comma = if i < headers.len() - 1 { "," } else { "" };
+        response_lines.push(format!("  {}{}", header, comma));
+    }
+    response_lines.push("}".to_string());
+
+    response_lines.join("\n")
+}
+
+// Helper function: Creates a security scheme
+fn create_security_scheme(security_ref: &str) -> openapiv3::SecurityScheme {
+    openapiv3::SecurityScheme::APIKey {
+        location: openapiv3::APIKeyLocation::Header,
+        name: "Authorization".to_string(),
+        description: Some(format!("API key security scheme for {}", security_ref)),
+        extensions: indexmap::IndexMap::new(),
+    }
+}
+
+// Helper function: Sets global security
+fn set_global_security(
+    open_api: &mut openapiv3::OpenAPI,
+    response_data: &HttpApiDefinitionResponseData,
+) {
+    let mut seen_requirements = std::collections::HashSet::new();
+    let mut global_security = Vec::new();
+
+    for route in &response_data.routes {
+        if let Some(security_ref) = &route.security {
+            if !seen_requirements.contains::<str>(security_ref) {
+                let mut req = indexmap::IndexMap::new();
+                req.insert(security_ref.to_string(), Vec::<String>::new());
+                global_security.push(req);
+                seen_requirements.insert(security_ref.to_string());
+            }
+        }
+    }
+
+    if !global_security.is_empty() {
+        open_api.security = Some(global_security);
+    }
+}
+
+// Helper function: Adds operation to path item
+fn add_operation_to_path_item(
+    path_item: &mut openapiv3::PathItem,
+    method: &MethodPattern,
+    operation: openapiv3::Operation,
+) -> Result<(), String> {
+    match method {
+        MethodPattern::Get => {
+            path_item.get = Some(operation);
+        }
+        MethodPattern::Post => {
+            path_item.post = Some(operation);
+        }
+        MethodPattern::Put => {
+            path_item.put = Some(operation);
+        }
+        MethodPattern::Delete => {
+            path_item.delete = Some(operation);
+        }
+        MethodPattern::Options => {
+            path_item.options = Some(operation);
+        }
+        MethodPattern::Head => {
+            path_item.head = Some(operation);
+        }
+        MethodPattern::Patch => {
+            path_item.patch = Some(operation);
+        }
+        MethodPattern::Trace => {
+            path_item.trace = Some(operation);
+        }
+        MethodPattern::Connect => {
+            return Err("CONNECT method is not supported in OpenAPI v3 specification".to_string());
+        }
+    }
+    Ok(())
+}
+
+// Helper function: Creates a default object schema
+// Used as fallback in case type or fields are missing
+fn create_default_object_schema() -> openapiv3::Schema {
+    openapiv3::Schema {
+        schema_data: Default::default(),
+        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(Default::default())),
+    }
+}
+
+// Macro: Generate the body of the match arm
+macro_rules! create_integer_schema_body {
+    ($format:expr, $min:expr, $max:expr) => {{
+        let schema_data = openapiv3::SchemaData::default();
+        openapiv3::Schema {
+            schema_data,
+            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
+                openapiv3::IntegerType {
+                    format: openapiv3::VariantOrUnknownOrEmpty::Item($format),
+                    minimum: $min,
+                    maximum: $max,
+                    multiple_of: None,
+                    exclusive_minimum: false,
+                    exclusive_maximum: false,
+                    enumeration: vec![],
+                },
+            )),
+        }
+    }};
+}
+
+// Helper function: Converts AnalysedType to OpenAPI Schema
 fn create_schema_from_analysed_type(
     analysed_type: &golem_wasm_ast::analysis::AnalysedType,
 ) -> openapiv3::Schema {
     use golem_wasm_ast::analysis::AnalysedType;
 
     match analysed_type {
+        // Handle boolean type
         AnalysedType::Bool(_) => openapiv3::Schema {
             schema_data: Default::default(),
             schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Boolean(
                 openapiv3::BooleanType::default(),
             )),
         },
+
+        // Handle integer types using the macro for the body
         AnalysedType::U8(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int32,
-                        ),
-                        minimum: Some(0),
-                        maximum: Some(255),
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(0), Some(255))
         }
         AnalysedType::U16(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int32,
-                        ),
-                        minimum: Some(0),
-                        maximum: Some(65535),
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(0), Some(65535))
         }
         AnalysedType::U32(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int32,
-                        ),
-                        minimum: Some(0),
-                        maximum: None, // Too large to represent as i64
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(0), None)
         }
         AnalysedType::U64(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int64,
-                        ),
-                        minimum: Some(0),
-                        maximum: None,
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int64, Some(0), None)
         }
         AnalysedType::S8(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int32,
-                        ),
-                        minimum: Some(-128),
-                        maximum: Some(127),
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(-128), Some(127))
         }
         AnalysedType::S16(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int32,
-                        ),
-                        minimum: Some(-32768),
-                        maximum: Some(32767),
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(-32768), Some(32767))
         }
         AnalysedType::S32(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int32,
-                        ),
-                        minimum: None,
-                        maximum: None,
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, None, None)
         }
         AnalysedType::S64(_) => {
-            let schema_data = openapiv3::SchemaData::default();
-            openapiv3::Schema {
-                schema_data,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                    openapiv3::IntegerType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::IntegerFormat::Int64,
-                        ),
-                        minimum: None,
-                        maximum: None,
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        enumeration: vec![],
-                    },
-                )),
-            }
+            create_integer_schema_body!(openapiv3::IntegerFormat::Int64, None, None)
         }
+
         AnalysedType::F32(_) => {
             let schema_data = openapiv3::SchemaData::default();
             openapiv3::Schema {
@@ -993,7 +880,7 @@ fn create_schema_from_analysed_type(
             // Initialize schema_data directly with description
             let schema_data = openapiv3::SchemaData {
                 description: Some("Tuple type".to_string()),
-                ..Default::default() // Use struct update syntax
+                ..Default::default()
             };
 
             openapiv3::Schema {
@@ -1189,9 +1076,6 @@ fn create_schema_from_analysed_type(
             }
         }
         // Handle any other cases with a generic object type
-        _ => openapiv3::Schema {
-            schema_data: Default::default(),
-            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(Default::default())),
-        },
+        _ => create_default_object_schema(),
     }
 }
