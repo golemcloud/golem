@@ -35,10 +35,10 @@ golem-worker-executor-base = { path = "../golem-worker-executor-base", version =
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-colored = "3.0.0"
-dirs = "4.0.0"
+colored = { workspace = true }
+dirs = { workspace = true }
 prometheus = { workspace = true }
-rustyline = "15.0.0"
+rustyline = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

@@ -191,9 +191,8 @@ impl Hinter for RibEdit {
 
         if let Some(variables) = instance_variable_names {
             for var in variables.iter() {
-                if var.starts_with(word) {
+                if let Some(hint) = var.strip_prefix(word) {
                     // return only remaining part of the variable name
-                    let hint = &var[word.len()..];
                     return Some(hint.to_string());
                 }
             }
