@@ -91,10 +91,10 @@ impl From<UnResolvedTypesError> for RibCompilationError {
 impl From<TypeMismatchError> for RibCompilationError {
     fn from(value: TypeMismatchError) -> Self {
         let expected = match value.expected_type {
-            ExpectedType::AnalysedType(anaysed_type) => TypeName::try_from(anaysed_type)
+            ExpectedType::AnalysedType(analysed_type) => TypeName::try_from(analysed_type)
                 .map(|x| format!("expected {}", x))
                 .ok(),
-            ExpectedType::Kind(kind) => Some(format!("expected {}", kind)),
+            ExpectedType::TypeHint(kind) => Some(format!("expected {}", kind)),
         };
 
         let actual = match value.actual_type {

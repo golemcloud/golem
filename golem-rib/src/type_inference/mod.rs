@@ -52,7 +52,7 @@ mod infer_orphan_literals;
 mod inference_fix_point;
 mod inferred_expr;
 mod instance_type_binding;
-pub(crate) mod kind;
+pub(crate) mod type_hint;
 mod rib_input_type;
 mod rib_output_type;
 mod type_annotation_binding;
@@ -289,8 +289,7 @@ mod tests {
         let mut valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
         let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 
-        // Cannot infer 1
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]

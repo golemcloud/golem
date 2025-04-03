@@ -100,10 +100,10 @@ impl TypeRefinement for OkType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
             if let InferredType::Result {
-                ok: Some(ok_type), ..
+                ok, ..
             } = inferred_type
             {
-                Some(OkType(ok_type.deref().clone()))
+                Some(OkType(ok.clone().as_deref().cloned()))
             } else {
                 None
             }
@@ -115,11 +115,11 @@ impl TypeRefinement for ErrType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
             if let InferredType::Result {
-                error: Some(err_type),
+                error,
                 ..
             } = inferred_type
             {
-                Some(ErrType(err_type.deref().clone()))
+                Some(ErrType(error.clone().as_deref().cloned()))
             } else {
                 None
             }

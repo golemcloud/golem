@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_inference::kind::TypeKind;
+use crate::type_inference::type_hint::TypeHint;
 use crate::{Expr, ExprVisitor, InferredType};
 
 // Check all exprs that cannot be the type it is tagged against
@@ -26,7 +26,7 @@ pub fn check_invalid_expr(expr: &mut Expr) -> Result<(), InvalidExpr> {
                 Err(message) => {
                     return Err(InvalidExpr {
                         expr: expr.clone(),
-                        expected_type: TypeKind::Number,
+                        expected_type: TypeHint::Number,
                         found: inferred_type.clone(),
                         message,
                     });
@@ -41,7 +41,7 @@ pub fn check_invalid_expr(expr: &mut Expr) -> Result<(), InvalidExpr> {
 #[derive(Debug, Clone)]
 pub struct InvalidExpr {
     pub expr: Expr,
-    pub expected_type: TypeKind,
+    pub expected_type: TypeHint,
     pub found: InferredType,
     pub message: String,
 }

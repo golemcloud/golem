@@ -245,7 +245,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
 mod internal {
     use crate::call_type::CallType;
     use crate::rib_compilation_error::RibCompilationError;
-    use crate::type_inference::kind::{GetTypeKind, TypeKind};
+    use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
     use crate::{
@@ -263,11 +263,11 @@ mod internal {
     ) -> Result<(), RibCompilationError> {
         update_yield_expr_in_list_comprehension(variable_id, iterable_expr, yield_expr)?;
 
-        let refined_list_type = ListType::refine(comprehension_result_type).ok_or(
+        let refined_list_type = ListType::refine(comprehension_result_type).ok_or_else(||
             get_compilation_error_for_ambiguity(
                 comprehension_result_type,
                 yield_expr,
-                &TypeKind::List,
+                &TypeHint::List(None),
             )
             .with_additional_error_detail("the result of a comprehension should be of type list"),
         )?;
@@ -316,8 +316,8 @@ mod internal {
             let iterable_variable_type = match refined_iterable {
                 Some(refined_iterable) => refined_iterable.inner_type(),
                 None => {
-                    let refined_range = RangeType::refine(&iterable_type).ok_or(
-                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
+                    let refined_range = RangeType::refine(&iterable_type).ok_or_else(||
+                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeHint::List(None))
                             .with_additional_error_detail(
                                 "the iterable expression in list comprehension should be of type list or a range",
                             ),
@@ -364,8 +364,8 @@ mod internal {
             let iterable_variable_type = match refined_iterable {
                 Some(refined_iterable) => refined_iterable.inner_type(),
                 None => {
-                    let refined_range = RangeType::refine(&iterable_type).ok_or(
-                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeKind::List)
+                    let refined_range = RangeType::refine(&iterable_type).ok_or_else(||
+                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeHint::List(None))
                             .with_additional_error_detail(
                                 "the iterable expression in list comprehension should be of type list or a range",
                             ),
@@ -409,11 +409,11 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or(
+        let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or_else(||
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
                 &outer_expr,
-                &TypeKind::Option,
+                &TypeHint::Option(None),
             ),
         )?;
 
@@ -429,11 +429,16 @@ mod internal {
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
         let refined_ok_type =
-            OkType::refine(outer_inferred_type).ok_or(get_compilation_error_for_ambiguity(
-                outer_inferred_type,
-                &outer_expr,
-                &TypeKind::Result,
-            ))?;
+            OkType::refine(outer_inferred_type).ok_or_else(||{
+                get_compilation_error_for_ambiguity(
+                    outer_inferred_type,
+                    &outer_expr,
+                    &TypeHint::Result {
+                        ok: None,
+                        err: None,
+                    },
+                )
+            })?;
 
         let inner_type = refined_ok_type.inner_type();
 
@@ -447,12 +452,18 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
+        dbg!(outer_inferred_type.clone());
         let refined_err_type =
-            ErrType::refine(outer_inferred_type).ok_or(get_compilation_error_for_ambiguity(
-                outer_inferred_type,
-                &outer_expr,
-                &TypeKind::Result,
-            ))?;
+            ErrType::refine(outer_inferred_type).ok_or_else(||{
+                get_compilation_error_for_ambiguity(
+                    outer_inferred_type,
+                    &outer_expr,
+                    &TypeHint::Result {
+                        ok: None,
+                        err: None,
+                    },
+                )
+            })?;
         let inner_type = refined_err_type.inner_type();
 
         inner_expr.add_infer_type_mut(inner_type.clone());
@@ -465,8 +476,8 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_list_type = ListType::refine(outer_inferred_type).ok_or(
-            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::List),
+        let refined_list_type = ListType::refine(outer_inferred_type).ok_or_else(||
+            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeHint::List(None)),
         )?;
         let inner_type = refined_list_type.inner_type();
 
@@ -482,8 +493,8 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or(
-            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeKind::Tuple),
+        let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or_else(||
+            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeHint::Tuple(None)),
         )?;
         let inner_types = refined_tuple_type.inner_types();
 
@@ -500,10 +511,10 @@ mod internal {
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
         let refined_record_type =
-            RecordType::refine(outer_inferred_type).ok_or(get_compilation_error_for_ambiguity(
+            RecordType::refine(outer_inferred_type).ok_or_else(||get_compilation_error_for_ambiguity(
                 outer_inferred_type,
                 &outer_expr,
-                &TypeKind::Record,
+                &TypeHint::Record(None),
             ))?;
 
         for (field, expr) in inner_expressions {
@@ -564,7 +575,7 @@ mod internal {
 
             ArmPattern::Constructor(constructor_name, patterns) => {
                 if constructor_name == "some" || constructor_name == "none" {
-                    let resolved = OptionalType::refine(predicate_type).ok_or(
+                    let resolved = OptionalType::refine(predicate_type).ok_or_else(||
                         InvalidPatternMatchError::constructor_type_mismatch(
                             original_predicate,
                             pattern_match_expr,
@@ -600,7 +611,7 @@ mod internal {
                         }
 
                         None => {
-                            ErrType::refine(predicate_type).ok_or(
+                            ErrType::refine(predicate_type).ok_or_else(||
                                 InvalidPatternMatchError::constructor_type_mismatch(
                                     original_predicate,
                                     pattern_match_expr,
@@ -627,7 +638,7 @@ mod internal {
                         }
 
                         None => {
-                            OkType::refine(predicate_type).ok_or(
+                            OkType::refine(predicate_type).ok_or_else(||
                                 InvalidPatternMatchError::constructor_type_mismatch(
                                     original_predicate,
                                     pattern_match_expr,
@@ -650,7 +661,7 @@ mod internal {
             }
 
             ArmPattern::TupleConstructor(patterns) => {
-                let tuple_type = TupleType::refine(predicate_type).ok_or(
+                let tuple_type = TupleType::refine(predicate_type).ok_or_else(||
                     InvalidPatternMatchError::constructor_type_mismatch(
                         original_predicate,
                         pattern_match_expr,
@@ -682,7 +693,7 @@ mod internal {
             }
 
             ArmPattern::ListConstructor(patterns) => {
-                let list_type = ListType::refine(predicate_type).ok_or(
+                let list_type = ListType::refine(predicate_type).ok_or_else(||
                     InvalidPatternMatchError::constructor_type_mismatch(
                         original_predicate,
                         pattern_match_expr,
@@ -703,7 +714,7 @@ mod internal {
             }
 
             ArmPattern::RecordConstructor(fields) => {
-                let record_type = RecordType::refine(predicate_type).ok_or(
+                let record_type = RecordType::refine(predicate_type).ok_or_else(||
                     InvalidPatternMatchError::constructor_type_mismatch(
                         original_predicate,
                         pattern_match_expr,
@@ -734,7 +745,7 @@ mod internal {
     pub fn get_compilation_error_for_ambiguity(
         actual_inferred_type: &InferredType,
         expr: &Expr,
-        push_down_kind: &TypeKind,
+        push_down_kind: &TypeHint,
     ) -> RibCompilationError {
         // First check if the inferred type is a fully valid WIT type
         // If so, we trust this as this may handle majority of the cases
@@ -747,13 +758,13 @@ mod internal {
             Err(_) => {
                 // InferredType is not a fully valid WIT type yet
                 // however it has enough information for compiler to trust it over the expected `type_kind`
-                let actual_kind = actual_inferred_type.get_type_kind();
+                let actual_kind = actual_inferred_type.get_type_hint();
                 match actual_kind {
-                    TypeKind::Number | TypeKind::Str | TypeKind::Boolean | TypeKind::Char => {
+                    TypeHint::Number | TypeHint::Str | TypeHint::Boolean | TypeHint::Char => {
                         TypeMismatchError {
                             expr_with_wrong_type: expr.clone(),
                             parent_expr: None,
-                            expected_type: ExpectedType::Kind(actual_kind.clone()),
+                            expected_type: ExpectedType::TypeHint(actual_kind.clone()),
                             actual_type: ActualType::Kind(push_down_kind.clone()),
                             field_path: Default::default(),
                             additional_error_detail: vec![],
@@ -761,7 +772,9 @@ mod internal {
                         .into()
                     }
 
-                    _ => AmbiguousTypeError::new(actual_inferred_type, expr, push_down_kind).into(),
+                    _ => {
+                        AmbiguousTypeError::new(actual_inferred_type, expr, push_down_kind).into()
+                    },
                 }
             }
         }

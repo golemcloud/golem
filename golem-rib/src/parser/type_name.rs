@@ -93,18 +93,20 @@ impl Display for TypeName {
             }
             TypeName::Option(inner_type) => write!(f, "option<{}>", inner_type),
             // https://component-model.bytecodealliance.org/design/wit.html#results
-            TypeName::Result { ok, error } => match (ok, error) {
-                (Some(ok), Some(error)) => {
-                    write!(f, "result<{}, {}>", ok, error)
-                }
-                (Some(ok), None) => {
-                    write!(f, "result<{}>", ok)
-                }
-                (None, Some(error)) => {
-                    write!(f, "result<_, {}>", error)
-                }
-                (None, None) => {
-                    write!(f, "result")
+            TypeName::Result { ok, error } => {
+                match (ok, error) {
+                    (Some(ok), Some(error)) => {
+                        write!(f, "result<{}, {}>", ok, error)
+                    }
+                    (Some(ok), None) => {
+                        write!(f, "result<{}>", ok)
+                    }
+                    (None, Some(error)) => {
+                        write!(f, "result<_, {}>", error)
+                    }
+                    (None, None) => {
+                        write!(f, "result")
+                    }
                 }
             },
             TypeName::Record(fields) => {
