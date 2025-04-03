@@ -19,7 +19,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RibResult {
     Unit,
     Val(ValueAndType),
