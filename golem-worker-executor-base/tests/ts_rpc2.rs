@@ -16,6 +16,10 @@ use test_r::{inherit_test_dep, test};
 
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
+use golem_common::model::ComponentType;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
@@ -25,7 +29,7 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
 static COUNTER_COMPONENT_NAME: &str = "counter-ts";
-static CALLER_COMPONENT_NAME: &str = "caller-composed-ts";
+static CALLER_COMPONENT_NAME: &str = "caller-ts";
 
 #[test]
 #[tracing::instrument]
@@ -38,7 +42,33 @@ async fn counter_resource_test_2(
     let executor = common::start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
-    let caller_component_id = executor.component(CALLER_COMPONENT_NAME).store().await;
+    let caller_component_id = executor
+        .component(CALLER_COMPONENT_NAME)
+        .with_dynamic_linking(&[(
+            "rpc:counters-client/counters-client",
+            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                targets: HashMap::from_iter(vec![
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
+                    (
+                        "counter".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
+                ]),
+            }),
+        )])
+        .store()
+        .await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -81,7 +111,33 @@ async fn counter_resource_test_2_with_restart(
     let executor = common::start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
-    let caller_component_id = executor.component(CALLER_COMPONENT_NAME).store().await;
+    let caller_component_id = executor
+        .component(CALLER_COMPONENT_NAME)
+        .with_dynamic_linking(&[(
+            "rpc:counters-client/counters-client",
+            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                targets: HashMap::from_iter(vec![
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
+                    (
+                        "counter".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
+                ]),
+            }),
+        )])
+        .store()
+        .await;
 
     let mut env = HashMap::new();
     env.insert(
