@@ -29,7 +29,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
-use golem_common::model::{ComponentId, ProjectId};
+use golem_common::model::ComponentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
@@ -248,7 +248,8 @@ impl RemoteComponentService {
 }
 
 #[async_trait]
-impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ComponentService<Namespace, AuthCtx> for RemoteComponentService
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ComponentService<Namespace, AuthCtx>
+    for RemoteComponentService
 {
     async fn get_by_version(
         &self,
@@ -345,7 +346,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ComponentService<Namespac
                     let response = client
                         .call("get_components", move |client| {
                             let request = GetComponentsRequest {
-                                project_id: Some(project_id.clone().into()),
+                                project_id: project_id.clone().map(|p| p.into()),
                                 component_name: Some(name.clone()),
                             };
 

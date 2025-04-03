@@ -80,7 +80,7 @@ impl RegisterApiDefinitionApi {
             compiled_definition,
             &self
                 .definition_service
-                .conversion_context(&EmptyAuthCtx::default()),
+                .conversion_context(&DefaultNamespace(), &EmptyAuthCtx::default()),
         )
         .await
         .map_err(|e| {
@@ -122,7 +122,7 @@ impl RegisterApiDefinitionApi {
             .into_core(
                 &self
                     .definition_service
-                    .conversion_context(&EmptyAuthCtx::default()),
+                    .conversion_context(&DefaultNamespace(), &EmptyAuthCtx::default()),
             )
             .await
             .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
@@ -140,7 +140,7 @@ impl RegisterApiDefinitionApi {
             compiled_definition,
             &self
                 .definition_service
-                .conversion_context(&EmptyAuthCtx::default()),
+                .conversion_context(&DefaultNamespace(), &EmptyAuthCtx::default()),
         )
         .await
         .map_err(|e| {
@@ -189,7 +189,7 @@ impl RegisterApiDefinitionApi {
             .into_core(
                 &self
                     .definition_service
-                    .conversion_context(&EmptyAuthCtx::default()),
+                    .conversion_context(&DefaultNamespace(), &EmptyAuthCtx::default()),
             )
             .await
             .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
@@ -216,7 +216,7 @@ impl RegisterApiDefinitionApi {
                 compiled_definition,
                 &self
                     .definition_service
-                    .conversion_context(&EmptyAuthCtx::default()),
+                    .conversion_context(&DefaultNamespace(), &EmptyAuthCtx::default()),
             )
             .await
             .map_err(|e| {
@@ -277,7 +277,7 @@ impl RegisterApiDefinitionApi {
             compiled_definition,
             &self
                 .definition_service
-                .conversion_context(&EmptyAuthCtx::default()),
+                .conversion_context(&DefaultNamespace(), &EmptyAuthCtx::default()),
         )
         .await
         .map_err(|e| {
@@ -368,7 +368,9 @@ impl RegisterApiDefinitionApi {
                 .await?
         };
 
-        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&DefaultNamespace(), &auth_ctx);
 
         let converted = data.into_iter().map(|d| {
             HttpApiDefinitionResponseData::from_compiled_http_api_definition(d, &conversion_context)
@@ -389,7 +391,6 @@ mod test {
     use test_r::test;
 
     use super::*;
-    use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
     use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
@@ -437,8 +438,11 @@ mod test {
     struct TestComponentService;
 
     #[async_trait]
-    impl golem_worker_service_base::service::component::ComponentService<EmptyAuthCtx>
-        for TestComponentService
+    impl
+        golem_worker_service_base::service::component::ComponentService<
+            DefaultNamespace,
+            EmptyAuthCtx,
+        > for TestComponentService
     {
         async fn get_by_version(
             &self,
@@ -460,6 +464,7 @@ mod test {
         async fn get_by_name(
             &self,
             _component_id: &ComponentName,
+            _namespace: &DefaultNamespace,
             _auth_ctx: &EmptyAuthCtx,
         ) -> ComponentResult<Component> {
             unimplemented!()
@@ -519,7 +524,7 @@ mod test {
             identity_provider,
         ));
 
-        let component_service: ComponentService = Arc::new(TestComponentService);
+        let component_service = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(
             component_service,
             api_definition_repo,

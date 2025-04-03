@@ -430,7 +430,7 @@ impl TestComponentService {
 }
 
 #[async_trait]
-impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
+impl<Namespace, AuthCtx> ComponentService<Namespace, AuthCtx> for TestComponentService {
     async fn get_by_version(
         &self,
         _component_id: &ComponentId,
@@ -451,6 +451,7 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
     async fn get_by_name(
         &self,
         name: &ComponentName,
+        _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component> {
         let test_component = Self::test_component();
@@ -491,7 +492,7 @@ async fn test_services(
     api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send>,
     security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send>,
 ) {
-    let component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send> =
+    let component_service: Arc<dyn ComponentService<DefaultNamespace, EmptyAuthCtx>> =
         Arc::new(TestComponentService {});
 
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});

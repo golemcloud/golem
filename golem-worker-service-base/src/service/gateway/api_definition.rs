@@ -31,7 +31,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::component::VersionedComponentId;
-use golem_common::model::{ComponentId};
+use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::{Component, ComponentName};
@@ -39,7 +39,7 @@ use golem_service_base::repo::RepoError;
 use rib::RibError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug};
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -197,8 +197,13 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>>;
 
-    fn conversion_context<'a>(&'a self, namespace: &Namespace, auth_ctx: &'a AuthCtx) -> BoxConversionContext<'a>
+    fn conversion_context<'a>(
+        &'a self,
+        namespace: &'a Namespace,
+        auth_ctx: &'a AuthCtx,
+    ) -> BoxConversionContext<'a>
     where
+        Namespace: 'a,
         AuthCtx: 'a;
 }
 
@@ -230,7 +235,9 @@ pub struct DefaultConversionContext<'a, Namespace, AuthCtx> {
 }
 
 #[async_trait]
-impl<AuthCtx: GolemAuthCtx, Namespace: GolemNamespace> ConversionContext for DefaultConversionContext<'_, AuthCtx, Namespace> {
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ConversionContext
+    for DefaultConversionContext<'_, Namespace, AuthCtx>
+{
     async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
         let name = name.clone();
         let component = self
@@ -238,7 +245,7 @@ impl<AuthCtx: GolemAuthCtx, Namespace: GolemNamespace> ConversionContext for Def
             .get_or_insert_simple(&name, async || {
                 let result = self
                     .component_service
-                    .get_by_name(&name, self.namespace.project_id(), self.auth_ctx)
+                    .get_by_name(&name, self.namespace, self.auth_ctx)
                     .await;
 
                 match result {
@@ -651,8 +658,13 @@ impl<AuthCtx: GolemAuthCtx, Namespace: GolemNamespace> ApiDefinitionService<Auth
         Ok(values)
     }
 
-    fn conversion_context<'a>(&'a self, namespace: &Namespace,  auth_ctx: &'a AuthCtx) -> BoxConversionContext<'a>
+    fn conversion_context<'a>(
+        &'a self,
+        namespace: &'a Namespace,
+        auth_ctx: &'a AuthCtx,
+    ) -> BoxConversionContext<'a>
     where
+        Namespace: 'a,
         AuthCtx: 'a,
     {
         DefaultConversionContext {

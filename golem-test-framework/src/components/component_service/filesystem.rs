@@ -350,7 +350,7 @@ impl ComponentService for FileSystemComponentService {
                 let file_name = path.file_name().unwrap().to_str().unwrap();
 
                 if file_name.starts_with(&component_id_str) && file_name.ends_with(".json") {
-                    let version_part = file_name.split('-').last().unwrap();
+                    let version_part = file_name.split('-').next_back().unwrap();
                     let version_part = version_part[..version_part.len() - 5].to_string();
                     version_part.parse::<u64>().ok()
                 } else {

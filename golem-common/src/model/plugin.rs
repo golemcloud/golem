@@ -1,7 +1,6 @@
 use super::PoemMultipartTypeRequirements;
 use crate::model::{
-    AccountId, ComponentId, ComponentVersion, Empty, PluginInstallationId,
-    PoemTypeRequirements,
+    AccountId, ComponentId, ComponentVersion, Empty, PluginInstallationId, PoemTypeRequirements,
 };
 use async_trait::async_trait;
 use serde::de::{MapAccess, Visitor};

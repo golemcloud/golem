@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-use golem_common::model::{AccountId};
+use golem_common::model::{AccountId, ProjectId};
 use serde::{Deserialize, Serialize};
 
 pub trait GolemAuthCtx: Send + Sync + Clone + IntoIterator<Item = (String, String)> {}
@@ -25,8 +25,11 @@ impl IntoIterator for EmptyAuthCtx {
 
 impl GolemAuthCtx for EmptyAuthCtx {}
 
-pub trait GolemNamespace: Send + Sync + Clone + Eq + TryFrom<String, Error = String> + Display + 'static {
+pub trait GolemNamespace:
+    Send + Sync + Clone + Eq + TryFrom<String, Error = String> + Display + 'static
+{
     fn account_id(&self) -> AccountId;
+    fn project_id(&self) -> Option<ProjectId>;
 }
 
 #[derive(
@@ -46,6 +49,9 @@ pub struct DefaultNamespace();
 impl GolemNamespace for DefaultNamespace {
     fn account_id(&self) -> AccountId {
         AccountId::placeholder()
+    }
+    fn project_id(&self) -> Option<ProjectId> {
+        None
     }
 }
 

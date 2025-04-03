@@ -180,7 +180,9 @@ pub struct ApiDeploymentServiceDefault<Namespace, AuthCtx> {
     pub component_service: Arc<dyn ComponentService<Namespace, AuthCtx> + Send + Sync>,
 }
 
-impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentServiceDefault<Namespace, AuthCtx> {
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx>
+    ApiDeploymentServiceDefault<Namespace, AuthCtx>
+{
     pub fn new(
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,

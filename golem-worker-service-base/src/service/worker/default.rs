@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::{
-    AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor, ResponseMapResult, RoutingLogic, WorkerRequestMetadata, WorkerServiceError, WorkerStream
+    AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
+    ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -40,7 +41,6 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, TargetWorkerId,
     WorkerFilter, WorkerId, WorkerStatus,
 };
-use golem_service_base::auth::GolemNamespace;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{
     GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
@@ -57,28 +57,26 @@ use tonic::Code;
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
 #[async_trait]
-pub trait WorkerService<Namespace: GolemNamespace> {
+pub trait WorkerService {
     async fn create(
         &self,
         worker_id: &WorkerId,
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<WorkerId>;
 
     async fn connect(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<WorkerStream<LogEvent>>;
 
     async fn delete(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     fn validate_typed_parameters(
@@ -95,8 +93,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
@@ -105,8 +102,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
             function_name,
             params,
             invocation_context,
-            namespace,
-            metadata
+            metadata,
         )
         .await
     }
@@ -120,8 +116,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
@@ -133,8 +128,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult>;
 
     /// Invokes a worker using JSON value encoding represented by raw strings and awaits its results
@@ -147,8 +141,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
@@ -160,8 +153,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke(
@@ -170,8 +162,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
             function_name,
             params,
             invocation_context,
-            namespace,
-            metadata
+            metadata,
         )
         .await
     }
@@ -185,8 +176,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     /// Enqueues an invocation for the worker without awaiting its results, using JSON value
@@ -199,8 +189,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     async fn complete_promise(
@@ -208,20 +197,20 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<bool>;
 
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<WorkerMetadata>;
 
     async fn find_metadata(
@@ -231,13 +220,13 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
 
     async fn resume(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
         force: bool,
     ) -> WorkerResult<()>;
 
@@ -246,7 +235,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     async fn get_oplog(
@@ -255,7 +244,7 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn search_oplog(
@@ -264,37 +253,35 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn list_directory(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 
     async fn activate_plugin(
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     async fn deactivate_plugin(
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     async fn fork_worker(
@@ -302,27 +289,33 @@ pub trait WorkerService<Namespace: GolemNamespace> {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     async fn revert_worker(
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
     async fn cancel_invocation(
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<bool>;
 }
 
 pub struct TypedResult {
     pub result: TypeAnnotatedValue,
     pub function_result_types: Vec<AnalysedFunctionResult>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkerRequestMetadata {
+    pub account_id: Option<AccountId>,
+    pub limits: Option<ResourceLimits>,
 }
 
 #[derive(Clone)]
@@ -366,15 +359,14 @@ impl HasWorkerExecutorClients for WorkerServiceDefault {
 }
 
 #[async_trait]
-impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefault {
+impl WorkerService for WorkerServiceDefault {
     async fn create(
         &self,
         worker_id: &WorkerId,
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<WorkerId> {
         let worker_id_clone = worker_id.clone();
         self.call_worker_executor(
@@ -387,7 +379,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                     component_version,
                     args: arguments.clone(),
                     env: environment_variables.clone(),
-                    account_id: Some(namespace.account_id().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
                     account_limits: metadata.limits.clone().map(|id| id.into()),
                 }))
             },
@@ -410,8 +402,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
     async fn connect(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<WorkerStream<LogEvent>> {
         let worker_id = worker_id.clone();
         let worker_id_err: WorkerId = worker_id.clone();
@@ -422,7 +413,8 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                 move |worker_executor_client| {
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                     }))
                 },
@@ -444,7 +436,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
     async fn delete(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -457,7 +449,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(
                             worker_id.clone(),
                         )),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                     },
                 ))
             },
@@ -497,8 +489,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -513,7 +504,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
                     }
@@ -556,7 +547,6 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult> {
         let worker_id = worker_id.clone();
@@ -572,7 +562,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
                     }
@@ -615,8 +605,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -631,7 +620,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
                     }
@@ -674,8 +663,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -689,7 +677,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
                         input: params.clone(),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
                     },
@@ -717,8 +705,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -732,7 +719,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
                         input: params.clone(),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
                     },
@@ -758,7 +745,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<bool> {
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
@@ -777,7 +764,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                             .complete_promise(CompletePromiseRequest {
                                 promise_id: Some(promise_id.into()),
                                 data,
-                                account_id: Some(namespace.account_id().into()),
+                                account_id: metadata.account_id.clone().map(|id| id.into()),
                             })
                     )
                 },
@@ -810,7 +797,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -822,7 +809,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                     worker_executor_client.interrupt_worker(InterruptWorkerRequest {
                         worker_id: Some(worker_id.into()),
                         recover_immediately,
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                     }),
                 )
             },
@@ -846,7 +833,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<WorkerMetadata> {
         let worker_id = worker_id.clone();
         let metadata = self.call_worker_executor(
@@ -857,7 +844,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                 Box::pin(worker_executor_client.get_worker_metadata(
                     workerexecutor::v1::GetWorkerMetadataRequest {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                     }
                 ))
             },
@@ -893,7 +880,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
@@ -902,7 +889,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
 
             Ok((None, result.into_iter().take(count as usize).collect()))
         } else {
-            self.find_metadata_internal(component_id, filter, cursor, count, precise, namespace)
+            self.find_metadata_internal(component_id, filter, cursor, count, precise, metadata)
                 .await
         }
     }
@@ -910,7 +897,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
     async fn resume(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
         force: bool,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
@@ -921,7 +908,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    account_id: Some(namespace.account_id().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
                     force: Some(force),
                 }))
             },
@@ -945,7 +932,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -957,7 +944,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                     worker_id: Some(worker_id.into()),
                     mode: update_mode.into(),
                     target_version,
-                    account_id: Some(namespace.account_id().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -981,7 +968,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -995,7 +982,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         from_oplog_index: from_oplog_index.into(),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                     }),
                 )
             },
@@ -1052,7 +1039,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1067,7 +1054,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                         query: query_clone,
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                     }),
                 )
             },
@@ -1113,8 +1100,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1126,7 +1112,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                 Box::pin(
                     worker_executor_client.list_directory(workerexecutor::v1::ListDirectoryRequest {
                         worker_id: Some(worker_id.into()),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         path: path_clone.to_string()
                     }),
@@ -1167,8 +1153,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: Namespace,
-        metadata: WorkerRequestMetadata
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1180,7 +1165,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                     Box::pin(worker_executor_client.get_file_contents(
                         workerexecutor::v1::GetFileContentsRequest {
                             worker_id: Some(worker_id.clone().into()),
-                            account_id: Some(namespace.account_id().into()),
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
                             account_limits: metadata.limits.clone().map(|id| id.into()),
                             file_path: path_clone.to_string(),
                         },
@@ -1259,7 +1244,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         let plugin_installation_id = plugin_installation_id.clone();
@@ -1272,7 +1257,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                     worker_executor_client.activate_plugin(ActivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                     }),
                 )
             },
@@ -1297,7 +1282,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         let plugin_installation_id = plugin_installation_id.clone();
@@ -1310,7 +1295,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                     worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: Some(namespace.account_id().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
                     }),
                 )
             },
@@ -1336,7 +1321,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let source_worker_id = source_worker_id.clone();
         let target_worker_id = target_worker_id.clone();
@@ -1349,7 +1334,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                 Box::pin(worker_executor_client.fork_worker(ForkWorkerRequest {
                     source_worker_id: Some(source_worker_id.into()),
                     target_worker_id: Some(target_worker_id.into()),
-                    account_id: Some(namespace.account_id().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
                     oplog_index_cutoff: oplog_index_cut_off.into(),
                 }))
             },
@@ -1372,7 +1357,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1384,7 +1369,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                 Box::pin(worker_executor_client.revert_worker(RevertWorkerRequest {
                     worker_id: Some(worker_id.into()),
                     target: Some(target.into()),
-                    account_id: Some(namespace.account_id().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1406,7 +1391,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<bool> {
         let worker_id = worker_id.clone();
         let idempotency_key = idempotency_key.clone();
@@ -1419,7 +1404,7 @@ impl<Namespace: GolemNamespace> WorkerService<Namespace> for WorkerServiceDefaul
                 Box::pin(worker_executor_client.cancel_invocation(CancelInvocationRequest {
                     worker_id: Some(worker_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
-                    account_id: Some(namespace.account_id().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1491,14 +1476,14 @@ impl WorkerServiceDefault {
         Ok(result.into_iter().flatten().collect())
     }
 
-    async fn find_metadata_internal<Namespace: GolemNamespace>(
+    async fn find_metadata_internal(
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        namespace: Namespace,
+        metadata: WorkerRequestMetadata,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id = component_id.clone();
         let result = self
@@ -1508,6 +1493,7 @@ impl WorkerServiceDefault {
                 move |worker_executor_client| {
                     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
                         component_id.clone().into();
+                    let account_id = metadata.account_id.clone().map(|id| id.into());
                     Box::pin(worker_executor_client.get_workers_metadata(
                         workerexecutor::v1::GetWorkersMetadataRequest {
                             component_id: Some(component_id),
@@ -1515,7 +1501,7 @@ impl WorkerServiceDefault {
                             cursor: Some(cursor.clone().into()),
                             count,
                             precise,
-                            account_id: Some(namespace.account_id().into()),
+                            account_id,
                         },
                     ))
                 },
