@@ -275,66 +275,59 @@ impl GetTypeHint for InferredType {
     fn get_type_hint(&self) -> TypeHint {
         match self {
             InferredType::Bool => TypeHint::Boolean,
-            InferredType::S8 => TypeHint::Number,
-            InferredType::U8 => TypeHint::Number,
-            InferredType::S16 => TypeHint::Number,
-            InferredType::U16 => TypeHint::Number,
-            InferredType::S32 => TypeHint::Number,
-            InferredType::U32 => TypeHint::Number,
-            InferredType::S64 => TypeHint::Number,
-            InferredType::U64 => TypeHint::Number,
-            InferredType::F32 => TypeHint::Number,
-            InferredType::F64 => TypeHint::Number,
+            InferredType::S8
+            | InferredType::U8
+            | InferredType::S16
+            | InferredType::U16
+            | InferredType::S32
+            | InferredType::U32
+            | InferredType::S64
+            | InferredType::U64
+            | InferredType::F32
+            | InferredType::F64 => TypeHint::Number,
             InferredType::Chr => TypeHint::Char,
             InferredType::Str => TypeHint::Str,
             InferredType::List(inferred_type) => {
-                let inner = inferred_type.get_type_hint();
-                TypeHint::List(Some(Box::new(inner)))
+                TypeHint::List(Some(Box::new(inferred_type.get_type_hint())))
             }
             InferredType::Tuple(tuple) => {
-                let elems = tuple.iter().map(|tpe| tpe.get_type_hint()).collect();
-                TypeHint::Tuple(Some(elems))
+                TypeHint::Tuple(Some(tuple.iter().map(GetTypeHint::get_type_hint).collect()))
             }
-            InferredType::Record(record) => {
-                let fields = record
+            InferredType::Record(record) => TypeHint::Record(Some(
+                record
                     .iter()
-                    .map(|(name, tpe)| (name.clone(), tpe.get_type_hint()))
-                    .collect();
-                TypeHint::Record(Some(fields))
-            }
+                    .map(|(name, tpe)| (name.to_string(), tpe.get_type_hint()))
+                    .collect(),
+            )),
             InferredType::Flags(flags) => {
-                let flags = flags.iter().map(|f| f.to_string()).collect();
-                TypeHint::Flag(Some(flags))
+                TypeHint::Flag(Some(flags.iter().map(|x| x.to_string()).collect()))
             }
             InferredType::Enum(enums) => {
-                let variants = enums.iter().map(|f| f.to_string()).collect();
-                TypeHint::Enum(Some(variants))
+                TypeHint::Enum(Some(enums.iter().map(|s| s.to_string()).collect()))
             }
-            InferredType::Option(inner) => {
-                let inner = inner.get_type_hint();
-                TypeHint::Option(Some(Box::new(inner)))
-            }
-            InferredType::Result { ok, error } => {
-                let ok = ok.as_ref().map(|tpe| tpe.get_type_hint());
-                let error = error.as_ref().map(|tpe| tpe.get_type_hint());
-                TypeHint::Result {
-                    ok: ok.map(Box::new),
-                    err: error.map(Box::new),
-                }
-            }
-            InferredType::Variant(variants) => {
-                let variants = variants
-                    .into_iter()
-                    .map(|(name, tpe)| (name.clone(), tpe.clone().map(|tpe| tpe.get_type_hint())))
-                    .collect();
-                TypeHint::Variant(Some(variants))
-            }
+            InferredType::Option(inner) => TypeHint::Option(Some(Box::new(inner.get_type_hint()))),
+            InferredType::Result { ok, error } => TypeHint::Result {
+                ok: ok.as_ref().map(|tpe| Box::new(tpe.get_type_hint())),
+                err: error.as_ref().map(|tpe| Box::new(tpe.get_type_hint())),
+            },
+            InferredType::Variant(variants) => TypeHint::Variant(Some(
+                variants
+                    .iter()
+                    .map(|(name, tpe)| {
+                        (
+                            name.to_string(),
+                            tpe.as_ref().map(GetTypeHint::get_type_hint),
+                        )
+                    })
+                    .collect(),
+            )),
             InferredType::Resource { .. } => TypeHint::Resource,
-            InferredType::OneOf(possibilities) => internal::get_type_kind(possibilities),
-            InferredType::AllOf(possibilities) => internal::get_type_kind(possibilities),
-            InferredType::Unknown => TypeHint::Unknown,
-            InferredType::Sequence(_) => TypeHint::Unknown,
-            InferredType::Instance { .. } => TypeHint::Unknown,
+            InferredType::OneOf(possibilities) | InferredType::AllOf(possibilities) => {
+                internal::get_type_kind(possibilities)
+            }
+            InferredType::Unknown | InferredType::Sequence(_) | InferredType::Instance { .. } => {
+                TypeHint::Unknown
+            }
             InferredType::Range { .. } => TypeHint::Range,
         }
     }
