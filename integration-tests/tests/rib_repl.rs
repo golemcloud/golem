@@ -143,24 +143,6 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     );
 }
 
-#[test]
-async fn test_rib_repl_real(deps: &EnvBasedTestDependencies) {
-    let mut rib_repl = RibRepl::bootstrap(
-        None,
-        Arc::new(TestRibReplDependencyManager::new(deps.clone())),
-        Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
-        Box::new(DefaultResultPrinter),
-        Some(ComponentDetails {
-            component_name: "pricing".to_string(),
-            source_path: deps.component_directory().join("pricing.wasm"),
-        }),
-    )
-    .await
-    .expect("Failed to bootstrap REPL");
-
-    rib_repl.run().await
-}
-
 struct TestRibReplDependencyManager {
     dependencies: EnvBasedTestDependencies,
 }
