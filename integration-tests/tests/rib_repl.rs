@@ -11,25 +11,28 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use test_r::{test};
+use test_r::test;
 
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{ValueAndType};
+use golem_wasm_rpc::{Value, ValueAndType};
 use std::path::Path;
-use std::sync::{Arc};
+use std::sync::Arc;
 use tracing::Instrument;
 
 use crate::Tracing;
-use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use async_trait::async_trait;
-use test_r::inherit_test_dep;
-use uuid::Uuid;
-use golem_rib_repl::dependency_manager::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
+use golem_common::model::{ComponentId, TargetWorkerId};
+use golem_rib_repl::dependency_manager::{
+    ReplDependencies, RibComponentMetadata, RibDependencyManager,
+};
 use golem_rib_repl::invoke::WorkerFunctionInvoke;
 use golem_rib_repl::repl_printer::DefaultResultPrinter;
 use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibResult};
+use test_r::inherit_test_dep;
+use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -44,33 +47,102 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
         Box::new(DefaultResultPrinter),
         Some(ComponentDetails {
             component_name: "shopping-cart".to_string(),
-            source_path: deps
-                .component_directory()
-                .join("shopping-cart.wasm"),
+            source_path: deps.component_directory().join("shopping-cart.wasm"),
         }),
-    ).await.expect("Failed to bootstrap REPL");
+    )
+    .await
+    .expect("Failed to bootstrap REPL");
 
-    let command1 = r#"
+    let rib1 = r#"
       let worker = instance("my_worker")
     "#;
 
-
-    let command2 = r#"
+    let rib2 = r#"
       let result = worker.add(1, 2)
     "#;
 
+    let rib3 = r#"
+      worker.get-cart-contents()
+     "#;
 
-    let result =
-        rib_repl.process_command(command1).await.expect("Failed to process command");
+    let rib4 = r#"
+      worker.add-item({
+        product-id: "123",
+        name: "item1",
+        price: 10.0,
+        quantity: 2
+      })
+    "#;
+
+    let rib5 = r#"
+      worker.get-cart-contents()
+     "#;
+
+    let result = rib_repl
+        .process_command(rib1)
+        .await
+        .expect("Failed to process command");
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result =
-        rib_repl.process_command(command2).await;
+    let result = rib_repl
+        .process_command(rib2)
+        .await
+        .map_err(|err| err.to_string());
 
-    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("function 'add' not found"));
+
+    let result = rib_repl
+        .process_command(rib3)
+        .await
+        .map_err(|err| err.to_string())
+        .expect("Failed to process rib");
+
+    assert_eq!(
+        result,
+        Some(RibResult::Val(ValueAndType::new(
+            Value::List(vec![]),
+            list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ],),),
+        )))
+    );
+
+    let result = rib_repl
+        .process_command(rib4)
+        .await
+        .map_err(|err| err.to_string())
+        .expect("Failed to process rib");
+
+    assert_eq!(result, Some(RibResult::Unit));
+
+    let result = rib_repl
+        .process_command(rib5)
+        .await
+        .map_err(|err| err.to_string())
+        .expect("Failed to process rib");
+
+    assert_eq!(
+        result,
+        Some(RibResult::Val(ValueAndType::new(
+            Value::List(vec![Value::Record(vec![
+                Value::String("123".to_string()),
+                Value::String("item1".to_string()),
+                Value::F32(10.0),
+                Value::U32(2),
+            ])]),
+            list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ],)),
+        )))
+    );
 }
-
 
 struct TestRibReplDependencyManager {
     dependencies: EnvBasedTestDependencies,
@@ -88,9 +160,16 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         Err("test will need to run with a single component".to_string())
     }
 
-    async fn add_component(&self, source_path: &Path, component_name: String) -> Result<RibComponentMetadata, String> {
+    async fn add_component(
+        &self,
+        source_path: &Path,
+        component_name: String,
+    ) -> Result<RibComponentMetadata, String> {
         let component_id = self.dependencies.component("shopping-cart").store().await;
-        let metadata = self.dependencies.get_latest_component_metadata(&component_id).await;
+        let metadata = self
+            .dependencies
+            .get_latest_component_metadata(&component_id)
+            .await;
         Ok(RibComponentMetadata {
             component_id: component_id.0,
             metadata: metadata.exports,
@@ -98,10 +177,9 @@ impl RibDependencyManager for TestRibReplDependencyManager {
     }
 }
 
-
 // Embedded RibFunctionInvoke implementation
 pub struct TestRibReplWorkerFunctionInvoke {
-    embedded_worker_executor: EnvBasedTestDependencies
+    embedded_worker_executor: EnvBasedTestDependencies,
 }
 
 impl TestRibReplWorkerFunctionInvoke {

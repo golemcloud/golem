@@ -21,8 +21,8 @@ use test_r::test_dep;
 test_r::enable!();
 
 mod fork;
-mod worker;
 mod rib_repl;
+mod worker;
 
 #[derive(Debug)]
 pub struct Tracing;
