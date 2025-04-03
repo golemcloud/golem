@@ -343,7 +343,7 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
 impl From<AmbiguousTypeError> for RibCompilationError {
     fn from(value: AmbiguousTypeError) -> Self {
         let cause = format!(
-            "The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: {}",
+            "ambiguous types: {}",
             value
                 .ambiguous_types
                 .iter()
@@ -352,17 +352,12 @@ impl From<AmbiguousTypeError> for RibCompilationError {
                 .join(", ")
         );
 
-        let help_messages = vec![
-            "ensure this expression is only used in contexts that align with its actual type"
-                .to_string(),
-        ];
-
         RibCompilationError {
             cause,
             expr: value.expr,
             immediate_parent: None,
             additional_error_details: value.additional_error_details,
-            help_messages,
+            help_messages: vec![],
         }
     }
 }

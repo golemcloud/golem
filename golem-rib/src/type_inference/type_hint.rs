@@ -323,7 +323,7 @@ impl GetTypeHint for InferredType {
             )),
             InferredType::Resource { .. } => TypeHint::Resource,
             InferredType::OneOf(possibilities) | InferredType::AllOf(possibilities) => {
-                internal::get_type_kind(possibilities)
+                get_type_kind(possibilities)
             }
             InferredType::Unknown | InferredType::Sequence(_) | InferredType::Instance { .. } => {
                 TypeHint::Unknown
@@ -333,22 +333,17 @@ impl GetTypeHint for InferredType {
     }
 }
 
-mod internal {
-    use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
-    use crate::InferredType;
-
-    pub(crate) fn get_type_kind(possibilities: &[InferredType]) -> TypeHint {
-        if let Some(first) = possibilities.first() {
-            let first = first.get_type_hint();
-            if possibilities.iter().all(|p| p.get_type_hint() == first) {
-                first
-            } else {
-                TypeHint::Ambiguous {
-                    possibilities: possibilities.iter().map(|p| p.get_type_hint()).collect(),
-                }
-            }
+fn get_type_kind(possibilities: &[InferredType]) -> TypeHint {
+    if let Some(first) = possibilities.first() {
+        let first = first.get_type_hint();
+        if possibilities.iter().all(|p| p.get_type_hint() == first) {
+            first
         } else {
-            TypeHint::Unknown
+            TypeHint::Ambiguous {
+                possibilities: possibilities.iter().map(|p| p.get_type_hint()).collect(),
+            }
         }
+    } else {
+        TypeHint::Unknown
     }
 }
