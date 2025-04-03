@@ -1192,7 +1192,7 @@ impl DynamicRpcResource {
             && resource_name.ends_with("-result")
             && methods
                 .iter()
-                .filter_map(|m| m.method_name.split('.').last().map(|s| s.to_string()))
+                .filter_map(|m| m.method_name.split('.').next_back().map(|s| s.to_string()))
                 .sorted()
                 .collect::<Vec<_>>()
                 == vec!["get".to_string(), "subscribe".to_string()]
