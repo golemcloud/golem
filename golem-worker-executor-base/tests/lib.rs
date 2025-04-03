@@ -64,8 +64,8 @@ pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
 pub mod transactions;
-pub mod ts_rpc1;
-pub mod ts_rpc2;
+pub mod ts_rpc1_stubless;
+pub mod ts_rpc2_stubless;
 pub mod wasi;
 
 test_r::enable!();
