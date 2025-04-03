@@ -164,7 +164,11 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         _source_path: &Path,
         component_name: String,
     ) -> Result<RibComponentMetadata, String> {
-        let component_id = self.dependencies.component(component_name.as_str()).store().await;
+        let component_id = self
+            .dependencies
+            .component(component_name.as_str())
+            .store()
+            .await;
         let metadata = self
             .dependencies
             .get_latest_component_metadata(&component_id)
