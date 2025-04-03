@@ -263,14 +263,14 @@ mod internal {
     ) -> Result<(), RibCompilationError> {
         update_yield_expr_in_list_comprehension(variable_id, iterable_expr, yield_expr)?;
 
-        let refined_list_type = ListType::refine(comprehension_result_type).ok_or_else(||
+        let refined_list_type = ListType::refine(comprehension_result_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 comprehension_result_type,
                 yield_expr,
                 &TypeHint::List(None),
             )
-            .with_additional_error_detail("the result of a comprehension should be of type list"),
-        )?;
+            .with_additional_error_detail("the result of a comprehension should be of type list")
+        })?;
 
         let inner_type = refined_list_type.inner_type();
 
@@ -409,13 +409,13 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or_else(||
+        let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
                 &outer_expr,
                 &TypeHint::Option(None),
-            ),
-        )?;
+            )
+        })?;
 
         let inner_type = refined_optional_type.inner_type();
 
@@ -428,17 +428,16 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_ok_type =
-            OkType::refine(outer_inferred_type).ok_or_else(||{
-                get_compilation_error_for_ambiguity(
-                    outer_inferred_type,
-                    &outer_expr,
-                    &TypeHint::Result {
-                        ok: None,
-                        err: None,
-                    },
-                )
-            })?;
+        let refined_ok_type = OkType::refine(outer_inferred_type).ok_or_else(|| {
+            get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeHint::Result {
+                    ok: None,
+                    err: None,
+                },
+            )
+        })?;
 
         let inner_type = refined_ok_type.inner_type();
 
@@ -452,18 +451,17 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        dbg!(outer_inferred_type.clone());
-        let refined_err_type =
-            ErrType::refine(outer_inferred_type).ok_or_else(||{
-                get_compilation_error_for_ambiguity(
-                    outer_inferred_type,
-                    &outer_expr,
-                    &TypeHint::Result {
-                        ok: None,
-                        err: None,
-                    },
-                )
-            })?;
+        let refined_err_type = ErrType::refine(outer_inferred_type).ok_or_else(|| {
+            get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeHint::Result {
+                    ok: None,
+                    err: None,
+                },
+            )
+        })?;
+
         let inner_type = refined_err_type.inner_type();
 
         inner_expr.add_infer_type_mut(inner_type.clone());
@@ -476,9 +474,13 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_list_type = ListType::refine(outer_inferred_type).ok_or_else(||
-            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeHint::List(None)),
-        )?;
+        let refined_list_type = ListType::refine(outer_inferred_type).ok_or_else(|| {
+            get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeHint::List(None),
+            )
+        })?;
         let inner_type = refined_list_type.inner_type();
 
         for expr in inner_expressions.iter_mut() {
@@ -493,9 +495,13 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or_else(||
-            get_compilation_error_for_ambiguity(outer_inferred_type, &outer_expr, &TypeHint::Tuple(None)),
-        )?;
+        let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or_else(|| {
+            get_compilation_error_for_ambiguity(
+                outer_inferred_type,
+                &outer_expr,
+                &TypeHint::Tuple(None),
+            )
+        })?;
         let inner_types = refined_tuple_type.inner_types();
 
         for (expr, typ) in inner_expressions.iter_mut().zip(inner_types) {
@@ -510,12 +516,13 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibCompilationError> {
-        let refined_record_type =
-            RecordType::refine(outer_inferred_type).ok_or_else(||get_compilation_error_for_ambiguity(
+        let refined_record_type = RecordType::refine(outer_inferred_type).ok_or_else(|| {
+            get_compilation_error_for_ambiguity(
                 outer_inferred_type,
                 &outer_expr,
                 &TypeHint::Record(None),
-            ))?;
+            )
+        })?;
 
         for (field, expr) in inner_expressions {
             let inner_type = refined_record_type.inner_type_by_name(field);
@@ -575,13 +582,13 @@ mod internal {
 
             ArmPattern::Constructor(constructor_name, patterns) => {
                 if constructor_name == "some" || constructor_name == "none" {
-                    let resolved = OptionalType::refine(predicate_type).ok_or_else(||
+                    let resolved = OptionalType::refine(predicate_type).ok_or_else(|| {
                         InvalidPatternMatchError::constructor_type_mismatch(
                             original_predicate,
                             pattern_match_expr,
                             constructor_name,
-                        ),
-                    )?;
+                        )
+                    })?;
 
                     let inner = resolved.inner_type();
 
@@ -611,13 +618,13 @@ mod internal {
                         }
 
                         None => {
-                            ErrType::refine(predicate_type).ok_or_else(||
+                            ErrType::refine(predicate_type).ok_or_else(|| {
                                 InvalidPatternMatchError::constructor_type_mismatch(
                                     original_predicate,
                                     pattern_match_expr,
                                     "ok",
-                                ),
-                            )?;
+                                )
+                            })?;
                         }
                     }
                 } else if constructor_name == "err" {
@@ -638,13 +645,13 @@ mod internal {
                         }
 
                         None => {
-                            OkType::refine(predicate_type).ok_or_else(||
+                            OkType::refine(predicate_type).ok_or_else(|| {
                                 InvalidPatternMatchError::constructor_type_mismatch(
                                     original_predicate,
                                     pattern_match_expr,
                                     "err",
-                                ),
-                            )?;
+                                )
+                            })?;
                         }
                     }
                 } else if let Some(variant_type) = VariantType::refine(predicate_type) {
@@ -661,13 +668,13 @@ mod internal {
             }
 
             ArmPattern::TupleConstructor(patterns) => {
-                let tuple_type = TupleType::refine(predicate_type).ok_or_else(||
+                let tuple_type = TupleType::refine(predicate_type).ok_or_else(|| {
                     InvalidPatternMatchError::constructor_type_mismatch(
                         original_predicate,
                         pattern_match_expr,
                         "tuple",
-                    ),
-                )?;
+                    )
+                })?;
 
                 let inner_types = tuple_type.inner_types();
 
@@ -693,13 +700,13 @@ mod internal {
             }
 
             ArmPattern::ListConstructor(patterns) => {
-                let list_type = ListType::refine(predicate_type).ok_or_else(||
+                let list_type = ListType::refine(predicate_type).ok_or_else(|| {
                     InvalidPatternMatchError::constructor_type_mismatch(
                         original_predicate,
                         pattern_match_expr,
                         "list",
-                    ),
-                )?;
+                    )
+                })?;
 
                 let list_elem_type = list_type.inner_type();
 
@@ -714,13 +721,13 @@ mod internal {
             }
 
             ArmPattern::RecordConstructor(fields) => {
-                let record_type = RecordType::refine(predicate_type).ok_or_else(||
+                let record_type = RecordType::refine(predicate_type).ok_or_else(|| {
                     InvalidPatternMatchError::constructor_type_mismatch(
                         original_predicate,
                         pattern_match_expr,
                         "record",
-                    ),
-                )?;
+                    )
+                })?;
 
                 for (field, pattern) in fields {
                     let type_of_field = record_type.inner_type_by_name(field);
@@ -772,9 +779,7 @@ mod internal {
                         .into()
                     }
 
-                    _ => {
-                        AmbiguousTypeError::new(actual_inferred_type, expr, push_down_kind).into()
-                    },
+                    _ => AmbiguousTypeError::new(actual_inferred_type, expr, push_down_kind).into(),
                 }
             }
         }

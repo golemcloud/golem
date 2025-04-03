@@ -1428,7 +1428,10 @@ mod tests {
         compiler, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId,
         Path, VariableId,
     };
-    use golem_wasm_ast::analysis::analysed_type::{bool, case, f32, field, list, option, record, result, s32, s8, str, tuple, u32, u64, u8, variant};
+    use golem_wasm_ast::analysis::analysed_type::{
+        bool, case, f32, field, list, option, record, result, s32, s8, str, tuple, u32, u64, u8,
+        variant,
+    };
     use golem_wasm_rpc::{parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -2280,7 +2283,7 @@ mod tests {
 
         let expected = ValueAndType::new(
             Value::Result(Ok(Some(Box::new(Value::U64(1))))),
-            result(u64(), str())
+            result(u64(), str()),
         );
 
         assert_eq!(rib_result.get_val().unwrap(), expected);

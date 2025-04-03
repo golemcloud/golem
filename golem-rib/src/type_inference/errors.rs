@@ -34,7 +34,10 @@ impl AmbiguousTypeError {
         let actual_kind = inferred_expr.get_type_hint();
         match actual_kind {
             TypeHint::Ambiguous { possibilities } => {
-                let possibilities = possibilities.into_iter().map(|x| x.to_string()).collect::<Vec<_>>();
+                let possibilities = possibilities
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>();
 
                 AmbiguousTypeError {
                     expr: expr.clone(),
@@ -42,12 +45,10 @@ impl AmbiguousTypeError {
                     additional_error_details: vec![],
                 }
             }
-            _ => {
-                AmbiguousTypeError {
-                    expr: expr.clone(),
-                    ambiguous_types: vec![expected.to_string(), inferred_expr.printable()],
-                    additional_error_details: vec![],
-                }
+            _ => AmbiguousTypeError {
+                expr: expr.clone(),
+                ambiguous_types: vec![expected.to_string(), inferred_expr.printable()],
+                additional_error_details: vec![],
             },
         }
     }

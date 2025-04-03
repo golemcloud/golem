@@ -23,7 +23,6 @@
 # - `cargo make elastic-up`: starts elastic, kibana, filebeat (in detached mode) and loads logs into elastic
 # - `cargo make elastic-stop`: stops the elastic env
 # - `cargo make elastic-down`: stops and removes the elastic env, including all stored data
-# - `cargo make rib-repl`: run rib repl in test mode
 
 [config]
 default_to_workspace = false # by default, we run cargo commands on top level instead of per member
@@ -810,11 +809,4 @@ docker compose --project-directory log-tools/elastic stop
 description = "Stops and removes the elastic environment, including all data"
 script = '''
 docker compose --project-directory log-tools/elastic down --volumes
-'''
-
-## ** RUN RIB REPL **
-[tasks.rib-repl]
-description = "Run a Rib REPL that uses test-components"
-script = '''
-cargo run --bin rib-repl
 '''

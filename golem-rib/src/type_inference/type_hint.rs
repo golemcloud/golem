@@ -17,7 +17,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::ops::Deref;
 
-
 // A`TypeHint` is a simplified representation of InferredType (lower level compiler type), which may
 // represent a `kind` of type, but not the full type. That said, there will be stages of compilation
 // a type-hint can be one to one with analysed_type.
@@ -56,7 +55,9 @@ pub enum TypeHint {
     Resource,
     Variant(Option<Vec<(String, Option<TypeHint>)>>),
     Unknown,
-    Ambiguous { possibilities: Vec<TypeHint> },
+    Ambiguous {
+        possibilities: Vec<TypeHint>,
+    },
     Range,
 }
 
@@ -171,7 +172,12 @@ impl fmt::Display for TypeHint {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}: {}", name, kind.clone().map_or("_".to_string(), |x| x.to_string()))?;
+                    write!(
+                        f,
+                        "{}: {}",
+                        name,
+                        kind.clone().map_or("_".to_string(), |x| x.to_string())
+                    )?;
                 }
                 write!(f, "}}")
             }
@@ -193,22 +199,19 @@ impl fmt::Display for TypeHint {
     }
 }
 
-
 impl GetTypeHint for AnalysedType {
     fn get_type_hint(&self) -> TypeHint {
         match self {
             AnalysedType::Record(fields) => {
-                let fields = fields.fields
+                let fields = fields
+                    .fields
                     .iter()
                     .map(|name_tpe| (name_tpe.name.clone(), name_tpe.typ.get_type_hint()))
                     .collect();
                 TypeHint::Record(Some(fields))
             }
             AnalysedType::Tuple(elems) => {
-                let elems = elems.items
-                    .iter()
-                    .map(|tpe| tpe.get_type_hint())
-                    .collect();
+                let elems = elems.items.iter().map(|tpe| tpe.get_type_hint()).collect();
                 TypeHint::Tuple(Some(elems))
             }
             AnalysedType::Flags(flags) => {
@@ -252,9 +255,15 @@ impl GetTypeHint for AnalysedType {
             }
             AnalysedType::Handle(_) => TypeHint::Resource,
             AnalysedType::Variant(variants) => {
-                let variants = variants.cases
+                let variants = variants
+                    .cases
                     .iter()
-                    .map(|name_tpe| (name_tpe.name.clone(), name_tpe.typ.clone().map(|tpe| tpe.get_type_hint())))
+                    .map(|name_tpe| {
+                        (
+                            name_tpe.name.clone(),
+                            name_tpe.typ.clone().map(|tpe| tpe.get_type_hint()),
+                        )
+                    })
                     .collect();
                 TypeHint::Variant(Some(variants))
             }
@@ -283,10 +292,7 @@ impl GetTypeHint for InferredType {
                 TypeHint::List(Some(Box::new(inner)))
             }
             InferredType::Tuple(tuple) => {
-                let elems = tuple
-                    .iter()
-                    .map(|tpe| tpe.get_type_hint())
-                    .collect();
+                let elems = tuple.iter().map(|tpe| tpe.get_type_hint()).collect();
                 TypeHint::Tuple(Some(elems))
             }
             InferredType::Record(record) => {
@@ -301,10 +307,7 @@ impl GetTypeHint for InferredType {
                 TypeHint::Flag(Some(flags))
             }
             InferredType::Enum(enums) => {
-                let variants = enums
-                    .iter()
-                    .map(|f| f.to_string())
-                    .collect();
+                let variants = enums.iter().map(|f| f.to_string()).collect();
                 TypeHint::Enum(Some(variants))
             }
             InferredType::Option(inner) => {

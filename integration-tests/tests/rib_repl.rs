@@ -155,10 +155,10 @@ async fn test_rib_repl_real(deps: &EnvBasedTestDependencies) {
             source_path: deps.component_directory().join("pricing.wasm"),
         }),
     )
-        .await
-        .expect("Failed to bootstrap REPL");
+    .await
+    .expect("Failed to bootstrap REPL");
 
-   rib_repl.run().await
+    rib_repl.run().await
 }
 
 struct TestRibReplDependencyManager {

@@ -1,22 +1,29 @@
-use std::path::Path;
-use std::sync::Arc;
 use async_trait::async_trait;
-use uuid::Uuid;
 use golem_common::base_model::{ComponentId, TargetWorkerId};
-use golem_rib_repl::dependency_manager::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
+use golem_rib_repl::dependency_manager::{
+    ReplDependencies, RibComponentMetadata, RibDependencyManager,
+};
 use golem_rib_repl::invoke::WorkerFunctionInvoke;
 use golem_rib_repl::repl_printer::DefaultResultPrinter;
 use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
-use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::ValueAndType;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName};
+use std::path::Path;
+use std::sync::Arc;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
-    let deps = EnvBasedTestDependencies::new(
-        EnvBasedTestDependenciesConfig::new()
-    ).await;
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig::new()).await;
+
+    // component name from args
+    let component_name = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "shopping-cart".to_string());
 
     let mut rib_repl = RibRepl::bootstrap(
         None,
@@ -24,12 +31,14 @@ async fn main() {
         Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
         Box::new(DefaultResultPrinter),
         Some(ComponentDetails {
-            component_name: "pricing".to_string(),
-            source_path: deps.component_directory().join("pricing.wasm"),
+            component_name: component_name.to_string(),
+            source_path: deps
+                .component_directory()
+                .join(format!("{}.wasm", component_name)),
         }),
     )
-        .await
-        .expect("Failed to bootstrap REPL");
+    .await
+    .expect("Failed to bootstrap REPL");
 
     rib_repl.run().await
 }
@@ -37,7 +46,6 @@ async fn main() {
 struct TestRibReplDependencyManager {
     dependencies: EnvBasedTestDependencies,
 }
-
 
 impl TestRibReplDependencyManager {
     fn new(dependencies: EnvBasedTestDependencies) -> Self {
