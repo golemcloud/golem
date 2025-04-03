@@ -17,12 +17,21 @@ use crate::compiler::ir::RibIR;
 use crate::{Expr, InferredExpr, InstructionId};
 use bincode::{Decode, Encode};
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, Default, PartialEq, Encode, Decode)]
 pub struct RibByteCode {
     pub instructions: Vec<RibIR>,
 }
 
 impl RibByteCode {
+    pub fn diff(&self, previous: &RibByteCode) -> RibByteCode {
+        let mut diff = RibByteCode::default();
+        for (i, instruction) in self.instructions.iter().enumerate() {
+            if i >= previous.instructions.len() {
+                diff.instructions.push(instruction.clone());
+            }
+        }
+        diff
+    }
     // Convert expression to bytecode instructions
     pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibByteCode, String> {
         let expr: &Expr = inferred_expr.get_expr();

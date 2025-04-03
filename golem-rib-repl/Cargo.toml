@@ -1,0 +1,38 @@
+[package]
+name = "golem-rib-repl"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Repl for Rib language"
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[dependencies]
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
+    "analysis",
+    "bincode",
+] }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+colored = { workspace = true }
+dirs = { workspace = true }
+prometheus = { workspace = true }
+rustyline = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+
+

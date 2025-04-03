@@ -1785,7 +1785,7 @@ mod tests {
                     )
                     .with_inferred_type(InferredType::Str),
                 ),
-                inferred_type: InferredType::Unknown,
+                inferred_type: InferredType::Tuple(vec![]),
                 source_span: SourceSpan::default(),
             },
             Expr::Let {
@@ -1815,7 +1815,7 @@ mod tests {
                     )
                     .with_inferred_type(InferredType::U64),
                 ),
-                inferred_type: InferredType::Unknown,
+                inferred_type: InferredType::Tuple(vec![]),
                 source_span: SourceSpan::default(),
             },
             Expr::Identifier {
