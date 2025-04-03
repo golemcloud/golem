@@ -3304,14 +3304,9 @@ dependencies = [
  "async-trait",
  "colored",
  "dirs",
- "golem-api-grpc",
- "golem-common",
  "golem-rib",
- "golem-service-base",
- "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-worker-executor-base",
  "prometheus",
  "rustyline",
  "serde_json",
@@ -3320,9 +3315,6 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
- "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-http",
 ]
 
 [[package]]

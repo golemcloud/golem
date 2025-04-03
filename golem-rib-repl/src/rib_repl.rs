@@ -7,9 +7,9 @@ use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
 use golem_wasm_rpc::ValueAndType;
-use rib::{RibError, RibFunctionInvoke};
 use rib::RibResult;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
+use rib::{RibError, RibFunctionInvoke};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -99,10 +99,7 @@ impl RibRepl {
         })
     }
 
-    pub async fn process_command(
-        &mut self,
-        prompt: &str,
-    ) -> Result<Option<RibResult>, RibError> {
+    pub async fn process_command(&mut self, prompt: &str) -> Result<Option<RibResult>, RibError> {
         if !prompt.is_empty() {
             self.update_rib_text_in_session(prompt);
 
@@ -119,13 +116,11 @@ impl RibRepl {
                     helper.update_progression(&compilation);
 
                     // Before evaluation
-                    let result =
-                        eval(compilation.rib_byte_code, &mut self.repl_state).await;
+                    let result = eval(compilation.rib_byte_code, &mut self.repl_state).await;
                     match result {
                         Ok(result) => {
                             self.printer.print_rib_result(&result);
                             Ok(Some(result))
-
                         }
                         Err(err) => {
                             self.remove_rib_text_in_session();
@@ -150,7 +145,7 @@ impl RibRepl {
             let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
             match readline {
                 Ok(line) => {
-                   let _ = self.process_command(&line).await;
+                    let _ = self.process_command(&line).await;
                 }
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,
