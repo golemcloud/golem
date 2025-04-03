@@ -4453,6 +4453,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-rib",
+ "golem-rib-repl",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",

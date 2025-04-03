@@ -7,7 +7,7 @@ use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
 use golem_wasm_rpc::ValueAndType;
-use rib::RibFunctionInvoke;
+use rib::{RibError, RibFunctionInvoke};
 use rib::RibResult;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
 use rustyline::error::ReadlineError;
@@ -24,6 +24,10 @@ pub struct RibRepl {
 }
 
 impl RibRepl {
+    pub fn read_line(&mut self) -> rustyline::Result<String> {
+        self.editor.readline(">>> ".magenta().to_string().as_str())
+    }
+
     pub async fn bootstrap(
         history_file: Option<PathBuf>,
         dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
@@ -95,45 +99,59 @@ impl RibRepl {
         })
     }
 
+    pub async fn process_command(
+        &mut self,
+        prompt: &str,
+    ) -> Result<Option<RibResult>, RibError> {
+        if !prompt.is_empty() {
+            self.update_rib_text_in_session(prompt);
+
+            // Add every rib script into the history (in memory) and save it
+            // regardless of whether it compiles or not
+            // History is never used for any progressive compilation or interpretation
+            let _ = self.editor.add_history_entry(prompt);
+            let _ = self.editor.save_history(&self.history_file_path);
+
+            match compile_rib_script(&self.current_rib_program(), &mut self.repl_state) {
+                Ok(compilation) => {
+                    let helper = self.editor.helper_mut().unwrap();
+
+                    helper.update_progression(&compilation);
+
+                    // Before evaluation
+                    let result =
+                        eval(compilation.rib_byte_code, &mut self.repl_state).await;
+                    match result {
+                        Ok(result) => {
+                            self.printer.print_rib_result(&result);
+                            Ok(Some(result))
+
+                        }
+                        Err(err) => {
+                            self.remove_rib_text_in_session();
+                            self.printer.print_runtime_error(&err);
+                            Err(RibError::InternalError(err))
+                        }
+                    }
+                }
+                Err(err) => {
+                    self.remove_rib_text_in_session();
+                    self.printer.print_rib_error(&err);
+                    Err(RibError::InternalError(err.to_string()))
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn run(&mut self) {
         loop {
             let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
             match readline {
-                Ok(line) if !line.is_empty() => {
-                    self.update_rib_text_in_session(line.as_str());
-
-                    // Add every rib script into the history (in memory) and save it
-                    // regardless of whether it compiles or not
-                    // History is never used for any progressive compilation or interpretation
-                    let _ = self.editor.add_history_entry(line.as_str());
-                    let _ = self.editor.save_history(&self.history_file_path);
-
-                    match compile_rib_script(&self.current_rib_program(), &mut self.repl_state) {
-                        Ok(compilation) => {
-                            let helper = self.editor.helper_mut().unwrap();
-
-                            helper.update_progression(&compilation);
-
-                            // Before evaluation
-                            let result =
-                                eval(compilation.rib_byte_code, &mut self.repl_state).await;
-                            match result {
-                                Ok(result) => {
-                                    self.printer.print_rib_result(&result);
-                                }
-                                Err(err) => {
-                                    self.remove_rib_text_in_session();
-                                    self.printer.print_runtime_error(&err);
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            self.remove_rib_text_in_session();
-                            self.printer.print_rib_error(&err);
-                        }
-                    }
+                Ok(line) => {
+                   let _ = self.process_command(&line).await;
                 }
-                Ok(_) => continue,
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,
             }
@@ -174,6 +192,7 @@ fn get_default_history_file() -> PathBuf {
     path
 }
 
+#[derive(Debug, Clone)]
 pub enum ReplBootstrapError {
     // Currently not supported
     // So either the context should have only 1 component

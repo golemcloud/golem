@@ -22,6 +22,7 @@ test_r::enable!();
 
 mod fork;
 mod worker;
+mod rib_repl;
 
 #[derive(Debug)]
 pub struct Tracing;
