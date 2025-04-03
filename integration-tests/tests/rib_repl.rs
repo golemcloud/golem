@@ -17,7 +17,6 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::path::Path;
 use std::sync::Arc;
-use tracing::Instrument;
 
 use crate::Tracing;
 use async_trait::async_trait;
@@ -162,10 +161,10 @@ impl RibDependencyManager for TestRibReplDependencyManager {
 
     async fn add_component(
         &self,
-        source_path: &Path,
+        _source_path: &Path,
         component_name: String,
     ) -> Result<RibComponentMetadata, String> {
-        let component_id = self.dependencies.component("shopping-cart").store().await;
+        let component_id = self.dependencies.component(component_name.as_str()).store().await;
         let metadata = self
             .dependencies
             .get_latest_component_metadata(&component_id)
