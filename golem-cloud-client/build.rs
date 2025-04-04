@@ -68,6 +68,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "InitialComponentFile",
                 "golem_common::model::InitialComponentFile",
             ),
+            ("ErrorBody", "golem_client::model::ErrorBody"),
+            ("ErrorsBody", "golem_client::model::ErrorsBody"),
             ("GolemError", "golem_client::model::GolemError"),
             ("MethodPattern", "golem_client::model::MethodPattern"),
             (

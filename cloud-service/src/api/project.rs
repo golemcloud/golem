@@ -5,12 +5,12 @@ use crate::service::project::ProjectService;
 use crate::service::project_auth::ProjectAuthorisationService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::ProjectAction;
+use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
-use golem_service_base::model::ErrorBody;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;

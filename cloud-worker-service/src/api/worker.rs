@@ -13,6 +13,9 @@ use cloud_common::model::{ProjectAction, TokenSecret};
 use futures::StreamExt;
 use futures_util::TryStreamExt;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{
+    ErrorBody, ErrorsBody, GolemError, GolemErrorBody, GolemErrorUnknown,
+};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
@@ -762,7 +765,7 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::WorkerMetadata>> {
+    ) -> Result<Json<model::WorkerMetadata>> {
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
@@ -832,7 +835,7 @@ impl WorkerApi {
         /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
         precise: Query<Option<bool>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+    ) -> Result<Json<model::WorkersMetadataResponse>> {
         let record = recorded_http_api_request!(
             "get_workers_metadata",
             component_id = component_id.0.to_string()

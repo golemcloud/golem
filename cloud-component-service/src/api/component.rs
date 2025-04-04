@@ -3,6 +3,8 @@ use crate::model::{Component, ComponentQuery};
 use crate::service::component::CloudComponentService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use futures_util::TryStreamExt;
+use golem_common::model::component::VersionedComponentId;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
@@ -14,7 +16,7 @@ use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
     DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
-use golem_service_base::model::{ComponentName, ErrorBody, ErrorsBody, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
 use poem::Body;
 use poem_openapi::param::{Path, Query};

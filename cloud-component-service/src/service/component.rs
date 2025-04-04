@@ -7,6 +7,7 @@ use cloud_common::clients::limit::LimitService;
 use cloud_common::clients::project::ProjectService;
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, ProjectAction};
 use futures_util::stream::BoxStream;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{

@@ -3,6 +3,7 @@ use crate::service::component::CloudComponentService;
 use async_trait::async_trait;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::model::CloudComponentOwner;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::{ComponentPluginScope, PluginInstallation};
@@ -10,7 +11,7 @@ use golem_common::model::{
     AccountId, ComponentId, ComponentType, Empty, InitialComponentFile, ProjectId,
 };
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use poem::web::Field;
 use poem_openapi::types::{ParseError, ParseFromMultipartField, ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};

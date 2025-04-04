@@ -4,9 +4,9 @@ use crate::service::account_summary::{AccountSummaryService, AccountSummaryServi
 use crate::service::auth::{AuthService, AuthServiceError};
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::ErrorBody;
 use golem_common::recorded_http_api_request;
 use golem_common::SafeDisplay;
-use golem_service_base::model::ErrorBody;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
