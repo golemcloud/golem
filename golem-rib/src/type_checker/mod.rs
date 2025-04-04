@@ -65,6 +65,34 @@ mod type_check_tests {
         use crate::{compile, Expr};
 
         #[test]
+        async fn test_inference_pattern_match_invalid() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => x,
+            none => "none"
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 3, column 11
+            `match x {  some(x) => x, none => "none" } `
+            cause: cannot determine the type
+            invalid pattern match, conflicting types inferred. u64, string
+            help: try specifying the expected type explicitly
+            help: if the issue persists, please review the script for potential type inconsistencies
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
         fn test_type_mismatch_in_record_in_function_call1() {
             let expr = r#"
           let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});

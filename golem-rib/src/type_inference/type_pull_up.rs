@@ -1119,7 +1119,7 @@ mod internal {
             let right_number_type = right_expr_type.as_number().map_err(|_| TypeMismatchError {
                 expr_with_wrong_type: right_expr.clone(),
                 parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::TypeHint(TypeHint::Number),
+                expected_type: ExpectedType::Hint(TypeHint::Number),
                 actual_type: ActualType::Inferred(right_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
@@ -1130,7 +1130,7 @@ mod internal {
             let left_number_type = left_expr_type.as_number().map_err(|_| TypeMismatchError {
                 expr_with_wrong_type: left_expr.clone(),
                 parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::TypeHint(TypeHint::Number),
+                expected_type: ExpectedType::Hint(TypeHint::Number),
                 actual_type: ActualType::Inferred(left_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
@@ -1154,7 +1154,7 @@ mod internal {
                 return Err(TypeMismatchError {
                     expr_with_wrong_type: original_math_expr.clone(),
                     parent_expr: None,
-                    expected_type: ExpectedType::TypeHint(TypeHint::Number),
+                    expected_type: ExpectedType::Hint(TypeHint::Number),
                     actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
                     field_path: Default::default(),
                     additional_error_detail: vec![
@@ -1551,7 +1551,7 @@ mod internal {
             TypeMismatchError {
                 expr_with_wrong_type: original_selection_expr.clone(),
                 parent_expr: None,
-                expected_type: ExpectedType::TypeHint(TypeHint::Record(None)),
+                expected_type: ExpectedType::Hint(TypeHint::Record(None)),
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
@@ -1580,7 +1580,7 @@ mod internal {
             TypeMismatchError {
                 expr_with_wrong_type: original_selection_expr.clone(),
                 parent_expr: None,
-                expected_type: ExpectedType::TypeHint(TypeHint::List(None)),
+                expected_type: ExpectedType::Hint(TypeHint::List(None)),
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
@@ -1604,7 +1604,7 @@ mod internal {
                 TypeMismatchError {
                     expr_with_wrong_type: original_selection_expr.clone(),
                     parent_expr: None,
-                    expected_type: ExpectedType::TypeHint(TypeHint::Number),
+                    expected_type: ExpectedType::Hint(TypeHint::Number),
                     actual_type: ActualType::Inferred(select_index_type.clone()),
                     field_path: Default::default(),
                     additional_error_detail: vec![format!(

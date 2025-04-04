@@ -56,6 +56,12 @@ path = "tests/api/lib.rs"
 harness = false
 
 [[bin]]
+name = "rib-repl"
+path = "src/rib_repl/main.rs"
+harness = false
+test = false
+
+[[bin]]
 name = "benchmark_simple_worker_echo"
 path = "src/benchmarks/simple_worker_echo.rs"
 harness = false

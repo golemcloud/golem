@@ -13,12 +13,11 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{ArmPattern, Expr, MultipleUnResolvedTypesError, UnResolvedTypesError};
+use crate::{ArmPattern, Expr, UnResolvedTypesError};
 
-pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> {
+pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
     let mut queue = vec![];
     queue.push(expr);
-    let mut errors: Vec<UnResolvedTypesError> = vec![];
 
     while let Some(expr) = queue.pop() {
         let expr_copied = expr.clone();
@@ -30,13 +29,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of number: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid number, {}", e)));
                     }
                 }
             }
@@ -52,13 +46,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of record: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid record, {}", e)))
                     }
                 }
             }
@@ -74,13 +63,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of tuple: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid tuple, {}", e)))
                     }
                 }
             }
@@ -99,13 +83,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of range: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid range, {}", e)))
                     }
                 }
             }
@@ -121,13 +100,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of sequence: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid sequence, {}", e)));
                     }
                 }
             }
@@ -142,13 +116,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of option: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid option, {}", e)));
                     }
                 }
             }
@@ -159,13 +128,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of option: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid option, {}", e)));
                     }
                 }
             }
@@ -181,13 +145,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of result-ok: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid result-ok, {}", e)));
                     }
                 }
             }
@@ -203,13 +162,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of result-err: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid result-err, {}", e)));
                     }
                 }
             }
@@ -229,13 +183,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of if-else condition: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid if-else condition, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -252,13 +204,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of length function: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid length function, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -277,13 +227,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of list comprehension: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid list comprehension, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -304,13 +252,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of list aggregation: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid list aggregation, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -335,13 +281,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                         *inferred_type = unified_type;
                     }
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of pattern match: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid pattern match, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -370,13 +314,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                         match unified_inferred_type {
                             Ok(unified_type) => *inferred_type = unified_type,
                             Err(e) => {
-                                errors.push(
-                                    UnResolvedTypesError::from(&expr_copied, None)
-                                        .with_additional_error_detail(format!(
-                                            "cannot determine the return type of function {}: {}",
-                                            function_name, e
-                                        )),
-                                );
+                                return Err(UnResolvedTypesError::from(&expr_copied, None)
+                                    .with_additional_error_detail(format!(
+                                        "cannot determine the return type of function {}, {}",
+                                        function_name, e
+                                    )));
                             }
                         }
                     }
@@ -387,13 +329,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                         match unified_inferred_type {
                             Ok(unified_type) => *inferred_type = unified_type,
                             Err(e) => {
-                                errors.push(
-                                    UnResolvedTypesError::from(&expr_copied, None)
-                                        .with_additional_error_detail(format!(
-                                            "cannot determine the type of function return: {}",
-                                            e
-                                        )),
-                                );
+                                return Err(UnResolvedTypesError::from(&expr_copied, None)
+                                    .with_additional_error_detail(format!(
+                                        "invalid function return, {}",
+                                        e
+                                    )));
                             }
                         }
                     }
@@ -410,13 +350,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of field selection: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid field selection, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -434,13 +372,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of dynamic field selection: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid dynamic field selection, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -454,13 +390,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of literal: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid literal, {}", e)));
                     }
                 }
             }
@@ -470,13 +401,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of flags: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid flags, {}", e)));
                     }
                 }
             }
@@ -486,13 +412,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of identifier: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!("invalid identifier, {}", e)));
                     }
                 }
             }
@@ -525,13 +446,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of NOT expression: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "invalid NOT expression, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -546,13 +465,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "cannot determine the type, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -563,13 +480,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "cannot determine the type, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -580,13 +495,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type: {}",
-                                    e
-                                )),
-                        );
+                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                            .with_additional_error_detail(format!(
+                                "cannot determine the type, {}",
+                                e
+                            )));
                     }
                 }
             }
@@ -601,56 +514,28 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
                 rhs,
                 inferred_type,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &expr_copied)?,
 
             Expr::Minus {
                 lhs,
                 rhs,
                 inferred_type,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &expr_copied)?,
 
             Expr::Divide {
                 lhs,
                 rhs,
                 inferred_type,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &expr_copied)?,
 
             Expr::Multiply {
                 lhs,
                 rhs,
                 inferred_type,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &expr_copied)?,
 
             Expr::And { lhs, rhs, .. } => {
                 queue.push(lhs);
@@ -681,11 +566,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(MultipleUnResolvedTypesError(errors))
-    }
+    Ok(())
 }
 
 mod internal {
@@ -696,9 +577,8 @@ mod internal {
         left: &'a mut Expr,
         right: &'a mut Expr,
         inferred_type: &mut InferredType,
-        errors: &mut Vec<UnResolvedTypesError>,
         expr: &Expr,
-    ) {
+    ) -> Result<(), UnResolvedTypesError> {
         queue.push(left);
         queue.push(right);
         let unified_inferred_type = inferred_type.unify();
@@ -706,14 +586,12 @@ mod internal {
         match unified_inferred_type {
             Ok(unified_type) => *inferred_type = unified_type,
             Err(e) => {
-                errors.push(
-                    UnResolvedTypesError::from(expr, None).with_additional_error_detail(format!(
-                        "cannot determine the type of math operation: {}",
-                        e
-                    )),
-                );
+                return Err(UnResolvedTypesError::from(expr, None)
+                    .with_additional_error_detail(format!("invalid math operation, {}", e)))
             }
         }
+
+        Ok(())
     }
 
     // Push any existence of expr in arm patterns to queue

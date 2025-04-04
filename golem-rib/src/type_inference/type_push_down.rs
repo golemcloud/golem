@@ -771,8 +771,8 @@ mod internal {
                         TypeMismatchError {
                             expr_with_wrong_type: expr.clone(),
                             parent_expr: None,
-                            expected_type: ExpectedType::TypeHint(actual_kind.clone()),
-                            actual_type: ActualType::Kind(push_down_kind.clone()),
+                            expected_type: ExpectedType::Hint(actual_kind.clone()),
+                            actual_type: ActualType::Hint(push_down_kind.clone()),
                             field_path: Default::default(),
                             additional_error_detail: vec![],
                         }
