@@ -17,7 +17,7 @@ use assert2::check;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::storage::indexed::memory::InMemoryIndexedStorage;
@@ -120,9 +120,7 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
             .await
             .expect("Cannot create db options");
 
-        let pool = SqlitePool::new(sqlx_pool_sqlite)
-            .await
-            .expect("Cannot connect to sqlite db");
+        let pool = SqlitePool::new(sqlx_pool_sqlite.clone(), sqlx_pool_sqlite);
         let sis = SqliteIndexedStorage::new(pool).await.unwrap();
         Arc::new(sis)
     }

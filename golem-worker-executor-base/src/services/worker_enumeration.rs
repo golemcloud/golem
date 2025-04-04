@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
                 .unwrap_or("N/A".to_string())
         );
 
-        let active_workers = self.active_workers.iter();
+        let active_workers = self.active_workers.snapshot();
 
         let mut workers: Vec<WorkerMetadata> = vec![];
         for (worker_id, worker) in active_workers {

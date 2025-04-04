@@ -18,6 +18,7 @@ use crate::gateway_api_deployment::*;
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
+use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 
 use std::sync::Arc;
 use tracing::{error, info};
@@ -173,17 +174,19 @@ impl ConflictChecker for HttpApiDefinition {
     }
 }
 
-pub struct ApiDeploymentServiceDefault<AuthCtx> {
+pub struct ApiDeploymentServiceDefault<Namespace, AuthCtx> {
     pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
-    pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
+    pub component_service: Arc<dyn ComponentService<Namespace, AuthCtx> + Send + Sync>,
 }
 
-impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx>
+    ApiDeploymentServiceDefault<Namespace, AuthCtx>
+{
     pub fn new(
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
-        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<Namespace, AuthCtx> + Send + Sync>,
     ) -> Self {
         Self {
             deployment_repo,
@@ -192,7 +195,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         }
     }
 
-    async fn fetch_existing_deployments<Namespace>(
+    async fn fetch_existing_deployments(
         &self,
         site: &ApiSite,
     ) -> Result<Vec<ApiDeploymentRecord>, ApiDeploymentError<Namespace>> {
@@ -202,7 +205,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
     }
 
     /// Ensures that the site is not already used by another namespace.
-    fn ensure_no_namespace_conflict<Namespace: Display>(
+    fn ensure_no_namespace_conflict(
         &self,
         deployment: &ApiDeploymentRequest<Namespace>,
         existing_records: &[ApiDeploymentRecord],
@@ -227,7 +230,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
     }
 
     /// Checks for conflicts among API definitions.
-    fn check_for_conflicts<Namespace: Display + Clone>(
+    fn check_for_conflicts(
         &self,
         namespace: &Namespace,
         all_definitions: &[CompiledHttpApiDefinition<Namespace>],
@@ -253,7 +256,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
     }
 
     /// Finalizes the deployment by marking drafts, updating constraints, and saving records.
-    async fn finalize_deployment<Namespace>(
+    async fn finalize_deployment(
         &self,
         deployment: &ApiDeploymentRequest<Namespace>,
         auth_ctx: &AuthCtx,
@@ -326,7 +329,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         Ok(())
     }
 
-    async fn remove_component_constraints<Namespace>(
+    async fn remove_component_constraints(
         &self,
         existing_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
         auth_ctx: &AuthCtx,
@@ -355,7 +358,7 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
         Ok(())
     }
 
-    async fn set_undeployed_as_draft<Namespace>(
+    async fn set_undeployed_as_draft(
         &self,
         deployments: Vec<ApiDeploymentRecord>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
@@ -386,12 +389,8 @@ impl<AuthCtx: Send + Sync> ApiDeploymentServiceDefault<AuthCtx> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace> ApiDeploymentService<AuthCtx, Namespace>
-    for ApiDeploymentServiceDefault<AuthCtx>
-where
-    AuthCtx: Send + Sync,
-    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-    <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<AuthCtx, Namespace>
+    for ApiDeploymentServiceDefault<Namespace, AuthCtx>
 {
     async fn deploy(
         &self,

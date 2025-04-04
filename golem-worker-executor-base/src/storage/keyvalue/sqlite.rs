@@ -15,7 +15,9 @@
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_service_base::storage::sqlite::{DBValue, SqlitePool};
+use golem_common::SafeDisplay;
+use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::DBValue;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -31,9 +33,10 @@ impl SqliteKeyValueStorage {
     }
 
     async fn init(&self) -> Result<(), String> {
-        self.pool
-            .execute(sqlx::query(
-                r#"
+        let pool = self.pool.with_rw("kv_storage", "init");
+
+        pool.execute(sqlx::query(
+            r#"
                 CREATE TABLE IF NOT EXISTS kv_storage (
                     key TEXT NOT NULL,         -- The key to store
                     value BLOB NOT NULL,       -- The value to store
@@ -41,10 +44,11 @@ impl SqliteKeyValueStorage {
                     PRIMARY KEY(key, namespace)     -- Avoid duplicate key values in a namespace
                 );
                 "#,
-            ))
-            .await?;
+        ))
+        .await
+        .map_err(|err| err.to_safe_string())?;
 
-        self.pool.execute(sqlx::query(
+        pool.execute(sqlx::query(
             r#"
                   CREATE TABLE IF NOT EXISTS set_storage (
                     key TEXT NOT NULL,             -- The set's key
@@ -54,14 +58,14 @@ impl SqliteKeyValueStorage {
                   );
                 "#,
         ))
-            .await?;
-        self.pool.execute(sqlx::query(
+            .await.map_err(|err| err.to_safe_string())?;
+        pool.execute(sqlx::query(
             r#"
                     CREATE INDEX IF NOT EXISTS idx_set_storage_key_namespace ON set_storage (key, namespace);
                 "#))
-            .await?;
+            .await.map_err(|err| err.to_safe_string())?;
 
-        self.pool.execute(sqlx::query(
+        pool.execute(sqlx::query(
             r#"
                   CREATE TABLE IF NOT EXISTS sorted_set_storage (
                     key TEXT NOT NULL,             -- The sorted set's key
@@ -72,17 +76,17 @@ impl SqliteKeyValueStorage {
                   );
                 "#,
         ))
-            .await?;
-        self.pool.execute(sqlx::query(
+            .await.map_err(|err| err.to_safe_string())?;
+        pool.execute(sqlx::query(
             r#"
                         CREATE INDEX IF NOT EXISTS idx_sorted_set_storage_key_namespace ON sorted_set_storage (key, namespace);
                     "#))
-            .await?;
-        self.pool.execute(sqlx::query(
+            .await.map_err(|err| err.to_safe_string())?;
+        pool.execute(sqlx::query(
             r#"
                         CREATE INDEX IF NOT EXISTS idx_sorted_set_storage_score  ON sorted_set_storage (score);
                     "#))
-            .await?;
+            .await.map_err(|err| err.to_safe_string())?;
 
         Ok(())
     }
@@ -118,10 +122,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn set_many(
@@ -132,8 +137,8 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
-        let api = self.pool.with(svc_name, api_name);
-        let mut tx = api.begin().await?;
+        let api = self.pool.with_rw(svc_name, api_name);
+        let mut tx = api.begin().await.map_err(|err| err.to_safe_string())?;
 
         for (field_key, field_value) in pairs {
             tx.execute(
@@ -144,9 +149,10 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(field_value)
                 .bind(Self::namespace(namespace.clone())),
             )
-            .await?;
+            .await
+            .map_err(|err| err.to_safe_string())?;
         }
-        api.commit(tx).await
+        api.commit(tx).await.map_err(|err| err.to_safe_string())
     }
 
     async fn set_if_not_exists(
@@ -158,7 +164,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        let api = self.pool.with(svc_name, api_name);
+        let api = self.pool.with_rw(svc_name, api_name);
         let existing: Option<(i32,)> = api
             .fetch_optional_as(
                 sqlx::query_as::<_, (i32,)>(
@@ -167,7 +173,8 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(key)
                 .bind(Self::namespace(namespace.clone())),
             )
-            .await?;
+            .await
+            .map_err(|err| err.to_safe_string())?;
 
         let query = sqlx::query(
             "INSERT OR IGNORE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
@@ -176,7 +183,10 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         .bind(value)
         .bind(Self::namespace(namespace));
 
-        api.execute(query).await.map(|_| existing.is_none())
+        api.execute(query)
+            .await
+            .map(|_| existing.is_none())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn get(
@@ -192,10 +202,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_optional_as::<DBValue, _>(query)
             .await
             .map(|r| r.map(|op| op.into_bytes()))
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn get_many(
@@ -219,7 +230,12 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         }
         query = query.bind(Self::namespace(namespace));
 
-        let results: Vec<DBKeyValue> = self.pool.with(svc_name, api_name).fetch_all(query).await?;
+        let results: Vec<DBKeyValue> = self
+            .pool
+            .with_ro(svc_name, api_name)
+            .fetch_all(query)
+            .await
+            .map_err(|err| err.to_safe_string())?;
 
         let mut result_map = results
             .into_iter()
@@ -245,10 +261,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .bind(key)
             .bind(Self::namespace(namespace));
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn del_many(
@@ -258,17 +275,18 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<(), String> {
-        let api = self.pool.with(svc_name, api_name);
-        let mut tx = api.begin().await?;
+        let api = self.pool.with_rw(svc_name, api_name);
+        let mut tx = api.begin().await.map_err(|err| err.to_safe_string())?;
         for key in keys {
             tx.execute(
                 sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
                     .bind(key)
                     .bind(Self::namespace(namespace.clone())),
             )
-            .await?;
+            .await
+            .map_err(|err| err.to_safe_string())?;
         }
-        api.commit(tx).await
+        api.commit(tx).await.map_err(|err| err.to_safe_string())
     }
 
     async fn exists(
@@ -283,10 +301,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_optional(query)
             .await
             .map(|row| row.is_some())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn keys(
@@ -299,10 +318,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_all::<(String,), _>(query)
             .await
             .map(|vec| vec.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn add_to_set(
@@ -322,10 +342,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         .bind(value);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn remove_from_set(
@@ -344,10 +365,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn members_of_set(
@@ -364,7 +386,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_all::<DBValue, _>(query)
             .await
             .map(|vec| {
@@ -372,6 +394,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                     .map(|k| k.into_bytes())
                     .collect::<Vec<Bytes>>()
             })
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn add_to_sorted_set(
@@ -396,10 +419,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(score);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn remove_from_sorted_set(
@@ -419,10 +443,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn get_sorted_set(
@@ -439,7 +464,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                         .bind(Self::namespace(namespace));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_all::<DBScoreValue, _>(query)
             .await
             .map(|vec| {
@@ -447,6 +472,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                     .map(|k| k.into_pair())
                     .collect::<Vec<(f64, Bytes)>>()
             })
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn query_sorted_set(
@@ -467,7 +493,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(max);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_all::<DBScoreValue, _>(query)
             .await
             .map(|vec| {
@@ -475,6 +501,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                     .map(|k| k.into_pair())
                     .collect::<Vec<(f64, Bytes)>>()
             })
+            .map_err(|err| err.to_safe_string())
     }
 }
 

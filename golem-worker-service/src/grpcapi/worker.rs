@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use futures::Stream;
@@ -53,6 +52,7 @@ use golem_common::grpc::{
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
+use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::empty_worker_metadata;
@@ -61,19 +61,24 @@ use golem_worker_service_base::grpcapi::{
     validate_component_file_path, validate_protobuf_plugin_installation_id,
     validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
 };
+use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::{InvocationParameters, WorkerStream};
 use std::pin::Pin;
+use std::sync::Arc;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub struct WorkerGrpcApi {
-    component_service: ComponentService,
+    component_service: Arc<dyn ComponentService<DefaultNamespace, EmptyAuthCtx>>,
     worker_service: WorkerService,
 }
 
 impl WorkerGrpcApi {
-    pub fn new(component_service: ComponentService, worker_service: WorkerService) -> Self {
+    pub fn new(
+        component_service: Arc<dyn ComponentService<DefaultNamespace, EmptyAuthCtx>>,
+        worker_service: WorkerService,
+    ) -> Self {
         Self {
             component_service,
             worker_service,

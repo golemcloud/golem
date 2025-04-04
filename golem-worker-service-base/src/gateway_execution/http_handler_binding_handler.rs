@@ -16,9 +16,9 @@ use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetails};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::HasAccountId;
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_common::{virtual_exports, widen_infallible};
+use golem_service_base::auth::GolemNamespace;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::TypeAnnotatedValueConstructors;
 use http::StatusCode;
@@ -64,7 +64,7 @@ impl<Namespace> DefaultHttpHandlerBindingHandler<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBindingHandler<Namespace>
+impl<Namespace: GolemNamespace> HttpHandlerBindingHandler<Namespace>
     for DefaultHttpHandlerBindingHandler<Namespace>
 {
     async fn handle_http_handler_binding(

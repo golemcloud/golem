@@ -20,9 +20,7 @@ use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
     PluginInstallation, PluginOwner, PluginTypeSpecificDefinition,
 };
-use golem_common::model::{
-    AccountId, ComponentId, ComponentType, Empty, HasAccountId, PluginInstallationId,
-};
+use golem_common::model::{AccountId, ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::repo::component::DefaultComponentOwnerRow;
 use golem_common::repo::plugin::{DefaultPluginOwnerRow, DefaultPluginScopeRow};
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
@@ -72,7 +70,9 @@ impl FromStr for UuidOwner {
     }
 }
 
-impl HasAccountId for UuidOwner {
+impl ComponentOwner for UuidOwner {
+    type Row = UuidOwnerRow;
+    type PluginOwner = UuidOwner;
     fn account_id(&self) -> AccountId {
         AccountId {
             value: self.0.to_string(),
@@ -80,13 +80,13 @@ impl HasAccountId for UuidOwner {
     }
 }
 
-impl ComponentOwner for UuidOwner {
-    type Row = UuidOwnerRow;
-    type PluginOwner = UuidOwner;
-}
-
 impl PluginOwner for UuidOwner {
     type Row = UuidOwnerRow;
+    fn account_id(&self) -> AccountId {
+        AccountId {
+            value: self.0.to_string(),
+        }
+    }
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]

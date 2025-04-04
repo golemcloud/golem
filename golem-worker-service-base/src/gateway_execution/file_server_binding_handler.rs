@@ -16,13 +16,14 @@ use crate::empty_worker_metadata;
 use crate::gateway_execution::WorkerDetails;
 use crate::getter::{get_response_headers_or_default, get_status_code};
 use crate::service::component::{ComponentService, ComponentServiceError};
-use crate::service::worker::{WorkerService, WorkerServiceError};
+use crate::service::worker::{WorkerResult, WorkerService, WorkerServiceError};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use futures::Stream;
 use futures_util::TryStreamExt;
-use golem_common::model::{ComponentFilePath, HasAccountId, TargetWorkerId, WorkerId};
-use golem_service_base::auth::EmptyAuthCtx;
+use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
+use golem_service_base::auth::{DefaultNamespace, GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::Component;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
@@ -156,27 +157,93 @@ impl FileServerBindingDetails {
     }
 }
 
-pub struct DefaultFileServerBindingHandler {
-    component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
-    initial_component_files_service: Arc<InitialComponentFilesService>,
+#[async_trait::async_trait]
+pub trait WorkerServiceAdapter<Namespace>: Send + Sync + 'static {
+    async fn get_worker_version(
+        &self,
+        worker_id: &WorkerId,
+        namespace: &Namespace,
+    ) -> Result<Option<u64>, FileServerBindingError>;
+
+    async fn get_file_contents(
+        &self,
+        worker_id: &TargetWorkerId,
+        path: ComponentFilePath,
+        namespace: &Namespace,
+    ) -> Result<BoxStream<'static, WorkerResult<Bytes>>, FileServerBindingError>;
+}
+
+pub struct DefaultWorkerServiceAdapter {
     worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
-impl DefaultFileServerBindingHandler {
+impl DefaultWorkerServiceAdapter {
+    pub fn new(worker_service: Arc<dyn WorkerService + Sync + Send>) -> Self {
+        Self { worker_service }
+    }
+}
+
+#[async_trait::async_trait]
+impl WorkerServiceAdapter<DefaultNamespace> for DefaultWorkerServiceAdapter {
+    async fn get_worker_version(
+        &self,
+        worker_id: &WorkerId,
+        _namespace: &DefaultNamespace,
+    ) -> Result<Option<u64>, FileServerBindingError> {
+        let worker_metadata = self
+            .worker_service
+            .get_metadata(worker_id, empty_worker_metadata())
+            .await;
+
+        let version = match worker_metadata {
+            Ok(metadata) => Some(metadata.component_version),
+            Err(WorkerServiceError::WorkerNotFound(_)) => None,
+            Err(other) => Err(FileServerBindingError::InternalError(format!(
+                "Failed looking up worker metadata: {other}"
+            )))?,
+        };
+
+        Ok(version)
+    }
+
+    async fn get_file_contents(
+        &self,
+        worker_id: &TargetWorkerId,
+        path: ComponentFilePath,
+        _namespace: &DefaultNamespace,
+    ) -> Result<BoxStream<'static, WorkerResult<Bytes>>, FileServerBindingError> {
+        self.worker_service
+            .get_file_contents(worker_id, path, empty_worker_metadata())
+            .await
+            .map_err(FileServerBindingError::WorkerServiceError)
+    }
+}
+
+pub struct DefaultFileServerBindingHandler<Namespace, AuthCtx> {
+    component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
+    initial_component_files_service: Arc<InitialComponentFilesService>,
+    worker_service: Arc<dyn WorkerServiceAdapter<Namespace> + Sync + Send>,
+    auth_ctx: AuthCtx,
+}
+
+impl<Namespace: GolemNamespace, AuthCtx> DefaultFileServerBindingHandler<Namespace, AuthCtx> {
     pub fn new(
-        component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
+        component_service: Arc<dyn ComponentService<Namespace, AuthCtx> + Sync + Send>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        worker_service: Arc<dyn WorkerService + Sync + Send>,
+        worker_service: Arc<dyn WorkerServiceAdapter<Namespace> + Sync + Send>,
+        auth_ctx: AuthCtx,
     ) -> Self {
         Self {
             component_service,
             initial_component_files_service,
             worker_service,
+            auth_ctx,
         }
     }
 
     async fn get_component_metadata(
         &self,
+        namespace: &Namespace,
         worker_detail: &WorkerDetails,
     ) -> Result<Component, FileServerBindingError> {
         // Two cases, we either have an existing worker or not (either not configured or not existing).
@@ -184,17 +251,9 @@ impl DefaultFileServerBindingHandler {
         // the worker is using. Not doing that would make the blob_storage optimization for read-only files visible to users.
 
         let component_version = if let Some(worker_id) = worker_detail.worker_id() {
-            let worker_metadata = self
-                .worker_service
-                .get_metadata(&worker_id, empty_worker_metadata())
-                .await;
-            match worker_metadata {
-                Ok(metadata) => Some(metadata.component_version),
-                Err(WorkerServiceError::WorkerNotFound(_)) => None,
-                Err(other) => Err(FileServerBindingError::InternalError(format!(
-                    "Failed looking up worker metadata: {other}"
-                )))?,
-            }
+            self.worker_service
+                .get_worker_version(&worker_id, namespace)
+                .await?
         } else {
             None
         };
@@ -204,13 +263,13 @@ impl DefaultFileServerBindingHandler {
                 .get_by_version(
                     &worker_detail.component_id,
                     component_version,
-                    &EmptyAuthCtx(),
+                    &self.auth_ctx,
                 )
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         } else {
             self.component_service
-                .get_latest(&worker_detail.component_id, &EmptyAuthCtx())
+                .get_latest(&worker_detail.component_id, &self.auth_ctx)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         };
@@ -220,8 +279,8 @@ impl DefaultFileServerBindingHandler {
 }
 
 #[async_trait]
-impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<Namespace>
-    for DefaultFileServerBindingHandler
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> FileServerBindingHandler<Namespace>
+    for DefaultFileServerBindingHandler<Namespace, AuthCtx>
 {
     async fn handle_file_server_binding_result(
         &self,
@@ -232,7 +291,9 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
         let binding_details = FileServerBindingDetails::from_rib_result(original_result)
             .map_err(FileServerBindingError::InvalidRibResult)?;
 
-        let component_metadata = self.get_component_metadata(worker_detail).await?;
+        let component_metadata = self
+            .get_component_metadata(namespace, worker_detail)
+            .await?;
 
         // if we are serving a read_only file, we can just go straight to the blob storage.
         let matching_ro_file = component_metadata
@@ -285,13 +346,8 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
 
             let stream = self
                 .worker_service
-                .get_file_contents(
-                    &worker_id,
-                    binding_details.file_path.clone(),
-                    empty_worker_metadata(),
-                )
-                .await
-                .map_err(FileServerBindingError::WorkerServiceError)?;
+                .get_file_contents(&worker_id, binding_details.file_path.clone(), namespace)
+                .await?;
 
             let stream =
                 stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
