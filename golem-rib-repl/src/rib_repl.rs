@@ -188,10 +188,7 @@ impl RibRepl {
     ///
     /// Note: Currently, only a single component is supported per session. Multi-component
     /// support is planned but not yet implemented.
-    pub fn update_component_dependency(
-        &mut self,
-        dependency: RibComponentMetadata
-    ) {
+    pub fn update_component_dependency(&mut self, dependency: RibComponentMetadata) {
         self.repl_state.update_dependency(dependency);
     }
 
