@@ -17,9 +17,9 @@ pub mod worker;
 pub mod worker_request_executor;
 
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::DefaultFileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
@@ -52,7 +52,7 @@ use golem_common::model::RetryConfig;
 
 use golem_common::config::DbConfig;
 use golem_common::redis::RedisPool;
-use golem_service_base::db;
+use golem_service_base::db::postgres::PostgresPool;
 use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
     SqliteGatewaySessionExpiration,
@@ -174,7 +174,7 @@ impl Services {
             .clone()
         {
             DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+                let db_pool = PostgresPool::configured(&c)
                     .await
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
@@ -196,7 +196,7 @@ impl Services {
                 )
             }
             DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
+                let db_pool = SqlitePool::configured(&c)
                     .await
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =

@@ -35,12 +35,12 @@ use golem_component_service_base::service::component_object_store::{
 use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
 use golem_component_service_base::service::transformer_plugin_caller::TransformerPluginCallerDefault;
 use golem_service_base::config::BlobStorageConfig;
-use golem_service_base::db;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -54,7 +54,7 @@ impl Services {
     pub async fn new(config: &ComponentServiceConfig) -> Result<Services, String> {
         let (component_repo, plugin_repo) = match &config.db {
             DbConfig::Postgres(db_config) => {
-                let db_pool = db::create_postgres_pool(db_config)
+                let db_pool = PostgresPool::configured(db_config)
                     .await
                     .map_err(|e| e.to_string())?;
 
@@ -70,7 +70,7 @@ impl Services {
                 (component_repo, plugin_repo)
             }
             DbConfig::Sqlite(db_config) => {
-                let db_pool = db::create_sqlite_pool(db_config)
+                let db_pool = SqlitePool::configured(db_config)
                     .await
                     .map_err(|e| e.to_string())?;
                 let component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send> =

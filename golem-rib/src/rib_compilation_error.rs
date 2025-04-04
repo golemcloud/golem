@@ -91,10 +91,10 @@ impl From<UnResolvedTypesError> for RibCompilationError {
 impl From<TypeMismatchError> for RibCompilationError {
     fn from(value: TypeMismatchError) -> Self {
         let expected = match value.expected_type {
-            ExpectedType::AnalysedType(anaysed_type) => TypeName::try_from(anaysed_type)
+            ExpectedType::AnalysedType(analysed_type) => TypeName::try_from(analysed_type)
                 .map(|x| format!("expected {}", x))
                 .ok(),
-            ExpectedType::Kind(kind) => Some(format!("expected {}", kind)),
+            ExpectedType::TypeHint(kind) => Some(format!("expected {}", kind)),
         };
 
         let actual = match value.actual_type {
@@ -343,7 +343,7 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
 impl From<AmbiguousTypeError> for RibCompilationError {
     fn from(value: AmbiguousTypeError) -> Self {
         let cause = format!(
-            "The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: {}",
+            "ambiguous types: {}",
             value
                 .ambiguous_types
                 .iter()
@@ -352,17 +352,12 @@ impl From<AmbiguousTypeError> for RibCompilationError {
                 .join(", ")
         );
 
-        let help_messages = vec![
-            "ensure this expression is only used in contexts that align with its actual type"
-                .to_string(),
-        ];
-
         RibCompilationError {
             cause,
             expr: value.expr,
             immediate_parent: None,
             additional_error_details: value.additional_error_details,
-            help_messages,
+            help_messages: vec![],
         }
     }
 }
