@@ -26,8 +26,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use wit_parser::{
-    Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve,
-    Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
+    Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve, Type,
+    TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
 };
 
 #[derive(Clone, Debug)]
@@ -418,18 +418,9 @@ impl StubDefinition {
             })
             .collect();
 
-        let results = match &function.results {
-            Results::Named(params) => {
-                let mut param_stubs = Vec::new();
-                for (name, typ) in params {
-                    param_stubs.push(FunctionParamStub {
-                        name: name.clone(),
-                        typ: *typ,
-                    });
-                }
-                FunctionResultStub::Named(param_stubs)
-            }
-            Results::Anon(single) => FunctionResultStub::Anon(*single),
+        let results = match &function.result {
+            None => FunctionResultStub::Unit,
+            Some(single) => FunctionResultStub::Anon(*single),
         };
 
         FunctionStub {
@@ -586,6 +577,15 @@ impl StubDefinition {
                     .map(|stub| stub.as_static().expect("Expected static function"))
                     .collect(),
                 FunctionKind::Constructor(_) => stubs,
+                FunctionKind::AsyncFreestanding => {
+                    panic!("WASI P3 async is not supported yet")
+                }
+                FunctionKind::AsyncMethod(_) => {
+                    panic!("WASI P3 async is not supported yet")
+                }
+                FunctionKind::AsyncStatic(_) => {
+                    panic!("WASI P3 async is not supported yet")
+                }
             }
         };
 
@@ -784,7 +784,7 @@ pub struct FunctionParamStub {
 #[derive(Debug, Clone)]
 pub enum FunctionResultStub {
     Anon(Type),
-    Named(Vec<FunctionParamStub>),
+    Unit,
     SelfType,
 }
 
@@ -792,7 +792,7 @@ impl FunctionResultStub {
     pub fn is_empty(&self) -> bool {
         match self {
             FunctionResultStub::Anon(_) => false,
-            FunctionResultStub::Named(params) => params.is_empty(),
+            FunctionResultStub::Unit => true,
             FunctionResultStub::SelfType => false,
         }
     }

@@ -110,11 +110,12 @@ uuid = "1.13.2"
 version-compare = "0.2.0"
 wac-graph = "=0.6.1"
 walkdir = "2.5.0"
-wasm-wave = "0.222.1"
+wasm-wave = "0.227.1"
 wax = "0.6.0"
-wit-bindgen-rust = "=0.26.0"
-wit-encoder = "=0.221.2"
-wit-parser = "=0.221.3"
+wasm-metadata = "=0.227.1"
+wit-bindgen-rust = "=0.40.0"
+wit-encoder = "=0.227.1"
+wit-parser = "=0.227.1"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }

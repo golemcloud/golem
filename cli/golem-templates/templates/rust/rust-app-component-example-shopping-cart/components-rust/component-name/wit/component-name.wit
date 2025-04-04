@@ -24,13 +24,13 @@ interface component-name-api {
     success(order-confirmation),
   }
 
-  initialize-cart: func(user-id: string) -> ();
+  initialize-cart: func(user-id: string);
 
-  add-item: func(item: product-item) -> ();
+  add-item: func(item: product-item);
 
-  remove-item: func(product-id: string) -> ();
+  remove-item: func(product-id: string);
 
-  update-item-quantity: func(product-id: string, quantity: u32) -> ();
+  update-item-quantity: func(product-id: string, quantity: u32);
 
   checkout: func() -> checkout-result;
 

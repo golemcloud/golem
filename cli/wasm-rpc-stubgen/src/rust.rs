@@ -630,15 +630,7 @@ fn get_output_values_source(
                 quote! { result.tuple_element(0).expect("tuple not found") },
             )?);
         }
-        FunctionResultStub::Named(params) => {
-            for (n, param) in params.iter().enumerate() {
-                output_values.push(extract_from_wit_value(
-                    &param.typ,
-                    def,
-                    quote! { result.tuple_element(#n).expect("tuple not found") },
-                )?);
-            }
-        }
+        FunctionResultStub::Unit => {}
         FunctionResultStub::SelfType if mode == FunctionMode::Constructor => {
             output_values.push(quote! {
                 {
@@ -714,23 +706,9 @@ fn get_result_type_source(
                 #typ
             }
         }
-        FunctionResultStub::Named(params) => {
-            let mut results = Vec::new();
-            for param in params {
-                let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-                let param_typ = type_to_rust_ident(&param.typ, def)?;
-                results.push(quote! {
-                    #param_name: #param_typ
-                });
-            }
-            if results.is_empty() {
-                quote! {
-                    ()
-                }
-            } else {
-                quote! {
-                    (#(#results),*)
-                }
+        FunctionResultStub::Unit => {
+            quote! {
+                ()
             }
         }
         FunctionResultStub::SelfType => {
@@ -908,6 +886,7 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                 }
             }
         }
+        Type::ErrorContext => Err(anyhow!("ErrorContext is not supported yet")),
     }
 }
 
@@ -1121,6 +1100,7 @@ fn wit_value_builder(
                 TypeDefKind::Unknown => Ok(quote!(todo!("unknown"))),
             }
         }
+        Type::ErrorContext => Err(anyhow!("ErrorContext is not supported yet")),
     }
 }
 
@@ -1442,6 +1422,7 @@ fn extract_from_wit_value(
                 TypeDefKind::Unknown => Ok(quote!(panic!("Unexpected unknown type!"))),
             }
         }
+        Type::ErrorContext => Err(anyhow!("ErrorContext is not supported yet")),
     }
 }
 

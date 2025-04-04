@@ -61,9 +61,9 @@ interface component-name-api {
 
   delete: func(id: string) -> result<_, string>;
 
-  delete-done-items: func() -> ();
+  delete-done-items: func();
 
-  delete-all: func() -> ();
+  delete-all: func();
 
   get: func(id: string) -> result<item, string>;
 

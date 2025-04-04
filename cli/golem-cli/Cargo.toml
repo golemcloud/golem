@@ -97,6 +97,7 @@ reqwest = { workspace = true }
 serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
+wasm-metadata = { workspace = true }
 
 [build-dependencies]
 shadow-rs = { workspace = true }

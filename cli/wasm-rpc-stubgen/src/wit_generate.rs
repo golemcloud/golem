@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_encoder::{
     Ident, Interface, InterfaceItem, Package, PackageItem, Params, ResourceFunc, ResourceFuncKind,
-    Results, StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World, WorldItem,
+    StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World, WorldItem,
 };
 use wit_parser::{PackageId, PackageName};
 
@@ -128,7 +128,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
             }
 
             {
-                let mut custom_constructor = ResourceFunc::static_("custom");
+                let mut custom_constructor = ResourceFunc::static_("custom", false);
                 let mut params = match &interface.constructor_params {
                     Some(constructor_params) => constructor_params.to_encoder(def)?,
                     None => Params::empty(),
@@ -149,9 +149,8 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                     ),
                 );
                 custom_constructor.set_params(params);
-                custom_constructor.set_results(Results::Anon(Type::Named(Ident::new(
-                    interface.name.clone(),
-                ))));
+                custom_constructor
+                    .set_result(Some(Type::Named(Ident::new(interface.name.clone()))));
                 stub_functions.push(custom_constructor);
             }
 
@@ -162,14 +161,14 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                     let mut blocking_function = {
                         let function_name = naming::wit::blocking_function_name(function);
                         if is_static {
-                            ResourceFunc::static_(function_name)
+                            ResourceFunc::static_(function_name, false)
                         } else {
-                            ResourceFunc::method(function_name)
+                            ResourceFunc::method(function_name, false)
                         }
                     };
                     blocking_function.set_params(function.params.to_encoder(def)?);
                     if !function.results.is_empty() {
-                        blocking_function.set_results(function.results.to_encoder(def)?);
+                        blocking_function.set_result(function.results.to_encoder(def)?);
                     }
                     stub_functions.push(blocking_function);
                 }
@@ -178,14 +177,14 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                 {
                     let mut async_function = {
                         if is_static {
-                            ResourceFunc::static_(function.name.clone())
+                            ResourceFunc::static_(function.name.clone(), false)
                         } else {
-                            ResourceFunc::method(function.name.clone())
+                            ResourceFunc::method(function.name.clone(), false)
                         }
                     };
                     async_function.set_params(function.params.to_encoder(def)?);
                     if !function.results.is_empty() {
-                        async_function.set_results(Results::Anon(Type::Named(Ident::new(
+                        async_function.set_result(Some(Type::Named(Ident::new(
                             function.async_result_type(interface),
                         ))));
                     }
@@ -197,9 +196,9 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                     let mut scheduled_function = {
                         let function_name = naming::wit::schedule_function_name(function);
                         if is_static {
-                            ResourceFunc::static_(function_name)
+                            ResourceFunc::static_(function_name, false)
                         } else {
-                            ResourceFunc::method(function_name)
+                            ResourceFunc::method(function_name, false)
                         }
                     };
 
@@ -210,9 +209,8 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                     );
                     scheduled_function.set_params(params);
 
-                    let results: Results =
-                        Results::anon(Type::named("golem-rpc-cancellation-token"));
-                    scheduled_function.set_results(results);
+                    let results = Some(Type::named("golem-rpc-cancellation-token"));
+                    scheduled_function.set_result(results);
 
                     stub_functions.push(scheduled_function);
                 }
@@ -249,24 +247,21 @@ fn add_async_return_type(
         function.async_result_type(owner_interface),
         [
             {
-                let mut subscribe = ResourceFunc::method("subscribe");
-                subscribe.set_results(Results::Anon(Type::Named(Ident::new("wasi-io-pollable"))));
+                let mut subscribe = ResourceFunc::method("subscribe", false);
+                subscribe.set_result(Some(Type::Named(Ident::new("wasi-io-pollable"))));
                 subscribe
             },
             {
-                let mut get = ResourceFunc::method("get");
+                let mut get = ResourceFunc::method("get", false);
                 match &function.results {
                     FunctionResultStub::Anon(typ) => {
-                        get.set_results(Results::Anon(Type::option(
+                        get.set_result(Some(Type::option(
                             typ.to_encoder(def).with_context(context)?,
                         )));
                     }
-                    FunctionResultStub::Named(params) => {
-                        Err(anyhow!(
-                            "Named parameters are not supported as async stub result, params: {:?}",
-                            params
-                        ))
-                        .with_context(context)?;
+                    FunctionResultStub::Unit => {
+                        Err(anyhow!("Unit result is not supported as async stub result",))
+                            .with_context(context)?;
                     }
                     FunctionResultStub::SelfType => {
                         Err(anyhow!("Unexpected self return type")).with_context(context)?;
@@ -638,6 +633,7 @@ impl ToEncoder for wit_parser::Type {
                     }
                 }
             }
+            wit_parser::Type::ErrorContext => Type::ErrorContext,
         })
     }
 }
@@ -667,7 +663,7 @@ impl ToEncoder for Vec<FunctionParamStub> {
 }
 
 impl ToEncoder for FunctionResultStub {
-    type EncoderType = Results;
+    type EncoderType = Option<Type>;
 
     fn to_encoder(&self, def: &StubDefinition) -> anyhow::Result<Self::EncoderType> {
         let context = || {
@@ -677,12 +673,8 @@ impl ToEncoder for FunctionResultStub {
             )
         };
         Ok(match self {
-            FunctionResultStub::Anon(typ) => {
-                Results::Anon(typ.to_encoder(def).with_context(context)?)
-            }
-            FunctionResultStub::Named(types) => {
-                Results::Named(types.to_encoder(def).with_context(context)?)
-            }
+            FunctionResultStub::Anon(typ) => Some(typ.to_encoder(def).with_context(context)?),
+            FunctionResultStub::Unit => None,
             FunctionResultStub::SelfType => {
                 Err(anyhow!("Unexpected self type")).with_context(context)?
             }
@@ -1067,6 +1059,15 @@ impl UsedTypeIdents for Type {
                 .flat_map(|type_| type_.used_type_idents())
                 .collect(),
             Type::Named(ident) => HashSet::from([ident.clone()]),
+            Type::Future(_) => {
+                panic!("WASI P3 Future is not supported yet")
+            }
+            Type::Stream(_) => {
+                panic!("WASI P3 Stream is not supported yet")
+            }
+            Type::ErrorContext => {
+                panic!("WASI P3 ErrorContext is not supported yet")
+            }
         }
     }
 }
@@ -1116,8 +1117,8 @@ impl UsedTypeIdents for ResourceFunc {
         idents.extend(self.params().used_type_idents());
 
         let results = match self.kind() {
-            ResourceFuncKind::Method(_, results) => Some(results),
-            ResourceFuncKind::Static(_, results) => Some(results),
+            ResourceFuncKind::Method(_, _, results) => Some(results),
+            ResourceFuncKind::Static(_, _, results) => Some(results),
             ResourceFuncKind::Constructor => None,
         };
         if let Some(results) = results {
@@ -1128,11 +1129,11 @@ impl UsedTypeIdents for ResourceFunc {
     }
 }
 
-impl UsedTypeIdents for Results {
+impl UsedTypeIdents for Option<Type> {
     fn used_type_idents(&self) -> HashSet<Ident> {
         match self {
-            Results::Named(params) => params.used_type_idents(),
-            Results::Anon(type_) => type_.used_type_idents(),
+            None => HashSet::new(),
+            Some(type_) => type_.used_type_idents(),
         }
     }
 }
@@ -1144,7 +1145,7 @@ impl UsedTypeIdents for InterfaceItem {
             InterfaceItem::Function(function) => {
                 let mut idents = HashSet::<Ident>::new();
                 idents.extend(function.params().used_type_idents());
-                idents.extend(function.results().used_type_idents());
+                idents.extend(function.result().used_type_idents());
                 idents
             }
         }
@@ -1164,7 +1165,7 @@ impl UsedTypeIdents for StandaloneFunc {
     fn used_type_idents(&self) -> HashSet<Ident> {
         let mut idents = HashSet::<Ident>::new();
         idents.extend(self.params().used_type_idents());
-        idents.extend(self.results().used_type_idents());
+        idents.extend(self.result().used_type_idents());
         idents
     }
 }

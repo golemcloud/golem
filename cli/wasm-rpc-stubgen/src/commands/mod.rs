@@ -23,3 +23,4 @@ pub mod composition;
 
 /// Declarative subcommands
 pub mod app;
+mod metadata;

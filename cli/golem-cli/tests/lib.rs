@@ -123,6 +123,13 @@ fn app_build_with_rust_component(_tracing: &Tracing) {
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stderr_contains("Compiling app_rust v0.0.1"));
 
+    check_component_metadata(
+        &ctx.working_dir
+            .join("golem-temp/components/app_rust_debug.wasm"),
+        "app:rust".to_string(),
+        None,
+    );
+
     // Rebuild - 1
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
     assert!(outputs.success());
@@ -156,6 +163,22 @@ fn app_build_with_rust_component(_tracing: &Tracing) {
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
+}
+
+fn check_component_metadata(
+    wasm: &Path,
+    expected_package_name: String,
+    expected_version: Option<String>,
+) {
+    let wasm = std::fs::read(wasm).unwrap();
+    let payload = wasm_metadata::Payload::from_binary(&wasm).unwrap();
+    let metadata = payload.metadata();
+
+    assert_eq!(metadata.name, Some(expected_package_name));
+    assert_eq!(
+        metadata.version.as_ref().map(|v| v.to_string()),
+        expected_version
+    );
 }
 
 #[test]

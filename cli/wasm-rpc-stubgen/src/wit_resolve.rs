@@ -757,6 +757,11 @@ impl ResolvedWitApplication {
             None => false,
         })
     }
+
+    pub fn root_package_name(&self, component_name: &ComponentName) -> anyhow::Result<PackageName> {
+        let component = self.component(component_name)?;
+        Ok(component.main_package_name.clone())
+    }
 }
 
 pub fn parse_wit_deps_dir(path: &Path) -> Result<Vec<UnresolvedPackageGroup>, Error> {
