@@ -1,0 +1,24 @@
+{
+    "$schema": "https://json.schemastore.org/tsconfig",
+    "compilerOptions": {
+      "skipLibCheck": true,
+      "target": "ES2020",
+      "noEmit": true,
+      "lib": ["ES2020"],
+      // "types": ["node"],
+      "moduleResolution": "bundler",
+      "checkJs": false,
+      "strict": true,
+      "noUncheckedIndexedAccess": true,
+      "noImplicitOverride": true,
+      "paths": {
+        "rpc:counters-client/counters-client": [
+          "./src/generated/interfaces/rpc-counters-client-counters-client.d.ts"
+        ],
+        "wasi:cli/environment@0.2.0": [
+          "./src/generated/interfaces/wasi-cli-environment.d.ts"
+        ]
+      }
+    },
+    "exclude": ["node_modules"]
+  }

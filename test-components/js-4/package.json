@@ -1,10 +1,10 @@
 {
   "type": "module",
   "scripts": {
-    "build": "jco componentize -w wit -o out/component.wasm main.js"
+    "build": "componentize-js main.js -w wit -o out/component.wasm main.js"
   },
   "devDependencies": {
-    "@golemcloud/componentize-js": "0.10.5-golem.3",
-    "@golemcloud/jco": "1.4.4-golem.1"
+    "@bytecodealliance/componentize-js": "0.18.0",
+    "@bytecodealliance/preview2-shim": "0.17.2"
   }
 }
