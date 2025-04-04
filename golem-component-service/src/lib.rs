@@ -74,12 +74,12 @@ impl ComponentService {
 
         match config.db.clone() {
             DbConfig::Postgres(c) => {
-                db::postgres_migrate(&c, migrations.postgres_migrations())
+                db::postgres::migrate(&c, migrations.postgres_migrations())
                     .await
                     .context("Postgres DB migration")?;
             }
             DbConfig::Sqlite(c) => {
-                db::sqlite_migrate(&c, migrations.sqlite_migrations())
+                db::sqlite::migrate(&c, migrations.sqlite_migrations())
                     .await
                     .context("SQLite DB migration")?;
             }

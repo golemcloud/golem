@@ -1429,7 +1429,8 @@ mod tests {
         Path, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
-        bool, case, f32, field, list, option, record, s32, s8, str, tuple, u32, u64, u8, variant,
+        bool, case, f32, field, list, option, record, result, s32, s8, str, tuple, u32, u64, u8,
+        variant,
     };
     use golem_wasm_rpc::{parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType};
 
@@ -2261,6 +2262,56 @@ mod tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "1 bar".into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_pattern_match_dynamic_branch_1() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x: u64 = 1;
+
+           match x {
+                1 => ok(1: u64),
+                2 => err("none")
+           }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+        let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected = ValueAndType::new(
+            Value::Result(Ok(Some(Box::new(Value::U64(1))))),
+            result(u64(), str()),
+        );
+
+        assert_eq!(rib_result.get_val().unwrap(), expected);
+    }
+
+    #[test]
+    async fn test_interpreter_pattern_match_dynamic_branch_2() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x = some({foo: 1:u64});
+
+           match x {
+               some(x) => ok(x.foo),
+               none => err("none")
+           }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+        let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected = ValueAndType::new(
+            Value::Result(Ok(Some(Box::new(Value::U64(1))))),
+            result(u64(), str()),
+        );
+
+        assert_eq!(rib_result.get_val().unwrap(), expected);
     }
 
     #[test]
@@ -3793,7 +3844,7 @@ mod tests {
         let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.cart("bar");
-                cart.add-item({product-id: "mac", name: "apple", quantity: 1, price: 1});
+                cart.add-item({product-id: "mac", name: "apple", price: 1, quantity: 1});
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3873,7 +3924,7 @@ mod tests {
                 let c = 1;
                 let d = 1;
                 let cart = worker.cart("bar");
-                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                cart.add-item({product-id: a, name: b, price: d, quantity: c});
                 cart.remove-item(a);
                 cart.update-item-quantity(a, 2);
                 let result = cart.get-cart-contents();

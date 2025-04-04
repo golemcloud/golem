@@ -14,11 +14,11 @@
 
 use crate::Tracing;
 use golem_common::config::DbSqliteConfig;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::{
     db,
     migration::{Migrations, MigrationsDir},
 };
-use sqlx::Pool;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential};
 use uuid::Uuid;
@@ -131,7 +131,7 @@ mod tests {
 
 pub struct SqliteDb {
     db_path: String,
-    pub pool: Arc<Pool<sqlx::Sqlite>>,
+    pub pool: Arc<SqlitePool>,
 }
 
 impl SqliteDb {
@@ -142,7 +142,7 @@ impl SqliteDb {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(
+        db::sqlite::migrate(
             &db_config,
             MigrationsDir::new("../golem-component-service/db/migration".into())
                 .sqlite_migrations(),
@@ -150,7 +150,7 @@ impl SqliteDb {
         .await
         .unwrap();
 
-        let pool = Arc::new(db::create_sqlite_pool(&db_config).await.unwrap());
+        let pool = Arc::new(SqlitePool::configured(&db_config).await.unwrap());
 
         Self { db_path, pool }
     }
