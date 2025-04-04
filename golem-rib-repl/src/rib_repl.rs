@@ -48,8 +48,7 @@ impl RibRepl {
     ///   If `None`, no history will be saved or loaded from `~/.rib_history`.
     /// - `dependency_manager`: This is responsible for how to load all the components or a specific
     ///   custom component.
-    /// - `worker_function_invoke`: A reference-counted, thread-safe handler responsible for invoking
-    ///   functions on workers. This trait is used to invoke various functions in the Rib environment.
+    /// - `worker_function_invoke`: An implementation of the `WorkerFunctionInvoke` trait,
     /// - `printer`: Optional custom printer for displaying results and errors in the REPL. If `None`
     ///   a default printer will be used.
     /// - `component_source`: Optional details about the component to be loaded, including its name
@@ -189,7 +188,7 @@ impl RibRepl {
     /// Note: Currently, only a single component is supported per session. Multi-component
     /// support is planned but not yet implemented.
     pub fn update_component_dependency(&mut self, dependency: RibComponentMetadata) {
-        self.repl_state.update_dependency(dependency);
+        self.repl_state.pdate_dependency(dependency);
     }
 
     /// Starts the default REPL loop for executing Rib code interactively.
