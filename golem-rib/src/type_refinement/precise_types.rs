@@ -22,10 +22,10 @@ pub struct RecordType(pub Vec<(String, InferredType)>);
 pub struct OptionalType(pub InferredType);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct OkType(pub InferredType);
+pub struct OkType(pub Option<InferredType>);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct ErrType(pub InferredType);
+pub struct ErrType(pub Option<InferredType>);
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct ListType(pub InferredType);

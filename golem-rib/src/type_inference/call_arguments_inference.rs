@@ -47,7 +47,7 @@ pub fn infer_function_call_types(
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
-    use crate::type_inference::kind::GetTypeKind;
+    use crate::type_inference::type_hint::GetTypeHint;
     use crate::{
         ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
         FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
@@ -340,7 +340,8 @@ mod internal {
         let is_valid = if provided.inferred_type().is_unknown() {
             true
         } else {
-            provided.inferred_type().get_type_kind() == expected.get_type_kind()
+            provided.inferred_type().get_type_hint().get_type_kind()
+                == expected.get_type_hint().get_type_kind()
         };
 
         if is_valid {
