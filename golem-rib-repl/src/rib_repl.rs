@@ -45,7 +45,7 @@ impl RibRepl {
     /// # Arguments
     ///
     /// - `history_file`: Optional path to a file where the REPL history will be stored and loaded from.
-    ///   If `None`, no history will be saved or loaded from `~/.rib_history`.
+    ///   If `None`, it will be loaded from `~/.rib_history`.
     /// - `dependency_manager`: This is responsible for how to load all the components or a specific
     ///   custom component.
     /// - `worker_function_invoke`: An implementation of the `WorkerFunctionInvoke` trait,
