@@ -222,13 +222,12 @@ impl RibRepl {
     }
 }
 
-/// Represents the source of a component in the Rib framework.
+/// Represents the source of a component in the REPL session.
 ///
-/// The `component_name` should be the component's name without the `.wasm` extension
-/// (e.g., `"shopping-cart"`), while `source_path` must include the full file path,
+/// The `source_path` must include the full file path,
 /// including the `.wasm` file (e.g., `"/path/to/shopping-cart.wasm"`).
 pub struct ComponentSource {
-    /// The name of the component without the `.wasm` extension.
+    /// The name of the component
     pub component_name: String,
 
     /// The full file path to the WebAssembly source file, including the `.wasm` extension.
