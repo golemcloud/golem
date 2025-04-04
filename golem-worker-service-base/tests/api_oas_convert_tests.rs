@@ -581,6 +581,7 @@ fn test_basic_types_and_record_conversion() {
 }
 
 // Test that the conversion works for a swagger-ui binding type
+// Test also for default response
 // Todo: Add test for file-server binding type, and any other new binding types
 #[test]
 fn test_swagger_ui_binding() {
@@ -608,20 +609,43 @@ fn test_swagger_ui_binding() {
         OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
             .unwrap();
 
-    // Parse the YAML to verify the structure
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+    // Define expected YAML structure
+    let expected_yaml = r#"
+openapi: 3.0.0
+info:
+  title: swagger-api
+  version: 0.1.0
+paths:
+  /v0.1.0/swagger-ui:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        default:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: swagger-ui
+components: {}
+x-golem-api-definition-id: swagger-api
+x-golem-api-definition-version: 0.1.0
+"#;
 
-    // Verify Swagger binding
-    let swagger_binding =
-        &yaml_value["paths"]["/v0.1.0/swagger-ui"]["get"]["x-golem-api-gateway-binding"];
-    assert_eq!(swagger_binding["binding-type"], "swagger-ui");
+    // Parse both YAMLs for comparison
+    let actual_yaml: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
+        .expect("Failed to parse actual OpenAPI YAML");
+    let expected_yaml: serde_yaml::Value =
+        serde_yaml::from_str(expected_yaml).expect("Failed to parse expected OpenAPI YAML");
 
-    // Verify responses section exists
-    let responses = &yaml_value["paths"]["/v0.1.0/swagger-ui"]["get"]["responses"];
-    assert!(responses.is_mapping());
-    assert!(responses["200"].is_mapping());
-    assert_eq!(responses["200"]["description"], "OK");
+    // Single assert comparing the complete structure
+    assert_eq!(actual_yaml, expected_yaml);
 }
 
 // Test for if security is converted properly
@@ -1114,6 +1138,7 @@ fn test_user_time_conversion() {
 // Test full structure of shopping-cart, tested as a single output openapi schema
 // Test for cors-preflight, swagger-ui, default bindings
 // Test for no request body, and array object as response
+// Test also for default response
 #[test]
 fn test_oas_conversion_full_structure_shopping_cart() {
     // Sample JSON input with complete shopping-cart structure
@@ -1282,6 +1307,12 @@ paths:
             application/json:
               schema:
                 type: object
+        default:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
       x-golem-api-gateway-binding:
         binding-type: swagger-ui
   /v0.0.1/{user}/get-cart-contents:
@@ -1297,6 +1328,31 @@ paths:
         style: simple
       responses:
         '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    product-id:
+                      type: string
+                    name:
+                      type: string
+                    price:
+                      type: number
+                      format: float
+                    quantity:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  required:
+                  - product-id
+                  - name
+                  - price
+                  - quantity
+        default:
           description: Created
           content:
             application/json:
@@ -1343,6 +1399,12 @@ paths:
         style: simple
       responses:
         '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        default:
           description: OK
           content:
             application/json:
