@@ -396,6 +396,7 @@ mod test {
     use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
     use golem_common::model::ComponentId;
     use golem_service_base::db;
+    use golem_service_base::db::sqlite::SqlitePool;
     use golem_service_base::model::{Component, ComponentName};
     use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
     use golem_worker_service_base::repo::api_definition::{
@@ -496,14 +497,14 @@ mod test {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(
+        db::sqlite::migrate(
             &db_config,
             MigrationsDir::new("./db/migration".into()).sqlite_migrations(),
         )
         .await
         .unwrap();
 
-        let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+        let db_pool = SqlitePool::configured(&db_config).await.unwrap();
 
         let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> = Arc::new(
             LoggedApiDefinitionRepo::new(DbApiDefinitionRepo::new(db_pool.clone().into())),

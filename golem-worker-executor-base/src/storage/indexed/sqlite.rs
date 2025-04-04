@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_common::SafeDisplay;
+use golem_service_base::db::sqlite::SqlitePool;
 use std::time::Duration;
-
-use super::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 
 #[derive(Debug)]
 pub struct SqliteIndexedStorage {
@@ -32,7 +32,9 @@ impl SqliteIndexedStorage {
     }
 
     async fn init(&self) -> Result<(), String> {
-        self.pool.execute(
+        let pool = self.pool.with_rw("indexed_storage", "init");
+
+        pool.execute(
         sqlx::query(
             r#"
                         CREATE TABLE IF NOT EXISTS index_storage (
@@ -44,13 +46,13 @@ impl SqliteIndexedStorage {
                         );
                          "#,
         ))
-            .await?;
+            .await.map_err(|err| err.to_safe_string())?;
 
-        self.pool
-            .execute(sqlx::query(
-                "CREATE INDEX IF NOT EXISTS idx_key ON index_storage (namespace, key);",
-            ))
-            .await?;
+        pool.execute(sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_key ON index_storage (namespace, key);",
+        ))
+        .await
+        .map_err(|err| err.to_safe_string())?;
         Ok(())
     }
 
@@ -98,10 +100,11 @@ impl IndexedStorage for SqliteIndexedStorage {
         .bind(key);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_optional_as(query)
             .await
             .map(|row| row.unwrap_or((false,)).0)
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn scan(
@@ -123,10 +126,11 @@ impl IndexedStorage for SqliteIndexedStorage {
 
         let keys = self
             .pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_all::<(String,), _>(query)
             .await
-            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())?;
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map_err(|err| err.to_safe_string())?;
 
         let new_cursor = if keys.len() < count as usize {
             0
@@ -158,10 +162,11 @@ impl IndexedStorage for SqliteIndexedStorage {
         .bind(value);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn length(
@@ -178,10 +183,11 @@ impl IndexedStorage for SqliteIndexedStorage {
         .bind(key);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_optional_as(query)
             .await
             .map(|row| row.map(|r| r.0 as u64).unwrap_or(0))
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn delete(
@@ -196,10 +202,11 @@ impl IndexedStorage for SqliteIndexedStorage {
             .bind(key);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn read(
@@ -221,10 +228,11 @@ impl IndexedStorage for SqliteIndexedStorage {
             .bind(sqlx::types::Json(end_id));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_all::<DBIdValue, _>(query)
             .await
             .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn first(
@@ -242,10 +250,11 @@ impl IndexedStorage for SqliteIndexedStorage {
                     .bind(key);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn last(
@@ -263,10 +272,11 @@ impl IndexedStorage for SqliteIndexedStorage {
                 .bind(key);
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn closest(
@@ -286,10 +296,11 @@ impl IndexedStorage for SqliteIndexedStorage {
             .bind(sqlx::types::Json(id));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_ro(svc_name, api_name)
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn drop_prefix(
@@ -307,10 +318,11 @@ impl IndexedStorage for SqliteIndexedStorage {
                 .bind(sqlx::types::Json(last_dropped_id));
 
         self.pool
-            .with(svc_name, api_name)
+            .with_rw(svc_name, api_name)
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 }
 

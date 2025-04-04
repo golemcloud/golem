@@ -159,8 +159,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 51
             `(1, 2)`
-            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `tuple`
-            help: ensure this expression is only used in contexts that align with its actual type
+            cause: ambiguous types: `list<number>`, `tuple<number, number>`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -183,8 +182,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 21
             `{a: "foo"}`
-            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `record`
-            help: ensure this expression is only used in contexts that align with its actual type
+            cause: ambiguous types: `list<number>`, `record{a: str}`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
