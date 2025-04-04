@@ -34,6 +34,10 @@ impl ReplState {
         self.rib_code_collection.push(rib.to_string());
     }
 
+    pub fn update_dependency(&mut self, dependency: RibComponentMetadata) {
+        self.dependency = dependency;
+    }
+
     pub fn pop_rib_text(&mut self) {
         self.rib_code_collection.pop();
     }

@@ -181,6 +181,20 @@ impl RibRepl {
         }
     }
 
+    /// Dynamically updates the REPL session with a new component dependency.
+    ///
+    /// This method is intended for use in interactive or user-controlled REPL loops,
+    /// allowing runtime replacement or augmentation of the active component metadata.
+    ///
+    /// Note: Currently, only a single component is supported per session. Multi-component
+    /// support is planned but not yet implemented.
+    pub fn update_component_dependency(
+        &mut self,
+        dependency: RibComponentMetadata
+    ) {
+        self.repl_state.update_dependency(dependency);
+    }
+
     /// Starts the default REPL loop for executing Rib code interactively.
     ///
     /// This is a convenience method that repeatedly reads user input and executes
