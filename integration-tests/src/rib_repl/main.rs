@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use golem_rib_repl::repl_printer::DefaultResultPrinter;
 use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
 use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies};
 use integration_tests::rib_repl::bootstrap::*;
@@ -16,7 +15,7 @@ async fn main() {
         None,
         Arc::new(TestRibReplDependencyManager::new(deps.clone())),
         Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
-        Box::new(DefaultResultPrinter),
+        None,
         Some(ComponentSource {
             component_name: component_name.to_string(),
             source_path: deps

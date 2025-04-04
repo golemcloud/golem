@@ -15,7 +15,7 @@
 use crate::compiler::compile_rib_script;
 use crate::dependency_manager::{RibComponentMetadata, RibDependencyManager};
 use crate::invoke::WorkerFunctionInvoke;
-use crate::repl_printer::ReplPrinter;
+use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
@@ -30,6 +30,7 @@ use rustyline::{Config, Editor};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
     history_file_path: PathBuf,
     printer: Box<dyn ReplPrinter>,
@@ -38,16 +39,32 @@ pub struct RibRepl {
 }
 
 impl RibRepl {
-    pub fn read_line(&mut self) -> rustyline::Result<String> {
-        self.editor.readline(">>> ".magenta().to_string().as_str())
-    }
 
+    /// Bootstraps and initializes the Rib REPL environment.
+    /// # Arguments
+    ///
+    /// - `history_file`: Optional path to a file where the REPL history will be stored and loaded from.
+    ///   If `None`, no history will be saved or loaded from `~/.rib_history`.
+    /// - `dependency_manager`: This is responsible for how to load all the components or a specific
+    ///    custom component.
+    /// - `worker_function_invoke`: A reference-counted, thread-safe handler responsible for invoking
+    ///   functions on workers. This trait is used to invoke various functions in the Rib environment.
+    /// - `printer`: Optional custom printer for displaying results and errors in the REPL. If `None`
+    ///   a default printer will be used.
+    /// - `component_source`: Optional details about the component to be loaded, including its name
+    ///   and source file path. If `None`, the REPL will try to load all the components using the
+    ///   `dependency_manager`, otherwise, `dependency_manager` will load only the specified component.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the fully initialized `RibRepl` instance,  which can be used to `run`
+    /// the REPL loop, along with fine grain control over the REPL state and execution.
     pub async fn bootstrap(
         history_file: Option<PathBuf>,
         dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
-        printer: Box<dyn ReplPrinter>,
-        component_details: Option<ComponentSource>,
+        printer: Option<dyn ReplPrinter>,
+        component_source: Option<ComponentSource>,
     ) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = history_file.unwrap_or_else(get_default_history_file);
 
@@ -57,7 +74,7 @@ impl RibRepl {
             Config::default(),
             DefaultHistory::new(),
         )
-        .unwrap();
+            .unwrap();
 
         rl.set_helper(Some(rib_editor));
 
@@ -70,7 +87,7 @@ impl RibRepl {
             }
         }
 
-        let component_dependency = match component_details {
+        let component_dependency = match component_source {
             Some(ref details) => dependency_manager
                 .add_component(&details.source_path, details.component_name.clone())
                 .await
@@ -107,20 +124,35 @@ impl RibRepl {
 
         Ok(RibRepl {
             history_file_path,
-            printer,
+            printer: printer
+                .map(|p| Box::new(p))
+                .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state,
         })
     }
 
-    pub async fn process_command(&mut self, prompt: &str) -> Result<Option<RibResult>, RibError> {
-        if !prompt.is_empty() {
-            self.update_rib_text_in_session(prompt);
+    /// Reads a single line of input from the REPL prompt.
+    ///
+    /// This method is exposed for users who want to manage their own REPL loop
+    /// instead of using the built-in [`Self::run`] method.
+    pub fn read_line(&mut self) -> rustyline::Result<String> {
+        self.editor.readline(">>> ".magenta().to_string().as_str())
+    }
+
+    /// Executes a single line of Rib code and returns the result.
+    ///
+    /// This function is exposed for users who want to implement custom REPL loops
+    /// or integrate Rib execution into other workflows.
+    /// For a built-in REPL loop, see [`Self::run`].
+    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibError> {
+        if !rib.is_empty() {
+            self.update_rib_text_in_session(rib);
 
             // Add every rib script into the history (in memory) and save it
             // regardless of whether it compiles or not
             // History is never used for any progressive compilation or interpretation
-            let _ = self.editor.add_history_entry(prompt);
+            let _ = self.editor.add_history_entry(rib);
             let _ = self.editor.save_history(&self.history_file_path);
 
             match compile_rib_script(&self.current_rib_program(), &mut self.repl_state) {
@@ -154,12 +186,17 @@ impl RibRepl {
         }
     }
 
+    /// Starts the default REPL loop for executing Rib code interactively.
+    ///
+    /// This is a convenience method that repeatedly reads user input and executes
+    /// it using [`Self::execute_rib`]. If you need more control over the REPL behavior,
+    /// use [`Self::read_line`] and [`Self::execute_rib`] directly.
     pub async fn run(&mut self) {
         loop {
             let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
             match readline {
-                Ok(line) => {
-                    let _ = self.process_command(&line).await;
+                Ok(rib) => {
+                    let _ = self.execute_rib(&rib).await;
                 }
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,
@@ -230,12 +267,11 @@ pub enum ReplBootstrapError {
 }
 
 
-// Developer note: As of now Rib interpreter can work with only one component, and there-fore,
-// `RibFunctionInvoke` trait within golem-rib module doesn't include component_id in the `invoke`
-// arguments.  It only needs to know about the optional worker_name, function name and arguments.
-// Once golem-rib supports multiple components, the `RibFunctionInvoke`
-// trait will be updated to include component_id and we can directly use that instead of
-// `WorkerFunctionInvoke` which is exposed to the clients of `golem-rib-repl` module
+// Note: Currently, the Rib interpreter supports only one component, so the
+// `RibFunctionInvoke` trait in the `golem-rib` module does not include `component_id` in
+// the `invoke` arguments. It only requires the optional worker name, function name, and arguments.
+// Once multi-component support is added, the trait will be updated to include `component_id`,
+// and we can use it directly instead of `WorkerFunctionInvoke` in the `golem-rib-repl` module.
 struct ReplRibFunctionInvoke {
     component_dependency: RibComponentMetadata,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,

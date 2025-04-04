@@ -4,7 +4,7 @@ use golem_rib_repl::dependency_manager::{
     ReplDependencies, RibComponentMetadata, RibDependencyManager,
 };
 use golem_rib_repl::invoke::WorkerFunctionInvoke;
-use golem_rib_repl::repl_printer::DefaultResultPrinter;
+use golem_rib_repl::repl_printer::DefaultReplResultPrinter;
 use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
