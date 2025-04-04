@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod benchmarks;
+pub mod rib_repl;
 
 #[cfg(test)]
 test_r::enable!();

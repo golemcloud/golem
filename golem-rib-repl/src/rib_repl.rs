@@ -47,7 +47,7 @@ impl RibRepl {
         dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
         printer: Box<dyn ReplPrinter>,
-        component_details: Option<ComponentDetails>,
+        component_details: Option<ComponentSource>,
     ) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = history_file.unwrap_or_else(get_default_history_file);
 
@@ -180,10 +180,16 @@ impl RibRepl {
     }
 }
 
-pub struct ComponentDetails {
-    // Name of the component
+/// Represents the source of a component in the Rib framework.
+///
+/// The `component_name` should be the component's name without the `.wasm` extension
+/// (e.g., `"shopping-cart"`), while `source_path` must include the full file path,
+/// including the `.wasm` file (e.g., `"/path/to/shopping-cart.wasm"`).
+pub struct ComponentSource {
+    /// The name of the component without the `.wasm` extension.
     pub component_name: String,
-    // The complete path of the wasm source file
+
+    /// The full file path to the WebAssembly source file, including the `.wasm` extension.
     pub source_path: PathBuf,
 }
 
@@ -201,30 +207,42 @@ fn get_default_history_file() -> PathBuf {
     path
 }
 
+/// Represents errors that can occur during the bootstrap phase of the Rib REPL environment.
 #[derive(Debug, Clone)]
 pub enum ReplBootstrapError {
-    // Currently not supported
-    // So either the context should have only 1 component
-    // or specifically specify the component when starting the REPL
-    // In future, when Rib supports multiple components (which may require the need
-    // of root package names being the component name)
+    /// Multiple components were found, but the REPL requires a single component context.
+    ///
+    /// To resolve this, either:
+    /// - Ensure the context includes only one component, or
+    /// - Explicitly specify the component to load when starting the REPL.
+    ///
+    /// In the future, Rib will support multiple components
     MultipleComponentsFound(String),
+
+    /// No components were found in the given context.
     NoComponentsFound,
+
+    /// Failed to load a specified component.
     ComponentLoadError(String),
+
+    /// Failed to read from or write to the REPL history file.
     ReplHistoryFileError(String),
 }
 
-// As of now Rib interpreter can work with only one component, and the details
-// and hence it needs to only know about worker-name, which is optional, and function arguments
-// When Rib supports multiple component, the RibFunctionInvoke will come to know
-// about the component_id and the worker_name and this indirection can be avoided
-pub struct ReplRibFunctionInvoke {
+
+// Developer note: As of now Rib interpreter can work with only one component, and there-fore,
+// `RibFunctionInvoke` trait within golem-rib module doesn't include component_id in the `invoke`
+// arguments.  It only needs to know about the optional worker_name, function name and arguments.
+// Once golem-rib supports multiple components, the `RibFunctionInvoke`
+// trait will be updated to include component_id and we can directly use that instead of
+// `WorkerFunctionInvoke` which is exposed to the clients of `golem-rib-repl` module
+struct ReplRibFunctionInvoke {
     component_dependency: RibComponentMetadata,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
 }
 
 impl ReplRibFunctionInvoke {
-    pub fn new(
+    fn new(
         component_dependency: RibComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     ) -> Self {

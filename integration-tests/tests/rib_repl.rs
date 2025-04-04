@@ -26,7 +26,7 @@ use golem_rib_repl::dependency_manager::{
 };
 use golem_rib_repl::invoke::WorkerFunctionInvoke;
 use golem_rib_repl::repl_printer::DefaultResultPrinter;
-use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
+use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibResult};
@@ -44,7 +44,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
         Arc::new(TestRibReplDependencyManager::new(deps.clone())),
         Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
         Box::new(DefaultResultPrinter),
-        Some(ComponentDetails {
+        Some(ComponentSource {
             component_name: "shopping-cart".to_string(),
             source_path: deps.component_directory().join("shopping-cart.wasm"),
         }),
