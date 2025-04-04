@@ -39,7 +39,6 @@ pub struct RibRepl {
 }
 
 impl RibRepl {
-
     /// Bootstraps and initializes the Rib REPL environment.
     /// # Arguments
     ///
@@ -63,7 +62,7 @@ impl RibRepl {
         history_file: Option<PathBuf>,
         dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
-        printer: Option<dyn ReplPrinter>,
+        printer: Option<Box<dyn ReplPrinter>>,
         component_source: Option<ComponentSource>,
     ) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = history_file.unwrap_or_else(get_default_history_file);
@@ -74,7 +73,7 @@ impl RibRepl {
             Config::default(),
             DefaultHistory::new(),
         )
-            .unwrap();
+        .unwrap();
 
         rl.set_helper(Some(rib_editor));
 
@@ -124,9 +123,7 @@ impl RibRepl {
 
         Ok(RibRepl {
             history_file_path,
-            printer: printer
-                .map(|p| Box::new(p))
-                .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
+            printer: printer.unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state,
         })
@@ -265,7 +262,6 @@ pub enum ReplBootstrapError {
     /// Failed to read from or write to the REPL history file.
     ReplHistoryFileError(String),
 }
-
 
 // Note: Currently, the Rib interpreter supports only one component, so the
 // `RibFunctionInvoke` trait in the `golem-rib` module does not include `component_id` in

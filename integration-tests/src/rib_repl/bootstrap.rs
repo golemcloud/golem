@@ -4,18 +4,12 @@ use golem_rib_repl::dependency_manager::{
     ReplDependencies, RibComponentMetadata, RibDependencyManager,
 };
 use golem_rib_repl::invoke::WorkerFunctionInvoke;
-use golem_rib_repl::repl_printer::DefaultReplResultPrinter;
-use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
-use golem_test_framework::config::{
-    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
-};
+use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::ValueAndType;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName};
 use std::path::Path;
-use std::sync::Arc;
 use uuid::Uuid;
-
 
 pub struct TestRibReplDependencyManager {
     dependencies: EnvBasedTestDependencies,

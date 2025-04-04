@@ -1,7 +1,9 @@
-use std::sync::Arc;
 use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
-use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+};
 use integration_tests::rib_repl::bootstrap::*;
+use std::sync::Arc;
 #[tokio::main]
 async fn main() {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig::new()).await;
@@ -23,8 +25,8 @@ async fn main() {
                 .join(format!("{}.wasm", component_name)),
         }),
     )
-        .await
-        .expect("Failed to bootstrap REPL");
+    .await
+    .expect("Failed to bootstrap REPL");
 
     rib_repl.run().await
 }
