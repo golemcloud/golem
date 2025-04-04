@@ -14,7 +14,7 @@
 
 use crate::base_model::{ComponentId, ComponentVersion};
 use crate::model::plugin::{DefaultPluginOwner, PluginOwner};
-use crate::model::{AccountId, HasAccountId, PoemTypeRequirements};
+use crate::model::{AccountId, PoemTypeRequirements};
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
@@ -24,7 +24,6 @@ pub trait ComponentOwner:
     Debug
     + Display
     + FromStr<Err = String>
-    + HasAccountId
     + Clone
     + PartialEq
     + Serialize
@@ -50,6 +49,8 @@ pub trait ComponentOwner:
         + 'static;
 
     type PluginOwner: PluginOwner + From<Self>;
+
+    fn account_id(&self) -> AccountId;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,12 +77,6 @@ impl FromStr for DefaultComponentOwner {
     }
 }
 
-impl HasAccountId for DefaultComponentOwner {
-    fn account_id(&self) -> AccountId {
-        AccountId::placeholder()
-    }
-}
-
 impl From<DefaultComponentOwner> for DefaultPluginOwner {
     fn from(_value: DefaultComponentOwner) -> Self {
         DefaultPluginOwner
@@ -92,6 +87,10 @@ impl ComponentOwner for DefaultComponentOwner {
     #[cfg(feature = "sql")]
     type Row = crate::repo::component::DefaultComponentOwnerRow;
     type PluginOwner = DefaultPluginOwner;
+
+    fn account_id(&self) -> AccountId {
+        AccountId::placeholder()
+    }
 }
 
 #[derive(

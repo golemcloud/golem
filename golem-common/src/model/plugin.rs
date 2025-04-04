@@ -1,7 +1,6 @@
 use super::PoemMultipartTypeRequirements;
 use crate::model::{
-    AccountId, ComponentId, ComponentVersion, Empty, HasAccountId, PluginInstallationId,
-    PoemTypeRequirements,
+    AccountId, ComponentId, ComponentVersion, Empty, PluginInstallationId, PoemTypeRequirements,
 };
 use async_trait::async_trait;
 use serde::de::{MapAccess, Visitor};
@@ -172,7 +171,6 @@ pub trait PluginOwner:
     Debug
     + Display
     + FromStr<Err = String>
-    + HasAccountId
     + Clone
     + PartialEq
     + Serialize
@@ -196,6 +194,8 @@ pub trait PluginOwner:
         + Sync
         + Unpin
         + 'static;
+
+    fn account_id(&self) -> AccountId;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -221,15 +221,13 @@ impl FromStr for DefaultPluginOwner {
     }
 }
 
-impl HasAccountId for DefaultPluginOwner {
-    fn account_id(&self) -> AccountId {
-        AccountId::placeholder()
-    }
-}
-
 impl PluginOwner for DefaultPluginOwner {
     #[cfg(feature = "sql")]
     type Row = crate::repo::plugin::DefaultPluginOwnerRow;
+
+    fn account_id(&self) -> AccountId {
+        AccountId::placeholder()
+    }
 }
 
 impl Serialize for DefaultPluginOwner {

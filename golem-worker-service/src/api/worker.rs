@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service::{component::ComponentService, worker::WorkerService};
+use crate::service::worker::WorkerService;
 use futures::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
@@ -25,11 +25,12 @@ use golem_common::model::{
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::auth::EmptyAuthCtx;
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::http_invocation_context::grpc_invocation_context_from_request;
+use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::{
     proxy_worker_connection, InvocationParameters, WorkerStream,
 };
@@ -40,6 +41,7 @@ use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tap::TapFallible;
 use tracing::Instrument;
@@ -48,7 +50,7 @@ const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct WorkerApi {
-    pub component_service: ComponentService,
+    pub component_service: Arc<dyn ComponentService<DefaultNamespace, EmptyAuthCtx>>,
     pub worker_service: WorkerService,
 }
 

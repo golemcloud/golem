@@ -33,12 +33,13 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
+use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
 use rib::RibError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -196,8 +197,13 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>>;
 
-    fn conversion_context<'a>(&'a self, auth_ctx: &'a AuthCtx) -> BoxConversionContext<'a>
+    fn conversion_context<'a>(
+        &'a self,
+        namespace: &'a Namespace,
+        auth_ctx: &'a AuthCtx,
+    ) -> BoxConversionContext<'a>
     where
+        Namespace: 'a,
         AuthCtx: 'a;
 }
 
@@ -220,15 +226,18 @@ type ComponentByNameCache = Cache<ComponentName, (), Option<ComponentView>, Stri
 
 type ComponentByIdCache = Cache<ComponentId, (), Option<ComponentView>, String>;
 
-struct ConversionContextImpl<'a, AuthCtx> {
-    component_service: &'a Arc<dyn ComponentService<AuthCtx>>,
+pub struct DefaultConversionContext<'a, Namespace, AuthCtx> {
+    component_service: &'a Arc<dyn ComponentService<Namespace, AuthCtx>>,
+    namespace: &'a Namespace,
     auth_ctx: &'a AuthCtx,
     component_name_cache: &'a ComponentByNameCache,
     component_id_cache: &'a ComponentByIdCache,
 }
 
 #[async_trait]
-impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthCtx> {
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ConversionContext
+    for DefaultConversionContext<'_, Namespace, AuthCtx>
+{
     async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
         let name = name.clone();
         let component = self
@@ -236,7 +245,7 @@ impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthC
             .get_or_insert_simple(&name, async || {
                 let result = self
                     .component_service
-                    .get_by_name(&name, self.auth_ctx)
+                    .get_by_name(&name, self.namespace, self.auth_ctx)
                     .await;
 
                 match result {
@@ -291,7 +300,7 @@ impl<AuthCtx: Send + Sync> ConversionContext for ConversionContextImpl<'_, AuthC
 }
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace> {
-    component_service: Arc<dyn ComponentService<AuthCtx>>,
+    component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
     definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
     security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
@@ -303,7 +312,7 @@ pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace> {
 
 impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
     pub fn new(
-        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<Namespace, AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
@@ -391,12 +400,8 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace> ApiDefinitionService<AuthCtx, Namespace>
+impl<AuthCtx: GolemAuthCtx, Namespace: GolemNamespace> ApiDefinitionService<AuthCtx, Namespace>
     for ApiDefinitionServiceDefault<AuthCtx, Namespace>
-where
-    AuthCtx: Send + Sync,
-    Namespace: Display + Clone + Send + Sync + TryFrom<String>,
-    <Namespace as TryFrom<String>>::Error: Display,
 {
     async fn create(
         &self,
@@ -464,7 +469,7 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
-        let conversion_ctx = self.conversion_context(auth_ctx);
+        let conversion_ctx = self.conversion_context(namespace, auth_ctx);
         let converted = definition
             .to_http_api_definition_request(&conversion_ctx)
             .await
@@ -536,7 +541,7 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
-        let conversion_ctx = self.conversion_context(auth_ctx);
+        let conversion_ctx = self.conversion_context(namespace, auth_ctx);
         let converted = definition
             .to_http_api_definition_request(&conversion_ctx)
             .await
@@ -653,12 +658,18 @@ where
         Ok(values)
     }
 
-    fn conversion_context<'a>(&'a self, auth_ctx: &'a AuthCtx) -> BoxConversionContext<'a>
+    fn conversion_context<'a>(
+        &'a self,
+        namespace: &'a Namespace,
+        auth_ctx: &'a AuthCtx,
+    ) -> BoxConversionContext<'a>
     where
+        Namespace: 'a,
         AuthCtx: 'a,
     {
-        ConversionContextImpl {
+        DefaultConversionContext {
             component_service: &self.component_service,
+            namespace,
             auth_ctx,
             component_name_cache: &self.component_name_cache,
             component_id_cache: &self.component_id_cache,

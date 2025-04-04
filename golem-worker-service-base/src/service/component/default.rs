@@ -32,6 +32,7 @@ use golem_common::model::component_constraint::{
 use golem_common::model::ComponentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
+use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::{Component, ComponentName};
 use http::Uri;
 use std::time::Duration;
@@ -41,7 +42,7 @@ use tonic::transport::Channel;
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
 #[async_trait]
-pub trait ComponentService<AuthCtx>: Send + Sync {
+pub trait ComponentService<Namespace, AuthCtx>: Send + Sync {
     async fn get_by_version(
         &self,
         component_id: &ComponentId,
@@ -58,6 +59,7 @@ pub trait ComponentService<AuthCtx>: Send + Sync {
     async fn get_by_name(
         &self,
         component_id: &ComponentName,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
 
@@ -246,9 +248,8 @@ impl RemoteComponentService {
 }
 
 #[async_trait]
-impl<AuthCtx> ComponentService<AuthCtx> for RemoteComponentService
-where
-    AuthCtx: IntoIterator<Item = (String, String)> + Clone + Send + Sync,
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ComponentService<Namespace, AuthCtx>
+    for RemoteComponentService
 {
     async fn get_by_version(
         &self,
@@ -326,6 +327,7 @@ where
     async fn get_by_name(
         &self,
         component_name: &ComponentName,
+        namespace: &Namespace,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
         let value = with_retries(
@@ -336,15 +338,15 @@ where
             &(
                 self.client.clone(),
                 component_name.0.clone(),
+                namespace.project_id(),
                 metadata.clone(),
             ),
-            |(client, name, metadata)| {
+            |(client, name, project_id, metadata)| {
                 Box::pin(async move {
                     let response = client
                         .call("get_components", move |client| {
-                            // Not passing project_id here will cause it to be resolved in the current project inferred from the authctx.
                             let request = GetComponentsRequest {
-                                project_id: None,
+                                project_id: project_id.clone().map(|p| p.into()),
                                 component_name: Some(name.clone()),
                             };
 
@@ -389,7 +391,6 @@ where
                     let response = client
                         .call("create_component_constraints", move |client| {
                             let request = CreateComponentConstraintsRequest {
-                                project_id: None,
                                 component_constraints: Some(ComponentConstraints {
                                     component_id: Some(
                                         golem_api_grpc::proto::golem::component::ComponentId::from(
@@ -450,7 +451,6 @@ where
                     let response = client
                         .call("delete_component_constraints", move |client| {
                             let request = DeleteComponentConstraintsRequest {
-                                project_id: None,
                                 component_constraints: Some(ComponentConstraints {
                                     component_id: Some(
                                         golem_api_grpc::proto::golem::component::ComponentId::from(

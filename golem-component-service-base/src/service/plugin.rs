@@ -27,7 +27,6 @@ use golem_common::model::plugin::{
     PluginOwner, PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
 };
 use golem_common::model::ComponentId;
-use golem_common::model::HasAccountId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;

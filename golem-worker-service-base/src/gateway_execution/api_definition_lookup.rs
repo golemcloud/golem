@@ -18,8 +18,8 @@ use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::service::gateway::api_deployment::{ApiDeploymentError, ApiDeploymentService};
 use async_trait::async_trait;
-use golem_common::model::HasAccountId;
 use golem_common::SafeDisplay;
+use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 use tracing::error;
 
 // To lookup the set of API Definitions based on an incoming input.
@@ -61,7 +61,7 @@ impl<AuthCtx, Namespace> DefaultHttpApiDefinitionLookup<AuthCtx, Namespace> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace: HasAccountId + Send + Sync> HttpApiDefinitionsLookup<Namespace>
+impl<AuthCtx: GolemAuthCtx, Namespace: GolemNamespace> HttpApiDefinitionsLookup<Namespace>
     for DefaultHttpApiDefinitionLookup<AuthCtx, Namespace>
 {
     async fn get(
