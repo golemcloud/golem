@@ -131,10 +131,7 @@ pub trait GetterExt<T> {
 
 impl<T: Getter<T>> GetterExt<T> for T {
     fn get_optional(&self, key: &Path) -> Option<T> {
-        match self.get(key) {
-            Ok(value) => Some(value),
-            Err(_) => None,
-        }
+        self.get(key).ok()
     }
 }
 

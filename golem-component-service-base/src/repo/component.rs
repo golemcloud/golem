@@ -26,18 +26,19 @@ use golem_common::model::{
     InitialComponentFileKey,
 };
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool, Row};
+use sqlx::Row;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::result::Result;
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::{debug, info_span, Span};
+use tracing_futures::Instrument;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -60,7 +61,7 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
     #[sqlx(skip)]
     pub installed_plugins:
         Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
-    pub root_package_name: String,
+    pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 }
 
@@ -377,28 +378,9 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owne
         }
     }
 
-    fn logged<R>(message: &'static str, result: Result<R, RepoError>) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!("{}", message),
-            Err(error) => error!(error = error.to_string(), "{message}"),
-        }
-        result
-    }
-
-    fn logged_with_id<R>(
-        message: &'static str,
-        component_id: &Uuid,
-        result: Result<R, RepoError>,
-    ) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!(component_id = component_id.to_string(), "{}", message),
-            Err(error) => error!(
-                component_id = component_id.to_string(),
-                error = error.to_string(),
-                "{message}"
-            ),
-        }
-        result
+    fn span(component_id: &Uuid) -> Span {
+        let span = info_span!("component repository", component_id = %component_id);
+        span
     }
 }
 
@@ -407,8 +389,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
     for LoggedComponentRepo<Owner, Repo>
 {
     async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError> {
-        let result = self.repo.create(component).await;
-        Self::logged_with_id("create", &component.component_id, result)
+        self.repo
+            .create(component)
+            .instrument(Self::span(&component.component_id))
+            .await
     }
 
     async fn update(
@@ -421,8 +405,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
     ) -> Result<ComponentRecord<Owner>, RepoError> {
-        let result = self
-            .repo
+        self.repo
             .update(
                 owner,
                 namespace,
@@ -432,8 +415,8 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
                 component_type,
                 files,
             )
-            .await;
-        Self::logged_with_id("update", component_id, result)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn activate(
@@ -445,8 +428,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         transformed_object_store_key: &str,
         updated_metadata: Vec<u8>,
     ) -> Result<(), RepoError> {
-        let result = self
-            .repo
+        self.repo
             .activate(
                 namespace,
                 component_id,
@@ -455,8 +437,8 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
                 transformed_object_store_key,
                 updated_metadata,
             )
-            .await;
-        Self::logged_with_id("activate", component_id, result)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn get(
@@ -464,13 +446,14 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let result = self.repo.get(namespace, component_id).await;
-        Self::logged_with_id("get", component_id, result)
+        self.repo
+            .get(namespace, component_id)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let result = self.repo.get_all(namespace).await;
-        Self::logged("get_all", result)
+        self.repo.get_all(namespace).await
     }
 
     async fn get_latest_version(
@@ -478,8 +461,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let result = self.repo.get_latest_version(namespace, component_id).await;
-        Self::logged_with_id("get_latest_version", component_id, result)
+        self.repo
+            .get_latest_version(namespace, component_id)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn get_by_version(
@@ -488,11 +473,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let result = self
-            .repo
+        self.repo
             .get_by_version(namespace, component_id, version)
-            .await;
-        Self::logged_with_id("get_by_version", component_id, result)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn get_by_name(
@@ -500,34 +484,29 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         namespace: &str,
         name: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let result = self.repo.get_by_name(namespace, name).await;
-        Self::logged("get_by_name", result)
+        self.repo.get_by_name(namespace, name).await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
-        let result = self.repo.get_id_by_name(namespace, name).await;
-        Self::logged("get_id_by_name", result)
+        self.repo.get_id_by_name(namespace, name).await
     }
 
     async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError> {
-        let result = self.repo.get_namespace(component_id).await;
-        Self::logged_with_id("get_namespace", component_id, result)
+        self.repo.get_namespace(component_id).await
     }
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
-        let result = self.repo.delete(namespace, component_id).await;
-        Self::logged_with_id("delete", component_id, result)
+        self.repo.delete(namespace, component_id).await
     }
 
     async fn create_or_update_constraint(
         &self,
         component_constraint_record: &ComponentConstraintsRecord,
     ) -> Result<(), RepoError> {
-        let result = self
-            .repo
+        self.repo
             .create_or_update_constraint(component_constraint_record)
-            .await;
-        Self::logged("create_component_constraint", result)
+            .instrument(Self::span(&component_constraint_record.component_id))
+            .await
     }
 
     // The only way to delete constraints is to delete through the usage interfaces.
@@ -539,12 +518,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         component_id: &Uuid,
         constraints_to_remove: &[FunctionSignature],
     ) -> Result<(), RepoError> {
-        let result = self
-            .repo
+        self.repo
             .delete_constraints(namespace, component_id, constraints_to_remove)
-            .await;
-
-        Self::logged_with_id("delete_component_constraint", component_id, result)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn get_constraint(
@@ -552,8 +529,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<FunctionConstraints>, RepoError> {
-        let result = self.repo.get_constraint(namespace, component_id).await;
-        Self::logged("get_component_constraint", result)
+        self.repo
+            .get_constraint(namespace, component_id)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn get_installed_plugins(
@@ -565,19 +544,20 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
         RepoError,
     > {
-        let result = self
-            .repo
+        self.repo
             .get_installed_plugins(owner, component_id, version)
-            .await;
-        Self::logged_with_id("get_installed_plugins", component_id, result)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn install_plugin(
         &self,
         record: &PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
     ) -> Result<u64, RepoError> {
-        let result = self.repo.install_plugin(record).await;
-        Self::logged_with_id("install_plugin", &record.target.component_id, result)
+        self.repo
+            .install_plugin(record)
+            .instrument(Self::span(&record.target.component_id))
+            .await
     }
 
     async fn uninstall_plugin(
@@ -586,11 +566,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
     ) -> Result<u64, RepoError> {
-        let result = self
-            .repo
+        self.repo
             .uninstall_plugin(owner, component_id, plugin_installation_id)
-            .await;
-        Self::logged_with_id("uninstall_plugin", component_id, result)
+            .instrument(Self::span(component_id))
+            .await
     }
 
     async fn update_plugin_installation(
@@ -601,8 +580,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         new_priority: i32,
         new_parameters: Vec<u8>,
     ) -> Result<u64, RepoError> {
-        let result = self
-            .repo
+        self.repo
             .update_plugin_installation(
                 owner,
                 component_id,
@@ -610,27 +588,34 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
                 new_priority,
                 new_parameters,
             )
-            .await;
-        Self::logged_with_id("update_plugin_installation", component_id, result)
+            .instrument(Self::span(component_id))
+            .await
     }
 }
 
-pub struct DbComponentRepo<DB: Database, Owner: ComponentOwner> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbComponentRepo<DB: Pool, Owner: ComponentOwner> {
+    db_pool: Arc<DB>,
     plugin_installation_queries: Arc<
-        dyn PluginInstallationRepoQueries<DB, Owner::PluginOwner, ComponentPluginInstallationTarget>
-            + Send
+        dyn PluginInstallationRepoQueries<
+                DB::Db,
+                Owner::PluginOwner,
+                ComponentPluginInstallationTarget,
+            > + Send
             + Sync,
     >,
 }
 
-impl<DB: Database + Sync, Owner: ComponentOwner> DbComponentRepo<DB, Owner>
+impl<DB: Pool + Sync, Owner: ComponentOwner> DbComponentRepo<DB, Owner>
 where
-    DbPluginInstallationRepoQueries<DB>:
-        PluginInstallationRepoQueries<DB, Owner::PluginOwner, ComponentPluginInstallationTarget>,
+    DbPluginInstallationRepoQueries<DB::Db>: PluginInstallationRepoQueries<
+        DB::Db,
+        Owner::PluginOwner,
+        ComponentPluginInstallationTarget,
+    >,
 {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
-        let plugin_installation_queries = Arc::new(DbPluginInstallationRepoQueries::<DB>::new());
+    pub fn new(db_pool: Arc<DB>) -> Self {
+        let plugin_installation_queries =
+            Arc::new(DbPluginInstallationRepoQueries::<DB::Db>::new());
         Self {
             db_pool,
             plugin_installation_queries,
@@ -638,7 +623,7 @@ where
     }
 }
 
-impl<Owner: ComponentOwner, DB: Database> Debug for DbComponentRepo<DB, Owner> {
+impl<Owner: ComponentOwner, DB: Pool> Debug for DbComponentRepo<DB, Owner> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DbComponentRepo")
             .field("db_pool", &self.db_pool)
@@ -646,14 +631,15 @@ impl<Owner: ComponentOwner, DB: Database> Debug for DbComponentRepo<DB, Owner> {
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
-impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
+impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::PostgresPool, Owner> {
     async fn get_files(
         &self,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Vec<FileRecord>, RepoError> {
-        sqlx::query_as::<_, FileRecord>(
+        let query = sqlx::query_as::<_, FileRecord>(
             r#"
             SELECT
                 component_id,
@@ -667,10 +653,11 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
             "#,
         )
         .bind(component_id)
-        .bind(version as i64)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(version as i64);
+        self.db_pool
+            .with_ro("component", "get_files")
+            .fetch_all(query)
+            .await
     }
 
     async fn add_files(
@@ -708,12 +695,15 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
         let mut query = self
             .plugin_installation_queries
             .get_all(&plugin_owner_row, &target);
-        Ok(query.build_query_as::<PluginInstallationRecord<
-            Owner::PluginOwner,
-            ComponentPluginInstallationTarget,
-        >>()
-            .fetch_all(self.db_pool.deref())
-            .await?)
+        let query = query
+            .build_query_as::<PluginInstallationRecord<
+                Owner::PluginOwner,
+                ComponentPluginInstallationTarget,
+            >>();
+        self.db_pool
+            .with_ro("component", "get_installed_plugins_for_component")
+            .fetch_all(query)
+            .await
     }
 
     async fn add_installed_plugins(
@@ -736,28 +726,34 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres, Owner> {
+impl<Owner: ComponentOwner> ComponentRepo<Owner>
+    for DbComponentRepo<golem_service_base::db::postgres::PostgresPool, Owner>
+{
     async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self.db_pool.with_rw("component", "create").begin().await?;
 
-        let result = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
-            .bind(component.component_id)
-            .fetch_optional(&mut *transaction)
-            .await?;
+        let query = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
+            .bind(component.component_id);
+
+        let result = transaction.fetch_optional(query).await?;
 
         if let Some(result) = result {
             let namespace: String = result.get("namespace");
             let name: String = result.get("name");
             if namespace != component.namespace || name != component.name {
-                transaction.rollback().await?;
+                self.db_pool
+                    .with_rw("component", "create")
+                    .rollback(transaction)
+                    .await?;
                 return Err(RepoError::Internal(
                     "Component namespace and name invalid".to_string(),
                 ));
             }
         } else {
-            let result = sqlx::query(
+            let query = sqlx::query(
                 r#"
                   INSERT INTO components
                     (namespace, component_id, name)
@@ -767,19 +763,22 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             )
             .bind(component.namespace.clone())
             .bind(component.component_id)
-            .bind(component.name.clone())
-            .execute(&mut *transaction)
-            .await;
+            .bind(component.name.clone());
+
+            let result = transaction.execute(query).await;
 
             if let Err(err) = result {
                 // Without this explicit rollback, sqlite seems to be remain locked when a next
                 // incoming request comes in.
-                transaction.rollback().await?;
-                return Err(err.into());
+                self.db_pool
+                    .with_rw("component", "create")
+                    .rollback(transaction)
+                    .await?;
+                return Err(err);
             }
         }
 
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               INSERT INTO component_versions
                 (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version)
@@ -797,12 +796,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .bind(&component.object_store_key)
             .bind(&component.transformed_object_store_key)
             .bind(&component.root_package_name)
-            .bind(&component.root_package_version)
-            .execute(&mut *transaction)
-            .await?;
+            .bind(&component.root_package_version);
+
+        transaction.execute(query).await?;
 
         for file in &component.files {
-            sqlx::query(
+            let query = sqlx::query(
                 r#"
                   INSERT INTO component_files
                     (component_id, version, file_path, file_key, file_permissions)
@@ -814,12 +813,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .bind(component.version)
             .bind(file.file_path.clone())
             .bind(file.file_key.clone())
-            .bind(file.file_permissions.clone())
-            .execute(&mut *transaction)
-            .await?;
+            .bind(file.file_permissions.clone());
+
+            transaction.execute(query).await?;
         }
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("component", "create")
+            .commit(transaction)
+            .await?;
         Ok(())
     }
 
@@ -833,24 +835,27 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
     ) -> Result<ComponentRecord<Owner>, RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self.db_pool.with_rw("component", "update").begin().await?;
 
-        let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
-            .bind(component_id)
-            .fetch_optional(&mut *transaction)
-            .await?;
+        let query = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
+            .bind(component_id);
+
+        let result = transaction.fetch_optional(query).await?;
 
         if let Some(result) = result {
             let existing_namespace: String = result.get("namespace");
             if existing_namespace != namespace {
-                transaction.rollback().await?;
+                self.db_pool
+                    .with_rw("component", "update")
+                    .rollback(transaction)
+                    .await?;
                 Err(RepoError::Internal(
                     "Component namespace invalid".to_string(),
                 ))
             } else {
                 let now = Utc::now();
                 let new_version = if let Some(component_type) = component_type {
-                    sqlx::query(
+                    let query = sqlx::query(
                         r#"
                               WITH prev AS (SELECT component_id, version, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                                    FROM component_versions WHERE component_id = $1
@@ -865,12 +870,11 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                         .bind(data.len() as i32)
                         .bind(now)
                         .bind(metadata)
-                        .bind(component_type)
-                        .fetch_one(&mut *transaction)
-                        .await?
-                        .get("version")
+                        .bind(component_type);
+
+                    transaction.fetch_one(query).await?.get("version")
                 } else {
-                    sqlx::query(
+                    let query = sqlx::query(
                         r#"
                               WITH prev AS (SELECT component_id, version, component_type, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                                    FROM component_versions WHERE component_id = $1
@@ -884,10 +888,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                         .bind(component_id)
                         .bind(data.len() as i32)
                         .bind(now)
-                        .bind(metadata)
-                        .fetch_one(&mut *transaction)
-                        .await?
-                        .get("version")
+                        .bind(metadata);
+                    transaction.fetch_one(query).await?.get("version")
                 };
 
                 debug!("update created new component version {new_version}");
@@ -901,15 +903,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 let mut query = self
                     .plugin_installation_queries
                     .get_all(&plugin_owner, &old_target);
+                let query =
+                    query.build_query_as::<PluginInstallationRecord<
+                        Owner::PluginOwner,
+                        ComponentPluginInstallationTarget,
+                    >>();
 
-                let existing_installations =
-                    query
-                        .build_query_as::<PluginInstallationRecord<
-                            Owner::PluginOwner,
-                            ComponentPluginInstallationTarget,
-                        >>()
-                        .fetch_all(&mut *transaction)
-                        .await?;
+                let existing_installations = transaction.fetch_all(query).await?;
 
                 let new_target = ComponentPluginInstallationRow {
                     component_id: *component_id,
@@ -932,15 +932,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
                 for installation in new_installations {
                     let mut query = self.plugin_installation_queries.create(&installation);
-
-                    query.build().execute(&mut *transaction).await?;
+                    let query = query.build();
+                    transaction.execute(query).await?;
                 }
 
                 let files = if let Some(files) = files {
                     files
                 } else {
                     // Copying the previous file set
-                    sqlx::query_as::<_, FileRecord>(
+                    let query = sqlx::query_as::<_, FileRecord>(
                         r#"
                             SELECT
                                 component_id,
@@ -953,14 +953,14 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                             "#,
                     )
                     .bind(old_target.component_id)
-                    .bind(old_target.component_version)
-                    .fetch_all(&mut *transaction)
-                    .await?
+                    .bind(old_target.component_version);
+
+                    transaction.fetch_all(query).await?
                 };
 
                 // Inserting the new file set
                 for file in files {
-                    sqlx::query(
+                    let query = sqlx::query(
                         r#"
                           INSERT INTO component_files
                             (component_id, version, file_path, file_key, file_permissions)
@@ -972,12 +972,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     .bind(new_version)
                     .bind(&file.file_path)
                     .bind(&file.file_key)
-                    .bind(&file.file_permissions)
-                    .execute(&mut *transaction)
-                    .await?;
+                    .bind(&file.file_permissions);
+
+                    transaction.execute(query).await?;
                 }
 
-                transaction.commit().await?;
+                self.db_pool
+                    .with_rw("component", "update")
+                    .commit(transaction)
+                    .await?;
 
                 let component = self
                     .get_by_version(namespace, component_id, new_version as u64)
@@ -988,7 +991,10 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 ))
             }
         } else {
-            transaction.rollback().await?;
+            self.db_pool
+                .with_rw("component", "update")
+                .rollback(transaction)
+                .await?;
             Err(RepoError::Internal(
                 "Component not found for update".to_string(),
             ))
@@ -1004,7 +1010,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         transformed_object_store_key: &str,
         updated_metadata: Vec<u8>,
     ) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               UPDATE component_versions
               SET available = TRUE, object_store_key = $4, metadata = $5, transformed_object_store_key = $6
@@ -1016,20 +1022,23 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .bind(component_version)
             .bind(object_store_key)
             .bind(updated_metadata)
-            .bind(transformed_object_store_key)
-            .execute(self.db_pool.deref())
+            .bind(transformed_object_store_key);
+
+        self.db_pool
+            .with_rw("component", "activate")
+            .execute(query)
             .await?;
 
         Ok(())
     }
 
-    #[when(sqlx::Postgres -> get)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get)]
     async fn get_postgres(
         &self,
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1052,22 +1061,25 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "#,
         )
         .bind(component_id)
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let components = self
+            .db_pool
+            .with("component", "get")
+            .fetch_all(query)
+            .await?;
 
         self.add_installed_plugins(self.add_files(components).await?)
             .await
     }
 
-    #[when(sqlx::Sqlite -> get)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get)]
     async fn get_sqlite(
         &self,
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1090,21 +1102,24 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "#,
         )
         .bind(component_id)
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let components = self
+            .db_pool
+            .with_ro("component", "get")
+            .fetch_all(query)
+            .await?;
 
         self.add_installed_plugins(self.add_files(components).await?)
             .await
     }
 
-    #[when(sqlx::Postgres -> get_all)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_all)]
     async fn get_all_postgres(
         &self,
         namespace: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1126,21 +1141,24 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 ORDER BY cv.component_id, cv.version
                 "#,
         )
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let components = self
+            .db_pool
+            .with("component", "get_all")
+            .fetch_all(query)
+            .await?;
 
         self.add_installed_plugins(self.add_files(components).await?)
             .await
     }
 
-    #[when(sqlx::Sqlite -> get_all)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_all)]
     async fn get_all_sqlite(
         &self,
         namespace: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1162,22 +1180,25 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 ORDER BY cv.component_id, cv.version
                 "#,
         )
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let components = self
+            .db_pool
+            .with_ro("component", "get_all")
+            .fetch_all(query)
+            .await?;
 
         self.add_installed_plugins(self.add_files(components).await?)
             .await
     }
 
-    #[when(sqlx::Postgres -> get_latest_version)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_latest_version)]
     async fn get_latest_version_postgres(
         &self,
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1201,10 +1222,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "#,
         )
         .bind(component_id)
-        .bind(namespace)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let component = self
+            .db_pool
+            .with("component", "get_latest_version")
+            .fetch_optional_as(query)
+            .await?;
 
         Ok(self
             .add_installed_plugins(self.add_files(component).await?)
@@ -1212,13 +1236,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .pop())
     }
 
-    #[when(sqlx::Sqlite -> get_latest_version)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_latest_version)]
     async fn get_latest_version_sqlite(
         &self,
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1242,10 +1266,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "#,
         )
         .bind(component_id)
-        .bind(namespace)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let component = self
+            .db_pool
+            .with_ro("component", "get_latest_version")
+            .fetch_optional_as(query)
+            .await?;
 
         Ok(self
             .add_installed_plugins(self.add_files(component).await?)
@@ -1253,14 +1280,14 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .pop())
     }
 
-    #[when(sqlx::Postgres -> get_by_version)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_by_version)]
     async fn get_by_version_postgres(
         &self,
         namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1283,10 +1310,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         )
         .bind(component_id)
         .bind(version as i64)
-        .bind(namespace)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let component = self
+            .db_pool
+            .with("component", "get_by_version")
+            .fetch_optional_as(query)
+            .await?;
 
         Ok(self
             .add_installed_plugins(self.add_files(component).await?)
@@ -1294,14 +1324,14 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .pop())
     }
 
-    #[when(sqlx::Sqlite -> get_by_version)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_version)]
     async fn get_by_version_sqlite(
         &self,
         namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1324,10 +1354,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         )
         .bind(component_id)
         .bind(version as i64)
-        .bind(namespace)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(namespace);
+
+        let component = self
+            .db_pool
+            .with_ro("component", "get_by_version")
+            .fetch_optional_as(query)
+            .await?;
 
         Ok(self
             .add_installed_plugins(self.add_files(component).await?)
@@ -1335,13 +1368,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .pop())
     }
 
-    #[when(sqlx::Postgres -> get_by_name)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_by_name)]
     async fn get_by_name_postgres(
         &self,
         namespace: &str,
         name: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1364,22 +1397,25 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "#,
         )
         .bind(namespace)
-        .bind(name)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(name);
+
+        let components = self
+            .db_pool
+            .with("component", "get_by_name")
+            .fetch_all(query)
+            .await?;
 
         self.add_installed_plugins(self.add_files(components).await?)
             .await
     }
 
-    #[when(sqlx::Sqlite -> get_by_name)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_name)]
     async fn get_by_name_sqlite(
         &self,
         namespace: &str,
         name: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1402,30 +1438,41 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "#,
         )
         .bind(namespace)
-        .bind(name)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(name);
+
+        let components = self
+            .db_pool
+            .with_ro("component", "get_by_name")
+            .fetch_all(query)
+            .await?;
 
         self.add_installed_plugins(self.add_files(components).await?)
             .await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
-        let result =
+        let query =
             sqlx::query("SELECT component_id FROM components WHERE namespace = $1 AND name = $2")
                 .bind(namespace)
-                .bind(name)
-                .fetch_optional(self.db_pool.deref())
-                .await?;
+                .bind(name);
+
+        let result = self
+            .db_pool
+            .with_ro("component", "get_id_by_name")
+            .fetch_optional(query)
+            .await?;
 
         Ok(result.map(|x| x.get("component_id")))
     }
 
     async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError> {
-        let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
-            .bind(component_id)
-            .fetch_optional(self.db_pool.deref())
+        let query = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
+            .bind(component_id);
+
+        let result = self
+            .db_pool
+            .with_ro("component", "get_namespace")
+            .fetch_optional(query)
             .await?;
 
         Ok(result.map(|x| x.get("namespace")))
@@ -1434,36 +1481,40 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
         // TODO: delete plugin installations
 
-        let mut transaction = self.db_pool.begin().await?;
-        sqlx::query(
+        let mut transaction = self.db_pool.with_rw("component", "delete").begin().await?;
+        let query = sqlx::query(
             r#"
                 DELETE FROM component_versions
                 WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
             "#
         )
             .bind(namespace)
-            .bind(component_id)
-            .execute(&mut *transaction)
-            .await?;
+            .bind(component_id);
 
-        sqlx::query(
+        transaction.execute(query).await?;
+
+        let query = sqlx::query(
             r#"
                 DELETE FROM component_files
                 WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
             "#
         )
             .bind(namespace)
-            .bind(component_id)
-            .execute(&mut *transaction)
-            .await?;
+            .bind(component_id);
 
-        sqlx::query("DELETE FROM components WHERE namespace = $1 AND component_id = $2")
-            .bind(namespace)
-            .bind(component_id)
-            .execute(&mut *transaction)
-            .await?;
+        transaction.execute(query).await?;
 
-        transaction.commit().await?;
+        let query =
+            sqlx::query("DELETE FROM components WHERE namespace = $1 AND component_id = $2")
+                .bind(namespace)
+                .bind(component_id);
+
+        transaction.execute(query).await?;
+
+        self.db_pool
+            .with_rw("component", "delete")
+            .commit(transaction)
+            .await?;
         Ok(())
     }
 
@@ -1473,9 +1524,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         component_id: &Uuid,
         constraints: &[FunctionSignature],
     ) -> Result<(), RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("component", "delete_constraints")
+            .begin()
+            .await?;
 
-        let existing_constraints_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
+        let query = sqlx::query_as::<_, ComponentConstraintsRecord>(
             r#"
                 SELECT
                     namespace,
@@ -1484,10 +1539,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM component_constraints WHERE component_id = $1
                 "#,
         )
-        .bind(component_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        .bind(component_id);
+
+        let existing_constraints_record = transaction.fetch_optional_as(query).await?;
 
         if let Some(existing_record) = existing_constraints_record {
             let existing_constraints: FunctionConstraints =
@@ -1499,17 +1553,16 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
             match new_constraints {
                 None => {
-                    sqlx::query(
+                    let query = sqlx::query(
                         r#"
                          DELETE FROM component_constraints
                           WHERE namespace = $1 AND component_id = $2
                           "#,
                     )
                     .bind(namespace)
-                    .bind(component_id)
-                    .execute(&mut *transaction)
-                    .await
-                    .map_err(RepoError::from)?;
+                    .bind(component_id);
+
+                    transaction.execute(query).await?;
                 }
 
                 Some(new_constraints) => {
@@ -1517,25 +1570,27 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                         .map_err(RepoError::Internal)?
                         .into();
 
-                    sqlx::query(
+                    let query = sqlx::query(
                         r#"
-                 UPDATE
-                   component_constraints
-                    SET constraints = $1
-                    WHERE namespace = $2 AND component_id = $3
-                    "#,
+                         UPDATE
+                           component_constraints
+                            SET constraints = $1
+                            WHERE namespace = $2 AND component_id = $3
+                            "#,
                     )
                     .bind(new_constraints)
                     .bind(namespace)
-                    .bind(component_id)
-                    .execute(&mut *transaction)
-                    .await
-                    .map_err(RepoError::from)?;
+                    .bind(component_id);
+
+                    transaction.execute(query).await?;
                 }
             }
         }
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("component", "delete_constraints")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
@@ -1545,9 +1600,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         component_constraint_record: &ComponentConstraintsRecord,
     ) -> Result<(), RepoError> {
         let component_constraint_record = component_constraint_record.clone();
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("component", "create_or_update_constraint")
+            .begin()
+            .await?;
 
-        let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
+        let query = sqlx::query_as::<_, ComponentConstraintsRecord>(
             r#"
                 SELECT
                     namespace,
@@ -1556,10 +1615,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM component_constraints WHERE component_id = $1
                 "#,
         )
-        .bind(component_constraint_record.component_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        .bind(component_constraint_record.component_id);
+
+        let existing_record = transaction.fetch_optional_as(query).await?;
 
         if let Some(existing_record) = existing_record {
             let existing_constraints = constraint_serde::deserialize(&existing_record.constraints)
@@ -1577,7 +1635,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 .map_err(RepoError::Internal)?
                 .into();
 
-            sqlx::query(
+            let query = sqlx::query(
                 r#"
                  UPDATE
                    component_constraints
@@ -1587,12 +1645,11 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             )
             .bind(merged_constraint_data)
             .bind(component_constraint_record.namespace)
-            .bind(component_constraint_record.component_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(RepoError::from)?;
+            .bind(component_constraint_record.component_id);
+
+            transaction.execute(query).await?;
         } else {
-            sqlx::query(
+            let query = sqlx::query(
                 r#"
               INSERT INTO component_constraints
                 (namespace, component_id, constraints)
@@ -1602,12 +1659,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             )
             .bind(component_constraint_record.namespace)
             .bind(component_constraint_record.component_id)
-            .bind(component_constraint_record.constraints)
-            .execute(&mut *transaction)
-            .await?;
+            .bind(component_constraint_record.constraints);
+
+            transaction.execute(query).await?;
         }
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("component", "create_or_update_constraint")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
@@ -1617,7 +1677,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<FunctionConstraints>, RepoError> {
-        let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
+        let query = sqlx::query_as::<_, ComponentConstraintsRecord>(
             r#"
                 SELECT
                     namespace,
@@ -1627,10 +1687,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "#,
         )
         .bind(component_id)
-        .bind(namespace)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        .bind(namespace);
+
+        let existing_record = self
+            .db_pool
+            .with_ro("component", "get_constraint")
+            .fetch_optional_as(query)
+            .await?;
 
         if let Some(existing_record) = existing_record {
             let existing_worker_calls_used =
@@ -1656,11 +1719,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             component_version: version as i64,
         };
         let mut query = self.plugin_installation_queries.get_all(owner, &target);
+        let query = query
+            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>();
 
-        Ok(query
-            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
-            .fetch_all(self.db_pool.deref())
-            .await?)
+        self.db_pool
+            .with_ro("component", "get_installed_plugins")
+            .fetch_all(query)
+            .await
     }
 
     async fn install_plugin(
@@ -1669,9 +1734,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     ) -> Result<u64, RepoError> {
         let component_id = record.target.component_id;
 
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("component", "install_plugin")
+            .begin()
+            .await?;
 
-        let new_version = sqlx::query(
+        let query = sqlx::query(
             r#"
               WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                    FROM component_versions WHERE component_id = $1
@@ -1683,10 +1752,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
               "#,
         )
             .bind(component_id)
-            .bind(Utc::now())
-            .fetch_one(&mut *transaction)
-            .await?
-            .get("version");
+            .bind(Utc::now());
+
+        let new_version = transaction.fetch_one(query).await?.get("version");
 
         debug!("install_plugin cloned old component version into version {new_version}");
 
@@ -1697,11 +1765,10 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         let mut query = self
             .plugin_installation_queries
             .get_all(&record.owner, &old_target);
+        let query = query
+            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>();
 
-        let existing_installations = query
-            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
-            .fetch_all(&mut *transaction)
-            .await?;
+        let existing_installations = transaction.fetch_all(query).await?;
 
         let new_target = ComponentPluginInstallationRow {
             component_id,
@@ -1732,11 +1799,14 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         for installation in new_installations {
             let mut query = self.plugin_installation_queries.create(&installation);
-
-            query.build().execute(&mut *transaction).await?;
+            let query = query.build();
+            transaction.execute(query).await?;
         }
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("component", "install_plugin")
+            .commit(transaction)
+            .await?;
 
         Ok(new_version as u64)
     }
@@ -1747,9 +1817,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
     ) -> Result<u64, RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("component", "uninstall_plugin")
+            .begin()
+            .await?;
 
-        let new_version = sqlx::query(
+        let query = sqlx::query(
             r#"
               WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                    FROM component_versions WHERE component_id = $1
@@ -1761,10 +1835,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
               "#,
         )
             .bind(component_id)
-            .bind(Utc::now())
-            .fetch_one(&mut *transaction)
-            .await?
-            .get("version");
+            .bind(Utc::now());
+
+        let new_version = transaction.fetch_one(query).await?.get("version");
 
         debug!("uninstall_plugin cloned old component version into version {new_version}");
 
@@ -1773,11 +1846,10 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             component_version: new_version - 1,
         };
         let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
+        let query = query
+            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>();
 
-        let existing_installations = query
-            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
-            .fetch_all(&mut *transaction)
-            .await?;
+        let existing_installations = transaction.fetch_all(query).await?;
 
         let new_target = ComponentPluginInstallationRow {
             component_id: *component_id,
@@ -1803,11 +1875,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         for installation in new_installations {
             let mut query = self.plugin_installation_queries.create(&installation);
+            let query = query.build();
 
-            query.build().execute(&mut *transaction).await?;
+            transaction.execute(query).await?;
         }
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("component", "uninstall_plugin")
+            .commit(transaction)
+            .await?;
 
         Ok(new_version as u64)
     }
@@ -1820,9 +1896,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         new_priority: i32,
         new_parameters: Vec<u8>,
     ) -> Result<u64, RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("component", "update_plugin_installation")
+            .begin()
+            .await?;
 
-        let new_version = sqlx::query(
+        let query = sqlx::query(
             r#"
               WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version
                    FROM component_versions WHERE component_id = $1
@@ -1834,10 +1914,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
               "#,
         )
             .bind(component_id)
-            .bind(Utc::now())
-            .fetch_one(&mut *transaction)
-            .await?
-            .get("version");
+            .bind(Utc::now());
+
+        let new_version = transaction.fetch_one(query).await?.get("version");
 
         debug!(
             "update_plugin_installation cloned old component version into version {new_version}"
@@ -1848,11 +1927,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             component_version: new_version - 1,
         };
         let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
+        let query = query.build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>();
 
-        let existing_installations = query
-            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
-            .fetch_all(&mut *transaction)
-            .await?;
+        let existing_installations = transaction.fetch_all(query).await?;
 
         let new_target = ComponentPluginInstallationRow {
             component_id: *component_id,
@@ -1892,11 +1969,14 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         for installation in new_installations {
             let mut query = self.plugin_installation_queries.create(&installation);
-
-            query.build().execute(&mut *transaction).await?;
+            let query = query.build();
+            transaction.execute(query).await?;
         }
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("component", "update_plugin_installation")
+            .commit(transaction)
+            .await?;
 
         Ok(new_version as u64)
     }

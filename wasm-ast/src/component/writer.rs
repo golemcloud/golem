@@ -371,18 +371,7 @@ fn add_to_component_type(
                     .iter()
                     .map(|(name, val_type)| (name.as_str(), val_type)),
             );
-            match &component_func_type.result {
-                ComponentFuncResult::Unnamed(component_val_type) => {
-                    function.result(component_val_type);
-                }
-                ComponentFuncResult::Named(name_type_pairs) => {
-                    function.results(
-                        name_type_pairs
-                            .iter()
-                            .map(|(name, val_type)| (name.as_str(), val_type)),
-                    );
-                }
-            }
+            function.result(component_func_type.result.as_ref().map(|tpe| tpe.into()));
         }
         ComponentType::Component(component_type_declarations) => {
             let mut component_type = wasm_encoder::ComponentType::new();
@@ -429,6 +418,7 @@ impl From<&PrimitiveValueType> for wasm_encoder::PrimitiveValType {
             PrimitiveValueType::F64 => wasm_encoder::PrimitiveValType::F64,
             PrimitiveValueType::Chr => wasm_encoder::PrimitiveValType::Char,
             PrimitiveValueType::Str => wasm_encoder::PrimitiveValType::String,
+            PrimitiveValueType::ErrorContext => wasm_encoder::PrimitiveValType::ErrorContext,
         }
     }
 }
@@ -497,6 +487,12 @@ fn add_to_defined_type(
         ComponentDefinedType::Borrowed { type_idx } => {
             defined_type.borrow(*type_idx);
         }
+        ComponentDefinedType::Future { inner } => {
+            defined_type.future(inner.as_ref().map(|t| t.into()));
+        }
+        ComponentDefinedType::Stream { inner } => {
+            defined_type.stream(inner.as_ref().map(|t| t.into()));
+        }
     };
 }
 
@@ -518,6 +514,10 @@ impl From<&CanonicalOption> for wasm_encoder::CanonicalOption {
             CanonicalOption::Realloc(func_idx) => wasm_encoder::CanonicalOption::Realloc(*func_idx),
             CanonicalOption::PostReturn(func_idx) => {
                 wasm_encoder::CanonicalOption::PostReturn(*func_idx)
+            }
+            CanonicalOption::Async => wasm_encoder::CanonicalOption::Async,
+            CanonicalOption::Callback(func_idx) => {
+                wasm_encoder::CanonicalOption::Callback(*func_idx)
             }
         }
     }

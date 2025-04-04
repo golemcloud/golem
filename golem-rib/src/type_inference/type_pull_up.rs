@@ -657,7 +657,7 @@ mod internal {
     use crate::generic_type_parameter::GenericTypeParameter;
     use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
-    use crate::type_inference::kind::TypeKind;
+    use crate::type_inference::type_hint::TypeHint;
     use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
@@ -1119,21 +1119,23 @@ mod internal {
             let right_number_type = right_expr_type.as_number().map_err(|_| TypeMismatchError {
                 expr_with_wrong_type: right_expr.clone(),
                 parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::Kind(TypeKind::Number),
+                expected_type: ExpectedType::TypeHint(TypeHint::Number),
                 actual_type: ActualType::Inferred(right_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
-                    "math expression consist of operands that are not valid numbers".to_string(),
+                    "type mismatch in mathematical expression: operands have incompatible types."
+                        .to_string(),
                 ],
             })?;
             let left_number_type = left_expr_type.as_number().map_err(|_| TypeMismatchError {
                 expr_with_wrong_type: left_expr.clone(),
                 parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::Kind(TypeKind::Number),
+                expected_type: ExpectedType::TypeHint(TypeHint::Number),
                 actual_type: ActualType::Inferred(left_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
-                    "math expression consist of operands that are not valid numbers".to_string(),
+                    "type mismatch in mathematical expression: operands have incompatible types."
+                        .to_string(),
                 ],
             })?;
 
@@ -1152,11 +1154,11 @@ mod internal {
                 return Err(TypeMismatchError {
                     expr_with_wrong_type: original_math_expr.clone(),
                     parent_expr: None,
-                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    expected_type: ExpectedType::TypeHint(TypeHint::Number),
                     actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
                     field_path: Default::default(),
                     additional_error_detail: vec![
-                        "math expression consist of operands that are not valid numbers"
+                        "type mismatch in mathematical expression: operands have incompatible types. "
                             .to_string(),
                     ],
                 });
@@ -1549,7 +1551,7 @@ mod internal {
             TypeMismatchError {
                 expr_with_wrong_type: original_selection_expr.clone(),
                 parent_expr: None,
-                expected_type: ExpectedType::Kind(TypeKind::Record),
+                expected_type: ExpectedType::TypeHint(TypeHint::Record(None)),
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
@@ -1578,7 +1580,7 @@ mod internal {
             TypeMismatchError {
                 expr_with_wrong_type: original_selection_expr.clone(),
                 parent_expr: None,
-                expected_type: ExpectedType::Kind(TypeKind::List),
+                expected_type: ExpectedType::TypeHint(TypeHint::List(None)),
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
@@ -1602,7 +1604,7 @@ mod internal {
                 TypeMismatchError {
                     expr_with_wrong_type: original_selection_expr.clone(),
                     parent_expr: None,
-                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    expected_type: ExpectedType::TypeHint(TypeHint::Number),
                     actual_type: ActualType::Inferred(select_index_type.clone()),
                     field_path: Default::default(),
                     additional_error_detail: vec![format!(

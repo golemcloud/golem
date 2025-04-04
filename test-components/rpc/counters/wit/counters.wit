@@ -9,7 +9,7 @@ interface api {
     get-value: func() -> u64;
 
     create-promise: func() -> promise-id;
-    block-on-promise: func(promise: promise-id) -> ();
+    block-on-promise: func(promise: promise-id);
 
     get-args: func() -> list<string>;
     get-env: func() -> list<tuple<string, string>>;

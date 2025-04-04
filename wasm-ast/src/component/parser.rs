@@ -190,6 +190,7 @@ impl TryFrom<wasmparser::PrimitiveValType> for PrimitiveValueType {
             wasmparser::PrimitiveValType::F64 => Ok(PrimitiveValueType::F64),
             wasmparser::PrimitiveValType::Char => Ok(PrimitiveValueType::Chr),
             wasmparser::PrimitiveValType::String => Ok(PrimitiveValueType::Str),
+            wasmparser::PrimitiveValType::ErrorContext => Ok(PrimitiveValueType::ErrorContext),
         }
     }
 }
@@ -433,24 +434,12 @@ impl TryFrom<wasmparser::ComponentDefinedType<'_>> for ComponentDefinedType {
                     type_idx: component_type_idx,
                 })
             }
-        }
-    }
-}
-
-impl TryFrom<wasmparser::ComponentFuncResult<'_>> for ComponentFuncResult {
-    type Error = String;
-
-    fn try_from(value: wasmparser::ComponentFuncResult) -> Result<Self, Self::Error> {
-        match value {
-            wasmparser::ComponentFuncResult::Unnamed(component_val_type) => {
-                Ok(ComponentFuncResult::Unnamed(component_val_type.try_into()?))
-            }
-            wasmparser::ComponentFuncResult::Named(pairs) => Ok(ComponentFuncResult::Named(
-                pairs
-                    .iter()
-                    .map(|&(name, typ)| typ.try_into().map(|t| (name.to_string(), t)))
-                    .collect::<Result<Vec<_>, String>>()?,
-            )),
+            wasmparser::ComponentDefinedType::Future(tpe) => Ok(ComponentDefinedType::Future {
+                inner: tpe.map(|tpe| tpe.try_into()).transpose()?,
+            }),
+            wasmparser::ComponentDefinedType::Stream(tpe) => Ok(ComponentDefinedType::Stream {
+                inner: tpe.map(|tpe| tpe.try_into()).transpose()?,
+            }),
         }
     }
 }
@@ -465,7 +454,7 @@ impl TryFrom<wasmparser::ComponentFuncType<'_>> for ComponentFuncType {
                 .iter()
                 .map(|&(name, typ)| typ.try_into().map(|t| (name.to_string(), t)))
                 .collect::<Result<Vec<_>, String>>()?,
-            result: value.results.try_into()?,
+            result: value.result.map(|ty| ty.try_into()).transpose()?,
         })
     }
 }
@@ -590,6 +579,10 @@ impl TryFrom<wasmparser::CanonicalOption> for CanonicalOption {
             wasmparser::CanonicalOption::PostReturn(func_idx) => {
                 Ok(CanonicalOption::PostReturn(func_idx))
             }
+            wasmparser::CanonicalOption::Async => Ok(CanonicalOption::Async),
+            wasmparser::CanonicalOption::Callback(func_idx) => {
+                Ok(CanonicalOption::Callback(func_idx))
+            }
         }
     }
 }
@@ -633,8 +626,89 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
             CanonicalFunction::ThreadSpawn { .. } => {
                 Err("Threads proposal is not supported".to_string())
             }
-            CanonicalFunction::ThreadHwConcurrency => {
-                Err("Threads proposal is not supported".to_string())
+            CanonicalFunction::ResourceDropAsync { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::ThreadAvailableParallelism => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::BackpressureSet => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::TaskReturn { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::Yield { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::SubtaskDrop => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::StreamNew { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::StreamRead { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::StreamWrite { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::StreamCancelRead { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::StreamCancelWrite { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::StreamCloseReadable { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::StreamCloseWritable { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::FutureNew { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::FutureRead { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::FutureWrite { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::FutureCancelRead { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::FutureCancelWrite { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::FutureCloseReadable { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::FutureCloseWritable { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::ErrorContextNew { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::ErrorContextDebugMessage { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::ErrorContextDrop => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::WaitableSetNew => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::WaitableSetWait { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::WaitableSetPoll { .. } => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::WaitableSetDrop => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::WaitableJoin => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
             }
         }
     }

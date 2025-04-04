@@ -415,7 +415,7 @@ where
         attempt(string("char").map(|_| TypeName::Chr)),
         attempt(string("string").map(|_| TypeName::Str)),
     ))
-    .skip(spaces())
+    .skip(spaces().silent())
 }
 
 pub fn parse_list_type<Input>() -> impl Parser<Input, Output = TypeName>
@@ -427,10 +427,10 @@ where
     Input::Position: GetSourcePosition,
 {
     string("list")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
+            char('<').skip(spaces().silent().silent()),
+            char('>').skip(spaces().silent().silent()),
             type_name(),
         ))
         .map(|inner_type| TypeName::List(Box::new(inner_type)))
@@ -445,10 +445,10 @@ where
     Input::Position: GetSourcePosition,
 {
     string("option")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
+            char('<').skip(spaces().silent().silent()),
+            char('>').skip(spaces().silent().silent()),
             type_name(),
         ))
         .map(|inner_type| TypeName::Option(Box::new(inner_type)))
@@ -469,16 +469,24 @@ where
     Input::Position: GetSourcePosition,
 {
     string("result")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(optional(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
+            char('<').skip(spaces().silent()),
+            char('>').skip(spaces().silent()),
             (
                 choice!(
-                    string("_").skip(spaces()).map(|_| ResultSuccess::NoType),
-                    type_name().skip(spaces()).map(ResultSuccess::WithType)
+                    string("_")
+                        .skip(spaces().silent())
+                        .map(|_| ResultSuccess::NoType),
+                    type_name()
+                        .skip(spaces().silent())
+                        .map(ResultSuccess::WithType)
                 ),
-                optional(char(',').skip(spaces()).with(type_name().skip(spaces()))),
+                optional(
+                    char(',')
+                        .skip(spaces().silent())
+                        .with(type_name().skip(spaces().silent())),
+                ),
             ),
         )))
         .map(|result| match result {
@@ -514,11 +522,11 @@ where
     Input::Position: GetSourcePosition,
 {
     string("tuple")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
-            sep_by(type_name(), char(',').skip(spaces())),
+            char('<').skip(spaces().silent()),
+            char('>').skip(spaces().silent()),
+            sep_by(type_name(), char(',').skip(spaces().silent())),
         ))
         .map(TypeName::Tuple)
 }
@@ -531,7 +539,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces().with(choice((
+    spaces().silent().with(choice((
         attempt(parse_basic_type()),
         attempt(parse_list_type()),
         attempt(parse_tuple_type()),

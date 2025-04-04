@@ -1,8 +1,31 @@
-package golem:rpc@0.1.3;
+package golem:rpc@0.2.0;
 
 interface types {
   use wasi:clocks/wall-clock@0.2.0.{datetime};
   use wasi:io/poll@0.2.0.{pollable};
+
+  /// Represents a Golem worker
+  record worker-id {
+    component-id: component-id,
+    worker-name: string
+  }
+
+  /// Represents a Golem component
+  record component-id {
+    uuid: uuid,
+  }
+
+  /// UUID
+  record uuid {
+    high-bits: u64,
+    low-bits: u64
+  }
+
+  /// Parses a UUID from a string
+  parse-uuid: func(uuid: string) -> result<uuid, string>;
+
+  /// Converts a UUID to a string
+  uuid-to-string: func(uuid: uuid) -> string;
 
   type node-index = s32;
 
@@ -88,7 +111,8 @@ interface types {
   }
 
   resource wasm-rpc {
-    constructor(location: uri);
+    constructor(worker-id: worker-id);
+    ephemeral: static func(component-id: component-id) -> wasm-rpc;
 
     invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
     invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
@@ -96,7 +120,7 @@ interface types {
     async-invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> future-invoke-result;
 
     /// Schedule invocation for later
-    schedule-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>) -> ();
+    schedule-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>);
     /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
     schedule-cancelable-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>) -> cancellation-token;
   }
@@ -107,7 +131,7 @@ interface types {
   }
 
   resource cancellation-token {
-    cancel: func() -> ();
+    cancel: func();
   }
 
   extract-value: func(vnt: value-and-type) -> wit-value;
