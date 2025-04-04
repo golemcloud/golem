@@ -13,23 +13,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20.x'
-      
+
       - name: Install dependencies
         run: |
           npm install
-      
+
+      - name: Generate types
+        run: |
+          npm run generate-types
+
       - name: Run code quality check
         run: |
           npm run check
-      
+
       - name: Build the package
         run: |
           npm run build
-  
+
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -39,20 +43,24 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
-      
+
       - name: Install dependencies
         run: |
           npm install
-      
+
+      - name: Generate types
+        run: |
+          npm run generate-types
+
       - name: Build the package
         run: |
           npm run build
-      
+
       - name: Publish to npm
         run: |
           npm publish --provenance --access public

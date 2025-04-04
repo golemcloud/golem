@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { type OplogIndex, getOplogIndex, setOplogIndex } from "./bindgen/bindgen";
 import { executeWithDrop, markAtomicOperation } from "./guard";
+import { type OplogIndex, getOplogIndex, setOplogIndex } from "./hostapi";
 import { Result } from "./result";
 
 /**
@@ -73,17 +73,17 @@ class InfallibleTransaction {
      */
     execute<In, Out, Err>(operation: Operation<In, Out, Err>, input: In): Out {
         const result = operation.execute(input);
-        if (result.isOk) {
+        if (result.isOk()) {
             this.compensations.push(
                 // Compensations cannot fail in infallible transactions.
                 () => {
-                    const compensationResult = operation.compensate(input, result.value);
-                    if (compensationResult.isErr) {
+                    const compensationResult = operation.compensate(input, result.val);
+                    if (compensationResult.isErr()) {
                         throw new Error("Compensation action failed");
                     }
                 },
             );
-            return result.value;
+            return result.val;
         } else {
             this.retry();
             throw new Error("Unreachable code");
@@ -113,9 +113,9 @@ class FallibleTransaction<Err> {
         input: In,
     ): Result<Out, Err> {
         const result = operation.execute(input);
-        if (result.isOk) {
+        if (result.isOk()) {
             this.compensations.push(() => {
-                return operation.compensate(input, result.value);
+                return operation.compensate(input, result.val);
             });
             return result;
         } else {
@@ -131,11 +131,11 @@ class FallibleTransaction<Err> {
     onFailure(error: Err): TransactionFailure<Err> {
         for (let i = this.compensations.length - 1; i >= 0; i--) {
             const compensationResult = this.compensations[i]();
-            if (compensationResult.isErr) {
+            if (compensationResult.isErr()) {
                 return {
                     type: "FailedAndRolledBackPartially",
                     error,
-                    compensationFailure: compensationResult.error,
+                    compensationFailure: compensationResult.val,
                 };
             }
         }
@@ -200,10 +200,10 @@ export function fallibleTransaction<Out, Err>(
     const tx = new FallibleTransaction<Err>();
     const execute = () => {
         const result = f(tx);
-        if (result.isOk) {
-            return Result.ok(result.value);
+        if (result.isOk()) {
+            return Result.ok(result.val);
         } else {
-            return Result.err(tx.onFailure(result.error));
+            return Result.err(tx.onFailure(result.val));
         }
     };
     return executeWithDrop([guard], execute);

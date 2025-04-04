@@ -12,7 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export * from "./hostapi";
-export * from "./guard";
-export * from "./result";
-export * from "./transaction";
+// reexport golem host api
+export * from "golem:api/host@1.1.6";

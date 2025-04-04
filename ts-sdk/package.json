@@ -18,14 +18,16 @@
     "out/"
   ],
   "scripts": {
-    "build": "tsc && cp -r src/bindgen out/bindgen",
+    "update-wit-deps": "wit-deps -d wit/deps -m wit/deps.toml -l wit/deps.lock",
+    "generate-types": "rm -rf types && jco guest-types wit -o types",
+    "build": "tsc",
     "check": "npx @biomejs/biome check",
     "fix": "npx @biomejs/biome check --write"
   },
   "devDependencies": {
-    "@biomejs/biome": "1.8.0",
-    "@bytecodealliance/jco": "1.2.4",
-    "@types/node": "^20.14.2",
-    "typescript": "^4.9.5"
+    "@biomejs/biome": "1.9.4",
+    "@bytecodealliance/jco": "1.10.2",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2"
   }
 }

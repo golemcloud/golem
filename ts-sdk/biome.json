@@ -23,6 +23,7 @@
         "indentWidth": 4
     },
     "files": {
-        "include": ["src/**/*"]
+        "include": ["src/**/*"],
+        "ignore": ["types/**/*"]
     }
 }

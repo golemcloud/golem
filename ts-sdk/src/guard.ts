@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import {
     setIdempotenceMode,
     setOplogPersistenceLevel,
     setRetryPolicy,
-} from "./bindgen/bindgen";
+} from "./hostapi";
 
 /**
  * PersistenceLevelGuard is a guard type that sets the persistence level for the oplog.
