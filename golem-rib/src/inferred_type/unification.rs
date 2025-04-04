@@ -721,10 +721,6 @@ pub fn unify_with_required(
                         inferred_type_left.clone(),
                         inferred_type_right.clone(),
                     ]))
-                } else if inferred_type_left.is_string() && inferred_type_right.is_number() {
-                    Ok(inferred_type_right.clone())
-                } else if inferred_type_left.is_number() && inferred_type_right.is_string() {
-                    Ok(inferred_type_left.clone())
                 } else {
                     Err(format!(
                         "conflicting types inferred. {}, {}",

@@ -17,21 +17,13 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::ops::Deref;
 
-// A`TypeHint` is a simplified representation of InferredType (lower level compiler type), which may
-// represent a `kind` of type, but not the full type. That said, there will be stages of compilation
-// a type-hint can be one to one with analysed_type.
+// `TypeHint` is a simplified form of `InferredType`
+// It can capture partial type information (e.g., `List(None)` all the  way full type information such
+// as `List(Some(Number))`).
+// It supports early checks like `inferred_type.get_type_hint() == analysed_type.get_type_hint()`.
 //
-// That said, it can be used for various other purposes such as
-// `inferred_type.get_type_hint() == analysed_type.get_type_hint())` allowing us to have some earlier
-// checks. For the same reason, we will have instance of `GetTypeHint` for `AnalysedType` too.
-//
-// The `TypeHint` is enriched with
-// more information as the compilation phases progress.
-// Ex: TypeHint::List(None) can be turned to TypeHint::List(Some(TypeHint::Number)) as the compilation phases progress.
-//
-// TypeHint can also be used for error reporting.
-// The compiler may not have decided full expected type (analysed_type) or even the actual-type (examples: it knows it is a `List` but not a `List(u32)`
-// and can be used to report errors.
+// As compilation progresses, `TypeHint` may get refined and can help with error reporting at various
+// stages even if the type information is not fully available.
 pub trait GetTypeHint {
     fn get_type_hint(&self) -> TypeHint;
 }

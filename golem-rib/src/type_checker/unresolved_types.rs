@@ -773,8 +773,8 @@ mod unresolved_types_tests {
         error in the following rib found at line 1, column 1
         `hello`
         cause: cannot determine the type
-        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: try specifying the expected type explicitly
+        help: if the issue persists, please review the script for potential type inconsistencies
         help: make sure `hello` is a valid identifier
         "#;
 
@@ -793,8 +793,8 @@ mod unresolved_types_tests {
         `{foo: {a: "bar", b: ("foo", hello)}}`
         cause: cannot determine the type
         unresolved type at path: `foo.b[1]`
-        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: try specifying the expected type explicitly
+        help: if the issue persists, please review the script for potential type inconsistencies
         help: make sure `hello` is a valid identifier
         "#;
 
@@ -812,8 +812,8 @@ mod unresolved_types_tests {
         found within:
         `ok(hello)`
         cause: cannot determine the type
-        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: try specifying the expected type explicitly
+        help: if the issue persists, please review the script for potential type inconsistencies
         help: make sure `hello` is a valid identifier
         "#;
 
@@ -832,8 +832,8 @@ mod unresolved_types_tests {
         found within:
         `err(hello)`
         cause: cannot determine the type
-        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: try specifying the expected type explicitly
+        help: if the issue persists, please review the script for potential type inconsistencies
         help: make sure `hello` is a valid identifier
         "#;
 

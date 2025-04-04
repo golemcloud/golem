@@ -118,14 +118,14 @@ pub struct TypeMismatchError {
 #[derive(Clone, Debug)]
 pub enum ExpectedType {
     AnalysedType(AnalysedType),
-    TypeHint(TypeHint),
+    Hint(TypeHint),
 }
 
 // If the actual type is not fully known but only a hint through TypeKind
 #[derive(Clone, Debug)]
 pub enum ActualType {
     Inferred(InferredType),
-    Kind(TypeHint),
+    Hint(TypeHint),
 }
 
 impl TypeMismatchError {
@@ -169,7 +169,7 @@ impl TypeMismatchError {
             expr_with_wrong_type: expr.clone(),
             parent_expr: parent_expr.cloned(),
             expected_type: ExpectedType::AnalysedType(expected_type),
-            actual_type: ActualType::Kind(actual_type.clone()),
+            actual_type: ActualType::Hint(actual_type.clone()),
             field_path: Path::default(),
             additional_error_detail: Vec::new(),
         }
@@ -202,10 +202,9 @@ impl UnResolvedTypesError {
 
     pub fn with_default_help_messages(&self) -> Self {
         self.with_help_message(
-            "consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`",
-        )
-        .with_help_message(
-            "or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]",
+            "try specifying the expected type explicitly",
+        ).with_help_message(
+            "if the issue persists, please review the script for potential type inconsistencies"
         )
     }
 
