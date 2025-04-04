@@ -24,12 +24,12 @@ use futures::TryStreamExt;
 use golem_common::model::{AccountId, ComponentId};
 use golem_common::widen_infallible;
 use golem_service_base::config::S3BlobStorageConfig;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{fs, memory, s3, BlobStorage, BlobStorageNamespace};
-use golem_service_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -382,15 +382,13 @@ impl Debug for SqliteTest {
 impl GetBlobStorage for SqliteTest {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
         let sqlx_pool_sqlite = SqlitePoolOptions::new()
+            .min_connections(10)
             .max_connections(10)
             .connect("sqlite::memory:")
             .await
             .expect("Cannot create db options");
 
-        let pool = SqlitePool::new(sqlx_pool_sqlite)
-            .await
-            .expect("Cannot connect to sqlite db");
-
+        let pool = SqlitePool::new(sqlx_pool_sqlite.clone(), sqlx_pool_sqlite.clone());
         let sbs = SqliteBlobStorage::new(pool).await.unwrap();
         Arc::new(sbs)
     }

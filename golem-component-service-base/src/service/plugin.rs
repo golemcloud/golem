@@ -27,7 +27,6 @@ use golem_common::model::plugin::{
     PluginOwner, PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
 };
 use golem_common::model::ComponentId;
-use golem_common::model::HasAccountId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -166,7 +165,8 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + 
     /// Registers a new plugin
     async fn create_plugin(
         &self,
-        plugin: PluginDefinitionCreation<Owner, Scope>,
+        owner: &Owner,
+        plugin: PluginDefinitionCreation<Scope>,
     ) -> Result<(), PluginError>;
 
     /// Gets a registered plugin belonging to a given `owner`, identified by its `name` and `version`
@@ -331,28 +331,28 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
 
     async fn create_plugin(
         &self,
-        plugin: PluginDefinitionCreation<Owner::PluginOwner, Scope>,
+        owner: &Owner::PluginOwner,
+        plugin: PluginDefinitionCreation<Scope>,
     ) -> Result<(), PluginError> {
         let type_specific_definition = match &plugin.specs {
             PluginTypeSpecificCreation::OplogProcessor(inner) => {
-                self.check_oplog_processor_plugin(&plugin.owner, inner)
-                    .await?;
+                self.check_oplog_processor_plugin(owner, inner).await?;
                 PluginTypeSpecificDefinition::OplogProcessor(inner.clone())
             }
             PluginTypeSpecificCreation::ComponentTransformer(inner) => {
                 PluginTypeSpecificDefinition::ComponentTransformer(inner.clone())
             }
             PluginTypeSpecificCreation::App(inner) => {
-                let blob_storage_key = self.store_plugin_wasm(&inner.data, &plugin.owner).await?;
+                let blob_storage_key = self.store_plugin_wasm(&inner.data, owner).await?;
                 PluginTypeSpecificDefinition::App(AppPluginDefinition { blob_storage_key })
             }
             PluginTypeSpecificCreation::Library(inner) => {
-                let blob_storage_key = self.store_plugin_wasm(&inner.data, &plugin.owner).await?;
+                let blob_storage_key = self.store_plugin_wasm(&inner.data, owner).await?;
                 PluginTypeSpecificDefinition::Library(LibraryPluginDefinition { blob_storage_key })
             }
         };
 
-        let definition = plugin.into_definition(type_specific_definition);
+        let definition = plugin.into_definition(owner.clone(), type_specific_definition);
         let record: PluginRecord<Owner::PluginOwner, Scope> = definition.into();
         self.plugin_repo.create(&record).await?;
         Ok(())

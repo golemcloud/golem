@@ -32,13 +32,11 @@ service ComponentService {
 }
 
 message CreateComponentConstraintsRequest {
-  golem.common.ProjectId projectId = 1;
-  ComponentConstraints componentConstraints = 2;
+  ComponentConstraints componentConstraints = 1;
 }
 
 message DeleteComponentConstraintsRequest {
-  golem.common.ProjectId projectId = 1;
-  ComponentConstraints componentConstraints = 2;
+  ComponentConstraints componentConstraints = 1;
 }
 
 message CreateComponentConstraintsResponse {

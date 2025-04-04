@@ -48,7 +48,8 @@ use golem_common::model::base64::Base64;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::redis::RedisPool;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
@@ -160,14 +161,14 @@ impl Drop for SqliteDb {
 pub async fn test_with_postgres_db() {
     let (db_config, _container) = start_docker_postgres().await;
 
-    db::postgres_migrate(
+    db::postgres::migrate(
         &db_config,
         MigrationsDir::new("../golem-worker-service/db/migration".into()).postgres_migrations(),
     )
     .await
     .unwrap();
 
-    let db_pool = db::create_postgres_pool(&db_config).await.unwrap();
+    let db_pool = PostgresPool::configured(&db_config).await.unwrap();
 
     let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> = Arc::new(
         api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
@@ -195,7 +196,7 @@ pub async fn test_gateway_session_with_sqlite() {
         max_connections: 10,
     };
 
-    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+    let db_pool = SqlitePool::configured(&db_config).await.unwrap();
 
     let data_value = DataValue(serde_json::Value::String(
         Nonce::new_random().secret().to_string(),
@@ -221,7 +222,7 @@ pub async fn test_gateway_session_with_sqlite_expired() {
         max_connections: 10,
     };
 
-    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+    let pool = SqlitePool::configured(&db_config).await.unwrap();
 
     let data_value = DataValue(serde_json::Value::String(
         Nonce::new_random().secret().to_string(),
@@ -229,10 +230,6 @@ pub async fn test_gateway_session_with_sqlite_expired() {
 
     let expiration =
         SqliteGatewaySessionExpiration::new(Duration::from_secs(1), Duration::from_secs(1));
-
-    let pool = SqlitePool::new(db_pool)
-        .await
-        .expect("Failed to create sqlite pool");
 
     let sqlite_session = SqliteGatewaySession::new(pool.clone(), expiration.clone())
         .await
@@ -322,16 +319,12 @@ async fn insert_and_get_session_with_sqlite(
     session_id: SessionId,
     data_key: DataKey,
     data_value: DataValue,
-    db_pool: sqlx::SqlitePool,
+    db_pool: SqlitePool,
 ) -> Result<DataValue, GatewaySessionError> {
-    let sqlite_session = SqliteGatewaySession::new(
-        SqlitePool::new(db_pool)
+    let sqlite_session =
+        SqliteGatewaySession::new(db_pool, SqliteGatewaySessionExpiration::default())
             .await
-            .map_err(|err| GatewaySessionError::InternalError(err.to_string()))?,
-        SqliteGatewaySessionExpiration::default(),
-    )
-    .await
-    .map_err(|err| GatewaySessionError::InternalError(err.to_string()))?;
+            .map_err(|err| GatewaySessionError::InternalError(err.to_string()))?;
 
     let session_store = Arc::new(sqlite_session);
 
@@ -350,14 +343,14 @@ pub async fn test_with_sqlite_db() {
         max_connections: 10,
     };
 
-    db::sqlite_migrate(
+    db::sqlite::migrate(
         &db_config,
         MigrationsDir::new("../golem-worker-service/db/migration".into()).sqlite_migrations(),
     )
     .await
     .unwrap();
 
-    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+    let db_pool = SqlitePool::configured(&db_config).await.unwrap();
 
     let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> = Arc::new(
         api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
@@ -430,7 +423,7 @@ impl TestComponentService {
 }
 
 #[async_trait]
-impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
+impl<Namespace, AuthCtx> ComponentService<Namespace, AuthCtx> for TestComponentService {
     async fn get_by_version(
         &self,
         _component_id: &ComponentId,
@@ -451,6 +444,7 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
     async fn get_by_name(
         &self,
         name: &ComponentName,
+        _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component> {
         let test_component = Self::test_component();
@@ -491,7 +485,7 @@ async fn test_services(
     api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send>,
     security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send>,
 ) {
-    let component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send> =
+    let component_service: Arc<dyn ComponentService<DefaultNamespace, EmptyAuthCtx>> =
         Arc::new(TestComponentService {});
 
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});

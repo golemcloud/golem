@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod component;
 pub mod worker;
 pub mod worker_request_executor;
 
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_worker_service_base::gateway_execution::file_server_binding_handler;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::DefaultFileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
     DefaultHttpHandlerBindingHandler, HttpHandlerBindingHandler,
 };
+use golem_worker_service_base::service::component::ComponentService;
 use worker_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
@@ -52,7 +53,7 @@ use golem_common::model::RetryConfig;
 
 use golem_common::config::DbConfig;
 use golem_common::redis::RedisPool;
-use golem_service_base::db;
+use golem_service_base::db::postgres::PostgresPool;
 use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
     SqliteGatewaySessionExpiration,
@@ -72,7 +73,7 @@ use tonic::codec::CompressionEncoding;
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: worker::WorkerService,
-    pub component_service: component::ComponentService,
+    pub component_service: Arc<dyn ComponentService<DefaultNamespace, EmptyAuthCtx>>,
     pub security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Sync + Send>,
     pub definition_service:
         Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
@@ -120,7 +121,7 @@ impl Services {
             },
         );
 
-        let component_service: component::ComponentService = {
+        let component_service: Arc<dyn ComponentService<DefaultNamespace, EmptyAuthCtx>> = {
             let config = &config.component_service;
             let uri = config.uri();
             let retry_config = config.retries.clone();
@@ -174,7 +175,7 @@ impl Services {
             .clone()
         {
             DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+                let db_pool = PostgresPool::configured(&c)
                     .await
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
@@ -196,7 +197,7 @@ impl Services {
                 )
             }
             DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
+                let db_pool = SqlitePool::configured(&c)
                     .await
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
@@ -252,7 +253,12 @@ impl Services {
         > = Arc::new(DefaultFileServerBindingHandler::new(
             component_service.clone(),
             initial_component_files_service.clone(),
-            worker_service.clone(),
+            Arc::new(
+                file_server_binding_handler::DefaultWorkerServiceAdapter::new(
+                    worker_service.clone(),
+                ),
+            ),
+            EmptyAuthCtx(),
         ));
 
         let http_handler_binding_handler: Arc<
