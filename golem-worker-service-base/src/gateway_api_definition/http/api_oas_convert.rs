@@ -184,16 +184,27 @@ fn add_request_body(operation: &mut openapiv3::Operation, route: &RouteResponseD
 
 // Helper function: Adds responses to the operation
 fn add_responses(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+    // Get the default status code based on the method
     let default_status = get_default_status_code(&route.method);
-    let status_codes = determine_status_codes(route, default_status);
 
-    for status_code in status_codes {
-        let response = create_response(status_code, route);
-        operation.responses.responses.insert(
-            openapiv3::StatusCode::Code(status_code),
-            openapiv3::ReferenceOr::Item(response),
-        );
-    }
+    // Create the specific response for the default status code
+    let specific_response = create_response(default_status, route);
+
+    // It is possible that rib outputs status 200, while we are expecting 201
+    // Also in the case that we have multiple possible response status, but a single response type
+    // {status: 200, body: string}, {status: 400, body: string}
+    // We create one response using method default status code, and another response using the default response
+    // Create the default response (same structure as the specific response)
+    let default_response = create_response(default_status, route);
+
+    // Add the specific response to the operation
+    operation.responses.responses.insert(
+        openapiv3::StatusCode::Code(default_status),
+        openapiv3::ReferenceOr::Item(specific_response),
+    );
+
+    // Add the default response to the operation
+    operation.responses.default = Some(openapiv3::ReferenceOr::Item(default_response));
 }
 
 // Helper function: Adds binding info to the operation
@@ -399,30 +410,6 @@ fn get_default_status_code(method: &MethodPattern) -> u16 {
         MethodPattern::Patch => 200,
         MethodPattern::Trace => 200,
         _ => 200,
-    }
-}
-
-// Helper function: Determines status codes to include
-fn determine_status_codes(route: &RouteResponseData, default_status: u16) -> Vec<u16> {
-    use golem_wasm_ast::analysis::AnalysedType;
-
-    // Check if response mapping output has a variant or result type
-    let has_multiple_responses =
-        if let Some(response_mapping_output) = &route.binding.response_mapping_output {
-            matches!(
-                &response_mapping_output.analysed_type,
-                AnalysedType::Variant(_) | AnalysedType::Result(_)
-            )
-        } else {
-            false
-        };
-
-    if has_multiple_responses {
-        // Include common 2xx, 4xx and 5xx status codes
-        vec![200, 201, 204, 400, 404, 500]
-    } else {
-        // Just use the default status code
-        vec![default_status]
     }
 }
 
