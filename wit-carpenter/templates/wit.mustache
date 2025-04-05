@@ -1,0 +1,73 @@
+/**
+{{package_meta.docs}}
+*/
+package {{package_meta.name_space}}:{{package_meta.name}}@{{package_meta.version}};
+
+{{#interfaces}}
+/**
+* {{docs}}
+*/
+interface {{name}} {
+    {{#uses}}
+    use {{interface_name}}.{ {{#type_names}}{{.}}{{^last}}, {{/last}}{{/type_names}}};
+    {{/uses}}
+    {{#types}}
+    /**
+    * {{docs}}
+    */{{#is_record}}
+    record {{name}} {
+        {{#fields}}
+        {{name}}: {{{type_name}}},
+        {{/fields}}
+    }
+    {{/is_record}}
+    {{#is_enum}}
+    enum {{name}} {
+        {{#fields}}
+        {{name}},
+        {{/fields}}
+    }
+    {{/is_enum}}
+    {{#is_variant}}
+    variant {{name}} {
+        {{#fields}}
+        {{name}}({{{type_name}}}),
+        {{/fields}}
+    }
+    {{/is_variant}}
+    {{/types}}
+    {{#functions}}
+    /**
+    * {{docs}}
+    */
+    {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}){{#result}} -> result<{{{ok}}}, {{{err}}}>{{/result}};
+    {{/functions}}
+    {{#resources}}
+    /**
+    * {{docs}}
+    */
+    resource {{name}} {
+        constructor({{#constructor.parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/constructor.parameters}});
+        
+        {{#functions}}
+        /**
+        * {{docs}}
+        */
+        {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}) -> result<{{{result.ok}}}, {{{result.err}}}>;
+        
+        {{/functions}}
+    }
+{{/resources}}
+
+}
+
+{{/interfaces}}
+
+/**
+* {{world.docs}}
+*/
+world {{world.name}} {
+    {{#world.exports}}
+    export {{.}};
+    {{/world.exports}}
+}

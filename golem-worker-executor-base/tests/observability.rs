@@ -26,7 +26,7 @@ use tracing::Instrument;
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, RpcRemote, WasmRpcTarget,
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
@@ -342,6 +342,9 @@ async fn invocation_context_test(
                         component_type: ComponentType::Durable,
                     },
                 )]),
+                remote: RpcRemote::GolemWorker(
+                    golem_common::model::component_metadata::GolemWorkerRemote {},
+                ),
             }),
         )])
         .store()

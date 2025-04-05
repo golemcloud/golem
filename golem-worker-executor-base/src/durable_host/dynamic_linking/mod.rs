@@ -24,6 +24,8 @@ use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 
+mod grpc;
+mod openapi;
 mod wasm_rpc;
 
 #[async_trait]

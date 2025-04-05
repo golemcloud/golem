@@ -65,6 +65,9 @@ async fn counter_resource_test_2(
                         },
                     ),
                 ]),
+                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
+                    golem_common::model::component_metadata::GolemWorkerRemote {},
+                ),
             }),
         )])
         .store()
@@ -134,6 +137,9 @@ async fn counter_resource_test_2_with_restart(
                         },
                     ),
                 ]),
+                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
+                    golem_common::model::component_metadata::GolemWorkerRemote {},
+                ),
             }),
         )])
         .store()

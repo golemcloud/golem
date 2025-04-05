@@ -109,6 +109,9 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
                         component_type: ComponentType::Durable,
                     },
                 )]),
+                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
+                    golem_common::model::component_metadata::GolemWorkerRemote {},
+                ),
             }),
         )])
         .store()

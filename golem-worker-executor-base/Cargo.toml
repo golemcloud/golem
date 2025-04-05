@@ -48,12 +48,14 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "1.0.0"
 hex = { workspace = true }
-http = { workspace = true }
+http.workspace = true
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
-hyper = { workspace = true }
+hyper.workspace = true
+io-extras = "0.18.4"
+iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 log = "0.4.26"
@@ -65,7 +67,8 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 ringbuf = "0.4.7"
-serde = { workspace = true }
+rustls.workspace = true
+serde.workspace = true
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
@@ -85,6 +88,14 @@ wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 zstd = "0.13"
+regex.workspace = true
+reqwest.workspace = true
+hyper-rustls = { version = "0.27.5", features = ["http2"]}
+rustls-native-certs = "0.8.1"
+prost-reflect = { version = "0.14.7", features = ["serde", "text-format"] }
+once_cell.workspace = true
+prost-build = "0.13.5"
+convert_case = "0.8.0"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
