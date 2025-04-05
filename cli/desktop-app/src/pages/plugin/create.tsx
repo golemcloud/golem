@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -6,10 +5,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { z } from "zod";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Form,
   FormControl,
@@ -19,10 +14,6 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Textarea } from "@/components/ui/textarea";
-import { useEffect, useState } from "react";
-import { ComponentList } from "@/types/component";
-import { API } from "@/service";
 import {
   Select,
   SelectContent,
@@ -30,11 +21,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useNavigate } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useEffect, useState } from "react";
+
+import { API } from "@/service";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ComponentList } from "@/types/component";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { useForm } from "react-hook-form";
+import { useNavigate } from "react-router-dom";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
 
 const formSchema = z.object({
   name: z.string().min(2, {
@@ -73,7 +74,7 @@ const formSchema = z.object({
     }),
     z.object({
       type: z.literal("Component"),
-      componentID: z
+      componentId: z
         .string()
         .uuid({ message: "Component ID must be a valid UUID." }),
     }),
@@ -522,7 +523,7 @@ export default function CreatePlugin() {
                   {form.watch("scope.type") === "Component" && (
                     <FormField
                       control={form.control}
-                      name="scope.componentID"
+                      name="scope.componentId"
                       render={({ field }) => (
                         <FormItem className="mt-4">
                           <FormLabel>
@@ -538,9 +539,9 @@ export default function CreatePlugin() {
                                 className={cn(
                                   (
                                     form.formState.errors.scope as {
-                                      componentID: string;
+                                      componentId: string;
                                     }
-                                  )?.componentID &&
+                                  )?.componentId &&
                                     "border-red-500 focus-visible:ring-red-500",
                                 )}
                               >

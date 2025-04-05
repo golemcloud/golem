@@ -1,8 +1,5 @@
-import ErrorBoundary from "@/components/errorBoundary";
-import { HTTP_METHOD_COLOR } from "@/components/nav-route";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ChevronRight, Copy, Layers, Plus, Trash } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -13,11 +10,15 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { cn, removeDuplicateApis } from "@/lib/utils";
+import { useEffect, useState } from "react";
+
 import { API } from "@/service";
 import { Api } from "@/types/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Deployment } from "@/types/deployments";
-import { ChevronRight, Copy, Layers, Plus, Trash } from "lucide-react";
-import { useEffect, useState } from "react";
+import ErrorBoundary from "@/components/errorBoundary";
+import { HTTP_METHOD_COLOR } from "@/components/nav-route";
 import { useNavigate } from "react-router-dom";
 
 const RoutesCard = ({
@@ -40,7 +41,12 @@ const RoutesCard = ({
 
   const copyToClipboard = (endpoint: { path: string; method: string }) => {
     const fullUrl = `${host}${endpoint.path}`;
-    const curlCommand = `curl --location ${endpoint.method} http://${fullUrl} --header "Content-Type: application/json" -d '{}'`;
+    const method = endpoint.method.toUpperCase(); // Ensure proper capitalization (GET, POST, PUT, DELETE, etc.)
+    const curlCommand = `curl --location --request ${method} http://${fullUrl} \
+  --header "Content-Type: application/json" \
+  --header "Accept: application/json" \
+  --data '{}'`;
+    
     navigator.clipboard
       .writeText(curlCommand)
       .then(() => {
@@ -71,7 +77,7 @@ const RoutesCard = ({
                   variant="secondary"
                   className={cn(
                     HTTP_METHOD_COLOR[
-                      endpoint.method as keyof typeof HTTP_METHOD_COLOR
+                    endpoint.method as keyof typeof HTTP_METHOD_COLOR
                     ],
                     "w-16 text-center justify-center",
                   )}
@@ -79,7 +85,7 @@ const RoutesCard = ({
                   {endpoint.method}
                 </Badge>
                 <code className="text-sm font-mono text-foreground">
-                  {endpoint.path}
+                  {endpoint.path || "/"}
                 </code>
               </div>
               {hoveredPath === endpoint.path && (
@@ -242,40 +248,39 @@ export default function Deployments() {
                                 a =>
                                   a.id === api.id && a.version === api.version,
                               )?.routes?.length || 0) > 0 && (
-                                <button
-                                  onClick={() =>
-                                    toggleExpanded(
-                                      deployment.site.host,
-                                      api.id,
-                                      api.version,
-                                    )
-                                  }
-                                  className="p-1 hover:bg-accent rounded-md"
-                                >
-                                  <ChevronRight
-                                    className={`w-4 h-4 text-muted-foreground transition-transform ${
-                                      expandedDeployment.includes(
+                                  <button
+                                    onClick={() =>
+                                      toggleExpanded(
+                                        deployment.site.host,
+                                        api.id,
+                                        api.version,
+                                      )
+                                    }
+                                    className="p-1 hover:bg-accent rounded-md"
+                                  >
+                                    <ChevronRight
+                                      className={`w-4 h-4 text-muted-foreground transition-transform ${expandedDeployment.includes(
                                         `${deployment.site.host}.${api.id}.${api.version}`,
                                       )
-                                        ? "rotate-90"
-                                        : ""
-                                    }`}
-                                  />
-                                </button>
-                              )}
+                                          ? "rotate-90"
+                                          : ""
+                                        }`}
+                                    />
+                                  </button>
+                                )}
                             </div>
                           </div>
 
                           {expandedDeployment.includes(
                             `${deployment.site.host}.${api.id}.${api.version}`,
                           ) && (
-                            <RoutesCard
-                              apiId={api.id}
-                              version={api.version}
-                              apiList={apiList}
-                              host={deployment.site.host}
-                            />
-                          )}
+                              <RoutesCard
+                                apiId={api.id}
+                                version={api.version}
+                                apiList={apiList}
+                                host={deployment.site.host}
+                              />
+                            )}
                         </div>
                       ))}
                     </div>

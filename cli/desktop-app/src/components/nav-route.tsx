@@ -1,4 +1,3 @@
-import { Badge } from "@/components/ui/badge.tsx";
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -6,6 +5,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+
+import { Badge } from "@/components/ui/badge.tsx";
 import { useNavigate } from "react-router-dom";
 
 export const HTTP_METHOD_COLOR = {
@@ -40,7 +41,7 @@ export function NavRoutes({
       <SidebarGroupLabel>Routes</SidebarGroupLabel>
       <SidebarMenu>
         {routes.map(item => (
-          <SidebarMenuItem key={item.name}>
+          <SidebarMenuItem key={`${item.name}-${item.method}`}>
             <SidebarMenuButton
               onClick={() => {
                 setActiveItem(item.name);

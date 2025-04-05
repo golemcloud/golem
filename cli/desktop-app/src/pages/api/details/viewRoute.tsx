@@ -1,17 +1,17 @@
+import { Api, RouteRequestData } from "@/types/api";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { CheckIcon, CopyIcon, Edit2Icon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+import { API } from "@/service";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CorsDisplay } from "@/components/cors-display";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
 import { HTTP_METHOD_COLOR } from "@/components/nav-route";
 import { RibEditor } from "@/components/rib-editor";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { API } from "@/service";
-import { Api, RouteRequestData } from "@/types/api";
 
 interface CodeBlockProps {
   code: string | string[];
@@ -141,7 +141,7 @@ export const ApiRoute = () => {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (apiName && version && path && method) {
+      if (apiName && version && method && path!== null) {
         const apiResponse= await API.getApi(apiName);
         const selectedApi = apiResponse.find(api => api.version === version);
         if (selectedApi) {
@@ -200,7 +200,7 @@ export const ApiRoute = () => {
                   {currentRoute.method}
                 </Badge>
                 <span className="font-mono text-gray-600 dark:text-gray-300">
-                  {currentRoute.path}
+                  {currentRoute.path || "/"}
                 </span>
               </div>
               {apiResponse?.draft && (

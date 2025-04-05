@@ -1,8 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
 import { BaseDirectory } from "@tauri-apps/api/path";
-import { writeFile } from "@tauri-apps/plugin-fs";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import TauriWebSocket from "@tauri-apps/plugin-websocket";
+import { invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { writeFile } from "@tauri-apps/plugin-fs";
 
 const isTauri = typeof window !== "undefined";
 
@@ -38,6 +38,7 @@ export async function fetchCurrentIP() {
     console.log("Current backend IP:", ip);
     return ip;
   } catch (error) {
+    return "http://localhost:9881"
     console.error("Failed to get current IP:", error);
   }
 }

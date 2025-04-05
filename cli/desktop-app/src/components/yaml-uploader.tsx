@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // @ts-nocheck
-import { Button } from "@/components/ui/button";
+import * as yaml from "js-yaml";
+
 import {
   Dialog,
   DialogContent,
@@ -9,15 +10,18 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input.tsx";
-import * as yaml from "js-yaml";
-import { Upload } from "lucide-react";
 import { useEffect, useState } from "react";
-import { YamlEditor } from "./yaml-editor";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+
 import { API } from "@/service";
 import { Api } from "@/types/api.ts";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import { ENDPOINT } from "@/service/endpoints.ts";
+import { Input } from "@/components/ui/input.tsx";
+import { Upload } from "lucide-react";
+import { YamlEditor } from "./yaml-editor";
+
+// import { parse } from "path";
 
 export default function YamlUploader() {
   const { apiName, version } = useParams();
@@ -76,11 +80,12 @@ export default function YamlUploader() {
   const onSubmit = async (payload: any) => {
     try {
       setIsSubmitting(true);
+      console.log(activeApiDetails)
 
-      const apiResponse = await API.getApi(apiName!);
-      const selectedApi = apiResponse.find(api => api.version === version);
-      const r = await API.callApi(
-        ENDPOINT.putApi(apiName, version),
+      // const apiResponse = await API.getApi(apiName!);
+      // const selectedApi = apiResponse.find(api => api.version === version);
+      await API.callApi(
+        ENDPOINT.putApi(activeApiDetails?.id!, version!),
         "PUT",
         payload,
         { "Content-Type": "application/yaml" },
@@ -116,6 +121,11 @@ export default function YamlUploader() {
       errors.push("Invalid or missing 'id' field.");
     }
 
+    // id must match the apiName
+    if (parsedData.id !== activeApiDetails?.id) {
+      errors.push(`'id' field must match the API name: ${apiName}.`);
+    }
+
     if (!parsedData.version || typeof parsedData.version !== "string") {
       errors.push("Invalid or missing 'version' field.");
     }
@@ -128,9 +138,7 @@ export default function YamlUploader() {
       errors.push("Invalid or missing 'routes' array.");
     } else {
       // Step 3: Validate each route
-      parsedData.routes.forEach((route: any, index: number) => {
-        const routePath = `routes[${index}]`;
-
+      parsedData.routes.forEach((route: any) => {
         if (
           !route.method ||
           ![
@@ -155,7 +163,7 @@ export default function YamlUploader() {
         if (!route.binding || typeof route.binding !== "object") {
           errors.push("Invalid or missing 'binding' object.");
         } else {
-          const { bindingType, componentId, response } = route.binding;
+          const { type: bindingType, component, response } = route.binding;
 
           if (
             !["default", "file-server", "cors-preflight"].includes(bindingType)
@@ -164,20 +172,20 @@ export default function YamlUploader() {
           }
 
           if (bindingType === "cors-preflight") {
-            if (!componentId || typeof componentId !== "object") {
+            if (!component || typeof component !== "object") {
               errors.push(
-                "Missing 'componentId' for 'cors-preflight' binding.",
+                "Missing 'component' for 'cors-preflight' binding.",
               );
             } else {
               if (
-                !componentId.componentId ||
-                typeof componentId.componentId !== "string"
+                !component.name ||
+                typeof component.name !== "string"
               ) {
-                errors.push("Invalid 'componentId'.");
+                errors.push("Invalid 'component.name'.");
               }
 
-              if (typeof componentId.version !== "number") {
-                errors.push("Invalid 'componentId.version'.");
+              if (typeof component.version !== "number") {
+                errors.push("Invalid 'component.version'.");
               }
             }
 
