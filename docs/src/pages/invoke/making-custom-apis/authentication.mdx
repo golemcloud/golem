@@ -56,8 +56,8 @@ routes:
   security: my-unique-security-scheme
   binding:
     type: wit-worker
-    componentId:
-      componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+    component:
+      name: "my-todo-api"
       version: 0
     response: |
       let email: string = request.auth.email;

@@ -26,8 +26,8 @@ routes:
     path: /v4/{user-id}/get-cart-contents
     binding:
       type: default
-      componentId:
-        componentId: dba38841-013a-49fa-a1dc-064949832f0c
+      component:
+        name: "shopping-cart"
         version: 0
       response: |
         let user: u64 = request.path.user-id;
@@ -37,7 +37,7 @@ routes:
 ```
 
 Please use this as a reference instead of using it with zero changes. For example, you might need to give a different
-version, componentId etc (explained below). You can get the `component` details including `componentId`
+version, component etc (explained below). You can get the `component` details including `name` and `version`
 by running `golem component list` command.
 
 The API definition's fields have the following meaning:
@@ -58,7 +58,7 @@ Let's break down the binding object.
 | Field         | Description                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `type`        | Specifies the type of binding. Here, it is set to "default", indicating that the binding involves a Golem worker.                                                                                                                                                                                                                                                                             |
-| `componentId` | Provides the component ID associated with the worker binding. As you can see the the golem-worker                                                                                                                                                                                                                                                                                                |
+| `component`   | Specifies the component's name and version                                                                                                                                                                                                                                                                                          |
 | `response`    | The `response` field here is a Rib expression that allows you to call any worker function and manipulates its output.                                                                                                                                                                                                                                                                            |
 
 See the [binding type reference](/http-api-definitions/worker-binding-types) for more details on the supported binding types.

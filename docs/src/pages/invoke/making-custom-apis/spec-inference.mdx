@@ -15,8 +15,8 @@ Here is a sample response when you register an API definition, where it holds th
       "method": "Get",
       "path": "/v4/{user-id}/get-cart-contents",
       "binding": {
-        "componentId": {
-          "componentId": "dba38841-013a-49fa-a1dc-064949832f0c",
+        "component": {
+          "name": "shopping-cart",
           "version": 0
         },
         "workerName": "let user: u64 = request.path.user-id;\n\"my-worker-${user}\"",
