@@ -1,5 +1,4 @@
 pub mod api_certificate;
-pub mod api_definition;
 pub mod api_domain;
 pub mod api_security;
 pub mod auth;
@@ -15,7 +14,6 @@ use crate::service::api_certificate::{
     AwsCertificateManager, CertificateManager, CertificateService, CertificateServiceDefault,
     InMemoryCertificateManager,
 };
-use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceDefault};
 use crate::service::api_domain::{
     ApiDomainService, ApiDomainServiceDefault, AwsDomainRoute, InMemoryRegisterDomain,
     InMemoryRegisterDomainRoute, RegisterDomainRoute,
@@ -23,30 +21,33 @@ use crate::service::api_domain::{
 use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceDefault};
 use crate::service::auth::{AuthService, CloudAuthService};
-use crate::service::file_server_binding_handler::CloudFileServerBindingHandler;
 use crate::service::worker::{WorkerService, WorkerServiceDefault};
 use crate::service::worker_request_executor::CloudGatewayWorkerRequestExecutor;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
 use cloud_common::clients::limit::{LimitService, LimitServiceDefault};
 use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
+use cloud_common::model::TokenSecret;
+use file_server_binding_handler::CloudWorkerServiceAdapter;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::DbConfig;
 use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::config::BlobStorageConfig;
-use golem_service_base::db;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
 use golem_worker_service_base::app_config::GatewaySessionStorageConfig;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     DefaultHttpApiDefinitionLookup, HttpApiDefinitionsLookup,
 };
-use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
+use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
+    DefaultFileServerBindingHandler, FileServerBindingHandler,
+};
 use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
     SqliteGatewaySessionExpiration,
@@ -61,8 +62,7 @@ use golem_worker_service_base::repo::api_deployment::{ApiDeploymentRepo, DbApiDe
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::component::{ComponentService, RemoteComponentService};
 use golem_worker_service_base::service::gateway::api_definition::{
-    ApiDefinitionService as BaseApiDefinitionService, ApiDefinitionServiceConfig,
-    ApiDefinitionServiceDefault as BaseApiDefinitionServiceDefault,
+    ApiDefinitionService, ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::gateway::api_deployment::{
@@ -80,13 +80,14 @@ pub struct ApiServices {
     pub worker_auth_service: Arc<dyn AuthService + Send + Sync>,
     pub project_service: Arc<dyn ProjectService + Send + Sync>,
     pub limit_service: Arc<dyn LimitService + Send + Sync>,
-    pub definition_service: Arc<dyn ApiDefinitionService + Send + Sync>,
+    pub definition_service:
+        Arc<dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Send + Sync>,
     pub deployment_service:
         Arc<dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Send + Sync>,
     pub domain_route: Arc<dyn RegisterDomainRoute + Send + Sync>,
     pub domain_service: Arc<dyn ApiDomainService + Send + Sync>,
     pub certificate_service: Arc<dyn CertificateService + Send + Sync>,
-    pub component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+    pub component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
     pub worker_service: Arc<dyn WorkerService + Send + Sync>,
     pub worker_request_to_http_service:
         Arc<dyn GatewayWorkerRequestExecutor<CloudNamespace> + Send + Sync>,
@@ -122,20 +123,20 @@ impl ApiServices {
             api_domain_repo,
             security_scheme_repo,
         ) = match config.base_config.db.clone() {
-            DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+            DbConfig::Postgres(config) => {
+                let db_pool = PostgresPool::configured(&config)
                     .await
                     .map_err(|e| format!("Init error (postgres pool): {e:?}"))?;
                 let api_definition_repo: Arc<dyn ApiDefinitionRepo + Send + Sync> =
-                    Arc::new(DbApiDefinitionRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiDefinitionRepo::new(Arc::new(db_pool.clone())));
                 let api_deployment_repo: Arc<dyn ApiDeploymentRepo + Send + Sync> =
-                    Arc::new(DbApiDeploymentRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiDeploymentRepo::new(Arc::new(db_pool.clone())));
                 let api_certificate_repo: Arc<dyn ApiCertificateRepo + Send + Sync> =
-                    Arc::new(DbApiCertificateRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiCertificateRepo::new(db_pool.clone()));
                 let api_domain_repo: Arc<dyn ApiDomainRepo + Send + Sync> =
-                    Arc::new(DbApiDomainRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiDomainRepo::new(db_pool.clone()));
                 let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+                    Arc::new(DbSecuritySchemeRepo::new(Arc::new(db_pool.clone())));
                 (
                     api_definition_repo,
                     api_deployment_repo,
@@ -144,8 +145,8 @@ impl ApiServices {
                     security_scheme_repo,
                 )
             }
-            DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
+            DbConfig::Sqlite(config) => {
+                let db_pool = SqlitePool::configured(&config)
                     .await
                     .map_err(|e| format!("Init error (sqlite pool): {e:?}"))?;
                 let api_definition_repo: Arc<dyn ApiDefinitionRepo + Send + Sync> =
@@ -153,9 +154,9 @@ impl ApiServices {
                 let api_deployment_repo: Arc<dyn ApiDeploymentRepo + Send + Sync> =
                     Arc::new(DbApiDeploymentRepo::new(db_pool.clone().into()));
                 let api_certificate_repo: Arc<dyn ApiCertificateRepo + Send + Sync> =
-                    Arc::new(DbApiCertificateRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiCertificateRepo::new(db_pool.clone()));
                 let api_domain_repo: Arc<dyn ApiDomainRepo + Send + Sync> =
-                    Arc::new(DbApiDomainRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiDomainRepo::new(db_pool.clone()));
                 let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
                     Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
 
@@ -230,7 +231,7 @@ impl ApiServices {
             dyn ApiDefinitionValidatorService<HttpApiDefinition> + Send + Sync,
         > = Arc::new(HttpApiDefinitionValidator {});
 
-        let component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync> =
+        let component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>> =
             Arc::new(RemoteComponentService::new(
                 config.base_config.component_service.uri(),
                 config.base_config.component_service.retries.clone(),
@@ -249,9 +250,9 @@ impl ApiServices {
             base_security_scheme_service.clone(),
         ));
 
-        let base_definition_service: Arc<
-            dyn BaseApiDefinitionService<CloudAuthCtx, CloudNamespace> + Sync + Send,
-        > = Arc::new(BaseApiDefinitionServiceDefault::new(
+        let definition_service: Arc<
+            dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Sync + Send,
+        > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),
             api_deployment_repo.clone(),
@@ -259,14 +260,6 @@ impl ApiServices {
             api_definition_validator,
             ApiDefinitionServiceConfig::default(),
         ));
-
-        let definition_service: Arc<dyn ApiDefinitionService + Send + Sync> =
-            Arc::new(ApiDefinitionServiceDefault::new(
-                auth_service.clone(),
-                base_definition_service,
-                &config.cloud_specific_config.cloud_api_definition,
-                component_service.clone(),
-            ));
 
         let deployment_service: Arc<
             dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Send + Sync,
@@ -424,11 +417,13 @@ impl ApiServices {
 
         let file_server_binding_handler: Arc<
             dyn FileServerBindingHandler<CloudNamespace> + Send + Sync,
-        > = Arc::new(CloudFileServerBindingHandler::new(
+        > = Arc::new(DefaultFileServerBindingHandler::new(
             component_service.clone(),
-            config.base_config.component_service.access_token,
             initial_component_files_service.clone(),
-            worker_service.clone(),
+            Arc::new(CloudWorkerServiceAdapter::new(worker_service.clone())),
+            CloudAuthCtx::new(TokenSecret::new(
+                config.base_config.component_service.access_token,
+            )),
         ));
 
         let http_handler_binding_handler: Arc<

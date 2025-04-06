@@ -1,19 +1,19 @@
+use crate::model::TokenSecret;
+use axum::http::header;
+use bincode::{Decode, Encode};
+use golem_common::model::{AccountId, ProjectId};
+use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
+use headers::authorization::Bearer as HBearer;
+use headers::Cookie as HCookie;
+use poem::web::headers::{Authorization, HeaderMapExt};
 use poem::Request;
 use poem_openapi::{
     auth::{ApiKey, Bearer},
     SecurityScheme,
 };
+use serde::Deserialize;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-
-use crate::model::TokenSecret;
-use axum::http::header;
-use bincode::{Decode, Encode};
-use golem_common::model::{AccountId, HasAccountId, ProjectId};
-use headers::authorization::Bearer as HBearer;
-use headers::Cookie as HCookie;
-use poem::web::headers::{Authorization, HeaderMapExt};
-use serde::Deserialize;
 use std::str::FromStr;
 
 #[derive(SecurityScheme)]
@@ -154,6 +154,8 @@ impl IntoIterator for CloudAuthCtx {
     }
 }
 
+impl GolemAuthCtx for CloudAuthCtx {}
+
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Encode, Decode, Deserialize)]
 pub struct CloudNamespace {
     pub project_id: ProjectId,
@@ -192,9 +194,12 @@ impl TryFrom<String> for CloudNamespace {
     }
 }
 
-impl HasAccountId for CloudNamespace {
+impl GolemNamespace for CloudNamespace {
     fn account_id(&self) -> AccountId {
         self.account_id.clone()
+    }
+    fn project_id(&self) -> Option<ProjectId> {
+        Some(self.project_id.clone())
     }
 }
 

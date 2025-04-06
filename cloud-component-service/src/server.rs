@@ -88,7 +88,7 @@ async fn async_main(
     let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
     match config.db.clone() {
         DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c, migrations.postgres_migrations())
+            db::postgres::migrate(&c, migrations.postgres_migrations())
                 .await
                 .map_err(|e| {
                     dbg!("DB - init error: {}", &e);
@@ -96,7 +96,7 @@ async fn async_main(
                 })?;
         }
         DbConfig::Sqlite(c) => {
-            db::sqlite_migrate(&c, migrations.sqlite_migrations())
+            db::sqlite::migrate(&c, migrations.sqlite_migrations())
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);

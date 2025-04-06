@@ -1,10 +1,10 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
+use futures_util::{future, TryFutureExt};
 use golem_common::model::AccountId;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool};
+use sqlx::Error;
 
 #[async_trait]
 pub trait AccountFuelRepo {
@@ -17,21 +17,22 @@ struct AccountFuel {
     consumed: i64,
 }
 
-pub struct DbAccountFuelRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbAccountFuelRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbAccountFuelRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbAccountFuelRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
+impl AccountFuelRepo for DbAccountFuelRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn get(&self, id: &AccountId) -> Result<i64, RepoError> {
-        let result = sqlx::query_as::<_, AccountFuel>(
+        let query = sqlx::query_as::<_, AccountFuel>(
             "
             SELECT consumed
             FROM account_fuel
@@ -40,29 +41,35 @@ impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
               AND year = EXTRACT(YEAR FROM current_date)
             ",
         )
-        .bind(id.value.clone())
-        .fetch_optional(self.db_pool.as_ref())
-        .await?;
+        .bind(&id.value);
 
-        Ok(result.map(|r| r.consumed).unwrap_or(0))
+        self.db_pool
+            .with_ro("account_fuel", "get")
+            .fetch_optional_as(query)
+            .await
+            .map(|r| r.map(|r| r.consumed).unwrap_or_default())
     }
 
-    #[when(sqlx::Postgres -> update)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> update)]
     async fn update_postgres(&self, id: &AccountId, delta: i64) -> Result<i64, RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("account_fuel", "update")
+            .begin()
+            .await?;
 
-        sqlx::query(
+        let query = sqlx::query(
             "
             INSERT INTO account_fuel (account_id, consumed, month, year)
             VALUES ($1, 0, 1, 2000)
             ON CONFLICT DO NOTHING
             ",
         )
-        .bind(id.value.clone())
-        .execute(&mut *transaction)
-        .await?;
+        .bind(&id.value);
 
-        sqlx::query(
+        transaction.execute(query).await?;
+
+        let query = sqlx::query(
             "
             UPDATE account_fuel
             SET consumed = CASE
@@ -75,29 +82,42 @@ impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
             WHERE account_id = $1
             ",
         )
-        .bind(id.value.clone())
-        .bind(delta)
-        .execute(&mut *transaction)
-        .await?;
+        .bind(&id.value)
+        .bind(delta);
 
-        // Should we use get?
-        let updated_fuel = sqlx::query_as::<_, AccountFuel>(
+        transaction.execute(query).await?;
+
+        let query = sqlx::query_as::<_, AccountFuel>(
             "SELECT consumed FROM account_fuel WHERE account_id = $1",
         )
-        .bind(id.value.clone())
-        .fetch_one(&mut *transaction)
-        .await?;
+        .bind(&id.value);
 
-        transaction.commit().await?;
+        // TODO: use fetch_one_as
+        let updated_fuel = transaction
+            .fetch_optional_as(query)
+            .and_then(|row| match row {
+                Some(row) => future::ok(row),
+                None => future::err(Error::RowNotFound.into()),
+            })
+            .await?;
+
+        self.db_pool
+            .with_rw("account_fuel", "update")
+            .commit(transaction)
+            .await?;
 
         Ok(updated_fuel.consumed)
     }
 
-    #[when(sqlx::Sqlite -> update)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> update)]
     async fn update_sqlite(&self, id: &AccountId, delta: i64) -> Result<i64, RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("account_fuel", "update")
+            .begin()
+            .await?;
 
-        sqlx::query(
+        let query = sqlx::query(
             "
             WITH upsert AS (
                 UPDATE account_fuel
@@ -116,20 +136,29 @@ impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
             WHERE NOT EXISTS (SELECT * FROM upsert)
             ",
         )
-            .bind(id.value.clone())
-            .bind(delta)
-            .execute(&mut *transaction)
-            .await?;
+            .bind(&id.value)
+            .bind(delta);
 
-        // Should we use get?
-        let updated_fuel = sqlx::query_as::<_, AccountFuel>(
+        transaction.execute(query).await?;
+
+        let query = sqlx::query_as::<_, AccountFuel>(
             "SELECT consumed FROM account_fuel WHERE account_id = $1",
         )
-        .bind(id.value.clone())
-        .fetch_one(&mut *transaction)
-        .await?;
+        .bind(&id.value);
 
-        transaction.commit().await?;
+        // TODO: use fetch_one_as
+        let updated_fuel = transaction
+            .fetch_optional_as(query)
+            .and_then(|row| match row {
+                Some(row) => future::ok(row),
+                None => future::err(Error::RowNotFound.into()),
+            })
+            .await?;
+
+        self.db_pool
+            .with_rw("account_fuel", "update")
+            .commit(transaction)
+            .await?;
 
         Ok(updated_fuel.consumed)
     }

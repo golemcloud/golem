@@ -17,6 +17,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
+use golem_component_service_base::model::plugin::PluginDefinitionCreation;
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
@@ -77,9 +78,7 @@ impl PluginGrpcApi {
     ) -> Result<(), ComponentError> {
         let auth = auth(metadata)?;
 
-        let plugin = request
-            .clone()
-            .try_into()
+        let plugin = grpc_to_plugin_creation(request.clone())
             .map_err(|err| bad_request_error(&format!("Invalid plugin specification: {err}")))?;
 
         self.plugin_service.create_plugin(&auth, plugin).await?;
@@ -277,4 +276,22 @@ fn plugin_definition_to_grpc(
         homepage: plugin_definition.homepage,
         specs: Some(plugin_definition.specs.into()),
     }
+}
+
+fn grpc_to_plugin_creation(
+    value: cloud_api_grpc::proto::golem::cloud::component::v1::CreatePluginRequest,
+) -> Result<PluginDefinitionCreation<CloudPluginScope>, String> {
+    let plugin = value.plugin.ok_or("missing plugin definition")?;
+
+    let converted = PluginDefinitionCreation {
+        name: plugin.name,
+        version: plugin.version,
+        description: plugin.description,
+        icon: plugin.icon,
+        homepage: plugin.homepage,
+        specs: plugin.specs.ok_or("missing specs")?.try_into()?,
+        scope: plugin.scope.ok_or("missing scope")?.try_into()?,
+    };
+
+    Ok(converted)
 }

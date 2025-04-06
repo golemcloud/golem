@@ -487,7 +487,7 @@ pub async fn test_postgres_db() {
     };
 
     let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
-    db::postgres_migrate(&db_config, migrations.postgres_migrations())
+    db::postgres::migrate(&db_config, migrations.postgres_migrations())
         .await
         .unwrap();
 
@@ -561,7 +561,7 @@ pub async fn test_sqlite_db() {
     };
 
     let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
-    db::sqlite_migrate(&db_config, migrations.sqlite_migrations())
+    db::sqlite::migrate(&db_config, migrations.sqlite_migrations())
         .await
         .unwrap();
 

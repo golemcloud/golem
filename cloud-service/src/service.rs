@@ -1,9 +1,9 @@
-use golem_common::config::DbConfig;
-use golem_service_base::db;
-use std::sync::Arc;
-
 use crate::config::CloudServiceConfig;
 use crate::repo;
+use golem_common::config::DbConfig;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
+use std::sync::Arc;
 
 pub mod account;
 pub mod account_grant;
@@ -45,17 +45,17 @@ pub struct Services {
 impl Services {
     pub async fn new(config: &CloudServiceConfig) -> Result<Services, String> {
         let repositories = match config.db.clone() {
-            DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+            DbConfig::Postgres(config) => {
+                let db_pool = PostgresPool::configured(&config)
                     .await
                     .map_err(|e| e.to_string())?;
-                repo::Repositories::new_postgres(Arc::new(db_pool))
+                repo::Repositories::new(db_pool)
             }
-            DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
+            DbConfig::Sqlite(config) => {
+                let db_pool = SqlitePool::configured(&config)
                     .await
                     .map_err(|e| e.to_string())?;
-                repo::Repositories::new_sqlite(Arc::new(db_pool))
+                repo::Repositories::new(db_pool)
             }
         };
 

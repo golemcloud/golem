@@ -1,14 +1,11 @@
-use std::ops::Deref;
-use std::result::Result;
-use std::str::FromStr;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use cloud_common::model::TokenId;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::AccountId;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool};
+use std::result::Result;
+use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::model::{OAuth2Provider, OAuth2Token};
@@ -61,21 +58,22 @@ pub trait OAuth2TokenRepo {
     async fn clean_token_id(&self, provider: &str, external_id: &str) -> Result<(), RepoError>;
 }
 
-pub struct DbOAuth2TokenRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbOAuth2TokenRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbOAuth2TokenRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbOAuth2TokenRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl OAuth2TokenRepo for DbOAuth2TokenRepo<sqlx::Postgres> {
+impl OAuth2TokenRepo for DbOAuth2TokenRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn upsert(&self, token: &OAuth2TokenRecord) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               INSERT INTO oauth2_tokens
                 (provider, external_id, account_id, token_id)
@@ -89,9 +87,12 @@ impl OAuth2TokenRepo for DbOAuth2TokenRepo<sqlx::Postgres> {
         .bind(token.provider.as_str())
         .bind(token.external_id.as_str())
         .bind(token.account_id.as_str())
-        .bind(token.token_id)
-        .execute(self.db_pool.deref())
-        .await?;
+        .bind(token.token_id);
+
+        self.db_pool
+            .with_rw("oauth2_token", "upsert")
+            .execute(query)
+            .await?;
 
         Ok(())
     }
@@ -101,32 +102,41 @@ impl OAuth2TokenRepo for DbOAuth2TokenRepo<sqlx::Postgres> {
         provider: &str,
         external_id: &str,
     ) -> Result<Option<OAuth2TokenRecord>, RepoError> {
-        sqlx::query_as::<_, OAuth2TokenRecord>(
+        let query = sqlx::query_as::<_, OAuth2TokenRecord>(
             "SELECT * FROM oauth2_tokens WHERE provider = $1 AND external_id = $2",
         )
         .bind(provider)
-        .bind(external_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(external_id);
+
+        self.db_pool
+            .with_ro("oauth2_token", "get")
+            .fetch_optional_as(query)
+            .await
     }
 
     async fn get_by_token_id(&self, token_id: &Uuid) -> Result<Vec<OAuth2TokenRecord>, RepoError> {
-        sqlx::query_as::<_, OAuth2TokenRecord>("SELECT * FROM oauth2_tokens WHERE token_id = $1")
-            .bind(token_id)
-            .fetch_all(self.db_pool.deref())
+        let query = sqlx::query_as::<_, OAuth2TokenRecord>(
+            "SELECT * FROM oauth2_tokens WHERE token_id = $1",
+        )
+        .bind(token_id);
+
+        self.db_pool
+            .with_ro("oauth2_token", "get_by_token_id")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
     async fn clean_token_id(&self, provider: &str, external_id: &str) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             "UPDATE oauth2_tokens SET token_id = NULL WHERE provider = $1 AND external_id = $2",
         )
         .bind(provider)
-        .bind(external_id)
-        .execute(self.db_pool.deref())
-        .await?;
+        .bind(external_id);
+
+        self.db_pool
+            .with_rw("oauth2_token", "clean_token_id")
+            .execute(query)
+            .await?;
         Ok(())
     }
 }

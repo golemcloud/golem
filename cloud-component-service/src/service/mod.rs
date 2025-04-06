@@ -31,13 +31,13 @@ use golem_component_service_base::service::plugin::{
 };
 use golem_component_service_base::service::transformer_plugin_caller::TransformerPluginCallerDefault;
 use golem_service_base::config::BlobStorageConfig;
-use golem_service_base::db;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -76,8 +76,8 @@ impl Services {
         };
 
         let (component_repo, plugin_repo) = match config.db.clone() {
-            DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+            DbConfig::Postgres(config) => {
+                let db_pool = PostgresPool::configured(&config)
                     .await
                     .map_err(|e| e.to_string())?;
 
@@ -92,8 +92,8 @@ impl Services {
                 )));
                 (component_repo, plugin_repo)
             }
-            DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
+            DbConfig::Sqlite(config) => {
+                let db_pool = SqlitePool::configured(&config)
                     .await
                     .map_err(|e| e.to_string())?;
 

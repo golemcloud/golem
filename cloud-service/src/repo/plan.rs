@@ -1,15 +1,11 @@
-use std::ops::Deref;
-use std::result::Result;
-use std::sync::Arc;
-
+use crate::model::{Plan, PlanData};
 use async_trait::async_trait;
 use cloud_common::model::PlanId;
 use conditional_trait_gen::trait_gen;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool};
+use std::result::Result;
 use uuid::Uuid;
-
-use crate::model::{Plan, PlanData};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct PlanRecord {
@@ -65,21 +61,22 @@ pub trait PlanRepo {
     async fn delete(&self, plan_id: &Uuid) -> Result<(), RepoError>;
 }
 
-pub struct DbPlanRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbPlanRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbPlanRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbPlanRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl PlanRepo for DbPlanRepo<sqlx::Postgres> {
+impl PlanRepo for DbPlanRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, plan: &PlanRecord) -> Result<(), RepoError> {
-        sqlx::query(r#"
+        let query = sqlx::query(r#"
               INSERT INTO plans
                 (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
               VALUES
@@ -91,15 +88,18 @@ impl PlanRepo for DbPlanRepo<sqlx::Postgres> {
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)
-            .bind(plan.monthly_upload_limit)
-            .execute(self.db_pool.deref())
+            .bind(plan.monthly_upload_limit);
+
+        self.db_pool
+            .with_rw("plan", "create")
+            .execute(query)
             .await?;
 
         Ok(())
     }
 
     async fn update(&self, plan: &PlanRecord) -> Result<(), RepoError> {
-        sqlx::query(r#"
+        let query = sqlx::query(r#"
               INSERT INTO plans
                 (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
               VALUES
@@ -118,33 +118,43 @@ impl PlanRepo for DbPlanRepo<sqlx::Postgres> {
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)
-            .bind(plan.monthly_upload_limit)
-            .execute(self.db_pool.deref())
+            .bind(plan.monthly_upload_limit);
+
+        self.db_pool
+            .with_rw("plan", "update")
+            .execute(query)
             .await?;
 
         Ok(())
     }
 
     async fn get(&self, plan_id: &Uuid) -> Result<Option<PlanRecord>, RepoError> {
-        sqlx::query_as::<_, PlanRecord>("SELECT * FROM plans WHERE plan_id = $1")
-            .bind(plan_id)
-            .fetch_optional(self.db_pool.deref())
+        let query =
+            sqlx::query_as::<_, PlanRecord>("SELECT * FROM plans WHERE plan_id = $1").bind(plan_id);
+
+        self.db_pool
+            .with_ro("plan", "get")
+            .fetch_optional_as(query)
             .await
-            .map_err(|e| e.into())
     }
 
     async fn get_all(&self) -> Result<Vec<PlanRecord>, RepoError> {
-        sqlx::query_as::<_, PlanRecord>("SELECT * FROM plans")
-            .fetch_all(self.db_pool.deref())
+        let query = sqlx::query_as::<_, PlanRecord>("SELECT * FROM plans");
+
+        self.db_pool
+            .with_ro("plan", "get_all")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
     async fn delete(&self, plan_id: &Uuid) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM plans WHERE plan_id = $1")
-            .bind(plan_id)
-            .execute(self.db_pool.deref())
+        let query = sqlx::query("DELETE FROM plans WHERE plan_id = $1").bind(plan_id);
+
+        self.db_pool
+            .with_rw("plan", "delete")
+            .execute(query)
             .await?;
+
         Ok(())
     }
 }

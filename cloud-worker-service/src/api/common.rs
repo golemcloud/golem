@@ -1,5 +1,4 @@
 use crate::service::api_certificate::CertificateServiceError;
-use crate::service::api_definition::ApiDefinitionError;
 use crate::service::api_domain::ApiDomainServiceError;
 use crate::service::api_domain::RegisterDomainRouteError;
 use crate::service::api_security::SecuritySchemeServiceError;
@@ -332,15 +331,6 @@ impl From<CertificateServiceError> for ApiEndpointError {
                     error: value.to_string(),
                 }))
             }
-        }
-    }
-}
-
-impl From<ApiDefinitionError> for ApiEndpointError {
-    fn from(value: ApiDefinitionError) -> Self {
-        match value {
-            ApiDefinitionError::Auth(e) => e.into(),
-            ApiDefinitionError::Base(e) => e.into(),
         }
     }
 }

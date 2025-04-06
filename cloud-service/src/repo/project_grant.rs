@@ -1,13 +1,10 @@
-use std::ops::Deref;
-use std::result::Result;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use cloud_common::model::{ProjectGrantId, ProjectPolicyId};
 use conditional_trait_gen::trait_gen;
 use golem_common::model::ProjectId;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool};
+use std::result::Result;
 use uuid::Uuid;
 
 use crate::model::{ProjectGrant, ProjectGrantData};
@@ -61,21 +58,22 @@ pub trait ProjectGrantRepo {
     async fn delete(&self, project_grant_id: &Uuid) -> Result<(), RepoError>;
 }
 
-pub struct DbProjectGrantRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbProjectGrantRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbProjectGrantRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbProjectGrantRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl ProjectGrantRepo for DbProjectGrantRepo<sqlx::Postgres> {
+impl ProjectGrantRepo for DbProjectGrantRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, project_grant: &ProjectGrantRecord) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               INSERT INTO project_grants
                 (project_grant_id, grantor_project_id, project_policy_id, grantee_account_id)
@@ -86,54 +84,67 @@ impl ProjectGrantRepo for DbProjectGrantRepo<sqlx::Postgres> {
         .bind(project_grant.project_grant_id)
         .bind(project_grant.grantor_project_id)
         .bind(project_grant.project_policy_id)
-        .bind(project_grant.grantee_account_id.clone())
-        .execute(self.db_pool.deref())
-        .await?;
+        .bind(project_grant.grantee_account_id.clone());
+
+        self.db_pool
+            .with_rw("project_grant", "create")
+            .execute(query)
+            .await?;
 
         Ok(())
     }
 
     async fn get(&self, project_grant_id: &Uuid) -> Result<Option<ProjectGrantRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectGrantRecord>(
+        let query = sqlx::query_as::<_, ProjectGrantRecord>(
             "SELECT * FROM project_grants WHERE project_grant_id = $1",
         )
-        .bind(project_grant_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(project_grant_id);
+
+        self.db_pool
+            .with_ro("project_grant", "get")
+            .fetch_optional_as(query)
+            .await
     }
 
     async fn get_by_project(
         &self,
         project_id: &Uuid,
     ) -> Result<Vec<ProjectGrantRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectGrantRecord>(
+        let query = sqlx::query_as::<_, ProjectGrantRecord>(
             "SELECT * FROM project_grants WHERE grantor_project_id = $1",
         )
-        .bind(project_id)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(project_id);
+
+        self.db_pool
+            .with_ro("project_grant", "get_by_project")
+            .fetch_all(query)
+            .await
     }
 
     async fn get_by_account(
         &self,
         grantee_account_id: &str,
     ) -> Result<Vec<ProjectGrantRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectGrantRecord>(
+        let query = sqlx::query_as::<_, ProjectGrantRecord>(
             "SELECT * FROM project_grants WHERE grantee_account_id = $1",
         )
-        .bind(grantee_account_id)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(grantee_account_id);
+
+        self.db_pool
+            .with_ro("project_grant", "get_by_account")
+            .fetch_all(query)
+            .await
     }
 
     async fn delete(&self, project_grant_id: &Uuid) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM project_grants WHERE project_grant_id = $1")
-            .bind(project_grant_id)
-            .execute(self.db_pool.deref())
+        let query = sqlx::query("DELETE FROM project_grants WHERE project_grant_id = $1")
+            .bind(project_grant_id);
+
+        self.db_pool
+            .with_rw("project_grant", "delete")
+            .execute(query)
             .await?;
+
         Ok(())
     }
 }

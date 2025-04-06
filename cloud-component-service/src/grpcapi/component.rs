@@ -707,10 +707,13 @@ impl ComponentService for ComponentGrpcApi {
         request: Request<CreateComponentConstraintsRequest>,
     ) -> Result<Response<CreateComponentConstraintsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-
         let record = recorded_grpc_api_request!(
             "create_constraints",
-            project_id = proto_project_id_string(&r.project_id)
+            component_id = &proto_component_id_string(
+                &r.component_constraints
+                    .as_ref()
+                    .and_then(|c| c.component_id)
+            )
         );
 
         match r.component_constraints {
@@ -801,8 +804,12 @@ impl ComponentService for ComponentGrpcApi {
     ) -> Result<Response<DeleteComponentConstraintsResponse>, Status> {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
-            "delete_component_constraint",
-            project_id = proto_project_id_string(&r.project_id)
+            "delete_component_constraints",
+            component_id = &proto_component_id_string(
+                &r.component_constraints
+                    .as_ref()
+                    .and_then(|c| c.component_id)
+            )
         );
 
         match r.component_constraints {

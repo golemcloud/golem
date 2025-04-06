@@ -1,17 +1,13 @@
-use std::collections::HashSet;
-use std::ops::Deref;
-use std::result::Result;
-use std::sync::Arc;
-
+use crate::model::ProjectPolicy;
 use async_trait::async_trait;
 use cloud_common::model::ProjectPolicyId;
 use cloud_common::model::{ProjectAction, ProjectActions};
 use conditional_trait_gen::trait_gen;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool};
+use std::collections::HashSet;
+use std::result::Result;
 use uuid::Uuid;
-
-use crate::model::ProjectPolicy;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ProjectPolicyRecord {
@@ -180,21 +176,22 @@ pub trait ProjectPolicyRepo {
     async fn delete(&self, project_policy_id: &Uuid) -> Result<(), RepoError>;
 }
 
-pub struct DbProjectPolicyRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbProjectPolicyRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbProjectPolicyRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbProjectPolicyRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
+impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, project_policy: &ProjectPolicyRecord) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               INSERT INTO project_policies
                 (
@@ -230,8 +227,11 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
             .bind(project_policy.view_api_definition)
             .bind(project_policy.create_api_definition)
             .bind(project_policy.update_api_definition)
-            .bind(project_policy.delete_api_definition)
-            .execute(self.db_pool.deref())
+            .bind(project_policy.delete_api_definition);
+
+        self.db_pool
+            .with_rw("project_policy", "create")
+            .execute(query)
             .await?;
 
         Ok(())
@@ -241,21 +241,27 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
         &self,
         project_policy_id: &Uuid,
     ) -> Result<Option<ProjectPolicyRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectPolicyRecord>(
+        let query = sqlx::query_as::<_, ProjectPolicyRecord>(
             "SELECT * FROM project_policies WHERE project_policy_id = $1",
         )
-        .bind(project_policy_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(project_policy_id);
+
+        self.db_pool
+            .with_ro("project_policy", "get")
+            .fetch_optional_as(query)
+            .await
     }
 
     async fn get_by_name(&self, name: &str) -> Result<Vec<ProjectPolicyRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectPolicyRecord>("SELECT * FROM project_policies WHERE name = $1")
-            .bind(name)
-            .fetch_all(self.db_pool.deref())
+        let query = sqlx::query_as::<_, ProjectPolicyRecord>(
+            "SELECT * FROM project_policies WHERE name = $1",
+        )
+        .bind(name);
+
+        self.db_pool
+            .with_ro("project_policy", "get_by_name")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
     async fn get_all(
@@ -279,18 +285,22 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
                 query = query.bind(id);
             }
 
-            query
-                .fetch_all(self.db_pool.deref())
+            self.db_pool
+                .with_ro("project_policy", "get_all")
+                .fetch_all(query)
                 .await
-                .map_err(|e| e.into())
         }
     }
 
     async fn delete(&self, project_policy_id: &Uuid) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM project_policies WHERE project_policy_id = $1")
-            .bind(project_policy_id)
-            .execute(self.db_pool.deref())
+        let query = sqlx::query("DELETE FROM project_policies WHERE project_policy_id = $1")
+            .bind(project_policy_id);
+
+        self.db_pool
+            .with_rw("project_policy", "delete")
+            .execute(query)
             .await?;
+
         Ok(())
     }
 }

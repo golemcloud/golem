@@ -15,11 +15,11 @@ use crate::repo::project_grant::{DbProjectGrantRepo, ProjectGrantRepo};
 use crate::repo::project_policy::{DbProjectPolicyRepo, ProjectPolicyRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use cloud_common::model::CloudPluginOwner;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRepoQueries,
 };
 use oauth2_web_flow_state::{DbOAuth2FlowState, OAuth2WebFlowStateRepo};
-use sqlx::{Pool, Postgres, Sqlite};
 use std::sync::Arc;
 
 pub mod account;
@@ -61,15 +61,7 @@ pub struct Repositories {
 }
 
 impl Repositories {
-    pub fn new_sqlite(db_pool: Arc<Pool<Sqlite>>) -> Self {
-        Self::new(db_pool)
-    }
-
-    pub fn new_postgres(db_pool: Arc<Pool<Postgres>>) -> Self {
-        Self::new(db_pool)
-    }
-
-    pub fn new<DB: sqlx::Database + Sync>(db_pool: Arc<Pool<DB>>) -> Self
+    pub fn new<DB: Pool + Clone + Send + Sync + 'static>(db_pool: DB) -> Self
     where
         DbPlanRepo<DB>: PlanRepo,
         DbAccountRepo<DB>: AccountRepo,
@@ -87,8 +79,11 @@ impl Repositories {
         DbProjectRepo<DB>: ProjectRepo,
         DbTokenRepo<DB>: TokenRepo,
         DbOAuth2FlowState<DB>: OAuth2WebFlowStateRepo,
-        DbPluginInstallationRepoQueries<DB>:
-            PluginInstallationRepoQueries<DB, CloudPluginOwner, ProjectPluginInstallationTarget>,
+        DbPluginInstallationRepoQueries<DB::Db>: PluginInstallationRepoQueries<
+            DB::Db,
+            CloudPluginOwner,
+            ProjectPluginInstallationTarget,
+        >,
     {
         let plan_repo: Arc<dyn PlanRepo + Sync + Send> = Arc::new(DbPlanRepo::new(db_pool.clone()));
 

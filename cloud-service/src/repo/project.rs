@@ -1,7 +1,3 @@
-use std::ops::Deref;
-use std::result::Result;
-use std::sync::Arc;
-
 use crate::model::{Project, ProjectData, ProjectPluginInstallationTarget, ProjectType};
 use crate::repo::plugin_installation::ProjectPluginInstallationTargetRow;
 use async_trait::async_trait;
@@ -9,11 +5,14 @@ use cloud_common::model::CloudPluginOwner;
 use cloud_common::repo::CloudPluginOwnerRow;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::ProjectId;
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool, Row};
+use sqlx::Row;
+use std::result::Result;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -104,21 +103,21 @@ pub trait ProjectRepo {
     ) -> Result<(), RepoError>;
 }
 
-pub struct DbProjectRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbProjectRepo<DB: Pool> {
+    db_pool: DB,
     plugin_installation_queries: Arc<
-        dyn PluginInstallationRepoQueries<DB, CloudPluginOwner, ProjectPluginInstallationTarget>
+        dyn PluginInstallationRepoQueries<DB::Db, CloudPluginOwner, ProjectPluginInstallationTarget>
             + Send
             + Sync,
     >,
 }
 
-impl<DB: Database + Sync> DbProjectRepo<DB>
+impl<DB: Pool + Sync> DbProjectRepo<DB>
 where
-    DbPluginInstallationRepoQueries<DB>:
-        PluginInstallationRepoQueries<DB, CloudPluginOwner, ProjectPluginInstallationTarget>,
+    DbPluginInstallationRepoQueries<DB::Db>:
+        PluginInstallationRepoQueries<DB::Db, CloudPluginOwner, ProjectPluginInstallationTarget>,
 {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+    pub fn new(db_pool: DB) -> Self {
         let plugin_installation_queries = Arc::new(DbPluginInstallationRepoQueries::new());
         Self {
             db_pool,
@@ -127,13 +126,14 @@ where
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
+impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, project: &ProjectRecord) -> Result<(), RepoError> {
-        let mut tx = self.db_pool.begin().await?;
+        let mut transaction = self.db_pool.with_rw("project", "create").begin().await?;
 
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               INSERT INTO projects
                 (project_id, name, description)
@@ -143,11 +143,11 @@ impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
         )
         .bind(project.project_id)
         .bind(project.name.clone())
-        .bind(project.description.clone())
-        .execute(&mut *tx)
-        .await?;
+        .bind(project.description.clone());
 
-        sqlx::query(
+        transaction.execute(query).await?;
+
+        let query = sqlx::query(
             r#"
               INSERT INTO project_account
                 (project_id, owner_account_id, is_default)
@@ -157,98 +157,118 @@ impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
         )
         .bind(project.project_id)
         .bind(project.owner_account_id.clone())
-        .bind(project.is_default)
-        .execute(&mut *tx)
-        .await?;
+        .bind(project.is_default);
 
-        tx.commit().await?;
+        transaction.execute(query).await?;
+
+        self.db_pool
+            .with_rw("project", "create")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
 
     async fn get(&self, project_id: &Uuid) -> Result<Option<ProjectRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectRecord>(
+        let query = sqlx::query_as::<_, ProjectRecord>(
             r#"
                SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
                WHERE p.project_id = $1
                "#,
         )
-        .bind(project_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(project_id);
+
+        self.db_pool
+            .with_ro("project", "get")
+            .fetch_optional_as(query)
+            .await
     }
 
     async fn get_own(&self, account_id: &str) -> Result<Vec<ProjectRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectRecord>(
+        let query = sqlx::query_as::<_, ProjectRecord>(
             r#"
                SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
                WHERE pa.owner_account_id = $1
                "#,
         )
-        .bind(account_id)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(account_id);
+
+        self.db_pool
+            .with_ro("project", "get_own")
+            .fetch_all(query)
+            .await
     }
 
     async fn get_own_count(&self, account_id: &str) -> Result<u64, RepoError> {
-        let result = sqlx::query(
+        let query = sqlx::query(
             r#"
                SELECT count(distinct p.project_id) AS project_count
                FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
                WHERE pa.owner_account_id = $1
                "#,
         )
-        .bind(account_id)
-        .fetch_one(self.db_pool.deref())
-        .await?;
+        .bind(account_id);
+
+        let result = self
+            .db_pool
+            .with_ro("project", "get_own_count")
+            .fetch_one(query)
+            .await?;
 
         let count: i64 = result.get("project_count");
         Ok(count as u64)
     }
 
     async fn get_own_default(&self, account_id: &str) -> Result<Option<ProjectRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectRecord>(
+        let query = sqlx::query_as::<_, ProjectRecord>(
             r#"
                SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
                WHERE pa.owner_account_id = $1 AND pa.is_default = true
                "#,
         )
-        .bind(account_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(account_id);
+
+        self.db_pool
+            .with_ro("project", "get_own_default")
+            .fetch_optional_as(query)
+            .await
     }
 
     async fn get_all(&self) -> Result<Vec<ProjectRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectRecord>(
+        let query = sqlx::query_as::<_, ProjectRecord>(
             "SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id",
-        )
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        );
+
+        self.db_pool
+            .with_ro("project", "get_all")
+            .fetch_all(query)
+            .await
     }
 
     async fn delete(&self, project_id: &Uuid) -> Result<(), RepoError> {
-        let mut tx = self.db_pool.begin().await?;
+        let mut transaction = self.db_pool.with_rw("project", "delete").begin().await?;
 
-        sqlx::query("DELETE FROM project_account WHERE project_id = $1")
-            .bind(project_id)
-            .execute(&mut *tx)
+        transaction
+            .execute(
+                sqlx::query("DELETE FROM project_account WHERE project_id = $1").bind(project_id),
+            )
             .await?;
 
-        sqlx::query("DELETE FROM project_grants WHERE grantor_project_id = $1")
-            .bind(project_id)
-            .execute(&mut *tx)
+        transaction
+            .execute(
+                sqlx::query("DELETE FROM project_grants WHERE grantor_project_id = $1")
+                    .bind(project_id),
+            )
             .await?;
 
-        sqlx::query("DELETE FROM projects WHERE project_id = $1")
-            .bind(project_id)
-            .execute(&mut *tx)
+        transaction
+            .execute(sqlx::query("DELETE FROM projects WHERE project_id = $1").bind(project_id))
             .await?;
 
-        tx.commit().await?;
+        self.db_pool
+            .with_rw("project", "delete")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
@@ -266,9 +286,13 @@ impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
         };
         let mut query = self.plugin_installation_queries.get_all(owner, &target);
 
-        Ok(query
-            .build_query_as::<PluginInstallationRecord<CloudPluginOwner, ProjectPluginInstallationTarget>>()
-            .fetch_all(self.db_pool.deref())
+        let query = query
+            .build_query_as::<PluginInstallationRecord<CloudPluginOwner, ProjectPluginInstallationTarget>>();
+
+        Ok(self
+            .db_pool
+            .with_ro("project", "get_installed_plugins")
+            .fetch_all(query)
             .await?)
     }
 
@@ -278,7 +302,11 @@ impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
     ) -> Result<(), RepoError> {
         let mut query = self.plugin_installation_queries.create(record);
 
-        let _ = query.build().execute(self.db_pool.deref()).await?;
+        self.db_pool
+            .with_rw("project", "get_installed_plugins")
+            .execute(query.build())
+            .await?;
+
         Ok(())
     }
 
@@ -295,7 +323,11 @@ impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
             self.plugin_installation_queries
                 .delete(owner, &target_row, plugin_installation_id);
 
-        let _ = query.build().execute(self.db_pool.deref()).await?;
+        self.db_pool
+            .with_rw("project", "uninstall_plugin")
+            .execute(query.build())
+            .await?;
+
         Ok(())
     }
 
@@ -318,7 +350,11 @@ impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
             new_parameters,
         );
 
-        let _ = query.build().execute(self.db_pool.deref()).await?;
+        self.db_pool
+            .with_rw("project", "update_plugin_installation")
+            .execute(query.build())
+            .await?;
+
         Ok(())
     }
 }

@@ -1,11 +1,8 @@
-use std::ops::Deref;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::AccountId;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool};
 
 #[async_trait]
 pub trait AccountWorkersRepo {
@@ -14,12 +11,12 @@ pub trait AccountWorkersRepo {
     async fn delete(&self, id: &AccountId) -> Result<(), RepoError>;
 }
 
-pub struct DbAccountWorkerRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbAccountWorkerRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbAccountWorkerRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbAccountWorkerRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
@@ -29,24 +26,31 @@ struct AccountWorkers {
     counter: i32,
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl AccountWorkersRepo for DbAccountWorkerRepo<sqlx::Postgres> {
+impl AccountWorkersRepo for DbAccountWorkerRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn get(&self, id: &AccountId) -> Result<i32, RepoError> {
-        sqlx::query_as::<_, AccountWorkers>(
+        let query = sqlx::query_as::<_, AccountWorkers>(
             "select counter from account_workers where account_id = $1",
         )
-        .bind(id.value.clone())
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
-        .map(|r| r.map(|r| r.counter).unwrap_or(0))
+        .bind(id.value.clone());
+
+        self.db_pool
+            .with_ro("account_workers", "get")
+            .fetch_optional_as(query)
+            .await
+            .map(|r| r.map(|r| r.counter).unwrap_or_default())
     }
 
     async fn update(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("account_workers", "update")
+            .begin()
+            .await?;
 
-        sqlx::query(
+        let query = sqlx::query(
             "
             insert into 
                 account_workers (account_id, counter)
@@ -56,28 +60,34 @@ impl AccountWorkersRepo for DbAccountWorkerRepo<sqlx::Postgres> {
             ",
         )
         .bind(id.value.clone())
-        .bind(value)
-        .execute(&mut *transaction)
-        .await?;
+        .bind(value);
 
-        let result = sqlx::query_as::<_, AccountWorkers>(
+        transaction.execute(query).await?;
+
+        let query = sqlx::query_as::<_, AccountWorkers>(
             "select counter from account_workers where account_id = $1",
         )
-        .bind(id.value.clone())
-        .fetch_optional(&mut *transaction)
-        .await?;
+        .bind(id.value.clone());
 
-        transaction.commit().await?;
+        let result = transaction.fetch_optional_as(query).await?;
 
-        Ok(result.map(|r| r.counter).unwrap_or(0))
+        self.db_pool
+            .with_rw("account_workers", "update")
+            .commit(transaction)
+            .await?;
+
+        Ok(result.map(|r| r.counter).unwrap_or_default())
     }
 
     async fn delete(&self, id: &AccountId) -> Result<(), RepoError> {
-        sqlx::query("delete from account_workers where account_id = $1")
-            .bind(id.value.clone())
-            .execute(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| ())
+        let query =
+            sqlx::query("delete from account_workers where account_id = $1").bind(id.value.clone());
+
+        self.db_pool
+            .with_rw("account_workers", "delete")
+            .execute(query)
+            .await?;
+
+        Ok(())
     }
 }

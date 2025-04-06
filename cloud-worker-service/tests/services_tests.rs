@@ -118,14 +118,16 @@ pub async fn test_with_sqlite_db() {
     };
 
     let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
-    db::sqlite_migrate(&db_config, migrations.sqlite_migrations())
+    db::sqlite::migrate(&db_config, migrations.sqlite_migrations())
         .await
         .unwrap();
 
-    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+    let db_pool = db::sqlite::SqlitePool::configured(&db_config)
+        .await
+        .unwrap();
 
     let api_certificate_repo: Arc<dyn ApiCertificateRepo + Sync + Send> =
-        Arc::new(DbApiCertificateRepo::new(db_pool.clone().into()));
+        Arc::new(DbApiCertificateRepo::new(db_pool.clone()));
     let certificate_manager: Arc<dyn CertificateManager + Sync + Send> =
         Arc::new(InMemoryCertificateManager::default());
 
@@ -139,7 +141,7 @@ pub async fn test_with_sqlite_db() {
         ));
 
     let api_domain_repo: Arc<dyn ApiDomainRepo + Sync + Send> =
-        Arc::new(DbApiDomainRepo::new(db_pool.clone().into()));
+        Arc::new(DbApiDomainRepo::new(db_pool.clone()));
 
     let domain_register_service: Arc<dyn RegisterDomain + Sync + Send> =
         Arc::new(InMemoryRegisterDomain::default());
@@ -161,14 +163,16 @@ pub async fn test_with_postgres_db() {
     let (db_config, _container) = start_docker_postgres().await;
 
     let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
-    db::postgres_migrate(&db_config, migrations.postgres_migrations())
+    db::postgres::migrate(&db_config, migrations.postgres_migrations())
         .await
         .unwrap();
 
-    let db_pool = db::create_postgres_pool(&db_config).await.unwrap();
+    let db_pool = db::postgres::PostgresPool::configured(&db_config)
+        .await
+        .unwrap();
 
     let api_certificate_repo: Arc<dyn ApiCertificateRepo + Sync + Send> =
-        Arc::new(DbApiCertificateRepo::new(db_pool.clone().into()));
+        Arc::new(DbApiCertificateRepo::new(db_pool.clone()));
     let certificate_manager: Arc<dyn CertificateManager + Sync + Send> =
         Arc::new(InMemoryCertificateManager::default());
 
@@ -182,7 +186,7 @@ pub async fn test_with_postgres_db() {
         ));
 
     let api_domain_repo: Arc<dyn ApiDomainRepo + Sync + Send> =
-        Arc::new(DbApiDomainRepo::new(db_pool.clone().into()));
+        Arc::new(DbApiDomainRepo::new(db_pool.clone()));
 
     let domain_register_service: Arc<dyn RegisterDomain + Sync + Send> =
         Arc::new(InMemoryRegisterDomain::default());

@@ -1,6 +1,7 @@
 use crate::api::common::{ApiEndpointError, ApiTags};
-use crate::service::api_definition::ApiDefinitionService;
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use crate::service::auth::AuthService;
+use cloud_common::auth::{CloudAuthCtx, CloudNamespace, GolemSecurityScheme};
+use cloud_common::model::ProjectAction;
 use futures_util::future::try_join_all;
 use golem_common::json_yaml::JsonOrYaml;
 use golem_common::model::ProjectId;
@@ -10,6 +11,7 @@ use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -18,13 +20,22 @@ use std::sync::Arc;
 use tracing::{error, Instrument};
 
 pub struct ApiDefinitionApi {
-    definition_service: Arc<dyn ApiDefinitionService + Sync + Send>,
+    definition_service: Arc<dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Send + Sync>,
+    auth_service: Arc<dyn AuthService + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl ApiDefinitionApi {
-    pub fn new(definition_service: Arc<dyn ApiDefinitionService + Sync + Send>) -> Self {
-        Self { definition_service }
+    pub fn new(
+        definition_service: Arc<
+            dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Send + Sync,
+        >,
+        auth_service: Arc<dyn AuthService + Sync + Send>,
+    ) -> Self {
+        Self {
+            definition_service,
+            auth_service,
+        }
     }
 
     /// Upload an OpenAPI definition
@@ -60,7 +71,14 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let auth_ctx = CloudAuthCtx::new(token.secret());
-        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id, ProjectAction::CreateApiDefinition, &auth_ctx)
+            .await?;
+
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&namespace, &auth_ctx);
 
         let definition = openapi
             .to_http_api_definition_request(&conversion_context)
@@ -70,9 +88,9 @@ impl ApiDefinitionApi {
                 ApiEndpointError::bad_request(safe(e))
             })?;
 
-        let (result, _) = self
+        let result = self
             .definition_service
-            .create(&project_id, &definition, &auth_ctx)
+            .create(&definition, &namespace, &auth_ctx)
             .await?;
 
         HttpApiDefinitionResponseData::from_compiled_http_api_definition(
@@ -123,7 +141,14 @@ impl ApiDefinitionApi {
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
         let auth_ctx = CloudAuthCtx::new(token);
-        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id, ProjectAction::CreateApiDefinition, &auth_ctx)
+            .await?;
+
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&namespace, &auth_ctx);
 
         let definition: CoreHttpApiDefinitionRequest = payload
             .clone()
@@ -131,9 +156,9 @@ impl ApiDefinitionApi {
             .await
             .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
 
-        let (result, _) = self
+        let result = self
             .definition_service
-            .create(&project_id, &definition, &auth_ctx)
+            .create(&definition, &namespace, &auth_ctx)
             .await?;
 
         HttpApiDefinitionResponseData::from_compiled_http_api_definition(
@@ -186,9 +211,15 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
-
         let auth_ctx = CloudAuthCtx::new(token);
-        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id, ProjectAction::UpdateApiDefinition, &auth_ctx)
+            .await?;
+
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&namespace, &auth_ctx);
 
         let definition: CoreHttpApiDefinitionRequest = payload
             .clone()
@@ -205,9 +236,9 @@ impl ApiDefinitionApi {
                 "Unmatched url and body versions.".to_string(),
             )))
         } else {
-            let (result, _) = self
+            let result = self
                 .definition_service
-                .update(&project_id, &definition, &auth_ctx)
+                .update(&definition, &namespace, &auth_ctx)
                 .await?;
 
             HttpApiDefinitionResponseData::from_compiled_http_api_definition(
@@ -259,11 +290,18 @@ impl ApiDefinitionApi {
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
         let auth_ctx = CloudAuthCtx::new(token);
-        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .await?;
 
-        let (data, _) = self
+        let conversion_context = self
             .definition_service
-            .get(&project_id, &id, &version, &auth_ctx)
+            .conversion_context(&namespace, &auth_ctx);
+
+        let data = self
+            .definition_service
+            .get(&id, &version, &namespace, &auth_ctx)
             .await?;
 
         let data = data.ok_or(ApiEndpointError::not_found(safe(format!(
@@ -312,18 +350,24 @@ impl ApiDefinitionApi {
     ) -> Result<Json<Vec<HttpApiDefinitionResponseData>>, ApiEndpointError> {
         let token = token.secret();
         let auth_ctx = CloudAuthCtx::new(token);
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .await?;
 
-        let (data, _) = if let Some(api_definition_id) = api_definition_id {
+        let data = if let Some(api_definition_id) = api_definition_id {
             self.definition_service
-                .get_all_versions(&project_id, &api_definition_id, &auth_ctx)
+                .get_all_versions(&api_definition_id, &namespace, &auth_ctx)
                 .await?
         } else {
             self.definition_service
-                .get_all(&project_id, &auth_ctx)
+                .get_all(&namespace, &auth_ctx)
                 .await?
         };
 
-        let conversion_context = self.definition_service.conversion_context(&auth_ctx);
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&namespace, &auth_ctx);
 
         let converted = data.into_iter().map(|d| {
             HttpApiDefinitionResponseData::from_compiled_http_api_definition(d, &conversion_context)
@@ -361,9 +405,14 @@ impl ApiDefinitionApi {
         );
 
         let auth_ctx = CloudAuthCtx::new(token);
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id.0, ProjectAction::DeleteApiDefinition, &auth_ctx)
+            .await?;
+
         let response = self
             .definition_service
-            .delete(&project_id.0, &id.0, &version.0, &auth_ctx)
+            .delete(&id.0, &version.0, &namespace, &auth_ctx)
             .instrument(record.span.clone())
             .await
             .map(|_| Json("API definition not found".to_string()))

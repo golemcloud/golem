@@ -4,7 +4,7 @@ use crate::repo::CloudPluginOwnerRow;
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::PluginOwner;
-use golem_common::model::{AccountId, HasAccountId, ProjectId};
+use golem_common::model::{AccountId, ProjectId};
 use golem_common::newtype_uuid;
 use poem_openapi::{Enum, Object};
 use serde::{Deserialize, Serialize};
@@ -394,14 +394,11 @@ impl FromStr for CloudPluginOwner {
     }
 }
 
-impl HasAccountId for CloudPluginOwner {
+impl PluginOwner for CloudPluginOwner {
+    type Row = CloudPluginOwnerRow;
     fn account_id(&self) -> AccountId {
         self.account_id.clone()
     }
-}
-
-impl PluginOwner for CloudPluginOwner {
-    type Row = CloudPluginOwnerRow;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -442,15 +439,13 @@ impl FromStr for CloudComponentOwner {
     }
 }
 
-impl HasAccountId for CloudComponentOwner {
-    fn account_id(&self) -> AccountId {
-        self.account_id.clone()
-    }
-}
-
 impl ComponentOwner for CloudComponentOwner {
     type Row = CloudComponentOwnerRow;
     type PluginOwner = CloudPluginOwner;
+
+    fn account_id(&self) -> AccountId {
+        self.account_id.clone()
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use crate::service::auth::AuthService;
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
-use cloud_common::auth::CloudAuthCtx;
+use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::get_authorisation_token;
 use cloud_common::model::ProjectAction;
 use futures::Stream;
@@ -56,7 +56,7 @@ use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub struct WorkerGrpcApi {
-    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+    component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
     auth_service: Arc<dyn AuthService + Send + Sync>,
 }
@@ -714,7 +714,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
 
 impl WorkerGrpcApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         auth_service: Arc<dyn AuthService + Send + Sync>,
     ) -> Self {

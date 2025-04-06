@@ -7,7 +7,9 @@ use crate::service::auth::AuthService;
 use crate::service::worker::{
     ConnectWorkerStream, WorkerError as WorkerServiceError, WorkerService,
 };
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
+use cloud_common::auth::{
+    CloudAuthCtx, CloudNamespace, GolemSecurityScheme, WrappedGolemSecuritySchema,
+};
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::{ProjectAction, TokenSecret};
 use futures::StreamExt;
@@ -240,7 +242,7 @@ impl From<AuthServiceError> for WorkerError {
 }
 
 pub struct WorkerApi {
-    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+    component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
     worker_auth_service: Arc<dyn AuthService + Send + Sync>,
 }
@@ -248,7 +250,7 @@ pub struct WorkerApi {
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         auth_service: Arc<dyn AuthService + Send + Sync>,
     ) -> Self {
