@@ -77,6 +77,21 @@ pub trait PoolApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>;
 
+    async fn fetch_one_as<'a, O, A>(
+        &mut self,
+        query_as: QueryAs<'a, Self::Db, O, A>,
+    ) -> Result<Self::Row, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Self::Db>,
+    {
+        self.fetch_optional_as(query)
+            .and_then(|row| match row {
+                Some(row) => future::ok(row),
+                None => future::err(Error::RowNotFound.into()),
+            })
+            .await
+    }
+
     async fn fetch_all<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Self::Db, O, A>,
