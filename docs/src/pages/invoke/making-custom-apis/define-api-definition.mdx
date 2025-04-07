@@ -31,7 +31,7 @@ routes:
         version: 0
       response: |
         let user: u64 = request.path.user-id;
-        let worker = instance(my-worker-${user});
+        let worker = instance("my-worker-${user}");
         let result = worker.get-cart-contents();
         {status: 200, body: result}
 ```
