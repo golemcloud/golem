@@ -157,7 +157,7 @@ impl Benchmark for Rpc {
                 .iter()
                 .map(|w| w.parent.clone())
                 .collect::<Vec<WorkerId>>(),
-            "golem:itrpc/rpc-api.{echo}",
+            "golem:itrpc-exports/rpc-api.{echo}",
             vec!["hello".into_value_and_type()],
         )
         .await;
@@ -191,7 +191,7 @@ impl Benchmark for Rpc {
             context,
             &recorder,
             &shard_manager_routing_table,
-            "golem:itrpc/rpc-api.{echo}",
+            "golem:itrpc-exports/rpc-api.{echo}",
             vec!["hello".into_value_and_type()],
             "worker-echo-invocation",
         )
