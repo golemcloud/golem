@@ -407,6 +407,7 @@ pub struct ClientConfig {
     pub worker_url: Url,
     pub cloud_url: Option<Url>,
     pub service_http_client_config: HttpClientConfig,
+    pub invoke_http_client_config: HttpClientConfig,
     pub health_check_http_client_config: HttpClientConfig,
     pub file_download_http_client_config: HttpClientConfig,
 }
@@ -427,6 +428,7 @@ impl From<&Profile> for ClientConfig {
                     service_http_client_config: HttpClientConfig::new_for_service_calls(
                         allow_insecure,
                     ),
+                    invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
                     health_check_http_client_config: HttpClientConfig::new_for_health_check(
                         allow_insecure,
                     ),
@@ -457,6 +459,7 @@ impl From<&Profile> for ClientConfig {
                     service_http_client_config: HttpClientConfig::new_for_service_calls(
                         allow_insecure,
                     ),
+                    invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
                     health_check_http_client_config: HttpClientConfig::new_for_health_check(
                         allow_insecure,
                     ),
@@ -481,11 +484,21 @@ impl HttpClientConfig {
     pub fn new_for_service_calls(allow_insecure: bool) -> Self {
         Self {
             allow_insecure,
+            timeout: Some(Duration::from_secs(10)),
+            connect_timeout: Some(Duration::from_secs(10)),
+            read_timeout: Some(Duration::from_secs(10)),
+        }
+        .with_env_overrides("GOLEM_HTTP")
+    }
+
+    pub fn new_for_invoke(allow_insecure: bool) -> Self {
+        Self {
+            allow_insecure,
             timeout: None,
             connect_timeout: None,
             read_timeout: None,
         }
-        .with_env_overrides("GOLEM_HTTP")
+        .with_env_overrides("GOLEM_HTTP_INVOKE")
     }
 
     pub fn new_for_health_check(allow_insecure: bool) -> Self {

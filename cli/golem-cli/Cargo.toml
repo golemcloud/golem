@@ -112,8 +112,6 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 
 [dev-dependencies]
-# Golem deps
-golem-test-framework = { workspace = true }
 
 # External deps
 log = { workspace = true }
