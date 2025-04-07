@@ -1,15 +1,15 @@
-import {asyncToSyncAsResult} from "@golemcloud/golem-ts";
-import { ComponentNameApi } from './generated/component-name';
+import type * as bindings from "pack:name/component-name"
 
 let result: any;
 
-export const componentNameApi: ComponentNameApi = {
-    getLastResult(): string {
+export const componentNameApi: typeof bindings.componentNameApi = {
+    async getLastResult(): Promise<string> {
         return JSON.stringify(result);
     },
-    fetchJson(url: string): string {
-        result = asyncToSyncAsResult(fetch(url).then(response => response.json()));
-        console.log(result);
-        return JSON.stringify(result);
+    async fetchJson(url: string): Promise<string> {
+        const response = await fetch(url);
+        const responseBody = await response.json();
+        console.log(responseBody);
+        return JSON.stringify(responseBody);
     },
 }

@@ -8,7 +8,7 @@
 templates:
   js:
     build:
-    - command: npx jco stubgen wit-generated -o src/generated
+    - command: node ../../common-js/scripts/jco-wrapper.mjs guest-types wit-generated --async-mode jspi --async-wasi-exports ${JCO_ASYNC_EXPORT_ARGS} -o src/generated
       sources:
       - wit-generated
       targets:

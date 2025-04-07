@@ -6,7 +6,7 @@ import url from "node:url";
 
 export default function componentRollupConfig() {
     const dir = path.dirname(url.fileURLToPath(import.meta.url));
-    const moduleRegex = /declare\s+module\s+"([^"]+)"/g;
+    const moduleRegex = /declare\s+module\s+['"]([^'"]+)['"]/g;
     const generated_interfaces_dir = "src/generated/interfaces";
 
     const externalPackages = (() => {
@@ -51,5 +51,3 @@ export default function componentRollupConfig() {
         ],
     };
 }
-
-

@@ -1,18 +1,18 @@
-import {ComponentNameApi} from "./generated/component-name";
+import type * as bindings from "pack:name/component-name"
+
 // Use this import for using the common lib:
 // import {example_common_function} from "common/lib";
 
-
 let state = BigInt(0);
 
-export const componentNameApi: ComponentNameApi = {
-    add(value: bigint) {
+export const componentNameApi: typeof bindings.componentNameApi = {
+    async add(value: bigint) {
         // Example common lib use:
         // console.log(example_common_function());
         console.log(`Adding ${value} to the counter`);
         state += value;
     },
-    get() {
+    async get() {
         return state;
     }
 };

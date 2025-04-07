@@ -167,12 +167,12 @@ pub fn main() -> anyhow::Result<()> {
             }
 
             if used_languages.contains(&GuestLanguage::JavaScript) {
-                println!("Installing npm packages with golem-ci");
+                println!("Installing npm packages with golem-cli");
                 golem_cli(&target_path, ["app", "js-npm-install"])?;
             }
 
             if used_languages.contains(&GuestLanguage::TypeScript) {
-                println!("Installing npm packages with golem-ci");
+                println!("Installing npm packages with golem-cli");
                 golem_cli(&target_path, ["app", "ts-npm-install"])?;
             }
 
