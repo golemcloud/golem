@@ -151,7 +151,8 @@ impl<C: Serialize> Template<C> for app_raw::ComponentProperties {
             build: self.build.render(env, ctx)?,
             custom_commands: self.custom_commands.render(env, ctx)?,
             clean: self.clean.render(env, ctx)?,
-            extensions: self.extensions.render(env, ctx)?,
+            component_type: self.component_type.clone(),
+            files: self.files.clone(),
         })
     }
 }

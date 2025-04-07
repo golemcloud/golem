@@ -35,6 +35,7 @@ pub enum ContextInitHintError {
 impl Error for ContextInitHintError {}
 
 pub mod service {
+    use crate::log::LogColorize;
     use crate::model::text::fmt::format_stack;
     use bytes::Bytes;
     use golem_client::model::{
@@ -48,7 +49,6 @@ pub mod service {
         GolemErrorWorkerNotFound,
     };
     use golem_common::model::{PromiseId, WorkerId};
-    use golem_wasm_rpc_stubgen::log::LogColorize;
     use itertools::Itertools;
     use reqwest::StatusCode;
     use std::error::Error;

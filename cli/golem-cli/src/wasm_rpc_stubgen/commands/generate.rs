@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cargo::generate_client_cargo_toml;
-use crate::compilation::compile;
 use crate::fs;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::naming;
-use crate::rust::generate_stub_source;
-use crate::stub::StubDefinition;
-use crate::wit_generate::{add_dependencies_to_stub_wit_dir, generate_client_wit_to_target};
-use crate::wit_resolve::ResolvedWitDir;
+use crate::wasm_rpc_stubgen::cargo::generate_client_cargo_toml;
+use crate::wasm_rpc_stubgen::compilation::compile;
+use crate::wasm_rpc_stubgen::naming;
+use crate::wasm_rpc_stubgen::rust::generate_stub_source;
+use crate::wasm_rpc_stubgen::stub::StubDefinition;
+use crate::wasm_rpc_stubgen::wit_generate::{
+    add_dependencies_to_stub_wit_dir, generate_client_wit_to_target,
+};
+use crate::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use anyhow::{anyhow, Context};
 use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;

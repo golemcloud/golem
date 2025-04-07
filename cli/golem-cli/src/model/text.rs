@@ -14,12 +14,12 @@
 
 pub mod fmt {
     use crate::fuzzy::Match;
+    use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
     use crate::model::{Format, WorkerNameMatch};
     use cli_table::{Row, Title, WithTitle};
     use colored::control::SHOULD_COLORIZE;
     use colored::Colorize;
     use golem_client::model::{InitialComponentFile, WorkerStatus};
-    use golem_wasm_rpc_stubgen::log::{log_warn_action, logln, LogColorize, LogIndent};
     use itertools::Itertools;
     use regex::Regex;
     use std::collections::BTreeMap;
@@ -838,10 +838,10 @@ pub mod template {
 
 pub mod profile {
     use crate::config::{ProfileConfig, ProfileKind};
+    use crate::log::{logln, LogColorize};
     use crate::model::text::fmt::*;
     use crate::model::ProfileView;
     use colored::Colorize;
-    use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
 
     impl TextView for Vec<ProfileView> {
         fn log(&self) {
@@ -916,6 +916,7 @@ pub mod profile {
 }
 
 pub mod worker {
+    use crate::log::{logln, LogColorize};
     use crate::model::deploy::TryUpdateAllWorkersResult;
     use crate::model::invoke_result_view::InvokeResultView;
     use crate::model::text::fmt::*;
@@ -935,7 +936,6 @@ pub mod worker {
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::{print_type_annotated_value, ValueAndType};
-    use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
     use indoc::{formatdoc, indoc};
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
@@ -1819,6 +1819,8 @@ pub mod plugin {
 
 // Shared help messages
 pub mod help {
+    use crate::log::{logln, LogColorize};
+    use crate::model::app::ComponentName as AppComponentName;
     use crate::model::component::render_type;
     use crate::model::text::fmt::{
         format_export, log_table, FieldsBuilder, MessageWithFields, TextView,
@@ -1826,8 +1828,6 @@ pub mod help {
     use cli_table::Table;
     use colored::Colorize;
     use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
-    use golem_wasm_rpc_stubgen::model::app::ComponentName as AppComponentName;
     use indoc::indoc;
     use textwrap::WordSplitter;
 

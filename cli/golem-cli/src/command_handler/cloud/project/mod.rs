@@ -20,6 +20,7 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::HintError;
 use crate::error::NonSuccessfulExit;
+use crate::log::{logln, LogColorize};
 use crate::model::project::ProjectView;
 use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::help::ComponentNameHelp;
@@ -30,7 +31,6 @@ use crate::model::{ProjectName, ProjectNameAndId};
 use anyhow::{anyhow, bail};
 use golem_cloud_client::api::{ProjectClient, ProjectGrantClient};
 use golem_cloud_client::model::{Project, ProjectDataRequest, ProjectGrantDataRequest};
-use golem_wasm_rpc_stubgen::log::{logln, LogColorize};
 use std::sync::Arc;
 
 pub mod plugin;

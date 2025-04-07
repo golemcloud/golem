@@ -1,6 +1,7 @@
 use crate::fs;
 use crate::log::LogColorize;
 use anyhow::{anyhow, Context};
+use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -84,6 +85,31 @@ pub struct Component {
     pub default_profile: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ComponentType {
+    Ephemeral,
+    #[default]
+    Durable,
+}
+
+impl From<ComponentType> for golem_common::model::ComponentType {
+    fn from(value: ComponentType) -> Self {
+        match value {
+            ComponentType::Ephemeral => Self::Ephemeral,
+            ComponentType::Durable => Self::Durable,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitialComponentFile {
+    pub source_path: String,
+    pub target_path: ComponentFilePath,
+    pub permissions: Option<ComponentFilePermissions>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentProperties {
@@ -101,8 +127,10 @@ pub struct ComponentProperties {
     pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
-    #[serde(flatten)]
-    pub extensions: serde_json::Map<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_type: Option<ComponentType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl ComponentProperties {
@@ -133,7 +161,13 @@ impl ComponentProperties {
             vec.push("customCommands");
         }
 
-        self.extensions.keys().for_each(|name| vec.push(name));
+        if self.component_type.is_some() {
+            vec.push("componentType");
+        }
+
+        if !self.files.is_empty() {
+            vec.push("files");
+        }
 
         vec
     }

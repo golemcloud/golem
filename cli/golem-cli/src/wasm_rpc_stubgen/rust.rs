@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize};
-use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
-use crate::{fs, naming, GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
+use crate::wasm_rpc_stubgen::naming;
+use crate::wasm_rpc_stubgen::stub::{
+    FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition,
+};
+use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};

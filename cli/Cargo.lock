@@ -1176,16 +1176,15 @@ dependencies = [
 
 [[package]]
 name = "blake3"
-version = "1.6.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1230237285e3e10cde447185e8975408ae24deaa67205ce684805c25bc0c7937"
+checksum = "34a796731680be7931955498a16a10b2270c7762963d5d570fdbfe02dcbf314f"
 dependencies = [
  "arrayref",
  "arrayvec",
  "cc",
  "cfg-if",
  "constant_time_eq",
- "memmap2",
 ]
 
 [[package]]
@@ -1755,9 +1754,9 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.15.10"
+version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea3c6ecd8059b57859df5c69830340ed3c41d30e3da0c1cbed90a96ac853041b"
+checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -3377,16 +3376,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43a49c392881ce6d5c3b8cb70f98717b7c07aabbdff06687b9030dbfbe2725f8"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi 0.13.3+wasi-0.2.2",
+ "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
 
 [[package]]
 name = "getset"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eded738faa0e88d3abc9d1a13cb11adc2073c400969eeb8793cf7132589959fc"
+checksum = "f3586f256131df87204eb733da72e3d3eb4f343c639f4b7be279ac7c48baeafe"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
@@ -3528,7 +3529,11 @@ dependencies = [
  "async-trait",
  "async_zip",
  "base64 0.22.1",
+ "blake3",
  "bytes 1.10.1",
+ "cargo-component",
+ "cargo-component-core",
+ "cargo_toml",
  "chrono",
  "clap",
  "clap-verbosity-flag",
@@ -3536,6 +3541,8 @@ dependencies = [
  "cli-table",
  "colored",
  "dirs 6.0.0",
+ "envsubst",
+ "fs_extra",
  "futures-util",
  "fuzzy-matcher",
  "golem-client",
@@ -3546,41 +3553,58 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast 1.2.0",
  "golem-wasm-rpc 1.2.0",
- "golem-wasm-rpc-stubgen",
+ "golem-wit",
+ "heck 0.5.0",
  "humansize",
+ "indexmap 2.7.1",
  "indoc",
  "inquire",
  "iso8601",
  "itertools 0.14.0",
  "lenient_bool",
  "log",
+ "minijinja",
  "native-tls",
  "phf",
+ "pretty_env_logger",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
  "regex",
  "reqwest 0.12.14",
+ "semver",
  "serde",
  "serde_json",
  "serde_json_path",
  "serde_yaml",
  "shadow-rs",
+ "shlex",
  "strip-ansi-escapes",
  "strum 0.27.1",
  "strum_macros 0.27.1",
+ "syn 2.0.98",
  "tempfile",
+ "terminal_size",
  "test-r",
  "textwrap",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.26.2",
+ "toml",
+ "toml_edit",
  "tracing",
  "tracing-subscriber",
  "url",
  "uuid",
  "version-compare",
+ "wac-graph",
  "walkdir",
  "wasm-metadata 0.227.1",
  "wasm-wave",
  "wax",
+ "wit-bindgen-rust 0.40.0",
+ "wit-encoder",
+ "wit-parser 0.227.1",
 ]
 
 [[package]]
@@ -4196,56 +4220,6 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wit-bindgen-rt 0.40.0",
-]
-
-[[package]]
-name = "golem-wasm-rpc-stubgen"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "assert2",
- "blake3",
- "cargo-component",
- "cargo-component-core",
- "cargo_toml",
- "chrono",
- "clap",
- "colored",
- "envsubst",
- "fs_extra",
- "golem-wasm-ast 1.2.0",
- "golem-wasm-rpc 1.2.0",
- "golem-wit",
- "heck 0.5.0",
- "indexmap 2.7.1",
- "indoc",
- "itertools 0.14.0",
- "minijinja",
- "pretty_env_logger",
- "prettyplease",
- "proc-macro2",
- "quote",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml",
- "shlex",
- "syn 2.0.98",
- "tempfile",
- "terminal_size",
- "test-r",
- "textwrap",
- "tokio",
- "toml",
- "toml_edit",
- "tracing",
- "wac-graph",
- "walkdir",
- "wasm-metadata 0.227.1",
- "wax",
- "wit-bindgen-rust 0.40.0",
- "wit-encoder",
- "wit-parser 0.227.1",
 ]
 
 [[package]]
@@ -5469,9 +5443,9 @@ dependencies = [
 
 [[package]]
 name = "keyring"
-version = "3.6.1"
+version = "3.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f8fe839464d4e4b37d756d7e910063696af79a7e877282cb1825e4ec5f10833"
+checksum = "1961983669d57bdfe6c0f3ef8e4c229b5ef751afcc7d87e4271d2f71f6ccfa8b"
 dependencies = [
  "byteorder",
  "dbus-secret-service",
@@ -5865,15 +5839,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "memmap2"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd3f7eed9d3848f8b98834af67102b720745c4ec028fcd0aa0239277e7de374f"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "memoffset"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5929,9 +5894,9 @@ dependencies = [
 
 [[package]]
 name = "minijinja"
-version = "2.7.0"
+version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cff7b8df5e85e30b87c2b0b3f58ba3a87b68e133738bf512a7713769326dbca9"
+checksum = "98642a6dfca91122779a307b77cd07a4aa951fbe32232aaf5bad9febc66be754"
 dependencies = [
  "serde",
 ]
@@ -6607,9 +6572,9 @@ checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
 name = "owo-colors"
-version = "4.1.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb37767f6569cd834a413442455e0f066d0d522de8630436e2a1761d9726ba56"
+checksum = "1036865bb9422d3300cf723f657c2851d0e9ab12567854b1f4eba3d77decf564"
 
 [[package]]
 name = "p256"
@@ -7593,11 +7558,12 @@ dependencies = [
 
 [[package]]
 name = "quinn"
-version = "0.11.6"
+version = "0.11.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62e96808277ec6f97351a2380e6c25114bc9e67037775464979f3037c92d05ef"
+checksum = "c3bd15a6f2967aef83887dcb9fec0014580467e33720d073560cf015a5683012"
 dependencies = [
  "bytes 1.10.1",
+ "cfg_aliases",
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
@@ -7607,17 +7573,18 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.9"
+version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2fe5ef3495d7d2e377ff17b1a8ce2ee2ec2a18cde8b6ad6619d65d0701c135d"
+checksum = "b820744eb4dc9b57a3398183639c511b5a26d2ed702cedd3febaa1393caa22cc"
 dependencies = [
  "bytes 1.10.1",
- "getrandom 0.2.15",
- "rand 0.8.5",
+ "getrandom 0.3.1",
+ "rand 0.9.0",
  "ring",
  "rustc-hash 2.1.1",
  "rustls 0.23.23",
@@ -7631,9 +7598,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.10"
+version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e46f3055866785f6b92bc6164b76be02ca8f2eb4b002c0354b28cf4c119e5944"
+checksum = "541d0f57c6ec747a90738a52741d3221f7960e8ac2f0ff4b1a63680e033b4ab5"
 dependencies = [
  "cfg_aliases",
  "libc",
@@ -8711,9 +8678,9 @@ dependencies = [
 
 [[package]]
 name = "sha256"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18278f6a914fa3070aa316493f7d2ddfb9ac86ebc06fa3b83bffda487e9065b0"
+checksum = "f880fc8562bdeb709793f00eb42a2ad0e672c4f883bbe59122b926eca935c8f6"
 dependencies = [
  "async-trait",
  "bytes 1.10.1",

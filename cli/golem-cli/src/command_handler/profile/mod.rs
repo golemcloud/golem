@@ -22,10 +22,10 @@ use crate::config::{
 };
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
+use crate::log::{log_action, log_warn_action, LogColorize};
 use crate::model::text::fmt::log_error;
 use crate::model::{Format, ProfileView};
 use anyhow::bail;
-use golem_wasm_rpc_stubgen::log::{log_action, log_warn_action, LogColorize};
 use std::sync::Arc;
 use url::Url;
 

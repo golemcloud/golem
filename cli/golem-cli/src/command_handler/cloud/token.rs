@@ -16,12 +16,12 @@ use crate::command::cloud::token::TokenSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
+use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::token::{TokenListView, TokenNewView};
 use crate::model::TokenId;
 use chrono::{DateTime, Utc};
 use golem_cloud_client::api::TokenClient;
 use golem_cloud_client::model::CreateTokenDto;
-use golem_wasm_rpc_stubgen::log::{log_warn_action, LogColorize};
 use std::sync::Arc;
 
 pub struct CloudTokenCommandHandler {

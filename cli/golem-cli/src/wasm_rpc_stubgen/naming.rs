@@ -1,6 +1,6 @@
 pub mod wit {
     use crate::log::LogColorize;
-    use crate::stub::FunctionStub;
+    use crate::wasm_rpc_stubgen::stub::FunctionStub;
     use anyhow::{anyhow, bail};
     use std::path::{Path, PathBuf};
 
@@ -157,7 +157,7 @@ pub mod wit {
 }
 
 pub mod rust {
-    use crate::stub::{FunctionStub, InterfaceStub};
+    use crate::wasm_rpc_stubgen::stub::{FunctionStub, InterfaceStub};
     use heck::{ToSnakeCase, ToUpperCamelCase};
     use proc_macro2::{Ident, Span};
     use wit_bindgen_rust::to_rust_ident;

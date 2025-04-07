@@ -16,10 +16,10 @@ use crate::command::profile::config::ProfileConfigSubcommand;
 use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
+use crate::log::log_action;
 use crate::model::text::fmt::log_error;
 use crate::model::Format;
 use anyhow::bail;
-use golem_wasm_rpc_stubgen::log::log_action;
 use std::sync::Arc;
 
 pub struct ProfileConfigCommandHandler {

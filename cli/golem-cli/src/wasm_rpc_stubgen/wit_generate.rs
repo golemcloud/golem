@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::fs;
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActions, PathExtra};
 use crate::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
-use crate::naming::wit::package_dep_dir_name_from_encoder;
-use crate::stub::{
+use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_encoder;
+use crate::wasm_rpc_stubgen::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition,
 };
-use crate::wit_encode::EncodedWitDir;
-use crate::wit_resolve::ResolvedWitDir;
-use crate::{cargo, fs, naming};
-use crate::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
+use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
+use crate::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
+use crate::wasm_rpc_stubgen::{cargo, naming};
+use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
 use semver::Version;

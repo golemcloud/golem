@@ -17,6 +17,7 @@ use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
+use crate::log::{log_action, log_error_action, log_warn_action, LogIndent};
 use crate::model::text::fmt::log_warn;
 use crate::model::ComponentName;
 use anyhow::bail;
@@ -26,7 +27,6 @@ use golem_client::model::{
 };
 use golem_cloud_client::api::ComponentClient as ComponentClientCloud;
 use golem_common::base_model::PluginInstallationId;
-use golem_wasm_rpc_stubgen::log::{log_action, log_error_action, log_warn_action, LogIndent};
 use std::sync::Arc;
 
 pub struct ComponentPluginCommandHandler {

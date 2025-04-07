@@ -16,11 +16,11 @@ use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
+use crate::log::{log_action, log_warn_action, logln};
 use crate::model::ProjectName;
 use golem_client::model::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_cloud_client::api::ProjectClient;
 use golem_common::base_model::PluginInstallationId;
-use golem_wasm_rpc_stubgen::log::{log_action, log_warn_action, logln};
 use std::sync::Arc;
 
 pub struct CloudProjectPluginCommandHandler {

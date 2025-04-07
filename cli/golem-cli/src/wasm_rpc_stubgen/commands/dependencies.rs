@@ -12,10 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use clap::Command;
+use crate::wasm_rpc_stubgen::wit_generate::{
+    add_client_as_dependency_to_wit_dir, AddClientAsDepConfig, UpdateCargoToml,
+};
+use std::path::Path;
 
-pub fn print_completion(mut command: Command, shell: clap_complete::Shell) {
-    let cmd_name = command.get_name().to_string();
-    tracing::info!("Golem CLI - generating completion file for {cmd_name} - {shell:?}...");
-    clap_complete::generate(shell, &mut command, cmd_name, &mut std::io::stdout());
+pub fn add_stub_dependency(
+    stub_wit_root: &Path,
+    dest_wit_root: &Path,
+    update_cargo_toml: UpdateCargoToml,
+) -> anyhow::Result<()> {
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_wit_root.to_path_buf(),
+        dest_wit_root: dest_wit_root.to_path_buf(),
+        update_cargo_toml,
+    })
 }

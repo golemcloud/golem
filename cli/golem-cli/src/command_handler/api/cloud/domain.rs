@@ -21,7 +21,7 @@ use crate::model::ProjectName;
 use golem_cloud_client::api::ApiDomainClient;
 use golem_cloud_client::model::DomainRequest;
 
-use golem_wasm_rpc_stubgen::log::log_warn_action;
+use crate::log::log_warn_action;
 use std::sync::Arc;
 
 pub struct ApiCloudDomainCommandHandler {

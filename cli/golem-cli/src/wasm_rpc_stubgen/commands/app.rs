@@ -1,5 +1,3 @@
-use crate::cargo::regenerate_cargo_package_component;
-use crate::commands::metadata::add_metadata;
 use crate::fs;
 use crate::fs::{resolve_relative_glob, PathExtra};
 use crate::log::{
@@ -7,18 +5,21 @@ use crate::log::{
 };
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, BuildProfileName, ComponentName,
-    ComponentPropertiesExtensions, CustomCommandError, DependencyType, DependentComponent,
-    DEFAULT_CONFIG_FILE_NAME,
+    CustomCommandError, DependencyType, DependentComponent, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
-use crate::stub::{RustDependencyOverride, StubConfig, StubDefinition};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::wit_generate::{
+use crate::wasm_rpc_stubgen::cargo::regenerate_cargo_package_component;
+use crate::wasm_rpc_stubgen::commands::metadata::add_metadata;
+use crate::wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
+use crate::wasm_rpc_stubgen::wit_generate::{
     add_client_as_dependency_to_wit_dir, extract_exports_as_wit_dep, AddClientAsDepConfig,
     UpdateCargoToml,
 };
-use crate::wit_resolve::{ExportedFunction, ResolvedWitApplication, WitDepsResolver};
-use crate::{commands, naming};
+use crate::wasm_rpc_stubgen::wit_resolve::{
+    ExportedFunction, ResolvedWitApplication, WitDepsResolver,
+};
+use crate::wasm_rpc_stubgen::{commands, naming};
 use anyhow::{anyhow, bail, Context, Error};
 use chrono::{DateTime, Utc};
 use colored::control::SHOULD_COLORIZE;
@@ -31,7 +32,6 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt::{Display, Write};
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -42,17 +42,16 @@ use wax::{Glob, LinkBehavior, WalkBehavior};
 use wit_parser::PackageName;
 
 #[derive(Clone, Debug)]
-pub struct Config<CPE: ComponentPropertiesExtensions> {
+pub struct Config {
     pub app_source_mode: ApplicationSourceMode,
     pub skip_up_to_date_checks: bool,
     pub profile: Option<BuildProfileName>,
     pub offline: bool,
-    pub extensions: PhantomData<CPE>,
     pub steps_filter: HashSet<AppBuildStep>,
     pub golem_rust_override: RustDependencyOverride,
 }
 
-impl<CPE: ComponentPropertiesExtensions> Config<CPE> {
+impl Config {
     pub fn should_run_step(&self, step: AppBuildStep) -> bool {
         if self.steps_filter.is_empty() {
             true
@@ -98,6 +97,7 @@ impl ComponentSelectMode {
 pub struct DynamicHelpSections {
     pub components: bool,
     pub custom_commands: bool,
+    pub builtin_commands: BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -108,9 +108,9 @@ pub struct ComponentStubInterfaces {
     pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
 }
 
-pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
-    pub config: Config<CPE>,
-    pub application: Application<CPE>,
+pub struct ApplicationContext {
+    pub config: Config,
+    pub application: Application,
     pub wit: ResolvedWitApplication,
     pub calling_working_dir: PathBuf,
     component_stub_defs: HashMap<ComponentName, StubDefinition>,
@@ -119,8 +119,8 @@ pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
     selected_component_names: BTreeSet<ComponentName>,
 }
 
-impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
-    pub fn new(config: Config<CPE>) -> anyhow::Result<Option<ApplicationContext<CPE>>> {
+impl ApplicationContext {
+    pub fn new(config: Config) -> anyhow::Result<Option<ApplicationContext>> {
         let Some(app_and_calling_working_dir) = load_app(&config) else {
             return Ok(None);
         };
@@ -368,7 +368,6 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
         let is_ephemeral = self
             .application
             .component_properties(component_name, self.profile())
-            .extensions
             .is_ephemeral();
         let stub_def = self.component_stub_def(component_name, is_ephemeral)?;
         let client_package_name = stub_def.client_parser_package_name();
@@ -1052,7 +1051,21 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                     )),
                 }
                 for command in commands {
-                    logln(format!("  {}", command.bold()))
+                    logln(format!(
+                        "  {}",
+                        format!(
+                            "{}{}",
+                            if config.builtin_commands.contains(&command)
+                                || command.starts_with(':')
+                            {
+                                ":"
+                            } else {
+                                ""
+                            },
+                            command
+                        )
+                        .bold()
+                    ))
                 }
                 logln("")
             }
@@ -1200,9 +1213,7 @@ fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_app<CPE: ComponentPropertiesExtensions>(
-    config: &Config<CPE>,
-) -> Option<ValidatedResult<(Application<CPE>, PathBuf)>> {
+fn load_app(config: &Config) -> Option<ValidatedResult<(Application, PathBuf)>> {
     let result =
         collect_sources(&config.app_source_mode)?.and_then(|(sources, calling_working_dir)| {
             sources
@@ -1419,8 +1430,8 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
         .collect::<Vec<_>>())
 }
 
-fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
-    ctx: &mut ApplicationContext<CPE>,
+fn create_generated_base_wit(
+    ctx: &mut ApplicationContext,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
     let component_source_wit = ctx
@@ -1536,8 +1547,8 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
     }
 }
 
-fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
-    ctx: &ApplicationContext<CPE>,
+fn create_generated_wit(
+    ctx: &ApplicationContext,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
     let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
@@ -1583,8 +1594,8 @@ fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
     }
 }
 
-fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
-    ctx: &mut ApplicationContext<CPE>,
+fn update_cargo_toml(
+    ctx: &mut ApplicationContext,
     mut skip_up_to_date_checks: bool,
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
@@ -1629,15 +1640,14 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
     ))
 }
 
-async fn build_client<CPE: ComponentPropertiesExtensions>(
-    ctx: &mut ApplicationContext<CPE>,
+async fn build_client(
+    ctx: &mut ApplicationContext,
     component: &DependentComponent,
 ) -> anyhow::Result<bool> {
     let stub_def = ctx.component_stub_def(
         &component.name,
         ctx.application
             .component_properties(&component.name, ctx.profile())
-            .extensions
             .is_ephemeral(),
     )?;
     let client_wit_root = stub_def.client_wit_root();
@@ -1714,7 +1724,6 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
                                 &component.name,
                                 ctx.application
                                     .component_properties(&component.name, ctx.profile())
-                                    .extensions
                                     .is_ephemeral(),
                             )?,
                             &client_wasm,
@@ -1754,7 +1763,6 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
                             &component.name,
                             ctx.application
                                 .component_properties(&component.name, ctx.profile())
-                                .extensions
                                 .is_ephemeral(),
                         )?;
                         commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
@@ -1768,8 +1776,8 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
     }
 }
 
-fn add_client_deps<CPE: ComponentPropertiesExtensions>(
-    ctx: &ApplicationContext<CPE>,
+fn add_client_deps(
+    ctx: &ApplicationContext,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
     let dependencies = ctx
@@ -1853,8 +1861,8 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn execute_external_command<CPE: ComponentPropertiesExtensions>(
-    ctx: &ApplicationContext<CPE>,
+fn execute_external_command(
+    ctx: &ApplicationContext,
     base_build_dir: &Path,
     command: &app_raw::ExternalCommand,
     additional_env_vars: HashMap<String, String>,

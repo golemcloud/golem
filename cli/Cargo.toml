@@ -5,7 +5,6 @@ members = [
     "golem",
     "golem-cli",
     "golem-templates",
-    "wasm-rpc-stubgen",
 ]
 
 exclude = [

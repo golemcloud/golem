@@ -20,12 +20,12 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
+use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
 use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use golem_cloud_client::api::AccountClient;
 use golem_cloud_client::model::{Account, AccountData};
-use golem_wasm_rpc_stubgen::log::log_warn_action;
 use std::sync::Arc;
 
 pub struct CloudAccountCommandHandler {

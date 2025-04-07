@@ -17,9 +17,9 @@
 use test_r::test;
 
 use fs_extra::dir::CopyOptions;
-use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
-use golem_wasm_rpc_stubgen::model::app::ComponentName;
-use golem_wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
+use golem_cli::model::app::ComponentName;
+use golem_cli::wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
+use golem_cli::wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
 use std::path::Path;
 use tempfile::{tempdir, TempDir};
 use wit_parser::{FunctionKind, Resolve, TypeDefKind, TypeOwner};

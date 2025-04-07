@@ -17,6 +17,7 @@ use crate::command::shared_args::PluginScopeArgs;
 use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
+use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::component::Component;
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
 use crate::model::{ComponentName, PathBufOrStdin, PluginDefinition, ProjectNameAndId};
@@ -33,7 +34,6 @@ use golem_cloud_client::model::{ComponentQuery, PluginDefinitionCreationCloudPlu
 use golem_cloud_client::{CloudPluginScope, ProjectPluginScope};
 use golem_common::model::plugin::ComponentPluginScope;
 use golem_common::model::{ComponentId, Empty};
-use golem_wasm_rpc_stubgen::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;

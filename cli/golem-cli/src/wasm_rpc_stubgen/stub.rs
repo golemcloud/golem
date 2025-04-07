@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::model::app::ComponentName;
-use crate::naming;
-use crate::rust::BindingMapping;
-use crate::wit_encode::EncodedWitDir;
-use crate::wit_generate::extract_exports_as_wit_dep;
-use crate::wit_resolve::{PackageSource, ResolvedWitDir};
+use crate::wasm_rpc_stubgen::naming;
+use crate::wasm_rpc_stubgen::rust::BindingMapping;
+use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
+use crate::wasm_rpc_stubgen::wit_generate::extract_exports_as_wit_dep;
+use crate::wasm_rpc_stubgen::wit_resolve::{PackageSource, ResolvedWitDir};
 use anyhow::{anyhow, Context};
 use indexmap::IndexMap;
 use itertools::Itertools;

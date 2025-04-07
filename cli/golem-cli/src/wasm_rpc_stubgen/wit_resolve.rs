@@ -1,10 +1,9 @@
+use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::app::{
-    Application, BuildProfileName, ComponentName, ComponentPropertiesExtensions,
-};
+use crate::model::app::{Application, BuildProfileName, ComponentName};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::{fs, naming};
+use crate::wasm_rpc_stubgen::naming;
 use anyhow::{anyhow, bail, Context, Error};
 use indexmap::IndexMap;
 use indoc::formatdoc;
@@ -287,10 +286,7 @@ pub struct ResolvedWitApplication {
 }
 
 impl ResolvedWitApplication {
-    pub fn new<CPE: ComponentPropertiesExtensions>(
-        app: &Application<CPE>,
-        profile: Option<&BuildProfileName>,
-    ) -> ValidatedResult<Self> {
+    pub fn new(app: &Application, profile: Option<&BuildProfileName>) -> ValidatedResult<Self> {
         // TODO: Can be removed once we fixed all docs and templates
         std::env::set_var("WIT_REQUIRE_F32_F64", "0");
 
@@ -367,10 +363,10 @@ impl ResolvedWitApplication {
         self.components.insert(component_name, resolved_component);
     }
 
-    fn add_components_from_app<CPE: ComponentPropertiesExtensions>(
+    fn add_components_from_app(
         &mut self,
         validation: &mut ValidationBuilder,
-        app: &Application<CPE>,
+        app: &Application,
         profile: Option<&BuildProfileName>,
     ) {
         for component_name in app.component_names() {
@@ -460,11 +456,7 @@ impl ResolvedWitApplication {
         }
     }
 
-    fn collect_component_deps<CPE: ComponentPropertiesExtensions>(
-        &mut self,
-        app: &Application<CPE>,
-        validation: &mut ValidationBuilder,
-    ) {
+    fn collect_component_deps(&mut self, app: &Application, validation: &mut ValidationBuilder) {
         fn component_deps<
             'a,
             I: IntoIterator<Item = &'a PackageName>,

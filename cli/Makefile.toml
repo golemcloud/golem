@@ -7,9 +7,8 @@
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make test`: runs all tests
 # - `cargo make unit-tests`: runs all unit tests
-# - `cargo make integrations-tests`: runs all integrations tests
-# - `cargo make cli-integrations-tests`: runs cli integrations tests only
-# - `cargo make stubgen-integrations-tests`: runs stubgen integrations tests only
+# - `cargo make integration-tests`: runs all integrations tests
+# - `cargo make cli-integration-tests`: runs cli integrations tests only
 # - `cargo make template-integration-tests`: runs template tests only
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make desktop`: builds the desktop application
@@ -142,21 +141,15 @@ exec --fail-on-error cargo test --workspace --lib --all-features -- --nocapture 
 
 [tasks.integration-tests]
 description = "Run integration tests"
-dependencies = ["cli-integration-tests", "stubgen-integration-tests", "template-integration-tests"]
+dependencies = ["cli-integration-tests", "template-integration-tests"]
 
 [tasks.cli-integration-tests]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --package golem-cli --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.stubgen-integration-tests]
-description = "Run stubgen integration tests"
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.template-integration-tests]
@@ -235,23 +228,10 @@ args = [
     "--no-verify",
 ]
 
-[tasks.publish-wasm-rpc-stubgen]
-description = "Publishes golem-wasm-rpc-stubgen package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-wasm-rpc-stubgen",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
 [tasks.publish-golem-cli]
-description = "Publishes golem-wasm-ast package to crates.io"
+description = "Publishes golem-cli package to crates.io"
 dependencies = [
     "publish-golem-templates",
-    "publish-wasm-rpc-stubgen"
 ]
 command = "cargo"
 args = [

@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::{GolemCliCommandPartialMatch, GolemCliGlobalFlags};
+use crate::command::{builtin_app_subcommands, GolemCliCommandPartialMatch, GolemCliGlobalFlags};
 use crate::command_handler::Handlers;
 use crate::config::Config;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError};
+use crate::log::{log_action, logln, LogColorize};
 use crate::model::component::show_exported_functions;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
 use crate::model::{ComponentNameMatchKind, Format};
+use crate::wasm_rpc_stubgen::commands::app::{ComponentSelectMode, DynamicHelpSections};
 use colored::Colorize;
-use golem_wasm_rpc_stubgen::commands::app::{ComponentSelectMode, DynamicHelpSections};
-use golem_wasm_rpc_stubgen::log::{log_action, logln, LogColorize};
 use std::sync::Arc;
 
 pub struct ErrorHandler {
@@ -53,6 +53,7 @@ impl ErrorHandler {
                     app_ctx.log_dynamic_help(&DynamicHelpSections {
                         components: true,
                         custom_commands: true,
+                        builtin_commands: builtin_app_subcommands(),
                     })?
                 }
 
@@ -75,6 +76,7 @@ impl ErrorHandler {
                     app_ctx.log_dynamic_help(&DynamicHelpSections {
                         components: true,
                         custom_commands: true,
+                        builtin_commands: builtin_app_subcommands(),
                     })?
                 }
 
@@ -93,6 +95,7 @@ impl ErrorHandler {
                     app_ctx.log_dynamic_help(&DynamicHelpSections {
                         components: true,
                         custom_commands: false,
+                        builtin_commands: builtin_app_subcommands(),
                     })?
                 }
 
@@ -111,6 +114,7 @@ impl ErrorHandler {
                     app_ctx.log_dynamic_help(&DynamicHelpSections {
                         components: true,
                         custom_commands: false,
+                        builtin_commands: builtin_app_subcommands(),
                     })?
                 }
 
@@ -206,6 +210,7 @@ impl ErrorHandler {
                     app_ctx.log_dynamic_help(&DynamicHelpSections {
                         components: true,
                         custom_commands: false,
+                        builtin_commands: builtin_app_subcommands(),
                     })?
                 }
 

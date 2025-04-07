@@ -18,6 +18,7 @@ use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
+use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::fmt::log_error;
 use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment};
 use anyhow::bail;
@@ -31,7 +32,6 @@ use golem_cloud_client::model::{
     ApiDefinitionInfo as ApiDefinitionInfoCloud, ApiDeploymentRequest as ApiDeploymentRequestCloud,
     ApiSite as ApiSiteCloud,
 };
-use golem_wasm_rpc_stubgen::log::{log_warn_action, LogColorize};
 use std::sync::Arc;
 
 pub struct ApiDeploymentCommandHandler {

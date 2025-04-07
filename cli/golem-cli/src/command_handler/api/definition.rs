@@ -17,6 +17,7 @@ use crate::command::shared_args::ProjectNameOptionalArg;
 use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
+use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::api_definition::{
     ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
 };
@@ -26,7 +27,6 @@ use golem_client::api::ApiDefinitionClient as ApiDefinitionClientOss;
 use golem_client::model::HttpApiDefinitionRequest as HttpApiDefinitionRequestOss;
 use golem_cloud_client::api::ApiDefinitionClient as ApiDefinitionClientCloud;
 use golem_cloud_client::model::HttpApiDefinitionRequest as HttpApiDefinitionRequestCloud;
-use golem_wasm_rpc_stubgen::log::{log_warn_action, LogColorize};
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
 

@@ -18,12 +18,12 @@ use crate::config::{
 };
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
+use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::fmt::log_warn;
 use crate::model::{ComponentName, Format};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_cloud_client::model::Account;
-use golem_wasm_rpc_stubgen::log::{log_warn_action, LogColorize};
 use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, Select, Text};
 use std::fmt::{Display, Formatter};

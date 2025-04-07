@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, log_warn_action, LogColorize};
-use crate::stub::StubDefinition;
-use crate::wit_resolve::ResolvedWitDir;
-use crate::{fs, naming, GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION, WIT_BINDGEN_VERSION};
+use crate::wasm_rpc_stubgen::naming;
+use crate::wasm_rpc_stubgen::stub::StubDefinition;
+use crate::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
+use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION, WIT_BINDGEN_VERSION};
 use anyhow::{anyhow, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,

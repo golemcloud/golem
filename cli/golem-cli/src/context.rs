@@ -19,8 +19,13 @@ use crate::config::{
     ClientConfig, HttpClientConfig, NamedProfile, Profile, ProfileKind, ProfileName,
 };
 use crate::error::HintError;
-use crate::model::app_ext::GolemComponentExtensions;
+use crate::log::{set_log_output, LogOutput, Output};
+use crate::model::app::AppBuildStep;
+use crate::model::app::BuildProfileName as AppBuildProfileName;
 use crate::model::{Format, HasFormatConfig};
+use crate::wasm_rpc_stubgen;
+use crate::wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode};
+use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::anyhow;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientOss;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientOss;
@@ -49,13 +54,7 @@ use golem_cloud_client::api::{AccountClientLive as AccountClientCloud, LoginClie
 use golem_cloud_client::{Context as ContextCloud, Security};
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
-use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode};
-use golem_wasm_rpc_stubgen::log::{set_log_output, LogOutput, Output};
-use golem_wasm_rpc_stubgen::model::app::AppBuildStep;
-use golem_wasm_rpc_stubgen::model::app::BuildProfileName as AppBuildProfileName;
-use golem_wasm_rpc_stubgen::stub::RustDependencyOverride;
 use std::collections::{BTreeMap, HashSet};
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::debug;
@@ -499,8 +498,7 @@ pub struct ApplicationContextState {
     pub build_steps_filter: HashSet<AppBuildStep>,
     build_steps_filter_was_set: bool,
 
-    app_context:
-        Option<Result<Option<ApplicationContext<GolemComponentExtensions>>, Arc<anyhow::Error>>>,
+    app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
 
 impl ApplicationContextState {
@@ -513,7 +511,7 @@ impl ApplicationContextState {
             .silent_init
             .then(|| LogOutput::new(Output::TracingDebug));
 
-        let config = golem_wasm_rpc_stubgen::commands::app::Config {
+        let config = wasm_rpc_stubgen::commands::app::Config {
             app_source_mode: {
                 match &config.app_manifest_path {
                     Some(path) => ApplicationSourceMode::Explicit(path.clone()),
@@ -529,7 +527,6 @@ impl ApplicationContextState {
             skip_up_to_date_checks: self.skip_up_to_date_checks,
             profile: config.build_profile.as_ref().map(|p| p.to_string().into()),
             offline: config.wasm_rpc_client_build_offline,
-            extensions: PhantomData::<GolemComponentExtensions>,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
         };
@@ -539,7 +536,7 @@ impl ApplicationContextState {
         self.app_context = Some(ApplicationContext::new(config).map_err(Arc::new))
     }
 
-    pub fn opt(&self) -> anyhow::Result<Option<&ApplicationContext<GolemComponentExtensions>>> {
+    pub fn opt(&self) -> anyhow::Result<Option<&ApplicationContext>> {
         match &self.app_context {
             Some(Ok(None)) => Ok(None),
             Some(Ok(Some(app_ctx))) => Ok(Some(app_ctx)),
@@ -548,9 +545,7 @@ impl ApplicationContextState {
         }
     }
 
-    pub fn opt_mut(
-        &mut self,
-    ) -> anyhow::Result<Option<&mut ApplicationContext<GolemComponentExtensions>>> {
+    pub fn opt_mut(&mut self) -> anyhow::Result<Option<&mut ApplicationContext>> {
         match &mut self.app_context {
             Some(Ok(None)) => Ok(None),
             Some(Ok(Some(app_ctx))) => Ok(Some(app_ctx)),
@@ -559,7 +554,7 @@ impl ApplicationContextState {
         }
     }
 
-    pub fn some_or_err(&self) -> anyhow::Result<&ApplicationContext<GolemComponentExtensions>> {
+    pub fn some_or_err(&self) -> anyhow::Result<&ApplicationContext> {
         match &self.app_context {
             Some(Ok(None)) => Err(anyhow!(HintError::NoApplicationManifestFound)),
             Some(Ok(Some(app_ctx))) => Ok(app_ctx),
@@ -568,9 +563,7 @@ impl ApplicationContextState {
         }
     }
 
-    pub fn some_or_err_mut(
-        &mut self,
-    ) -> anyhow::Result<&mut ApplicationContext<GolemComponentExtensions>> {
+    pub fn some_or_err_mut(&mut self) -> anyhow::Result<&mut ApplicationContext> {
         match &mut self.app_context {
             Some(Ok(None)) => Err(anyhow!(HintError::NoApplicationManifestFound)),
             Some(Ok(Some(app_ctx))) => Ok(app_ctx),

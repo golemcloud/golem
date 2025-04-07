@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app_ext::InitialComponentFile;
+use crate::log::{log_action, LogColorize, LogIndent};
+use crate::model::app::InitialComponentFile;
 use anyhow::{anyhow, bail, Context};
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePathWithPermissionsList,
 };
-use golem_wasm_rpc_stubgen::log::{log_action, LogColorize, LogIndent};
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -121,7 +121,7 @@ impl IfsArchiveBuilder {
         &self,
         component_file: InitialComponentFile,
     ) -> anyhow::Result<Vec<LoadedFile>> {
-        let scheme = component_file.source_path.as_url().scheme();
+        let scheme = component_file.source.as_url().scheme();
         match scheme {
             "file" | "" => self.load_local_file(component_file).await,
             "http" | "https" => self
@@ -131,7 +131,7 @@ impl IfsArchiveBuilder {
             _ => Err(anyhow!(
                 "Unsupported scheme '{}' for IFS file: {}",
                 scheme,
-                component_file.source_path.as_url()
+                component_file.source.as_url()
             )),
         }
     }
@@ -141,7 +141,7 @@ impl IfsArchiveBuilder {
         component_file: InitialComponentFile,
     ) -> anyhow::Result<Vec<LoadedFile>> {
         // if it's a directory, we need to recursively load all files and combine them with their target paths and permissions.
-        let source_path = PathBuf::from(component_file.source_path.as_url().path());
+        let source_path = PathBuf::from(component_file.source.as_url().path());
 
         let mut results: Vec<LoadedFile> = vec![];
         let mut queue: VecDeque<(PathBuf, ComponentFilePathWithPermissions)> =
@@ -193,7 +193,7 @@ impl IfsArchiveBuilder {
         &self,
         component_file: InitialComponentFile,
     ) -> anyhow::Result<LoadedFile> {
-        let url = component_file.source_path.into_url();
+        let url = component_file.source.into_url();
         log_action(
             "Downloading",
             format!("remote file: {}", url.as_str().log_color_highlight()),

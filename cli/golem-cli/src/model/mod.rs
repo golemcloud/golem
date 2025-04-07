@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod app_ext;
-pub mod app_ext_raw;
+pub mod app;
+pub mod app_raw;
 pub mod component;
 pub mod deploy;
 pub mod invoke_result_view;
 pub mod plugin_manifest;
 pub mod project;
+pub mod template;
 pub mod text;
 pub mod to_cloud;
 pub mod to_oss;

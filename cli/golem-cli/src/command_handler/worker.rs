@@ -23,6 +23,7 @@ use crate::context::{Context, GolemClients};
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
+use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::component::{function_params_types, show_exported_functions, Component};
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
@@ -40,6 +41,7 @@ use crate::model::{
     WorkerConnectOptions, WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch,
     WorkerUpdateMode, WorkersMetadataResponseView,
 };
+use crate::wasm_rpc_stubgen::commands::app::ComponentSelectMode;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use bytes::Bytes;
 use colored::Colorize;
@@ -63,10 +65,6 @@ use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{ComponentType, WorkerEvent};
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::parse_type_annotated_value;
-use golem_wasm_rpc_stubgen::commands::app::ComponentSelectMode;
-use golem_wasm_rpc_stubgen::log::{
-    log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent,
-};
 use itertools::{EitherOrBoth, Itertools};
 use native_tls::TlsConnector;
 use std::collections::HashMap;

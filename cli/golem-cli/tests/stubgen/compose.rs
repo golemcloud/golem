@@ -16,15 +16,16 @@
 
 // TODO: test compose with multiple stubs
 
-use crate::{cargo_component_build, golem_rust_override, test_data_path};
+use crate::stubgen::{cargo_component_build, golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
+use golem_cli::model::app::ComponentName;
+use golem_cli::wasm_rpc_stubgen::commands::composition::compose;
+use golem_cli::wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
+use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
+use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
+use golem_cli::wasm_rpc_stubgen::wit_generate::UpdateCargoToml;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::DefaultAst;
-use golem_wasm_rpc_stubgen::commands::composition::compose;
-use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
-use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
-use golem_wasm_rpc_stubgen::model::app::ComponentName;
-use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_r::test;

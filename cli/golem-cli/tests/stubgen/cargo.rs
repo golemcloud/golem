@@ -1,8 +1,8 @@
-use crate::{cargo_component_build, test_data_path};
+use crate::stubgen::{cargo_component_build, test_data_path};
 use assert2::check;
 use fs_extra::dir::CopyOptions;
-use golem_wasm_rpc_stubgen::cargo::regenerate_cargo_package_component;
-use golem_wasm_rpc_stubgen::fs;
+use golem_cli::fs;
+use golem_cli::wasm_rpc_stubgen::cargo::regenerate_cargo_package_component;
 use tempfile::TempDir;
 use test_r::test;
 

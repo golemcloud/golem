@@ -20,6 +20,7 @@ use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 use crate::command::worker::WorkerSubcommand;
 use crate::config::{BuildProfileName, ProfileName};
+use crate::log::LogColorize;
 use crate::model::{Format, WorkerName};
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -29,9 +30,8 @@ use clap::{self, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
-use golem_wasm_rpc_stubgen::log::LogColorize;
 use lenient_bool::LenientBool;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -533,10 +533,10 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::cloud::AccountId;
+    use crate::model::app::AppBuildStep;
     use crate::model::{ComponentName, ProjectName, WorkerName, WorkerUpdateMode};
     use clap::Args;
     use golem_templates::model::GuestLanguage;
-    use golem_wasm_rpc_stubgen::model::app::AppBuildStep;
 
     pub type ComponentTemplateName = String;
     pub type NewWorkerArgument = String;
@@ -1708,6 +1708,15 @@ pub mod server {
     }
 }
 
+pub fn builtin_app_subcommands() -> BTreeSet<String> {
+    GolemCliCommand::command()
+        .find_subcommand("app")
+        .unwrap()
+        .get_subcommands()
+        .map(|subcommand| subcommand.get_name().to_string())
+        .collect()
+}
+
 fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     let pos = key_and_val.find('=').ok_or_else(|| {
         anyhow!(
@@ -1746,7 +1755,7 @@ fn parse_instant(
 
 #[cfg(test)]
 mod test {
-    use crate::command::GolemCliCommand;
+    use crate::command::{builtin_app_subcommands, GolemCliCommand};
     use assert2::assert;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory};
@@ -1961,5 +1970,10 @@ mod test {
                 .map(|e| format!("{:?}", e))
                 .join("\n")
         );
+    }
+
+    #[test]
+    fn builtin_app_subcommands_no_panic() {
+        println!("{:?}", builtin_app_subcommands())
     }
 }

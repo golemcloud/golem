@@ -58,7 +58,6 @@ toml_edit = { workspace = true }
 wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
-wasm-metadata = { workspace = true }
 wit-bindgen-rust = { workspace = true }
 wit-encoder = { workspace = true }
 wit-parser = { workspace = true }

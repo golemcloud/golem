@@ -17,12 +17,12 @@ use crate::cloud::{
 };
 use crate::config::{Config, Profile, ProfileName};
 use crate::error::service::AnyhowMapServiceError;
+use crate::log::LogColorize;
 use anyhow::{anyhow, bail, Context};
 use colored::Colorize;
 use golem_cloud_client::api::{LoginClient, LoginClientLive, LoginOauth2WebFlowPollError};
 use golem_cloud_client::model::{Token, TokenSecret, UnsafeToken, WebFlowAuthorizeUrlResponse};
 use golem_cloud_client::Security;
-use golem_wasm_rpc_stubgen::log::LogColorize;
 use indoc::printdoc;
 use std::path::Path;
 use tracing::info;
