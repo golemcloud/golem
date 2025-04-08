@@ -63,6 +63,8 @@ async fn readwrite_get_returns_the_value_that_was_set(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(
@@ -100,6 +102,8 @@ async fn readwrite_get_fails_if_the_value_was_not_set(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -157,6 +161,8 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -221,6 +227,8 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result == vec![Value::Option(None)]);
@@ -265,6 +273,8 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result == vec![Value::Bool(true)]);
@@ -295,6 +305,8 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -343,6 +355,9 @@ async fn readwrite_buckets_can_be_shared_between_workers(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id_1).await;
+    executor.check_oplog_is_queryable(&worker_id_2).await;
 
     drop(executor);
 
@@ -421,6 +436,8 @@ async fn batch_get_many_gets_multiple_values(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(
@@ -484,6 +501,8 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -556,6 +575,8 @@ async fn batch_set_many_sets_multiple_values(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -686,6 +707,8 @@ async fn batch_delete_many_deletes_multiple_values(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result1 == vec![Value::Option(None)]);
@@ -754,6 +777,8 @@ async fn batch_get_keys_returns_multiple_keys(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 

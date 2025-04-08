@@ -309,8 +309,6 @@ async fn rdbms_postgres_crud(
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
     .await;
-
-    drop(executor);
 }
 
 #[test]
@@ -937,8 +935,6 @@ async fn rdbms_component_test<T: RdbmsType>(
     let worker_ids = start_workers::<T>(&executor, &component_id, db_address, n_workers).await;
 
     rdbms_workers_test::<T>(&executor, worker_ids, test).await;
-
-    drop(executor);
 }
 
 async fn rdbms_workers_test<T: RdbmsType>(
@@ -972,6 +968,10 @@ async fn rdbms_workers_test<T: RdbmsType>(
     while let Some(res) = fibers.join_next().await {
         let (worker_id, result_execute) = res.unwrap();
         workers_results.insert(worker_id, result_execute);
+    }
+
+    for worker_id in workers_results.keys() {
+        executor.check_oplog_is_queryable(worker_id).await;
     }
 
     for (worker_id, result) in workers_results {
