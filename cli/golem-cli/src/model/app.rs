@@ -2,14 +2,13 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::build_application;
 use crate::model::app_raw;
+use crate::model::component::AppComponentType;
 use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_parser;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use golem_common::model::{
-    ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentType,
-};
+use golem_common::model::{ComponentFilePathWithPermissions, ComponentFilePermissions};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -95,7 +94,7 @@ pub struct ComponentStubInterfaces {
 pub enum AppBuildStep {
     GenRpc,
     Componentize,
-    LinkRpc,
+    Link,
     AddMetadata,
 }
 
@@ -239,21 +238,40 @@ impl<T: Default> Default for WithSource<T> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DependencyType {
-    /// Dynamic (stubless) wasm-rpc
+    /// Dynamic ("stubless") wasm-rpc
     DynamicWasmRpc,
     /// Static (composed with compiled stub) wasm-rpc
     StaticWasmRpc,
+    /// Composes the two WASM components together
+    Wasm,
 }
 
 impl DependencyType {
     pub const STATIC_WASM_RPC: &'static str = "static-wasm-rpc";
     pub const WASM_RPC: &'static str = "wasm-rpc";
+    pub const WASM: &'static str = "wasm";
 
     pub fn as_str(&self) -> &'static str {
         match self {
             DependencyType::DynamicWasmRpc => Self::WASM_RPC,
             DependencyType::StaticWasmRpc => Self::STATIC_WASM_RPC,
+            DependencyType::Wasm => Self::WASM,
         }
+    }
+
+    pub fn describe(&self) -> &'static str {
+        match self {
+            DependencyType::DynamicWasmRpc => "WASM RPC dependency",
+            DependencyType::StaticWasmRpc => "Statically composed WASM RPC dependency",
+            DependencyType::Wasm => "WASM component dependency",
+        }
+    }
+
+    pub fn is_wasm_rpc(&self) -> bool {
+        matches!(
+            self,
+            DependencyType::DynamicWasmRpc | DependencyType::StaticWasmRpc
+        )
     }
 }
 
@@ -264,6 +282,7 @@ impl FromStr for DependencyType {
         match str {
             Self::WASM_RPC => Ok(Self::DynamicWasmRpc),
             Self::STATIC_WASM_RPC => Ok(Self::StaticWasmRpc),
+            Self::WASM => Ok(Self::Wasm),
             _ => Err(()),
         }
     }
@@ -329,7 +348,7 @@ impl Application {
         &self.wit_deps
     }
 
-    pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<DependentComponent> {
+    pub fn all_dependencies(&self) -> BTreeSet<DependentComponent> {
         self.dependencies.values().flatten().cloned().collect()
     }
 
@@ -416,7 +435,7 @@ impl Application {
         self.component(component_name).source_dir()
     }
 
-    pub fn component_wasm_rpc_dependencies(
+    pub fn component_dependencies(
         &self,
         component_name: &AppComponentName,
     ) -> &BTreeSet<DependentComponent> {
@@ -655,7 +674,7 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::ExternalCommand>,
     pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub component_type: ComponentType,
+    pub component_type: AppComponentType,
     pub files: Vec<InitialComponentFile>,
 }
 
@@ -675,7 +694,7 @@ impl ComponentProperties {
             build: raw.build,
             custom_commands: raw.custom_commands,
             clean: raw.clean,
-            component_type: raw.component_type.unwrap_or_default().into(),
+            component_type: raw.component_type.unwrap_or_default(),
             files,
         })
     }
@@ -734,7 +753,7 @@ impl ComponentProperties {
         }
 
         if let Some(component_type) = overrides.component_type {
-            self.component_type = component_type.into();
+            self.component_type = component_type;
             any_overrides = true;
         }
 
@@ -754,11 +773,15 @@ impl ComponentProperties {
     }
 
     pub fn is_ephemeral(&self) -> bool {
-        self.component_type == ComponentType::Ephemeral
+        self.component_type == AppComponentType::Ephemeral
     }
 
     pub fn is_durable(&self) -> bool {
-        self.component_type == ComponentType::Durable
+        self.component_type == AppComponentType::Durable
+    }
+
+    pub fn is_deployable(&self) -> bool {
+        self.component_type.as_deployable_component_type().is_some()
     }
 }
 
@@ -1210,14 +1233,16 @@ mod app_builder {
                             |validation| {
                                 if invalid_source {
                                     validation.add_error(format!(
-                                        "WASM RPC dependency {} - {} references unknown component",
+                                        "{} {} - {} references unknown component",
+                                        target.dep_type.describe(),
                                         component.as_str().log_color_error_highlight(),
                                         target.name.as_str().log_color_highlight()
                                     ))
                                 }
                                 if invalid_target {
                                     validation.add_error(format!(
-                                        "WASM RPC dependency {} - {} references unknown target component",
+                                        "{} {} - {} references unknown target component",
+                                        target.dep_type.describe(),
                                         component.as_str().log_color_highlight(),
                                         target.name.as_str().log_color_error_highlight()
                                     ))

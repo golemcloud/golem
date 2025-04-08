@@ -17,6 +17,7 @@ use crate::Tracing;
 use assert2::{assert, check};
 use colored::Colorize;
 use golem_cli::fs;
+use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_templates::model::GuestLanguage;
 use indoc::indoc;
 use itertools::Itertools;
@@ -35,6 +36,8 @@ mod cmd {
     pub static COMPONENT: &str = "component";
     pub static DEPLOY: &str = "deploy";
     pub static NEW: &str = "new";
+    pub static WORKER: &str = "worker";
+    pub static INVOKE: &str = "invoke";
 }
 
 mod flag {
@@ -369,6 +372,132 @@ fn custom_app_subcommand_with_builtin_name() {
     let outputs = ctx.cli([cmd::APP, ":new"]);
     assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo tree'"));
+}
+
+#[test]
+fn wasm_library_dependency_type() -> anyhow::Result<()> {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-name";
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:main"]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:lib"]);
+    assert!(outputs.success());
+
+    // Changing the `app:lib` component type to be a library
+    fs::write_str(
+        ctx.cwd_path_join(
+            Path::new("components-rust")
+                .join("app-lib")
+                .join("golem.yaml"),
+        ),
+        indoc! {"
+            components:
+              app:lib:
+                template: rust
+                profiles:
+                  debug:
+                    componentType: library
+                  release:
+                    componentType: library
+        "},
+    )?;
+
+    // Adding as a wasm dependency
+
+    fs::append_str(
+        ctx.cwd_path_join(
+            Path::new("components-rust")
+                .join("app-main")
+                .join("golem.yaml"),
+        ),
+        indoc! {"
+            dependencies:
+              app:main:
+                - type: wasm
+                  target: app:lib
+        "},
+    )?;
+
+    // Rewriting the main WIT
+
+    fs::write_str(
+        ctx.cwd_path_join(
+            Path::new("components-rust")
+                .join("app-main")
+                .join("wit")
+                .join("app-main.wit"),
+        ),
+        indoc! {"
+            package app:main;
+
+            interface app-main-api {
+                run: func() -> u64;
+            }
+
+            world app-main {
+                export app-main-api;
+                import app:lib-exports/app-lib-api;
+            }
+        "},
+    )?;
+
+    // Rewriting the main Rust source code
+
+    fs::write_str(
+        ctx.cwd_path_join(
+            Path::new("components-rust")
+                .join("app-main")
+                .join("src")
+                .join("lib.rs"),
+        ),
+        indoc! {"
+                #[allow(static_mut_refs)]
+                mod bindings;
+
+                use bindings::app::lib_exports::app_lib_api;
+                use crate::bindings::exports::app::main_exports::app_main_api::*;
+
+                struct Component;
+
+                impl Guest for Component {
+                    fn run() -> u64 {
+                        app_lib_api::add(1);
+                        app_lib_api::add(2);
+                        app_lib_api::add(3);
+                        app_lib_api::get()
+                    }
+                }
+
+                bindings::export!(Component with_types_in bindings);
+         "},
+    )?;
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([
+        cmd::WORKER,
+        cmd::INVOKE,
+        "app:main/test1",
+        "run",
+        "--format",
+        "json",
+    ]);
+    assert!(outputs.success());
+
+    let result: InvokeResultView = serde_json::from_str(&outputs.stdout[0])?;
+    assert_eq!(result.result_wave, Some(vec!["6".to_string()]));
+
+    Ok(())
 }
 
 pub struct Output {

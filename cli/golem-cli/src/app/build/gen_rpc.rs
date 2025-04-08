@@ -42,8 +42,10 @@ pub async fn gen_rpc(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
             create_generated_base_wit(ctx, &component_name)?;
         }
 
-        for dep in &ctx.application.all_wasm_rpc_dependencies() {
-            build_client(ctx, dep).await?;
+        for dep in &ctx.application.all_dependencies() {
+            if dep.dep_type.is_wasm_rpc() {
+                build_client(ctx, dep).await?;
+            }
         }
     }
 
@@ -404,6 +406,10 @@ async fn build_client(
                         )?;
                         commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
                     }
+                    DependencyType::Wasm => {
+                        // No need to generate RPC clients for this dependency type
+                        Ok(())
+                    }
                 }
             }
             .await,
@@ -417,9 +423,7 @@ fn add_client_deps(
     ctx: &ApplicationContext,
     component_name: &AppComponentName,
 ) -> Result<bool, Error> {
-    let dependencies = ctx
-        .application
-        .component_wasm_rpc_dependencies(component_name);
+    let dependencies = ctx.application.component_dependencies(component_name);
     if dependencies.is_empty() {
         Ok(false)
     } else {
@@ -434,23 +438,25 @@ fn add_client_deps(
         let _indent = LogIndent::new();
 
         for dep_component in dependencies {
-            log_action(
-                "Adding",
-                format!(
-                    "{} client wit dependency to {}",
-                    dep_component.name.as_str().log_color_highlight(),
-                    component_name.as_str().log_color_highlight()
-                ),
-            );
-            let _indent = LogIndent::new();
+            if dep_component.dep_type.is_wasm_rpc() {
+                log_action(
+                    "Adding",
+                    format!(
+                        "{} client wit dependency to {}",
+                        dep_component.name.as_str().log_color_highlight(),
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
 
-            add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
-                client_wit_root: ctx.application.client_wit(&dep_component.name),
-                dest_wit_root: ctx
-                    .application
-                    .component_generated_wit(component_name, ctx.profile()),
-                update_cargo_toml: UpdateCargoToml::NoUpdate,
-            })?
+                add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+                    client_wit_root: ctx.application.client_wit(&dep_component.name),
+                    dest_wit_root: ctx
+                        .application
+                        .component_generated_wit(component_name, ctx.profile()),
+                    update_cargo_toml: UpdateCargoToml::NoUpdate,
+                })?
+            }
         }
 
         Ok(true)

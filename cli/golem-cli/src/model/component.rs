@@ -31,6 +31,7 @@ use golem_wasm_ast::analysis::{
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +39,7 @@ pub struct Component {
     pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
-    pub component_type: ComponentType,
+    pub component_type: AppComponentType,
     pub metadata: ComponentMetadata,
     pub project_id: Option<ProjectId>,
     pub created_at: Option<DateTime<Utc>>,
@@ -51,7 +52,10 @@ impl From<golem_client::model::Component> for Component {
             versioned_component_id: value.versioned_component_id,
             component_name: value.component_name.into(),
             component_size: value.component_size,
-            component_type: value.component_type.unwrap_or(ComponentType::Durable),
+            component_type: value
+                .component_type
+                .unwrap_or(ComponentType::Durable)
+                .into(),
             metadata: value.metadata,
             project_id: None,
             created_at: value.created_at,
@@ -69,8 +73,53 @@ impl From<golem_cloud_client::model::Component> for Component {
             metadata: value.metadata,
             project_id: Some(ProjectId(value.project_id)),
             created_at: value.created_at,
-            component_type: value.component_type.unwrap_or(ComponentType::Durable),
+            component_type: value
+                .component_type
+                .unwrap_or(ComponentType::Durable)
+                .into(),
             files: value.files,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[derive(Default)]
+pub enum AppComponentType {
+    /// Durable Golem component
+    #[default]
+    Durable,
+    /// Ephemeral Golem component
+    Ephemeral,
+    /// Library component, to be used in composition (not deployable)
+    Library,
+}
+
+impl AppComponentType {
+    pub fn as_deployable_component_type(&self) -> Option<ComponentType> {
+        match self {
+            AppComponentType::Durable => Some(ComponentType::Durable),
+            AppComponentType::Ephemeral => Some(ComponentType::Ephemeral),
+            AppComponentType::Library => None,
+        }
+    }
+}
+
+impl From<ComponentType> for AppComponentType {
+    fn from(value: ComponentType) -> Self {
+        match value {
+            ComponentType::Durable => AppComponentType::Durable,
+            ComponentType::Ephemeral => AppComponentType::Ephemeral,
+        }
+    }
+}
+
+impl Display for AppComponentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppComponentType::Durable => write!(f, "Durable"),
+            AppComponentType::Ephemeral => write!(f, "Ephemeral"),
+            AppComponentType::Library => write!(f, "Library"),
         }
     }
 }
@@ -96,7 +145,7 @@ impl ComponentUpsertResult {
 pub struct ComponentView {
     pub component_name: ComponentName,
     pub component_id: Uuid,
-    pub component_type: ComponentType,
+    pub component_type: AppComponentType,
     pub component_version: u64,
     pub component_size: u64,
     pub created_at: Option<DateTime<Utc>>,

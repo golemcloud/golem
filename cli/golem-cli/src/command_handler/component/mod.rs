@@ -602,10 +602,19 @@ impl ComponentCommandHandler {
 
             let mut components = Vec::with_capacity(selected_component_names.len());
             for component_name in &selected_component_names {
-                components.push(
-                    self.deploy_component(build_profile.as_ref(), project, component_name)
-                        .await?,
-                );
+                let app_ctx = self.ctx.app_context_lock().await;
+                if app_ctx
+                    .some_or_err()?
+                    .application
+                    .component_properties(component_name, build_profile.as_ref())
+                    .is_deployable()
+                {
+                    drop(app_ctx);
+                    components.push(
+                        self.deploy_component(build_profile.as_ref(), project, component_name)
+                            .await?,
+                    );
+                }
             }
 
             components
@@ -1218,7 +1227,10 @@ fn component_deploy_properties(
     let component_properties = &app_ctx
         .application
         .component_properties(component_name, build_profile);
-    let component_type = component_properties.component_type;
+    let component_type = component_properties
+        .component_type
+        .as_deployable_component_type()
+        .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
     let files = component_properties.files.clone();
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
@@ -1238,7 +1250,7 @@ fn app_component_dynamic_linking(
 
     let wasm_rpc_deps = app_ctx
         .application
-        .component_wasm_rpc_dependencies(component_name)
+        .component_dependencies(component_name)
         .iter()
         .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
         .cloned()

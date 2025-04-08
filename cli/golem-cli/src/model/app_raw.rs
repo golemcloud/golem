@@ -1,5 +1,6 @@
 use crate::fs;
 use crate::log::LogColorize;
+use crate::model::component::AppComponentType;
 use anyhow::{anyhow, Context};
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};
@@ -85,23 +86,6 @@ pub struct Component {
     pub default_profile: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ComponentType {
-    Ephemeral,
-    #[default]
-    Durable,
-}
-
-impl From<ComponentType> for golem_common::model::ComponentType {
-    fn from(value: ComponentType) -> Self {
-        match value {
-            ComponentType::Ephemeral => Self::Ephemeral,
-            ComponentType::Durable => Self::Durable,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InitialComponentFile {
@@ -128,7 +112,7 @@ pub struct ComponentProperties {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_type: Option<ComponentType>,
+    pub component_type: Option<AppComponentType>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<InitialComponentFile>,
 }

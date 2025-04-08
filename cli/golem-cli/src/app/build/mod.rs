@@ -15,7 +15,7 @@
 use crate::app::build::add_metadata::add_metadata_to_selected_components;
 use crate::app::build::componentize::componentize;
 use crate::app::build::gen_rpc::gen_rpc;
-use crate::app::build::link_rpc::link_rpc;
+use crate::app::build::link::link;
 use crate::app::context::ApplicationContext;
 use crate::fs;
 use crate::log::{log_warn_action, LogColorize};
@@ -35,7 +35,7 @@ pub mod clean;
 pub mod componentize;
 pub mod external_command;
 pub mod gen_rpc;
-pub mod link_rpc;
+pub mod link;
 pub mod task_result_marker;
 
 pub async fn build_app(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
@@ -45,8 +45,8 @@ pub async fn build_app(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     if ctx.config.should_run_step(AppBuildStep::Componentize) {
         componentize(ctx)?;
     }
-    if ctx.config.should_run_step(AppBuildStep::LinkRpc) {
-        link_rpc(ctx).await?;
+    if ctx.config.should_run_step(AppBuildStep::Link) {
+        link(ctx).await?;
     }
     if ctx.config.should_run_step(AppBuildStep::AddMetadata) {
         add_metadata_to_selected_components(ctx).await?;
@@ -65,7 +65,7 @@ fn env_var_flag(name: &str) -> bool {
         .unwrap_or_default()
 }
 
-/// Similar std::env::vars() but silently drops invalid env vars instead of panicing.
+/// Similar to std::env::vars() but silently drops invalid env vars instead of panicing.
 /// Additionally, will ignore all env vars containing data incompatible with envsubst.
 fn valid_env_vars() -> HashMap<String, String> {
     let mut result = HashMap::new();

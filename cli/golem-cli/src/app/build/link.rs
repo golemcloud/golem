@@ -22,26 +22,37 @@ use crate::wasm_rpc_stubgen::commands;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 
-pub async fn link_rpc(ctx: &ApplicationContext) -> anyhow::Result<()> {
-    log_action("Linking", "RPC");
+pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
+    log_action("Linking", "dependencies");
     let _indent = LogIndent::new();
 
     for component_name in ctx.selected_component_names() {
         let static_dependencies = ctx
             .application
-            .component_wasm_rpc_dependencies(component_name)
+            .component_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::StaticWasmRpc)
             .collect::<BTreeSet<_>>();
+        let library_dependencies = ctx
+            .application
+            .component_dependencies(component_name)
+            .iter()
+            .filter(|dep| dep.dep_type == DependencyType::Wasm)
+            .collect::<BTreeSet<_>>();
         let dynamic_dependencies = ctx
             .application
-            .component_wasm_rpc_dependencies(component_name)
+            .component_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
             .collect::<BTreeSet<_>>();
-        let client_wasms = static_dependencies
+        let wasms_to_compose_with = static_dependencies
             .iter()
             .map(|dep| ctx.application.client_wasm(&dep.name))
+            .chain(
+                library_dependencies
+                    .iter()
+                    .map(|dep| ctx.application.component_wasm(&dep.name, ctx.profile())),
+            )
             .collect::<Vec<_>>();
         let component_wasm = ctx
             .application
@@ -84,17 +95,31 @@ pub async fn link_rpc(ctx: &ApplicationContext) -> anyhow::Result<()> {
             );
         }
 
+        if !library_dependencies.is_empty() {
+            log_action(
+                "Found",
+                format!(
+                    "static WASM library dependencies ({}) for {}",
+                    library_dependencies
+                        .iter()
+                        .map(|s| s.name.as_str().log_color_highlight())
+                        .join(", "),
+                    component_name.as_str().log_color_highlight(),
+                ),
+            );
+        }
+
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
             || {
-                let mut inputs = client_wasms.clone();
+                let mut inputs = wasms_to_compose_with.clone();
                 inputs.push(component_wasm.clone());
                 inputs
             },
             || [linked_wasm.clone()],
         ) {
             log_skipping_up_to_date(format!(
-                "linking RPC for {}",
+                "linking dependencies for {}",
                 component_name.as_str().log_color_highlight(),
             ));
             continue;
@@ -102,11 +127,11 @@ pub async fn link_rpc(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
         task_result_marker.result(
             async {
-                if static_dependencies.is_empty() {
+                if wasms_to_compose_with.is_empty() {
                     log_action(
                         "Copying",
                         format!(
-                            "{} without linking, no static WASM RPC dependencies were found",
+                            "{} without linking, no static dependencies were found",
                             component_name.as_str().log_color_highlight(),
                         ),
                     );
@@ -115,10 +140,15 @@ pub async fn link_rpc(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     log_action(
                         "Linking",
                         format!(
-                            "static WASM RPC dependencies ({}) into {}",
+                            "static dependencies ({}) into {}",
                             static_dependencies
                                 .iter()
                                 .map(|s| s.name.as_str().log_color_highlight())
+                                .chain(
+                                    library_dependencies
+                                        .iter()
+                                        .map(|s| s.name.as_str().log_color_highlight()),
+                                )
                                 .join(", "),
                             component_name.as_str().log_color_highlight(),
                         ),
@@ -129,7 +159,7 @@ pub async fn link_rpc(ctx: &ApplicationContext) -> anyhow::Result<()> {
                         ctx.application
                             .component_wasm(component_name, ctx.profile())
                             .as_path(),
-                        &client_wasms,
+                        &wasms_to_compose_with,
                         linked_wasm.as_path(),
                     )
                     .await

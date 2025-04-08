@@ -15,20 +15,21 @@
 use crate::app::build::external_command::execute_external_command;
 use crate::app::context::ApplicationContext;
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
-use crate::model::app::AppComponentName;
+use crate::model::app::{AppComponentName, DependencyType};
 use crate::wasm_rpc_stubgen::wit_resolve::ExportedFunction;
 use anyhow::{anyhow, Context};
 use heck::ToLowerCamelCase;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 pub fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.selected_component_names() {
+    let components_to_build = components_to_build(ctx);
+    for component_name in components_to_build {
         let component_properties = ctx
             .application
-            .component_properties(component_name, ctx.profile());
+            .component_properties(&component_name, ctx.profile());
 
         if component_properties.build.is_empty() {
             log_warn_action(
@@ -47,13 +48,13 @@ pub fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
         );
         let _indent = LogIndent::new();
 
-        let env_vars = build_step_env_vars(ctx, component_name)
+        let env_vars = build_step_env_vars(ctx, &component_name)
             .context("Failed to get env vars for build step")?;
 
         for build_step in &component_properties.build {
             execute_external_command(
                 ctx,
-                ctx.application.component_source_dir(component_name),
+                ctx.application.component_source_dir(&component_name),
                 build_step,
                 env_vars.clone(),
             )?;
@@ -61,6 +62,23 @@ pub fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn components_to_build(ctx: &ApplicationContext) -> BTreeSet<AppComponentName> {
+    let mut components_to_build = BTreeSet::new();
+    let mut remaining: Vec<_> = ctx.selected_component_names().iter().cloned().collect();
+
+    while let Some(component_name) = remaining.pop() {
+        components_to_build.insert(component_name.clone());
+
+        for dep in ctx.application.component_dependencies(&component_name) {
+            if dep.dep_type == DependencyType::Wasm && !components_to_build.contains(&dep.name) {
+                components_to_build.insert(dep.name.clone());
+                remaining.push(dep.name.clone());
+            }
+        }
+    }
+    components_to_build
 }
 
 fn build_step_env_vars(
