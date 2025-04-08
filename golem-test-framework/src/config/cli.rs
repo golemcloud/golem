@@ -112,7 +112,7 @@ pub struct CliParams {
     #[arg(long, default_value = "false")]
     pub primary_only: bool,
 
-    #[arg(long, default_value = "GolemClientProtocol::Grpc")]
+    #[arg(long, default_value = "grpc")]
     pub golem_client_protocol: GolemClientProtocol,
 }
 

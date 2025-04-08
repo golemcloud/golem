@@ -157,7 +157,7 @@ impl Benchmark for RpcLargeInput {
                 .iter()
                 .map(|w| w.parent.clone())
                 .collect::<Vec<WorkerId>>(),
-            "golem:itrpc/rpc-api.{echo}",
+            "golem:itrpc-exports/rpc-api.{echo}",
             vec!["hello".into_value_and_type()],
         )
         .await;
@@ -191,7 +191,7 @@ impl Benchmark for RpcLargeInput {
             context,
             &recorder,
             &shard_manager_routing_table,
-            "golem:itrpc/rpc-api.{process}",
+            "golem:itrpc-exports/rpc-api.{process}",
             vec![Data::generate_list(2000).into_value_and_type()],
             "worker-process-invocation",
         )
