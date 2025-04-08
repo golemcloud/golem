@@ -507,15 +507,15 @@ mod test {
         let db_pool = SqlitePool::configured(&db_config).await.unwrap();
 
         let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> = Arc::new(
-            LoggedApiDefinitionRepo::new(DbApiDefinitionRepo::new(db_pool.clone().into())),
+            LoggedApiDefinitionRepo::new(DbApiDefinitionRepo::new(db_pool.clone())),
         );
         let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
             Arc::new(api_deployment::LoggedDeploymentRepo::new(
-                api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
+                api_deployment::DbApiDeploymentRepo::new(db_pool.clone()),
             ));
 
         let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> = Arc::new(
-            LoggedSecuritySchemeRepo::new(DbSecuritySchemeRepo::new(db_pool.clone().into())),
+            LoggedSecuritySchemeRepo::new(DbSecuritySchemeRepo::new(db_pool.clone())),
         );
 
         let identity_provider = Arc::new(DefaultIdentityProvider);

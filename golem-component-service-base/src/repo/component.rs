@@ -594,7 +594,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 }
 
 pub struct DbComponentRepo<DB: Pool, Owner: ComponentOwner> {
-    db_pool: Arc<DB>,
+    db_pool: DB,
     plugin_installation_queries: Arc<
         dyn PluginInstallationRepoQueries<
                 DB::Db,
@@ -613,7 +613,7 @@ where
         ComponentPluginInstallationTarget,
     >,
 {
-    pub fn new(db_pool: Arc<DB>) -> Self {
+    pub fn new(db_pool: DB) -> Self {
         let plugin_installation_queries =
             Arc::new(DbPluginInstallationRepoQueries::<DB::Db>::new());
         Self {
