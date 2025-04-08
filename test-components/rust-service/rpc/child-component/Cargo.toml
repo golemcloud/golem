@@ -8,8 +8,8 @@ license = "Apache-2.0"
 [package.metadata.component.target]
 path = "wit-generated"
 
-[package.metadata.component.target.dependencies."golem:it-exports"]
-path = "wit-generated/deps/golem_it-exports"
+[package.metadata.component.target.dependencies]
+"golem:it-exports" = { path = "wit-generated/deps/golem_it-exports" }
 
 [dependencies]
 once_cell = "1.17.1"
