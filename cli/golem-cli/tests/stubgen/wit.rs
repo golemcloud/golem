@@ -17,7 +17,7 @@
 use test_r::test;
 
 use fs_extra::dir::CopyOptions;
-use golem_cli::model::app::ComponentName;
+use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_cli::wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
 use std::path::Path;
@@ -39,7 +39,7 @@ fn all_wit_types() {
         golem_rust_override: RustDependencyOverride::default(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
-        component_name: ComponentName::from("test:component"),
+        component_name: AppComponentName::from("test:component"),
         is_ephemeral: false,
     })
     .unwrap();
@@ -144,7 +144,7 @@ fn many_ways_to_export() {
         golem_rust_override: RustDependencyOverride::default(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
-        component_name: ComponentName::from("test:component"),
+        component_name: AppComponentName::from("test:component"),
         is_ephemeral: false,
     })
     .unwrap();

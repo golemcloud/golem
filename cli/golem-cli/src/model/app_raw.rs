@@ -62,7 +62,7 @@ impl Application {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
     #[serde(flatten)]
     pub component_properties: ComponentProperties,
@@ -73,7 +73,7 @@ pub struct ComponentTemplate {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Component {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
@@ -111,7 +111,7 @@ pub struct InitialComponentFile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_wit: Option<String>,

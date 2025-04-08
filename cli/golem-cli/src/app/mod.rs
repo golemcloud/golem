@@ -12,14 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// Top level commands for generating stub WASM components
-pub mod generate;
-
-/// Top level commands for managing dependencies on stubs
-pub mod dependencies;
-
-/// Top level commands for composing stubs with user components
-pub mod composition;
-
-/// Top level commands for adding metadata to WASM components
-pub mod metadata;
+pub mod build;
+pub mod context;
+pub mod error;

@@ -18,7 +18,7 @@
 
 use crate::stubgen::{cargo_component_build, golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
-use golem_cli::model::app::ComponentName;
+use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::composition::compose;
 use golem_cli::wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
@@ -82,7 +82,7 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
         golem_rust_override: golem_rust_override(),
         extract_source_exports_package: true,
         seal_cargo_workspace: true,
-        component_name: ComponentName::from("test:component"),
+        component_name: AppComponentName::from("test:component"),
         is_ephemeral: false,
     })
     .unwrap();

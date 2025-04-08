@@ -17,7 +17,7 @@
 
 use crate::stubgen::{golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
-use golem_cli::model::app::ComponentName;
+use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_ast::analysis::analysed_type::*;
@@ -53,7 +53,7 @@ async fn all_wit_types() {
         golem_rust_override: golem_rust_override(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
-        component_name: ComponentName::from("test:component"),
+        component_name: AppComponentName::from("test:component"),
         is_ephemeral: false,
     })
     .unwrap();
@@ -364,7 +364,7 @@ async fn resource() {
         golem_rust_override: golem_rust_override(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
-        component_name: ComponentName::from("test:component"),
+        component_name: AppComponentName::from("test:component"),
         is_ephemeral: false,
     })
     .unwrap();

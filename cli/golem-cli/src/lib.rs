@@ -16,6 +16,7 @@ use clap_verbosity_flag::Verbosity;
 use shadow_rs::shadow;
 use tracing_subscriber::FmtSubscriber;
 
+pub mod app;
 pub mod auth;
 pub mod cloud;
 pub mod command;

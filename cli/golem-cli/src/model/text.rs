@@ -1820,7 +1820,7 @@ pub mod plugin {
 // Shared help messages
 pub mod help {
     use crate::log::{logln, LogColorize};
-    use crate::model::app::ComponentName as AppComponentName;
+    use crate::model::app::AppComponentName;
     use crate::model::component::render_type;
     use crate::model::text::fmt::{
         format_export, log_table, FieldsBuilder, MessageWithFields, TextView,

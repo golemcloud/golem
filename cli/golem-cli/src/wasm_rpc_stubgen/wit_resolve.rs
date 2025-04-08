@@ -1,7 +1,7 @@
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::app::{Application, BuildProfileName, ComponentName};
+use crate::model::app::{AppComponentName, Application, BuildProfileName};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use anyhow::{anyhow, bail, Context, Error};
@@ -264,11 +264,11 @@ fn collect_package_sources(
 pub struct ResolvedWitComponent {
     main_package_name: PackageName,
     resolved_generated_wit_dir: Option<ResolvedWitDir>,
-    app_component_deps: HashSet<ComponentName>,
+    app_component_deps: HashSet<AppComponentName>,
     source_referenced_package_deps: HashSet<PackageName>,
     source_contained_package_deps: HashSet<PackageName>,
-    source_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
-    generated_component_deps: Option<HashSet<ComponentName>>,
+    source_component_deps: BTreeSet<AppComponentName>, // NOTE: BTree for making dep sorting deterministic
+    generated_component_deps: Option<HashSet<AppComponentName>>,
 }
 
 impl ResolvedWitComponent {
@@ -278,11 +278,11 @@ impl ResolvedWitComponent {
 }
 
 pub struct ResolvedWitApplication {
-    components: BTreeMap<ComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
-    package_to_component: HashMap<PackageName, ComponentName>,
-    stub_package_to_component: HashMap<PackageName, ComponentName>,
-    interface_package_to_component: HashMap<PackageName, ComponentName>,
-    component_order: Vec<ComponentName>,
+    components: BTreeMap<AppComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
+    package_to_component: HashMap<PackageName, AppComponentName>,
+    stub_package_to_component: HashMap<PackageName, AppComponentName>,
+    interface_package_to_component: HashMap<PackageName, AppComponentName>,
+    component_order: Vec<AppComponentName>,
 }
 
 impl ResolvedWitApplication {
@@ -315,7 +315,7 @@ impl ResolvedWitApplication {
     fn validate_package_names(&self, validation: &mut ValidationBuilder) {
         if self.package_to_component.len() != self.components.len() {
             let mut package_names_to_component_names =
-                BTreeMap::<&PackageName, Vec<&ComponentName>>::new();
+                BTreeMap::<&PackageName, Vec<&AppComponentName>>::new();
             for (component_name, component) in &self.components {
                 package_names_to_component_names
                     .entry(&component.main_package_name)
@@ -345,7 +345,7 @@ impl ResolvedWitApplication {
 
     fn add_resolved_component(
         &mut self,
-        component_name: ComponentName,
+        component_name: AppComponentName,
         resolved_component: ResolvedWitComponent,
     ) {
         self.package_to_component.insert(
@@ -460,9 +460,9 @@ impl ResolvedWitApplication {
         fn component_deps<
             'a,
             I: IntoIterator<Item = &'a PackageName>,
-            O: FromIterator<ComponentName>,
+            O: FromIterator<AppComponentName>,
         >(
-            known_package_deps: &HashMap<PackageName, ComponentName>,
+            known_package_deps: &HashMap<PackageName, AppComponentName>,
             dep_package_names: I,
         ) -> O {
             dep_package_names
@@ -472,8 +472,11 @@ impl ResolvedWitApplication {
         }
 
         let mut deps = HashMap::<
-            ComponentName,
-            (BTreeSet<ComponentName>, Option<HashSet<ComponentName>>),
+            AppComponentName,
+            (
+                BTreeSet<AppComponentName>,
+                Option<HashSet<AppComponentName>>,
+            ),
         >::new();
         for (component_name, component) in &self.components {
             deps.insert(
@@ -502,12 +505,12 @@ impl ResolvedWitApplication {
         }
 
         for (component_name, component) in &self.components {
-            let main_deps: HashSet<ComponentName> = component_deps(
+            let main_deps: HashSet<AppComponentName> = component_deps(
                 &self.package_to_component,
                 &component.source_referenced_package_deps,
             );
 
-            let stub_deps: HashSet<ComponentName> = component_deps(
+            let stub_deps: HashSet<AppComponentName> = component_deps(
                 &self.stub_package_to_component,
                 &component.source_referenced_package_deps,
             );
@@ -571,12 +574,12 @@ impl ResolvedWitApplication {
     fn sort_components_by_source_deps(&mut self, validation: &mut ValidationBuilder) {
         struct Visit<'a> {
             resolved_app: &'a ResolvedWitApplication,
-            component_names_by_id: Vec<&'a ComponentName>,
-            component_names_to_id: HashMap<&'a ComponentName, usize>,
+            component_names_by_id: Vec<&'a AppComponentName>,
+            component_names_to_id: HashMap<&'a AppComponentName, usize>,
             visited: HashSet<usize>,
             visiting: HashSet<usize>,
             path: Vec<usize>,
-            component_order: Vec<ComponentName>,
+            component_order: Vec<AppComponentName>,
         }
 
         impl<'a> Visit<'a> {
@@ -599,7 +602,7 @@ impl ResolvedWitApplication {
                 }
             }
 
-            fn visit_all(mut self) -> Result<Vec<ComponentName>, Vec<&'a ComponentName>> {
+            fn visit_all(mut self) -> Result<Vec<AppComponentName>, Vec<&'a AppComponentName>> {
                 for (component_id, &component_name) in
                     self.component_names_by_id.clone().iter().enumerate()
                 {
@@ -616,7 +619,7 @@ impl ResolvedWitApplication {
                 Ok(self.component_order)
             }
 
-            fn visit(&mut self, component_id: usize, component_name: &ComponentName) -> bool {
+            fn visit(&mut self, component_id: usize, component_name: &AppComponentName) -> bool {
                 if self.visited.contains(&component_id) {
                     true
                 } else if self.visiting.contains(&component_id) {
@@ -663,17 +666,17 @@ impl ResolvedWitApplication {
         }
     }
 
-    pub fn component_order(&self) -> &[ComponentName] {
+    pub fn component_order(&self) -> &[AppComponentName] {
         &self.component_order
     }
 
-    pub fn component_order_cloned(&self) -> Vec<ComponentName> {
+    pub fn component_order_cloned(&self) -> Vec<AppComponentName> {
         self.component_order.clone()
     }
 
     pub fn component(
         &self,
-        component_name: &ComponentName,
+        component_name: &AppComponentName,
     ) -> Result<&ResolvedWitComponent, Error> {
         self.components.get(component_name).ok_or_else(|| {
             anyhow!(
@@ -687,7 +690,7 @@ impl ResolvedWitApplication {
     //       component interface packages, as those are added from stubs
     pub fn missing_generic_source_package_deps(
         &self,
-        component_name: &ComponentName,
+        component_name: &AppComponentName,
     ) -> anyhow::Result<Vec<PackageName>> {
         let component = self.component(component_name)?;
         Ok(component
@@ -707,8 +710,8 @@ impl ResolvedWitApplication {
 
     pub fn component_exports_package_deps(
         &self,
-        component_name: &ComponentName,
-    ) -> anyhow::Result<Vec<(PackageName, ComponentName)>> {
+        component_name: &AppComponentName,
+    ) -> anyhow::Result<Vec<(PackageName, AppComponentName)>> {
         let component = self.component(component_name)?;
         Ok(component
             .source_referenced_package_deps
@@ -727,7 +730,10 @@ impl ResolvedWitApplication {
     // NOTE: this does not mean that the dependencies themselves are up-to-date, rather
     //       only checks if there are difference in set of dependencies specified in the
     //       application model vs in wit dependencies
-    pub fn is_dep_graph_up_to_date(&self, component_name: &ComponentName) -> anyhow::Result<bool> {
+    pub fn is_dep_graph_up_to_date(
+        &self,
+        component_name: &AppComponentName,
+    ) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
         Ok(match &component.generated_component_deps {
             Some(generated_deps) => &component.app_component_deps == generated_deps,
@@ -739,8 +745,8 @@ impl ResolvedWitApplication {
     //       only checks if it is present as wit package dependency
     pub fn has_as_wit_dep(
         &self,
-        component_name: &ComponentName,
-        dep_component_name: &ComponentName,
+        component_name: &AppComponentName,
+        dep_component_name: &AppComponentName,
     ) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
 
@@ -750,7 +756,10 @@ impl ResolvedWitApplication {
         })
     }
 
-    pub fn root_package_name(&self, component_name: &ComponentName) -> anyhow::Result<PackageName> {
+    pub fn root_package_name(
+        &self,
+        component_name: &AppComponentName,
+    ) -> anyhow::Result<PackageName> {
         let component = self.component(component_name)?;
         Ok(component.main_package_name.clone())
     }

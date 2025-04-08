@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::ApplicationContext;
 use crate::cloud::AccountId;
 use crate::command::builtin_app_subcommands;
 use crate::command::component::ComponentSubcommand;
@@ -25,7 +26,9 @@ use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, logln, LogColorize, LogIndent};
-use crate::model::app::{BuildProfileName, ComponentName as AppComponentName};
+use crate::model::app::{
+    AppComponentName, ApplicationComponentSelectMode, BuildProfileName, DynamicHelpSections,
+};
 use crate::model::app::{DependencyType, InitialComponentFile};
 use crate::model::component::{Component, ComponentView};
 use crate::model::deploy::TryUpdateAllWorkersResult;
@@ -36,9 +39,6 @@ use crate::model::to_cloud::ToCloud;
 use crate::model::{
     ComponentName, ComponentNameMatchKind, ProjectNameAndId, SelectedComponents, WorkerName,
     WorkerUpdateMode,
-};
-use crate::wasm_rpc_stubgen::commands::app::{
-    ApplicationContext, ComponentSelectMode, DynamicHelpSections,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient as ComponentClientOss;
@@ -207,7 +207,7 @@ impl ComponentCommandHandler {
             .build(
                 component_name.component_name,
                 Some(build_args),
-                &ComponentSelectMode::CurrentDir,
+                &ApplicationComponentSelectMode::CurrentDir,
             )
             .await
     }
@@ -220,7 +220,7 @@ impl ComponentCommandHandler {
             .app_handler()
             .clean(
                 component_name.component_name,
-                &ComponentSelectMode::CurrentDir,
+                &ApplicationComponentSelectMode::CurrentDir,
             )
             .await
     }
@@ -239,7 +239,7 @@ impl ComponentCommandHandler {
                 .as_ref(),
             component_name.component_name,
             Some(force_build),
-            &ComponentSelectMode::CurrentDir,
+            &ApplicationComponentSelectMode::CurrentDir,
             update_or_redeploy,
         )
         .await
@@ -346,7 +346,7 @@ impl ComponentCommandHandler {
                 .app_handler()
                 .opt_select_components(
                     component_name.iter().cloned().collect(),
-                    &ComponentSelectMode::CurrentDir,
+                    &ApplicationComponentSelectMode::CurrentDir,
                 )
                 .await?;
         }
@@ -455,7 +455,7 @@ impl ComponentCommandHandler {
                 .app_handler()
                 .opt_select_components(
                     component_name.iter().cloned().collect(),
-                    &ComponentSelectMode::CurrentDir,
+                    &ApplicationComponentSelectMode::CurrentDir,
                 )
                 .await?;
         }
@@ -558,7 +558,7 @@ impl ComponentCommandHandler {
             .app_handler()
             .diagnose(
                 component_names.component_name,
-                &ComponentSelectMode::CurrentDir,
+                &ApplicationComponentSelectMode::CurrentDir,
             )
             .await
     }
@@ -568,7 +568,7 @@ impl ComponentCommandHandler {
         project: Option<&ProjectNameAndId>,
         component_names: Vec<ComponentName>,
         force_build: Option<ForceBuildArg>,
-        default_component_select_mode: &ComponentSelectMode,
+        default_component_select_mode: &ApplicationComponentSelectMode,
         update_or_redeploy: WorkerUpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
         self.ctx
@@ -982,7 +982,7 @@ impl ComponentCommandHandler {
             .app_handler()
             .opt_select_components_allow_not_found(
                 component_name.clone().into_iter().collect(),
-                &ComponentSelectMode::CurrentDir,
+                &ApplicationComponentSelectMode::CurrentDir,
             )
             .await?;
 
@@ -1085,7 +1085,7 @@ impl ComponentCommandHandler {
                             project,
                             vec![component_name.clone()],
                             None,
-                            &ComponentSelectMode::CurrentDir,
+                            &ApplicationComponentSelectMode::CurrentDir,
                             WorkerUpdateOrRedeployArgs::default(),
                         )
                         .await?;

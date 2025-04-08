@@ -24,6 +24,7 @@ use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
+use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{function_params_types, show_exported_functions, Component};
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
@@ -41,7 +42,6 @@ use crate::model::{
     WorkerConnectOptions, WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch,
     WorkerUpdateMode, WorkersMetadataResponseView,
 };
-use crate::wasm_rpc_stubgen::commands::app::ComponentSelectMode;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use bytes::Bytes;
 use colored::Colorize;
@@ -1527,7 +1527,7 @@ impl WorkerCommandHandler {
 
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ComponentSelectMode::CurrentDir)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -1651,7 +1651,7 @@ impl WorkerCommandHandler {
 
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;

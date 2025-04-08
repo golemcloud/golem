@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::ApplicationContext;
 use crate::auth::{Auth, CloudAuthentication};
 use crate::cloud::{AccountId, CloudAuthenticationConfig};
 use crate::command::GolemCliGlobalFlags;
@@ -20,11 +21,9 @@ use crate::config::{
 };
 use crate::error::HintError;
 use crate::log::{set_log_output, LogOutput, Output};
-use crate::model::app::AppBuildStep;
-use crate::model::app::BuildProfileName as AppBuildProfileName;
+use crate::model::app::{AppBuildStep, ApplicationSourceMode};
+use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
 use crate::model::{Format, HasFormatConfig};
-use crate::wasm_rpc_stubgen;
-use crate::wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::anyhow;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientOss;
@@ -531,7 +530,7 @@ impl ApplicationContextState {
             .silent_init
             .then(|| LogOutput::new(Output::TracingDebug));
 
-        let config = wasm_rpc_stubgen::commands::app::Config {
+        let config = ApplicationConfig {
             app_source_mode: {
                 match &config.app_manifest_path {
                     Some(path) => ApplicationSourceMode::Explicit(path.clone()),

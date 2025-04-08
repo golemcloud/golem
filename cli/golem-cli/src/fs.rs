@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail, Context, Error};
 use std::cmp::PartialEq;
 use std::fs::{Metadata, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
+use wax::{Glob, LinkBehavior, WalkBehavior};
 
 pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let path = path.as_ref();
@@ -515,6 +516,33 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
         base_dir.as_ref().join(prefix_path),
         PathExtra::new(resolved_path).to_string()?,
     ))
+}
+
+pub fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<PathBuf>, Error> {
+    Ok(globs
+        .iter()
+        .map(|pattern| resolve_relative_glob(root_dir, pattern))
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .map(|(root_dir, pattern)| {
+            Glob::new(pattern)
+                .with_context(|| anyhow!("Failed to compile glob expression: {}", pattern))
+                .map(|pattern| (root_dir, pattern))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .flat_map(|(root_dir, glob)| {
+            glob.walk_with_behavior(
+                root_dir,
+                WalkBehavior {
+                    link: LinkBehavior::ReadFile,
+                    ..WalkBehavior::default()
+                },
+            )
+            .filter_map(|entry| entry.ok())
+            .map(|walk_item| walk_item.path().to_path_buf())
+        })
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]

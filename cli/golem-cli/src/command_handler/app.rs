@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::error::CustomCommandError;
 use crate::command::app::AppSubcommand;
 use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
@@ -24,12 +25,11 @@ use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
-use crate::model::app::CustomCommandError;
+use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::{ComponentName, WorkerUpdateMode};
-use crate::wasm_rpc_stubgen::commands::app::{ComponentSelectMode, DynamicHelpSections};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_templates::add_component_by_template;
@@ -191,14 +191,17 @@ impl AppCommandHandler {
         self.build(
             component_name.component_name,
             Some(build_args),
-            &ComponentSelectMode::All,
+            &ApplicationComponentSelectMode::All,
         )
         .await
     }
 
     async fn cmd_clean(&mut self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
-        self.clean(component_name.component_name, &ComponentSelectMode::All)
-            .await
+        self.clean(
+            component_name.component_name,
+            &ApplicationComponentSelectMode::All,
+        )
+        .await
     }
 
     async fn cmd_deploy(
@@ -217,7 +220,7 @@ impl AppCommandHandler {
                     .as_ref(),
                 component_name.component_name,
                 Some(force_build),
-                &ComponentSelectMode::All,
+                &ApplicationComponentSelectMode::All,
                 update_or_redeploy,
             )
             .await
@@ -289,7 +292,7 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         update_mode: WorkerUpdateMode,
     ) -> anyhow::Result<()> {
-        self.must_select_components(component_names, &ComponentSelectMode::All)
+        self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
 
         let components = self.components_for_update_or_redeploy().await?;
@@ -305,7 +308,7 @@ impl AppCommandHandler {
         &mut self,
         component_names: Vec<ComponentName>,
     ) -> anyhow::Result<()> {
-        self.must_select_components(component_names, &ComponentSelectMode::All)
+        self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
 
         let components = self.components_for_update_or_redeploy().await?;
@@ -321,15 +324,18 @@ impl AppCommandHandler {
         &mut self,
         component_names: AppOptionalComponentNames,
     ) -> anyhow::Result<()> {
-        self.diagnose(component_names.component_name, &ComponentSelectMode::All)
-            .await
+        self.diagnose(
+            component_names.component_name,
+            &ApplicationComponentSelectMode::All,
+        )
+        .await
     }
 
     pub async fn build(
         &mut self,
         component_names: Vec<ComponentName>,
         build: Option<BuildArgs>,
-        default_component_select_mode: &ComponentSelectMode,
+        default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
         if let Some(build) = build {
             self.ctx
@@ -348,7 +354,7 @@ impl AppCommandHandler {
     pub async fn clean(
         &mut self,
         component_names: Vec<ComponentName>,
-        default_component_select_mode: &ComponentSelectMode,
+        default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
@@ -397,7 +403,7 @@ impl AppCommandHandler {
     async fn must_select_components(
         &mut self,
         component_names: Vec<ComponentName>,
-        default: &ComponentSelectMode,
+        default: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
         self.opt_select_components(component_names, default)
             .await?
@@ -408,7 +414,7 @@ impl AppCommandHandler {
     pub async fn opt_select_components(
         &mut self,
         component_names: Vec<ComponentName>,
-        default: &ComponentSelectMode,
+        default: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<bool> {
         self.opt_select_components_internal(component_names, default, false)
             .await
@@ -417,7 +423,7 @@ impl AppCommandHandler {
     pub async fn opt_select_components_allow_not_found(
         &mut self,
         component_names: Vec<ComponentName>,
-        default: &ComponentSelectMode,
+        default: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<bool> {
         self.opt_select_components_internal(component_names, default, true)
             .await
@@ -428,7 +434,7 @@ impl AppCommandHandler {
     pub async fn opt_select_components_internal(
         &mut self,
         component_names: Vec<ComponentName>,
-        default: &ComponentSelectMode,
+        default: &ApplicationComponentSelectMode,
         allow_not_found: bool,
     ) -> anyhow::Result<bool> {
         let mut app_ctx = self.ctx.app_context_lock_mut().await;
@@ -487,7 +493,7 @@ impl AppCommandHandler {
             log_fuzzy_matches(&found);
 
             let _log_output = silent_selection.then(|| LogOutput::new(Output::TracingDebug));
-            app_ctx.select_components(&ComponentSelectMode::Explicit(
+            app_ctx.select_components(&ApplicationComponentSelectMode::Explicit(
                 found.into_iter().map(|m| m.option.into()).collect(),
             ))?
         }
@@ -646,7 +652,7 @@ impl AppCommandHandler {
     pub async fn diagnose(
         &mut self,
         component_names: Vec<ComponentName>,
-        default_component_select_mode: &ComponentSelectMode,
+        default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;

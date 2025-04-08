@@ -462,7 +462,17 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let args = args.into_iter().collect::<Vec<_>>();
+        let args = {
+            let mut all_args = vec![
+                "--config-dir".to_string(),
+                self.config_dir.path().to_str().unwrap().to_string(),
+            ];
+            all_args.extend(
+                args.into_iter()
+                    .map(|a| a.as_ref().to_str().unwrap().to_string()),
+            );
+            all_args
+        };
         let working_dir = &self.working_dir.canonicalize().unwrap();
 
         println!(
@@ -470,14 +480,7 @@ impl TestContext {
             "> working directory:".bold(),
             working_dir.display()
         );
-        println!(
-            "{} {}",
-            "> golem-cli".bold(),
-            args.iter()
-                .map(|s| s.as_ref().to_string_lossy())
-                .join(" ")
-                .blue()
-        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
 
         let output: Output = Command::new(&self.golem_cli_path)
             .args(args)

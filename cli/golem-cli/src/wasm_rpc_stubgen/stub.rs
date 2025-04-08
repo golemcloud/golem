@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app::ComponentName;
+use crate::model::app::AppComponentName;
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::rust::BindingMapping;
 use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
@@ -39,7 +39,7 @@ pub struct StubConfig {
     pub golem_rust_override: RustDependencyOverride,
     pub extract_source_exports_package: bool,
     pub seal_cargo_workspace: bool,
-    pub component_name: ComponentName,
+    pub component_name: AppComponentName,
     pub is_ephemeral: bool,
 }
 

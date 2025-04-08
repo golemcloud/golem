@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::error::AppValidationError;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::{
@@ -47,7 +48,6 @@ use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{logln, set_log_output, Output};
 use crate::model::text::fmt::log_error;
-use crate::wasm_rpc_stubgen::commands::app::AppValidationError;
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;

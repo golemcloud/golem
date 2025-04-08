@@ -18,11 +18,11 @@ use crate::config::Config;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError};
 use crate::log::{log_action, logln, LogColorize};
+use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::show_exported_functions;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
 use crate::model::{ComponentNameMatchKind, Format};
-use crate::wasm_rpc_stubgen::commands::app::{ComponentSelectMode, DynamicHelpSections};
 use colored::Colorize;
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -67,7 +67,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -86,7 +86,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -105,7 +105,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -202,7 +202,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
