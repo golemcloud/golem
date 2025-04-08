@@ -115,7 +115,7 @@ pub fn start_router(
         .at("/v1/plugins", component_service_api.clone())
         .at("/v1/plugins/*", component_service_api.clone())
         .at("/metrics", metrics)
-        .at("/health_check", component_service_api)
+        .at("/healthcheck", component_service_api)
         .with(OpenTelemetryMetrics::new())
         .with(Tracing);
 
