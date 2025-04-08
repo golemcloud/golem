@@ -26,7 +26,6 @@ use golem_service_base::repo::RepoError;
 use sqlx::QueryBuilder;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::sync::Arc;
 use tracing::{debug, info_span, Instrument, Span};
 use uuid::Uuid;
 
@@ -303,11 +302,11 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
 }
 
 pub struct DbPluginRepo<DB: Pool> {
-    db_pool: Arc<DB>,
+    db_pool: DB,
 }
 
 impl<DB: Pool> DbPluginRepo<DB> {
-    pub fn new(db_pool: Arc<DB>) -> Self {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }

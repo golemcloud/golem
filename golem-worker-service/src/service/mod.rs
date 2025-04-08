@@ -180,15 +180,15 @@ impl Services {
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
                     Arc::new(api_definition::LoggedApiDefinitionRepo::new(
-                        api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
+                        api_definition::DbApiDefinitionRepo::new(db_pool.clone()),
                     ));
                 let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
                     Arc::new(api_deployment::LoggedDeploymentRepo::new(
-                        api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
+                        api_deployment::DbApiDeploymentRepo::new(db_pool.clone()),
                     ));
 
                 let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone()));
 
                 (
                     api_definition_repo,
@@ -202,15 +202,15 @@ impl Services {
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
                     Arc::new(api_definition::LoggedApiDefinitionRepo::new(
-                        api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
+                        api_definition::DbApiDefinitionRepo::new(db_pool.clone()),
                     ));
                 let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
                     Arc::new(api_deployment::LoggedDeploymentRepo::new(
-                        api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
+                        api_deployment::DbApiDeploymentRepo::new(db_pool.clone()),
                     ));
 
                 let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone()));
 
                 (
                     api_definition_repo,

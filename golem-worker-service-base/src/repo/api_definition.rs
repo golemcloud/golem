@@ -19,7 +19,6 @@ use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 use sqlx::Row;
 use std::fmt::Display;
-use std::sync::Arc;
 use tracing::{info_span, Instrument, Span};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -229,11 +228,11 @@ impl<Repo: ApiDefinitionRepo + Sync> ApiDefinitionRepo for LoggedApiDefinitionRe
 }
 
 pub struct DbApiDefinitionRepo<DB: Pool> {
-    db_pool: Arc<DB>,
+    db_pool: DB,
 }
 
 impl<DB: Pool> DbApiDefinitionRepo<DB> {
-    pub fn new(db_pool: Arc<DB>) -> Self {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }

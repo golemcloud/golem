@@ -20,7 +20,6 @@ use conditional_trait_gen::{trait_gen, when};
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 use std::fmt::Display;
-use std::sync::Arc;
 use tracing::{info_span, Instrument, Span};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -167,11 +166,11 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
 }
 
 pub struct DbApiDeploymentRepo<DB: Pool> {
-    db_pool: Arc<DB>,
+    db_pool: DB,
 }
 
 impl<DB: Pool> DbApiDeploymentRepo<DB> {
-    pub fn new(db_pool: Arc<DB>) -> Self {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }

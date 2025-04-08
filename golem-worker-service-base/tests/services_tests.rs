@@ -170,15 +170,13 @@ pub async fn test_with_postgres_db() {
 
     let db_pool = PostgresPool::configured(&db_config).await.unwrap();
 
-    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> = Arc::new(
-        api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
-    );
-    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> = Arc::new(
-        api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
-    );
+    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+        Arc::new(api_definition::DbApiDefinitionRepo::new(db_pool.clone()));
+    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+        Arc::new(api_deployment::DbApiDeploymentRepo::new(db_pool.clone()));
 
     let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone()));
 
     test_services(
         api_definition_repo,
@@ -352,15 +350,13 @@ pub async fn test_with_sqlite_db() {
 
     let db_pool = SqlitePool::configured(&db_config).await.unwrap();
 
-    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> = Arc::new(
-        api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
-    );
-    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> = Arc::new(
-        api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
-    );
+    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+        Arc::new(api_definition::DbApiDefinitionRepo::new(db_pool.clone()));
+    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+        Arc::new(api_deployment::DbApiDeploymentRepo::new(db_pool.clone()));
 
     let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone()));
 
     test_services(
         api_definition_repo,

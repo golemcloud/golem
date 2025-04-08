@@ -24,7 +24,6 @@ use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::fmt::Display;
 use std::result::Result;
 use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{info_span, Instrument, Span};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -115,11 +114,11 @@ pub trait SecuritySchemeRepo {
 }
 
 pub struct DbSecuritySchemeRepo<DB: Pool> {
-    db_pool: Arc<DB>,
+    db_pool: DB,
 }
 
 impl<DB: Pool> DbSecuritySchemeRepo<DB> {
-    pub fn new(db_pool: Arc<DB>) -> Self {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
