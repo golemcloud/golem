@@ -15,7 +15,7 @@
 use crate::compiler::compile_rib_script;
 use crate::dependency_manager::{RibComponentMetadata, RibDependencyManager};
 use crate::invoke::WorkerFunctionInvoke;
-use crate::repl_printer::ReplPrinter;
+use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
@@ -30,6 +30,7 @@ use rustyline::{Config, Editor};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
     history_file_path: PathBuf,
     printer: Box<dyn ReplPrinter>,
@@ -38,16 +39,28 @@ pub struct RibRepl {
 }
 
 impl RibRepl {
-    pub fn read_line(&mut self) -> rustyline::Result<String> {
-        self.editor.readline(">>> ".magenta().to_string().as_str())
-    }
-
+    /// Bootstraps and initializes the Rib REPL environment and returns a `RibRepl` instance,
+    /// which can be used to `run` the REPL.
+    ///
+    /// # Arguments
+    ///
+    /// - `history_file`: Optional path to a file where the REPL history will be stored and loaded from.
+    ///   If `None`, it will be loaded from `~/.rib_history`.
+    /// - `dependency_manager`: This is responsible for how to load all the components or a specific
+    ///   custom component.
+    /// - `worker_function_invoke`: An implementation of the `WorkerFunctionInvoke` trait,
+    /// - `printer`: Optional custom printer for displaying results and errors in the REPL. If `None`
+    ///   a default printer will be used.
+    /// - `component_source`: Optional details about the component to be loaded, including its name
+    ///   and source file path. If `None`, the REPL will try to load all the components using the
+    ///   `dependency_manager`, otherwise, `dependency_manager` will load only the specified component.
+    ///
     pub async fn bootstrap(
         history_file: Option<PathBuf>,
         dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
-        printer: Box<dyn ReplPrinter>,
-        component_details: Option<ComponentDetails>,
+        printer: Option<Box<dyn ReplPrinter>>,
+        component_source: Option<ComponentSource>,
     ) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = history_file.unwrap_or_else(get_default_history_file);
 
@@ -70,7 +83,7 @@ impl RibRepl {
             }
         }
 
-        let component_dependency = match component_details {
+        let component_dependency = match component_source {
             Some(ref details) => dependency_manager
                 .add_component(&details.source_path, details.component_name.clone())
                 .await
@@ -107,20 +120,33 @@ impl RibRepl {
 
         Ok(RibRepl {
             history_file_path,
-            printer,
+            printer: printer.unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state,
         })
     }
 
-    pub async fn process_command(&mut self, prompt: &str) -> Result<Option<RibResult>, RibError> {
-        if !prompt.is_empty() {
-            self.update_rib_text_in_session(prompt);
+    /// Reads a single line of input from the REPL prompt.
+    ///
+    /// This method is exposed for users who want to manage their own REPL loop
+    /// instead of using the built-in [`Self::run`] method.
+    pub fn read_line(&mut self) -> rustyline::Result<String> {
+        self.editor.readline(">>> ".magenta().to_string().as_str())
+    }
+
+    /// Executes a single line of Rib code and returns the result.
+    ///
+    /// This function is exposed for users who want to implement custom REPL loops
+    /// or integrate Rib execution into other workflows.
+    /// For a built-in REPL loop, see [`Self::run`].
+    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibError> {
+        if !rib.is_empty() {
+            self.update_rib(rib);
 
             // Add every rib script into the history (in memory) and save it
             // regardless of whether it compiles or not
             // History is never used for any progressive compilation or interpretation
-            let _ = self.editor.add_history_entry(prompt);
+            let _ = self.editor.add_history_entry(rib);
             let _ = self.editor.save_history(&self.history_file_path);
 
             match compile_rib_script(&self.current_rib_program(), &mut self.repl_state) {
@@ -154,12 +180,28 @@ impl RibRepl {
         }
     }
 
+    /// Dynamically updates the REPL session with a new component dependency.
+    ///
+    /// This method is intended for use in interactive or user-controlled REPL loops,
+    /// allowing runtime replacement of active component metadata.
+    ///
+    /// Note: Currently, only a single component is supported per session. Multi-component
+    /// support is planned but not yet implemented.
+    pub fn update_component_dependency(&mut self, dependency: RibComponentMetadata) {
+        self.repl_state.update_dependency(dependency);
+    }
+
+    /// Starts the default REPL loop for executing Rib code interactively.
+    ///
+    /// This is a convenience method that repeatedly reads user input and executes
+    /// it using [`Self::execute_rib`]. If you need more control over the REPL behavior,
+    /// use [`Self::read_line`] and [`Self::execute_rib`] directly.
     pub async fn run(&mut self) {
         loop {
             let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
             match readline {
-                Ok(line) => {
-                    let _ = self.process_command(&line).await;
+                Ok(rib) => {
+                    let _ = self.execute_rib(&rib).await;
                 }
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,
@@ -167,8 +209,8 @@ impl RibRepl {
         }
     }
 
-    fn update_rib_text_in_session(&mut self, rib_text: &str) {
-        self.repl_state.update_rib_text(rib_text);
+    fn update_rib(&mut self, rib_text: &str) {
+        self.repl_state.update_rib(rib_text);
     }
 
     fn remove_rib_text_in_session(&mut self) {
@@ -180,10 +222,15 @@ impl RibRepl {
     }
 }
 
-pub struct ComponentDetails {
-    // Name of the component
+/// Represents the source of a component in the REPL session.
+///
+/// The `source_path` must include the full file path,
+/// including the `.wasm` file (e.g., `"/path/to/shopping-cart.wasm"`).
+pub struct ComponentSource {
+    /// The name of the component
     pub component_name: String,
-    // The complete path of the wasm source file
+
+    /// The full file path to the WebAssembly source file, including the `.wasm` extension.
     pub source_path: PathBuf,
 }
 
@@ -201,30 +248,40 @@ fn get_default_history_file() -> PathBuf {
     path
 }
 
+/// Represents errors that can occur during the bootstrap phase of the Rib REPL environment.
 #[derive(Debug, Clone)]
 pub enum ReplBootstrapError {
-    // Currently not supported
-    // So either the context should have only 1 component
-    // or specifically specify the component when starting the REPL
-    // In future, when Rib supports multiple components (which may require the need
-    // of root package names being the component name)
+    /// Multiple components were found, but the REPL requires a single component context.
+    ///
+    /// To resolve this, either:
+    /// - Ensure the context includes only one component, or
+    /// - Explicitly specify the component to load when starting the REPL.
+    ///
+    /// In the future, Rib will support multiple components
     MultipleComponentsFound(String),
+
+    /// No components were found in the given context.
     NoComponentsFound,
+
+    /// Failed to load a specified component.
     ComponentLoadError(String),
+
+    /// Failed to read from or write to the REPL history file.
     ReplHistoryFileError(String),
 }
 
-// As of now Rib interpreter can work with only one component, and the details
-// and hence it needs to only know about worker-name, which is optional, and function arguments
-// When Rib supports multiple component, the RibFunctionInvoke will come to know
-// about the component_id and the worker_name and this indirection can be avoided
-pub struct ReplRibFunctionInvoke {
+// Note: Currently, the Rib interpreter supports only one component, so the
+// `RibFunctionInvoke` trait in the `golem-rib` module does not include `component_id` in
+// the `invoke` arguments. It only requires the optional worker name, function name, and arguments.
+// Once multi-component support is added, the trait will be updated to include `component_id`,
+// and we can use it directly instead of `WorkerFunctionInvoke` in the `golem-rib-repl` module.
+struct ReplRibFunctionInvoke {
     component_dependency: RibComponentMetadata,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
 }
 
 impl ReplRibFunctionInvoke {
-    pub fn new(
+    fn new(
         component_dependency: RibComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     ) -> Self {

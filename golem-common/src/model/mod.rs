@@ -1069,10 +1069,6 @@ impl IntoValue for AccountId {
     }
 }
 
-pub trait HasAccountId {
-    fn account_id(&self) -> AccountId;
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]

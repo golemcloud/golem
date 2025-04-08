@@ -25,8 +25,7 @@ use golem_rib_repl::dependency_manager::{
     ReplDependencies, RibComponentMetadata, RibDependencyManager,
 };
 use golem_rib_repl::invoke::WorkerFunctionInvoke;
-use golem_rib_repl::repl_printer::DefaultResultPrinter;
-use golem_rib_repl::rib_repl::{ComponentDetails, RibRepl};
+use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibResult};
@@ -43,8 +42,8 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
         None,
         Arc::new(TestRibReplDependencyManager::new(deps.clone())),
         Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
-        Box::new(DefaultResultPrinter),
-        Some(ComponentDetails {
+        None,
+        Some(ComponentSource {
             component_name: "shopping-cart".to_string(),
             source_path: deps.component_directory().join("shopping-cart.wasm"),
         }),
@@ -78,21 +77,21 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
      "#;
 
     let result = rib_repl
-        .process_command(rib1)
+        .execute_rib(rib1)
         .await
         .expect("Failed to process command");
 
     assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
-        .process_command(rib2)
+        .execute_rib(rib2)
         .await
         .map_err(|err| err.to_string());
 
     assert!(result.unwrap_err().contains("function 'add' not found"));
 
     let result = rib_repl
-        .process_command(rib3)
+        .execute_rib(rib3)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");
@@ -111,7 +110,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     );
 
     let result = rib_repl
-        .process_command(rib4)
+        .execute_rib(rib4)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");
@@ -119,7 +118,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
-        .process_command(rib5)
+        .execute_rib(rib5)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");

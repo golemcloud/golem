@@ -22,20 +22,24 @@ pub struct ReplState {
     byte_code: RibByteCode,
     interpreter: Interpreter,
     dependency: RibComponentMetadata,
-    current_session_rib_texts: Vec<String>,
+    rib_code_collection: Vec<String>,
 }
 
 impl ReplState {
     pub fn current_rib_program(&self) -> String {
-        self.current_session_rib_texts.join(";")
+        self.rib_code_collection.join(";")
     }
 
-    pub fn update_rib_text(&mut self, rib_text: &str) {
-        self.current_session_rib_texts.push(rib_text.to_string());
+    pub fn update_rib(&mut self, rib: &str) {
+        self.rib_code_collection.push(rib.to_string());
+    }
+
+    pub fn update_dependency(&mut self, dependency: RibComponentMetadata) {
+        self.dependency = dependency;
     }
 
     pub fn pop_rib_text(&mut self) {
-        self.current_session_rib_texts.pop();
+        self.rib_code_collection.pop();
     }
 
     pub fn interpreter(&mut self) -> &mut Interpreter {
@@ -68,7 +72,7 @@ impl ReplState {
                 Some(interpreter_env),
             ),
             dependency: dependency.clone(),
-            current_session_rib_texts: vec![],
+            rib_code_collection: vec![],
         }
     }
 }

@@ -94,11 +94,11 @@ impl From<TypeMismatchError> for RibCompilationError {
             ExpectedType::AnalysedType(analysed_type) => TypeName::try_from(analysed_type)
                 .map(|x| format!("expected {}", x))
                 .ok(),
-            ExpectedType::TypeHint(kind) => Some(format!("expected {}", kind)),
+            ExpectedType::Hint(kind) => Some(format!("expected {}", kind)),
         };
 
         let actual = match value.actual_type {
-            ActualType::Kind(type_kind) => Some(format!("found {}", type_kind)),
+            ActualType::Hint(type_kind) => Some(format!("found {}", type_kind)),
             ActualType::Inferred(inferred_type) => TypeName::try_from(inferred_type)
                 .map(|x| format!("found {}", x))
                 .ok(),

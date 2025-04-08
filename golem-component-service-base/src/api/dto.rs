@@ -43,20 +43,18 @@ pub struct PluginDefinitionCreation<Scope: PluginScope> {
     pub scope: Scope,
 }
 
-impl<Scope: PluginScope> PluginDefinitionCreation<Scope> {
-    pub fn with_owner<Owner: PluginOwner>(
-        self,
-        owner: Owner,
-    ) -> local_plugin_model::PluginDefinitionCreation<Owner, Scope> {
+impl<Scope: PluginScope> From<PluginDefinitionCreation<Scope>>
+    for local_plugin_model::PluginDefinitionCreation<Scope>
+{
+    fn from(value: PluginDefinitionCreation<Scope>) -> Self {
         local_plugin_model::PluginDefinitionCreation {
-            name: self.name,
-            version: self.version,
-            description: self.description,
-            icon: self.icon,
-            homepage: self.homepage,
-            specs: self.specs.widen(),
-            scope: self.scope,
-            owner,
+            name: value.name,
+            version: value.version,
+            description: value.description,
+            icon: value.icon,
+            homepage: value.homepage,
+            specs: value.specs.widen(),
+            scope: value.scope,
         }
     }
 }
@@ -73,24 +71,22 @@ pub struct LibraryPluginDefinitionCreation<Scope: PluginScope> {
     pub wasm: TempFileUpload,
 }
 
-impl<Scope: PluginScope> LibraryPluginDefinitionCreation<Scope> {
-    pub fn with_owner<Owner: PluginOwner>(
-        self,
-        owner: Owner,
-    ) -> local_plugin_model::PluginDefinitionCreation<Owner, Scope> {
+impl<Scope: PluginScope> From<LibraryPluginDefinitionCreation<Scope>>
+    for local_plugin_model::PluginDefinitionCreation<Scope>
+{
+    fn from(value: LibraryPluginDefinitionCreation<Scope>) -> Self {
         local_plugin_model::PluginDefinitionCreation {
-            name: self.name,
-            version: self.version,
-            description: self.description,
-            icon: self.icon.0,
-            homepage: self.homepage,
-            scope: self.scope,
-            owner,
+            name: value.name,
+            version: value.version,
+            description: value.description,
+            icon: value.icon.0,
+            homepage: value.homepage,
             specs: local_plugin_model::PluginTypeSpecificCreation::Library(
                 local_plugin_model::LibraryPluginCreation {
-                    data: PluginWasmFileReference::Data(self.wasm.boxed()),
+                    data: PluginWasmFileReference::Data(value.wasm.boxed()),
                 },
             ),
+            scope: value.scope,
         }
     }
 }
@@ -107,24 +103,22 @@ pub struct AppPluginDefinitionCreation<Scope: PluginScope> {
     pub wasm: TempFileUpload,
 }
 
-impl<Scope: PluginScope> AppPluginDefinitionCreation<Scope> {
-    pub fn with_owner<Owner: PluginOwner>(
-        self,
-        owner: Owner,
-    ) -> local_plugin_model::PluginDefinitionCreation<Owner, Scope> {
+impl<Scope: PluginScope> From<AppPluginDefinitionCreation<Scope>>
+    for local_plugin_model::PluginDefinitionCreation<Scope>
+{
+    fn from(value: AppPluginDefinitionCreation<Scope>) -> Self {
         local_plugin_model::PluginDefinitionCreation {
-            name: self.name,
-            version: self.version,
-            description: self.description,
-            icon: self.icon.0,
-            homepage: self.homepage,
-            scope: self.scope,
-            owner,
+            name: value.name,
+            version: value.version,
+            description: value.description,
+            icon: value.icon.0,
+            homepage: value.homepage,
             specs: local_plugin_model::PluginTypeSpecificCreation::App(
                 local_plugin_model::AppPluginCreation {
-                    data: PluginWasmFileReference::Data(self.wasm.boxed()),
+                    data: PluginWasmFileReference::Data(value.wasm.boxed()),
                 },
             ),
+            scope: value.scope,
         }
     }
 }

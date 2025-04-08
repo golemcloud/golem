@@ -24,9 +24,9 @@ pub trait ReplPrinter {
 }
 
 #[derive(Clone)]
-pub struct DefaultResultPrinter;
+pub struct DefaultReplResultPrinter;
 
-impl ReplPrinter for DefaultResultPrinter {
+impl ReplPrinter for DefaultReplResultPrinter {
     fn print_rib_result(&self, result: &RibResult) {
         println!("{}", result.to_string().green());
     }
