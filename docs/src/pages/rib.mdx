@@ -167,7 +167,55 @@ Rib scripts can be multiline, and it should be separated by `;`.
 The last expression in the Rib script is the return value of the script. The last line in Rib script
 shouldn't end with a `;`, as this is a syntax error.
 
-### Numbers
+Let's see how we can write Rib corresponding to the types supported by the [WebAssembly Component Model](https://component-model.bytecodealliance.org/design/wit.html)
+
+### Identifier
+
+```rib copy
+foo
+```
+
+Here `foo` is an identifier. Note that identifiers are not wrapped with quotes.
+
+Rib will fail at compilation if variable `foo` is not available in the context.
+
+This implies, if you are running Rib specifying a wasm `component` through `api-gateway` in `golem`, then `Rib` has the access to look at component metadata.
+If `Rib` finds this variable `foo` in the component metadata,then it tries to infer its types.
+
+If such a variable is not present in the wasm component (i.e, you can cross check this in WIT file of the component),
+then technically there are two possibilities. Rib will choose to fail the compilation or consider it as a global variable input.
+A global input is nothing but `Rib` expects `foo` to be passed in to the evaluator of Rib script (somehow).
+
+
+
+Since you are using `Rib` from the api-gateway part of `golem` the only valid global variable supported is `request` and nothing else.
+This would mean, it will fail compilation.
+
+Example:
+
+```rib copy
+
+my-worker-function(request)
+
+```
+
+`request` here is a global input and Rib knows the type of `request` if `my-worker-function` is a valid function in the component (which acts as dependencies to Rib)
+
+
+Here are a few other examples of identifiers:
+
+```rib copy
+foo-bar
+FOO-BAR
+```
+
+More on global inputs to follow.
+
+### Primitives
+
+https://component-model.bytecodealliance.org/design/wit.html#primitive-types
+
+#### Numbers
 
 ```rib copy
 1
@@ -180,61 +228,8 @@ for a positive integer, s64 for a signed integer, and f64 for a floating point n
 1: u64
 ```
 
-### Assign to a variable
 
-```rib copy
-let x = 1;
-```
-
-We can annotate the type of the variable as well.
-
-
-```rib copy
-let x: u64 = 1;
-```
-
-If you are passing this variable to a worker function, then you may not need to specify the type of the variable.
-
-### String
-
-```rib copy
-"foo"
-```
-
-### String Interpolation (concatenation)
-
-This is similar to languages like `scala` where you start with `${` and end with `}`
-
-```rib copy
-let x = "foo";
-let y = "bar";
-let z = "${x}-and-${y}";
-```
-
-Evaluating this Rib will result in "foo-and-bar". The type of `z` is a string.
-
-### Identifier
-
-```rib copy
-foo
-```
-
-Here `foo` is an identifier. Note that identifiers are not wrapped with quotes.
-
-Such an expression can fail if the value of this variable is not available in the context of evaluation.
-This implies, if you are running Rib specifying a wasm `component` through `api-gateway` in `golem`, then `Rib` has the access to look at component metadata.
-If `Rib` finds this variable `foo` in the component metadata,then it tries to infer its types.
-
-If such a variable is not present in the wasm component (i.e, you can cross check this in WIT file of the component),
-then technically there are two possibilities. Rib will choose to fail the compilation or consider it as a global variable input.
-A global input is nothing but `Rib` expects `foo` to be passed in to the evaluator of Rib script (somehow).
-Since you are using `Rib` from the api-gateway part of `golem` the only valid global variable supported is `request` and nothing else.
-This would mean, it will fail compilation.
-
-More on global inputs to follow.
-
-### Boolean
-
+#### Boolean
 ```rib copy
 true
 ```
@@ -243,16 +238,21 @@ true
 false
 ```
 
-### Sequence
+#### String
+
+```rib copy
+"foo"
+```
+
+
+### Lists
 
 ```rib copy
 # Sequence of numbers
 [1, 2, 3]
 ```
 
-You can annotate the type of the sequence as well.
-
-
+You can annotate the type of the list as follows:
 
 ```rib copy
 let x: list<s32> = [1, 2, 3];
@@ -267,8 +267,99 @@ let x: list<s32> = [1, 2, 3];
 [{a: "foo"}, {b : "bar"}]
 ```
 
-This is parsed as a sequence of values. While the values can be of any type, similar to any dynamic language, evaluation may fail with error if we mix different types in a sequence.
-In other words, `Rib` evaluator do expect the values in a sequence to be of the same type.
+### Options
+
+`Option` in corresponding to WASM , which can take the shape of `Some` or `None`. This is similar to `Option` type in std `Rust`.
+
+An `Option` can be `Some` of a value, or `None`.
+
+```rib copy
+ some(1)
+```
+
+```rib copy
+ none
+```
+
+You can annotate the type of option as follows, if needed.
+
+```rib copy
+let x: option<u32> = none;
+```
+
+The syntax is inspired from wasm wave.
+
+
+### Results
+
+`Result`in `Rib` is WASM Result, which can take the shape of `ok` or `err`. This is similar to `Result` type in std `Rust`.
+
+A `Result` can be `Ok` of a value, or an `Err` of a value.
+
+```rib copy
+ ok(1)
+```
+
+```rib copy
+ err("error")
+```
+
+```rib copy
+
+{
+  "user": "ok(Alice)",
+  "age": 30u32
+}
+```
+
+Note that there are various [possibilities](https://component-model.bytecodealliance.org/design/wit.html#results) of `result` in Web Assembly component model.
+
+If there is no data associated with the error case, you can do the following:
+
+```rib copy
+let my-result: result<_, string> = err("foo")
+my-result
+```
+
+If there are no data associated with the success case, you can do the following:
+
+```rib copy
+let my-result: result<string> = ok("foo")
+
+```
+
+If you don't care the type of success and error.
+
+```rib copy
+let my-result: result = ok("foo")
+```
+
+When using `rib`, we recommend using the mostly used pattern which is to know both the success and error case (i.e, `result<u32, string>`)
+
+### Tuples
+
+A tuple type is an ordered fixed length sequence of values of specified types. It is similar to a record,
+except that the fields are identified by their order instead of by names.
+
+```rib copy
+(1, 20.1, "foo")
+```
+
+This is also equivalent to the following in Rib.
+You can be specific about the types just like in any rib expression.
+
+```rib copy
+let my-tuple: tuple<u64, f64, string> = (1, 20.1, "foo");
+my-tuple
+```
+
+Unlike `list`, the values in a tuple can be of different types.
+
+Here is another example:
+
+```rib copy
+("foo", 1, {a: "bar"})
+```
 
 ### Record
 
@@ -286,27 +377,181 @@ Note that, sometimes you will need to annotate the type of the number. It depend
 
 Note that keys are not considered as variables. Also note that keys in a WASM record don't have quotes. Example: `{"foo" : "bar"}` is wrong.
 
-### Tuple
+### Variants
+Let say your WIT file has the following [variant](https://component-model.bytecodealliance.org/design/wit.html#variants)
 
-```rib copy
-(1, 20.1, "foo")
 ```
 
-This is also equivalent to the following in Rib.
-You can be specific about the types just like in any rib expression.
+variant bid-result {
+   success,
+   failure(string),
+}
 
-```rib copy
-let k: (u64, f64, string) = (1, 20.1, "foo");
-k
+bid: func() -> bid-result;
+
+process-result: func(res: bid-result) -> string
+
 ```
 
-Unlike `sequence`, the values in a tuple can be of different types.
 
-Here is another example:
+Then, in Rib, all you need to is simply use the variant terms directly. Example:
 
 ```rib copy
-("foo", 1, {a: "bar"})
+let x = failure("its failed");
+x
 ```
+
+You can pattern match (more on this [patter-match](#pattern-matching) below) on variants as follows:
+
+```rib copy
+let x = failure("its failed");
+
+let result = match x { success => "its success", failure(msg) => msg }
+
+result
+```
+
+This will return "its failed".
+
+Here is the example WIT file and the corresponding rib scripts that shows how to pass
+variants as arguments to worker function. More explanation on how to invoke worker function using
+rib is explained [further down below](#invoke-worker-functions).
+
+```
+  variant bid-result {
+    success(string),
+    failure(string)
+  }
+
+  handle: func(res: bid-result) -> string;
+
+```
+
+
+```rib copy
+let worker = instance("my_worker");
+worker.handle(failure("it's failed"));
+```
+
+
+```rib copy
+let worker = instance("my_worker");
+worker.handle(success);
+```
+
+
+```rib copy
+let worker = instance("my_worker");
+let bid-result = worker.bid();
+let result = worker.handle(bid-result);
+result
+
+```
+
+Note that rib script should have the dependency to the component that defines the variant.
+Otherwise, Rib will fail with compilation.
+
+```
+failure("its failed")
+[invalid script] error in the following rib found at line 1, column 203
+`failure("its failed")`
+cause: invalid function call `failure`
+unknown function
+
+```
+
+If Rib is used through API gateway and not directly, this dependency is already added automatically as you
+specify component name when defining API definition.
+
+### Enums
+
+Let's say your WIT file has the following [enum](https://component-model.bytecodealliance.org/design/wit.html#enums) types,
+
+```
+  enum status {
+    backlog,
+    in-progress,
+    done,
+  }
+
+  enum priority {
+    low,
+    medium,
+    high,
+  }
+
+
+```
+
+Then, in Rib, all you need to do is to simply specify the name of the term. Example by typing in `backlog`, it knows its an enum type
+which can be any of `backlog`, `in-progress` and `done`.
+
+```rib copy
+let my-status = backlog;
+let my-priory = priority;
+{s: my-status, p: my-priority}
+```
+
+You can pattern match (more on this [pattern-match](#pattern-matching) below) on enum values as follows
+
+```rib copy
+
+let my-priority = low;
+
+let result = match my-priority {
+  low => "its low",
+  medium => "its medium",
+  high => "its high"
+};
+
+result
+```
+
+This will return the result "its low".
+
+Here is the example WIT file and the corresponding rib scripts that shows how to pass
+variants as arguments to worker function. More explanation on how to invoke worker function using
+rib is explained [further down below](#invoke-worker-functions).
+
+```
+  enum status {
+    backlog,
+    in-progress,
+    done,
+  }
+
+  enum priority {
+    low,
+    medium,
+    high,
+  }
+
+  process-user: func(status: status, priority: priority, user-id: string) -> string;
+
+
+```
+
+```rib copy
+
+let worker = instance("my_worker");
+let result = worker.process-user(backlog, low, "jon");
+result
+
+```
+
+```rib copy
+let worker = instance("my_worker");
+let status = in-progress;
+let priority = medium;
+let result = worker.process-user(status, priority, "jon");
+result
+```
+
+Note that rib script should have the dependency to the component that defines the enum.
+Otherwise, Rib will fail with compilation.
+
+If Rib is used through API gateway and not directly, this dependency is already added automatically as you
+specify component name when defining API definition.
 
 ### Flags
 
@@ -315,6 +560,38 @@ Here is another example:
 ```
 
 This is of a flag type.
+
+
+### Assign to a variable
+
+This can be done using `let` binding which we have already seen in the above examples
+
+```rib copy
+let x = 1;
+```
+
+We can annotate the type of the variable as well.
+
+
+```rib copy
+let x: u64 = 1;
+```
+
+If you are passing this variable to a worker function, then you may not need to specify the type of the variable.
+
+
+### String Interpolation (concatenation)
+
+This is similar to languages like `scala` where you start with `${` and end with `}`
+
+```rib copy
+let x = "foo";
+let y = "bar";
+let z = "${x}-and-${y}";
+```
+
+Evaluating this Rib will result in "foo-and-bar". The type of `z` is a string.
+
 
 ### Selection of Field
 
@@ -341,43 +618,6 @@ You can also inline as given below
 [1, 2, 3][0]
 ```
 
-### Result
-
-`Result`in `Rib` is WASM Result, which can take the shape of `ok` or `err`. This is similar to `Result` type in std `Rust`.
-
-A `Result` can be `Ok` of a value, or an `Err` of a value.
-
-```rib copy
- ok(1)
-```
-
-```rib copy
- err("error")
-```
-
-```rib copy
-
-{
-  "user": "ok(Alice)",
-  "age": 30u32
-}
-```
-
-### Option
-
-`Option` in corresponding to WASM , which can take the shape of `Some` or `None`. This is similar to `Option` type in std `Rust`.
-
-An `Option` can be `Some` of a value, or `None`.
-
-```rib copy
- some(1)
-```
-
-```rib copy
- none
-```
-
-The syntax is inspired from wasm wave.
 
 ### Comparison (Boolean)
 
@@ -466,7 +706,7 @@ Note on variant: A variant statement defines a new type where instances of the t
 This is similar to a "sum" type in algebraic datatype (or an enum in Rust if you're familiar with it).
 Variants can be thought of as tagged unions as well.
 
-### Pattern Match on Variants
+#### Pattern Match on Variants
 
 Given you are using Rib through worker bridge, which knows about component metadata,
 then, let's say we have a variant of type as given below responded from the `worker`, when invoking a function called `foo`:
