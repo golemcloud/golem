@@ -1,0 +1,408 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json",
+  "title": "Golem Application Manifest",
+  "description": "Golem Application Manifest.",
+  "type": "object",
+  "properties": {
+    "includes": {
+      "type": "array",
+      "description": "Include paths or globs for searching for application manifest documents. Only allowed in root application manifest documents.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tempDir": {
+      "type": "string",
+      "description": "Temporary directory used for generating and building WIT and WASM artifacts. Default location is golem-temp."
+    },
+    "witDeps": {
+      "type": "array",
+      "description": "List of source directories for common wit dependency packages",
+      "items": {
+        "type": "string"
+      }
+    },
+    "templates": {
+      "type": "object",
+      "description": "Component definition templates",
+      "additionalProperties": {
+        "$ref": "#/definitions/componentTemplate"
+      }
+    },
+    "components": {
+      "type": "object",
+      "description": "Components by component names",
+      "additionalProperties": {
+        "$ref": "#/definitions/component"
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/componentDependency"
+        }
+      }
+    },
+    "clean": {
+      "type": "array",
+      "description": "User defined extra paths used in the clean command.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "customCommands": {
+      "type": "object",
+      "description": "User defined custom commands.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/externalCommand"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "componentTemplate": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/templateRef",
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/definitions/componentProperties",
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/definitions/componentProfiles",
+          "additionalProperties": false
+        }
+      ]
+    },
+    "component": {
+      "description": "Component definition",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/componentPropertiesWithTemplateRef",
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/definitions/componentProfilesWithTemplateRef",
+          "additionalProperties": false
+        }
+      ]
+    },
+    "templateRef": {
+      "properties": {
+        "template": {
+          "type": "string",
+          "description": "Component template to be used for defining this component."
+        }
+      },
+      "additionalProperties": false
+    },
+    "componentProperties": {
+      "type": "object",
+      "properties": {
+        "sourceWit": {
+          "type": "string",
+          "description": "Source WIT directory for the user defined component WIT source(s)."
+        },
+        "generatedWit": {
+          "type": "string",
+          "description": "Generated WIT directory created by the golem tooling, which handles exported interface extraction and includes resolved package and stub dependencies."
+        },
+        "componentWasm": {
+          "type": "string",
+          "description": "File path for the built WASM component."
+        },
+        "linkedWasm": {
+          "type": "string",
+          "description": "File path for the linked WASM component which is ready to be uploaded to Golem."
+        },
+        "build": {
+          "type": "array",
+          "description": "Commands used for creating component WASM.",
+          "items": {
+            "$ref": "#/definitions/externalCommand"
+          }
+        },
+        "customCommands": {
+          "type": "object",
+          "description": "User defined custom commands.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/externalCommand"
+            }
+          }
+        },
+        "clean": {
+          "type": "array",
+          "description": "User defined extra paths used in the clean command.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "componentType": {
+          "enum": [
+            "durable",
+            "ephemeral"
+          ],
+          "description": "Optional component type, defaults to durable."
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component files system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "componentPropertiesWithTemplateRef": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string",
+          "description": "Component template to be used for defining this component."
+        },
+        "sourceWit": {
+          "type": "string",
+          "description": "Source WIT directory for the user defined component WIT source(s)."
+        },
+        "generatedWit": {
+          "type": "string",
+          "description": "Generated WIT directory created by the golem tooling, which handles exported interface extraction and includes resolved package and stub dependencies."
+        },
+        "componentWasm": {
+          "type": "string",
+          "description": "File path for the built WASM component."
+        },
+        "linkedWasm": {
+          "type": "string",
+          "description": "File path for the linked WASM component which is ready to be uploaded to Golem."
+        },
+        "build": {
+          "type": "array",
+          "description": "Commands used for creating component WASM.",
+          "items": {
+            "$ref": "#/definitions/externalCommand"
+          }
+        },
+        "customCommands": {
+          "type": "object",
+          "description": "User defined custom commands.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/externalCommand"
+            }
+          }
+        },
+        "clean": {
+          "type": "array",
+          "description": "User defined extra paths used in the clean command.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "componentType": {
+          "enum": [
+            "durable",
+            "ephemeral"
+          ],
+          "description": "Optional component type, defaults to durable."
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component files system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "componentProfiles": {
+      "type": "object",
+      "description": "Component definition profiles",
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "description": "Component definition profiles",
+          "additionalProperties": {
+            "$ref": "#/definitions/componentProperties"
+          }
+        },
+        "defaultProfile": {
+          "type": "string",
+          "description": "Default profile"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "profiles",
+        "defaultProfile"
+      ]
+    },
+    "componentProfilesWithTemplateRef": {
+      "type": "object",
+      "description": "Component definition profiles",
+      "properties": {
+        "template": {
+          "type": "string",
+          "description": "Component template to be used for defining this component."
+        },
+        "profiles": {
+          "type": "object",
+          "description": "Component definition profiles",
+          "additionalProperties": {
+            "$ref": "#/definitions/componentProperties"
+          }
+        },
+        "defaultProfile": {
+          "type": "string",
+          "description": "Default profile"
+        }
+      },
+      "additionalProperties": false
+    },
+    "externalCommand": {
+      "type": "object",
+      "description": "External command with optional inputs and outputs with up-to-date checks",
+      "properties": {
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "External command to execute"
+            },
+            "dir": {
+              "type": "string",
+              "description": "Working directory for the command, defaults to the directory of golem.yaml in which the component is defined."
+            },
+            "rmdirs": {
+              "type": "array",
+              "description": "List of directories that should be deleted before running the command, runs before mkdirs.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "mkdirs": {
+              "type": "array",
+              "description": "List of directories that should be created before running the command, runs after rmdirs",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "External command to execute"
+            },
+            "dir": {
+              "type": "string",
+              "description": "Working directory for the command, defaults to the directory of golem.yaml in which the component is defined."
+            },
+            "rmdirs": {
+              "type": "array",
+              "description": "List of directories that should be deleted before running the command, runs before mkdirs.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "mkdirs": {
+              "type": "array",
+              "description": "List of directories that should be created before running the command, runs after rmdirs",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sources": {
+              "type": "array",
+              "description": "Inputs (paths and globs) for the external command",
+              "items": {
+                "type": "string"
+              }
+            },
+            "targets": {
+              "type": "array",
+              "description": "Output (paths and globs) for the external command",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "command",
+            "sources",
+            "targets"
+          ]
+        }
+      ]
+    },
+    "componentDependency": {
+      "type": "object",
+      "description": "Component dependencies",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "wasm-rpc",
+              "description": "WASM RPC dependency"
+            },
+            "target": {
+              "type": "string",
+              "description": "Target component name."
+            }
+          },
+          "required": [
+            "type",
+            "target"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "initialComponentFile": {
+      "type": "object",
+      "description": "File entry for the initial component file system.",
+      "properties": {
+        "sourcePath": {
+          "type": "string",
+          "description": "Source path for the component file: either a local file or an URL."
+        },
+        "targetPath": {
+          "type": "string",
+          "description": "Target path for the component file, must be an absolute path"
+        },
+        "permissions": {
+          "enum": [
+            "read-only",
+            "read-write"
+          ],
+          "description": "Permission for the component file"
+        }
+      },
+      "required": [
+        "sourcePath",
+        "targetPath"
+      ]
+    }
+  }
+}

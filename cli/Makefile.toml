@@ -242,3 +242,14 @@ args = [
     "--allow-dirty",
     "--no-verify",
 ]
+
+## ** APP MANIFEST SCHEMA PUBLISHING **
+[tasks.publish-app-manifest-json-schema]
+description = "Publish application manifest schemas to S3 (https://schema.golem.cloud)"
+command = "aws"
+args = [
+    "s3",
+    "sync",
+    "schema.golem.cloud",
+    "s3://schema.golem.cloud",
+]
