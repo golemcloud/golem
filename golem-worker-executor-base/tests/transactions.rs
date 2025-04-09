@@ -160,6 +160,8 @@ async fn jump(
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -216,6 +218,8 @@ async fn explicit_oplog_commit(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     check!(result.is_ok());
 }
@@ -255,6 +259,8 @@ async fn set_retry_policy(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
@@ -290,6 +296,8 @@ async fn atomic_region(
         .invoke_and_await(&worker_id, "golem:it/api.{atomic-region}", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -331,6 +339,8 @@ async fn idempotence_on(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -370,6 +380,8 @@ async fn idempotence_off(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -406,6 +418,8 @@ async fn persist_nothing(
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{persist-nothing}", vec![])
         .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -447,6 +461,8 @@ async fn golem_rust_explicit_oplog_commit(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     check!(result.is_ok());
 }
@@ -486,6 +502,8 @@ async fn golem_rust_set_retry_policy(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
@@ -521,6 +539,8 @@ async fn golem_rust_atomic_region(
         .invoke_and_await(&worker_id, "golem:it/api.{atomic-region}", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -567,6 +587,8 @@ async fn golem_rust_idempotence_on(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -611,6 +633,8 @@ async fn golem_rust_idempotence_off(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -652,6 +676,8 @@ async fn golem_rust_persist_nothing(
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{persist-nothing}", vec![])
         .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -708,6 +734,8 @@ async fn golem_rust_fallible_transaction(
         .await;
 
     let events = http_server.get_events();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -770,6 +798,8 @@ async fn golem_rust_infallible_transaction(
         .await;
 
     let events = http_server.get_events();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();

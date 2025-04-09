@@ -85,7 +85,6 @@ async fn get_oplog_1(
         .unwrap();
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-
     drop(executor);
 
     // Whether there is an "enqueued invocation" entry or just directly started invocation
@@ -374,6 +373,8 @@ async fn invocation_context_test(
 
     let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
     info!("{:#?}", dump);
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     http_server.abort();
     drop(executor);

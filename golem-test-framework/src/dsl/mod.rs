@@ -1352,7 +1352,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     }
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
-        TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
+        let oplog = TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
+
+        for (idx, entry) in oplog.iter().enumerate() {
+            debug!("#{}: {entry:#?}", idx + 1);
+        }
+
         Ok(())
     }
 

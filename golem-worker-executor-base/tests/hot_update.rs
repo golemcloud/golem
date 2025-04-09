@@ -198,6 +198,8 @@ async fn auto_update_on_running(
         .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -242,6 +244,8 @@ async fn auto_update_on_idle(
 
     info!("result: {:?}", result);
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
@@ -299,6 +303,8 @@ async fn failing_auto_update_on_idle(
 
     info!("result: {:?}", result);
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -358,6 +364,8 @@ async fn auto_update_on_idle_with_non_diverging_history(
 
     info!("result: {:?}", result);
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     // Expectation: the f3 function is not changing between the versions, so we can safely
     // update the component and call f4 which only exists in the new version.
@@ -438,6 +446,8 @@ async fn failing_auto_update_on_running(
         .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -502,6 +512,8 @@ async fn manual_update_on_idle(
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it
     // using the v2 component's 'save' function through the v3 component's load function.
@@ -565,6 +577,8 @@ async fn manual_update_on_idle_without_save_snapshot(
         .unwrap();
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -658,6 +672,8 @@ async fn auto_update_on_running_followed_by_manual(
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -722,6 +738,8 @@ async fn manual_update_on_idle_with_failing_load(
         .unwrap();
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -793,6 +811,8 @@ async fn manual_update_on_idle_using_v11(
         .unwrap();
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it
