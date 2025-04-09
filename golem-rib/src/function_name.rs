@@ -1802,8 +1802,8 @@ mod function_name_tests {
     }
 
     fn round_trip_function_name_parse(input: &str) {
-        let parsed =
-            ParsedFunctionName::parse(input).expect(&format!("Input Parsing failed for {input}"));
+        let parsed = ParsedFunctionName::parse(input)
+            .unwrap_or_else(|_| panic!("Input Parsing failed for {input}"));
         let parsed_written =
             ParsedFunctionName::parse(parsed.to_string()).expect("Round-trip parsing failed");
         assert_eq!(parsed, parsed_written);
