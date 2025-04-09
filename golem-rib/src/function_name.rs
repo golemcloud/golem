@@ -14,9 +14,8 @@
 
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
-use combine::stream::position;
 use combine::stream::position::Stream;
-use combine::EasyParser;
+use combine::{eof, EasyParser};
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
@@ -625,9 +624,9 @@ impl ParsedFunctionName {
     pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
         let name = name.as_ref();
 
-        let mut parser = crate::parser::call::function_name();
+        let mut parser = crate::parser::call::function_name().skip(eof());
 
-        let result = parser.easy_parse(position::Stream::new(name));
+        let result = parser.easy_parse(Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),
@@ -1150,6 +1149,12 @@ mod function_name_tests {
     use golem_wasm_ast::analysis::analysed_type::{field, record, u64};
     use golem_wasm_rpc::Value;
     use test_r::test;
+
+    #[test]
+    fn parse_function_name_does_not_accept_partial_matches() {
+        let result = ParsedFunctionName::parse("x:y/z");
+        assert!(result.is_err());
+    }
 
     #[test]
     fn parse_function_name_global() {
