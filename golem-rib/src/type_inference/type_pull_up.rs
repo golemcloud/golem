@@ -78,7 +78,6 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
                 let lhs = lhs.to_string();
                 return Err(CustomError {
                     expr: expr.clone(),
-                    parent_expr: None,
                     help_message: vec![],
                     message: format!("invalid method invocation `{}.{}`. make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs),
                 }.into());
@@ -645,7 +644,6 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
     inferred_expr_stack.pop_front().ok_or(
         CustomError {
             expr: expr.clone(),
-            parent_expr: None,
             message: "could not infer type".to_string(),
             help_message: vec![],
         }
