@@ -1938,7 +1938,7 @@ mod tests {
 
         assert_eq!(
             result.get_val().unwrap().value,
-            Value::String("foo-bar-{foo: baz}-42".to_string())
+            Value::String("foo-bar-{foo: \"baz\"}-42".to_string())
         );
     }
 
