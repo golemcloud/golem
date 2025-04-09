@@ -14,12 +14,13 @@
 
 use crate::Expr;
 
+// let deadline = some("foo")
+// call_x(deadline)
+// let deadline = 2.0;
+// call_y(deadline)
 pub fn infer_all_identifiers(expr: &mut Expr) {
-    // We scan top-down and bottom-up to inform the type between the identifiers
-    // It doesn't matter which order we do it in (i.e, which identifier expression has the right type isn't a problem),
-    // as we accumulate all the types in both directions
-    internal::infer_all_identifiers_bottom_up(expr);
-    internal::infer_all_identifiers_top_down(expr);
+    internal::infer_all_identifiers_forward(expr);
+    internal::infer_all_identifiers_backward(expr);
     internal::infer_match_binding_variables(expr);
 }
 
@@ -28,23 +29,13 @@ mod internal {
     use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
     use std::collections::{HashMap, VecDeque};
 
-    pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
+    pub(crate) fn infer_all_identifiers_backward(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();
 
-        // Given
-        //   `Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))`
-        // Expr::Num(1)
-        // Expr::Let(Variable(x), Expr::Num(1))
-        // Expr::Identifier(x)
-        // Expr::Call(func, Expr::Identifier(x))
-        // Expr::Block(Expr::Let(x, Expr::Num(1)), Expr::Call(func, x))
-        let mut visitor = ExprVisitor::bottom_up(expr);
-
-        // Popping it from the back results in `Expr::Identifier(x)` to be processed first
-        // in the above example.
+        let mut visitor = ExprVisitor::top_down(expr);
         while let Some(expr) = visitor.pop_back() {
             match expr {
-                // If identifier is inferred (probably because it was part of a function call befre),
+                // If identifier is inferred (probably because it was part of a function call before),
                 // make sure to update the identifier inference lookup table.
                 // If lookup table is already updated, merge the inferred type
                 Expr::Identifier {
@@ -78,7 +69,7 @@ mod internal {
 
     // This is more of an optional stage, as bottom-up type propagation would be enough
     // but helps with reaching early fix point later down the line of compilation phases
-    pub(crate) fn infer_all_identifiers_top_down(expr: &mut Expr) {
+    pub(crate) fn infer_all_identifiers_forward(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();
         let mut visitor = ExprVisitor::top_down(expr);
         while let Some(expr) = visitor.pop_front() {
