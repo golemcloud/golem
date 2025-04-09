@@ -724,7 +724,7 @@ async fn test_api_def_with_request_with_request_body_type_mismatch() {
     let body = response.into_body().into_string().await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, "invalid http request body\ninvalid value for key foo_key: expected number, found string\nexpected request body: record{bar_key: string, foo_key: u32}");
+    assert_eq!(body, "invalid http request body\ninvalid value for key foo_key: expected number, found string\nexpected request body: record { bar_key: string, foo_key: u32 }");
 }
 
 #[test]

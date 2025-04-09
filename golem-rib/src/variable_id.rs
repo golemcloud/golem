@@ -66,6 +66,16 @@ impl VariableId {
         }
     }
 
+    pub fn is_local(&self) -> bool {
+        match self {
+            VariableId::Global(_) => false,
+            VariableId::Local(_, _) => true,
+            VariableId::MatchIdentifier(_) => false,
+            VariableId::ListComprehension(_) => false,
+            VariableId::ListReduce(_) => false,
+        }
+    }
+
     pub fn is_match_binding(&self) -> bool {
         match self {
             VariableId::Global(_) => false,

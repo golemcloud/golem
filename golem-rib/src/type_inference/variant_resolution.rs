@@ -75,7 +75,7 @@ mod internal {
                     inferred_type,
                     ..
                 } => {
-                    if variants.contains(&variable_id.name()) {
+                    if !variable_id.is_local() && variants.contains(&variable_id.name()) {
                         *expr = Expr::call(
                             CallType::VariantConstructor(variable_id.name()),
                             None,
@@ -105,13 +105,15 @@ mod internal {
                     inferred_type,
                     ..
                 } => {
-                    let key = RegistryKey::FunctionName(variable_id.name().clone());
-                    if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
-                        function_type_registry.types.get(&key)
-                    {
-                        no_arg_variants.push(variable_id.name());
-                        *inferred_type =
-                            inferred_type.merge(InferredType::from_variant_cases(type_variant));
+                    if !variable_id.is_local() {
+                        let key = RegistryKey::FunctionName(variable_id.name().clone());
+                        if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
+                            function_type_registry.types.get(&key)
+                        {
+                            no_arg_variants.push(variable_id.name());
+                            *inferred_type =
+                                inferred_type.merge(InferredType::from_variant_cases(type_variant));
+                        }
                     }
                 }
 

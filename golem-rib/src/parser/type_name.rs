@@ -108,14 +108,14 @@ impl Display for TypeName {
                 }
             },
             TypeName::Record(fields) => {
-                write!(f, "record{{")?;
+                write!(f, "record {{ ")?;
                 for (i, (field, typ)) in fields.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}: {}", field, typ)?;
                 }
-                write!(f, "}}")
+                write!(f, " }}")
             }
             TypeName::Flags(flags) => {
                 write!(f, "flags<")?;
@@ -128,17 +128,17 @@ impl Display for TypeName {
                 write!(f, ">")
             }
             TypeName::Enum(cases) => {
-                write!(f, "enum<")?;
+                write!(f, "enum {{ ")?;
                 for (i, case) in cases.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}", case)?;
                 }
-                write!(f, ">")
+                write!(f, " }}")
             }
             TypeName::Variant { cases } => {
-                write!(f, "variant<")?;
+                write!(f, "variant {{")?;
                 for (i, (case, typ)) in cases.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -148,7 +148,7 @@ impl Display for TypeName {
                         write!(f, "({})", typ)?;
                     }
                 }
-                write!(f, ">")
+                write!(f, " }}")
             }
         }
     }
