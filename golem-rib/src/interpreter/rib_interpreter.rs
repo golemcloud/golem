@@ -1410,6 +1410,10 @@ mod internal {
                     // Avoid extra quotes when concatenating strings
                     result.push_str(s);
                 }
+                Value::Char(char) => {
+                    // Avoid extra single quotes when concatenating chars
+                    result.push(*char);
+                }
                 _ => {
                     result.push_str(&val.to_string());
                 }
