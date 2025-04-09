@@ -83,13 +83,11 @@ impl Services {
 
                 let component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Send + Sync> =
                     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
-                        db_pool.clone().into(),
+                        db_pool.clone(),
                     )));
                 let plugin_repo: Arc<
                     dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync,
-                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
-                    db_pool.clone().into(),
-                )));
+                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db_pool.clone())));
                 (component_repo, plugin_repo)
             }
             DbConfig::Sqlite(config) => {
@@ -99,13 +97,11 @@ impl Services {
 
                 let component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Send + Sync> =
                     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
-                        db_pool.clone().into(),
+                        db_pool.clone(),
                     )));
                 let plugin_repo: Arc<
                     dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync,
-                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
-                    db_pool.clone().into(),
-                )));
+                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db_pool.clone())));
                 (component_repo, plugin_repo)
             }
         };

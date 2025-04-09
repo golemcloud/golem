@@ -128,15 +128,15 @@ impl ApiServices {
                     .await
                     .map_err(|e| format!("Init error (postgres pool): {e:?}"))?;
                 let api_definition_repo: Arc<dyn ApiDefinitionRepo + Send + Sync> =
-                    Arc::new(DbApiDefinitionRepo::new(Arc::new(db_pool.clone())));
+                    Arc::new(DbApiDefinitionRepo::new(db_pool.clone()));
                 let api_deployment_repo: Arc<dyn ApiDeploymentRepo + Send + Sync> =
-                    Arc::new(DbApiDeploymentRepo::new(Arc::new(db_pool.clone())));
+                    Arc::new(DbApiDeploymentRepo::new(db_pool.clone()));
                 let api_certificate_repo: Arc<dyn ApiCertificateRepo + Send + Sync> =
                     Arc::new(DbApiCertificateRepo::new(db_pool.clone()));
                 let api_domain_repo: Arc<dyn ApiDomainRepo + Send + Sync> =
                     Arc::new(DbApiDomainRepo::new(db_pool.clone()));
                 let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-                    Arc::new(DbSecuritySchemeRepo::new(Arc::new(db_pool.clone())));
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone()));
                 (
                     api_definition_repo,
                     api_deployment_repo,
@@ -150,15 +150,15 @@ impl ApiServices {
                     .await
                     .map_err(|e| format!("Init error (sqlite pool): {e:?}"))?;
                 let api_definition_repo: Arc<dyn ApiDefinitionRepo + Send + Sync> =
-                    Arc::new(DbApiDefinitionRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiDefinitionRepo::new(db_pool.clone()));
                 let api_deployment_repo: Arc<dyn ApiDeploymentRepo + Send + Sync> =
-                    Arc::new(DbApiDeploymentRepo::new(db_pool.clone().into()));
+                    Arc::new(DbApiDeploymentRepo::new(db_pool.clone()));
                 let api_certificate_repo: Arc<dyn ApiCertificateRepo + Send + Sync> =
                     Arc::new(DbApiCertificateRepo::new(db_pool.clone()));
                 let api_domain_repo: Arc<dyn ApiDomainRepo + Send + Sync> =
                     Arc::new(DbApiDomainRepo::new(db_pool.clone()));
                 let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone()));
 
                 (
                     api_definition_repo,

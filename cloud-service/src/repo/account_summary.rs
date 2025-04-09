@@ -2,11 +2,9 @@ use crate::model::AccountSummary;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
-use futures_util::{future, TryFutureExt};
 use golem_common::model::AccountId;
-use golem_service_base::db::Pool;
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo::RepoError;
-use sqlx::Error;
 
 #[async_trait]
 pub trait AccountSummaryRepo {
@@ -110,15 +108,10 @@ impl AccountSummaryRepo for DbAccountSummaryRepo<golem_service_base::db::postgre
     async fn count(&self) -> Result<u64, RepoError> {
         let query = sqlx::query_as::<_, (i64,)>("SELECT count(*) FROM accounts");
 
-        // TODO: use fetch_one_as
         let result = self
             .db_pool
             .with_ro("account_summary", "get")
-            .fetch_optional_as(query)
-            .and_then(|row| match row {
-                Some(row) => future::ok(row),
-                None => future::err(Error::RowNotFound.into()),
-            })
+            .fetch_one_as(query)
             .await?;
 
         Ok(result.0 as u64)

@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use futures_util::{future, TryFutureExt};
-use golem_service_base::db::Pool;
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo::RepoError;
-use sqlx::Error;
 use uuid::Uuid;
 
 use super::token::TokenRecord;
@@ -132,15 +130,10 @@ impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<golem_service_base::db::postgr
             sqlx::query_as("SELECT COUNT(*) FROM oauth2_web_flow_state WHERE oauth2_state = $1")
                 .bind(state);
 
-        // TODO: use fetch_one_as
         let (count,): (i64,) = self
             .db_pool
             .with_ro("oauth2_web_flow_state", "valid_temp_token")
-            .fetch_optional_as(query)
-            .and_then(|row| match row {
-                Some(row) => future::ok(row),
-                None => future::err(Error::RowNotFound.into()),
-            })
+            .fetch_one_as(query)
             .await?;
 
         Ok(count > 0)

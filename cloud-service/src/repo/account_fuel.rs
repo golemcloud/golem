@@ -1,10 +1,8 @@
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use futures_util::{future, TryFutureExt};
 use golem_common::model::AccountId;
-use golem_service_base::db::Pool;
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo::RepoError;
-use sqlx::Error;
 
 #[async_trait]
 pub trait AccountFuelRepo {
@@ -92,14 +90,7 @@ impl AccountFuelRepo for DbAccountFuelRepo<golem_service_base::db::postgres::Pos
         )
         .bind(&id.value);
 
-        // TODO: use fetch_one_as
-        let updated_fuel = transaction
-            .fetch_optional_as(query)
-            .and_then(|row| match row {
-                Some(row) => future::ok(row),
-                None => future::err(Error::RowNotFound.into()),
-            })
-            .await?;
+        let updated_fuel = transaction.fetch_one_as(query).await?;
 
         self.db_pool
             .with_rw("account_fuel", "update")
@@ -146,14 +137,7 @@ impl AccountFuelRepo for DbAccountFuelRepo<golem_service_base::db::postgres::Pos
         )
         .bind(&id.value);
 
-        // TODO: use fetch_one_as
-        let updated_fuel = transaction
-            .fetch_optional_as(query)
-            .and_then(|row| match row {
-                Some(row) => future::ok(row),
-                None => future::err(Error::RowNotFound.into()),
-            })
-            .await?;
+        let updated_fuel = transaction.fetch_one_as(query).await?;
 
         self.db_pool
             .with_rw("account_fuel", "update")
