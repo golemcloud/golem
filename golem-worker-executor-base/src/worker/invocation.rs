@@ -205,6 +205,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
 
     let function = find_function(&mut store, instance, &parsed)?;
+    validate_function_parameters(&mut store, &function, &full_function_name, &function_input)?;
 
     if store.data().is_live() {
         store
@@ -260,6 +261,60 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store.data().set_suspended().await?;
 
     call_result
+}
+
+fn validate_function_parameters(
+    store: &mut impl AsContextMut<Data = impl WorkerCtx>,
+    function: &FindFunctionResult,
+    raw_function_name: &str,
+    function_input: &[Value],
+) -> Result<(), GolemError> {
+    match function {
+        FindFunctionResult::ExportedFunction(func) => {
+            let store = store.as_context_mut();
+            let param_types = func.params(&store);
+
+            if function_input.len() != param_types.len() {
+                return Err(GolemError::ParamTypeMismatch {
+                    details: format!(
+                        "expected {}, got {} parameters",
+                        param_types.len(),
+                        function_input.len()
+                    ),
+                });
+            }
+        }
+        FindFunctionResult::ResourceDrop => {
+            if function_input.len() != 1 {
+                return Err(GolemError::ValueMismatch {
+                    details: "unexpected parameter count for drop".to_string(),
+                });
+            }
+
+            let store = store.as_context_mut();
+            let self_uri = store.data().self_uri();
+
+            match function_input.first() {
+                Some(Value::Handle { uri, resource_id }) => {
+                    if uri == &self_uri.value {
+                        Ok(*resource_id)
+                    } else {
+                        Err(GolemError::ValueMismatch {
+                            details: format!(
+                                "trying to drop handle for on wrong worker ({} vs {}) {}",
+                                uri, self_uri.value, raw_function_name
+                            ),
+                        })
+                    }
+                }
+                _ => Err(GolemError::ValueMismatch {
+                    details: format!("unexpected function input for drop for {raw_function_name}"),
+                }),
+            }?;
+        }
+        FindFunctionResult::IncomingHttpHandlerBridge => {}
+    }
+    Ok(())
 }
 
 async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
@@ -378,16 +433,6 @@ async fn invoke<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     let param_types = function.params(&store);
 
-    if function_input.len() != param_types.len() {
-        return Err(GolemError::ParamTypeMismatch {
-            details: format!(
-                "expected {}, got {} parameters",
-                param_types.len(),
-                function_input.len()
-            ),
-        });
-    }
-
     let mut params = Vec::new();
     let mut resources_to_drop = Vec::new();
     for (param, param_type) in function_input.iter().zip(param_types.iter()) {
@@ -449,7 +494,7 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
             );
     }
 
-    tracing::debug!("Invoking wasi:http/incoming-http-handler handle");
+    debug!("Invoking wasi:http/incoming-http-handler handle");
 
     let (_, mut task_exits) = {
         let (scheme, hyper_request) =
@@ -527,30 +572,11 @@ async fn drop_resource<Ctx: WorkerCtx>(
     raw_function_name: &str,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
-    let self_uri = store.data().self_uri();
-    if function_input.len() != 1 {
-        return Err(GolemError::ValueMismatch {
-            details: format!("unexpected parameter count for drop {raw_function_name}"),
-        });
-    }
 
     let resource_id = match function_input.first() {
-        Some(Value::Handle { uri, resource_id }) => {
-            if uri == &self_uri.value {
-                Ok(*resource_id)
-            } else {
-                Err(GolemError::ValueMismatch {
-                    details: format!(
-                        "trying to drop handle for on wrong worker ({} vs {}) {}",
-                        uri, self_uri.value, raw_function_name
-                    ),
-                })
-            }
-        }
-        _ => Err(GolemError::ValueMismatch {
-            details: format!("unexpected function input for drop for {raw_function_name}"),
-        }),
-    }?;
+        Some(Value::Handle { resource_id, .. }) => *resource_id,
+        _ => unreachable!(), // previously validated by `validate_function_parameters`
+    };
 
     if let ParsedFunctionReference::IndexedResourceDrop {
         resource,
