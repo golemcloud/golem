@@ -178,7 +178,7 @@ impl TypeMismatchError {
 
 pub struct MultipleUnResolvedTypesError(pub Vec<UnResolvedTypesError>);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UnResolvedTypesError {
     pub unresolved_expr: Expr,
     pub parent_expr: Option<Expr>,
@@ -274,6 +274,7 @@ impl Display for UnResolvedTypesError {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum FunctionCallError {
     InvalidFunctionCall {
         function_name: String,

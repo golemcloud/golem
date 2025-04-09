@@ -1422,15 +1422,16 @@ mod tests {
 
     use super::*;
     use crate::interpreter::rib_interpreter::tests::test_utils::{
-        get_value_and_type, strip_spaces,
+        get_analysed_type_variant, get_metadata_with_enum_and_variant, get_value_and_type,
+        strip_spaces,
     };
     use crate::{
         compiler, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId,
         Path, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
-        bool, case, f32, field, list, option, record, result, s32, s8, str, tuple, u32, u64, u8,
-        variant,
+        bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
+        u64, u8, variant,
     };
     use golem_wasm_rpc::{parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType};
 
@@ -1909,6 +1910,81 @@ mod tests {
             .value;
 
         assert_eq!(result, Value::String("21-foo".to_string()))
+    }
+
+    #[test]
+    async fn test_interpreter_with_variant_and_enum() {
+        let mut interpreter = test_utils::interpreter_dynamic_response(None);
+
+        // This has intentionally got conflicting variable names
+        // variable `x` is same as the enum name `x`
+        // similarly, variably `validate` is same as the variant name validate
+        let expr = r#"
+          let x = x;
+          let y = x;
+          let result1 = add-enum(x, y);
+          let validate = validate;
+          let validate2 = validate;
+          let result2 = add-variant(validate, validate2);
+          {res1: result1, res2: result2}
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(expr, &get_metadata_with_enum_and_variant()).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+        let expected_enum_type = r#enum(&["x", "y", "z"]);
+        let expected_variant_type = get_analysed_type_variant();
+
+        let expected_record_type = record(vec![
+            field("res1", expected_enum_type),
+            field("res2", expected_variant_type),
+        ]);
+
+        let expected_record_value = Value::Record(vec![
+            Value::Enum(0),
+            Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+        ]);
+
+        assert_eq!(
+            result,
+            RibResult::Val(ValueAndType::new(
+                expected_record_value,
+                expected_record_type
+            ))
+        );
+    }
+
+    #[test]
+    async fn test_interpreter_with_conflicting_variable_names() {
+        let mut interpreter = test_utils::interpreter_dynamic_response(None);
+
+        // This has intentionally conflicting variable names
+        // variable `x` is same as the enum name `x`
+        // similarly, variably `validate` is same as the variant name `validate`
+        // and `process-user` is same as the variant name `process-user`
+        let expr = r#"
+          let x = 1;
+          let y = 2;
+          let result1 = add-u32(x, y);
+          let process-user = 3;
+          let validate = 4;
+          let result2 = add-u64(process-user, validate);
+          {res1: result1, res2: result2}
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(expr, &get_metadata_with_enum_and_variant()).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+        let expected_value = Value::Record(vec![3u32.into_value(), 7u64.into_value()]);
+
+        let expected_type = record(vec![field("res1", u32()), field("res2", u64())]);
+        assert_eq!(
+            result,
+            RibResult::Val(ValueAndType::new(expected_value, expected_type))
+        );
     }
 
     #[test]
@@ -4304,7 +4380,8 @@ mod tests {
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
-            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke, RibInput,
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue,
+            RibFunctionInvoke, RibInput,
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
@@ -4676,6 +4753,18 @@ mod tests {
             }
         }
 
+        // A simple interpreter that returns response based on the function
+        pub(crate) fn interpreter_dynamic_response(input: Option<RibInput>) -> Interpreter {
+            let invoke = Arc::new(TestInvoke3);
+
+            Interpreter {
+                input: input.unwrap_or_default(),
+                invoke,
+                custom_stack: None,
+                custom_env: None,
+            }
+        }
+
         pub(crate) fn parse_function_details(input: &str) -> ValueAndType {
             let analysed_type = record(vec![
                 field("worker-name", option(str())),
@@ -4751,6 +4840,181 @@ mod tests {
                     tuple(vec![record(analysed_type_pairs)]),
                 );
                 Ok(value)
+            }
+        }
+
+        pub(crate) fn get_metadata_with_enum_and_variant() -> Vec<AnalysedExport> {
+            vec![
+                AnalysedExport::Function(AnalysedFunction {
+                    name: "add-u32".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "param1".to_string(),
+                            typ: u32(),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "param2".to_string(),
+                            typ: u32(),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: u32(),
+                    }],
+                }),
+                AnalysedExport::Function(AnalysedFunction {
+                    name: "add-u64".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "param1".to_string(),
+                            typ: u64(),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "param2".to_string(),
+                            typ: u64(),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: u64(),
+                    }],
+                }),
+                AnalysedExport::Function(AnalysedFunction {
+                    name: "add-enum".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "param1".to_string(),
+                            typ: r#enum(&["x", "y", "z"]),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "param2".to_string(),
+                            typ: r#enum(&["x", "y", "z"]),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: r#enum(&["x", "y", "z"]),
+                    }],
+                }),
+                AnalysedExport::Function(AnalysedFunction {
+                    name: "add-variant".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "param1".to_string(),
+                            typ: get_analysed_type_variant(),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "param2".to_string(),
+                            typ: get_analysed_type_variant(),
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: get_analysed_type_variant(),
+                    }],
+                }),
+            ]
+        }
+
+        struct TestInvoke3;
+
+        #[async_trait]
+        impl RibFunctionInvoke for TestInvoke3 {
+            async fn invoke(
+                &self,
+                _worker_name: Option<EvaluatedWorkerName>,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+            ) -> Result<ValueAndType, String> {
+                match function_name.0.as_str() {
+                    "add-u32" => {
+                        let args = args.0;
+                        let arg1 = args[0].get_literal().and_then(|x| x.get_number()).unwrap();
+                        let arg2 = args[1].get_literal().and_then(|x| x.get_number()).unwrap();
+                        let result = arg1 + arg2;
+                        let u32 = result.cast_to(&u32()).unwrap();
+
+                        Ok(ValueAndType::new(
+                            Value::Tuple(vec![u32.value]),
+                            tuple(vec![u32.typ]),
+                        ))
+                    }
+                    "add-u64" => {
+                        let args = args.0;
+                        let arg1 = args[0].get_literal().and_then(|x| x.get_number()).unwrap();
+                        let arg2 = args[1].get_literal().and_then(|x| x.get_number()).unwrap();
+                        let result = arg1 + arg2;
+                        let u64 = result.cast_to(&u64()).unwrap();
+                        Ok(ValueAndType::new(
+                            Value::Tuple(vec![u64.value]),
+                            tuple(vec![u64.typ]),
+                        ))
+                    }
+                    "add-enum" => {
+                        let args = args.0;
+                        let arg1 = args[0].clone().value;
+                        let arg2 = args[1].clone().value;
+                        match (arg1, arg2) {
+                            (Value::Enum(x), Value::Enum(y)) => {
+                                if x == y {
+                                    let result =
+                                        ValueAndType::new(Value::Enum(x), r#enum(&["x", "y", "z"]));
+                                    Ok(ValueAndType::new(
+                                        Value::Tuple(vec![result.value]),
+                                        tuple(vec![result.typ]),
+                                    ))
+                                } else {
+                                    Err(format!("Enums are not equal: {} and {}", x, y))
+                                }
+                            }
+                            (v1, v2) => Err(format!(
+                                "Invalid arguments for add-enum: {:?} and {:?}",
+                                v1, v2
+                            )),
+                        }
+                    }
+                    "add-variant" => {
+                        let args = args.0;
+                        let arg1 = args[0].clone().value;
+                        let arg2 = args[1].clone().value;
+                        match (arg1, arg2) {
+                            (
+                                Value::Variant {
+                                    case_idx: case_idx1,
+                                    case_value,
+                                },
+                                Value::Variant {
+                                    case_idx: case_idx2,
+                                    ..
+                                },
+                            ) => {
+                                if case_idx1 == case_idx2 {
+                                    let result = ValueAndType::new(
+                                        Value::Variant {
+                                            case_idx: case_idx1,
+                                            case_value,
+                                        },
+                                        get_analysed_type_variant(),
+                                    );
+                                    Ok(ValueAndType::new(
+                                        Value::Tuple(vec![result.value]),
+                                        tuple(vec![result.typ]),
+                                    ))
+                                } else {
+                                    Err(format!(
+                                        "Variants are not equal: {} and {}",
+                                        case_idx1, case_idx2
+                                    ))
+                                }
+                            }
+                            (v1, v2) => Err(format!(
+                                "Invalid arguments for add-variant: {:?} and {:?}",
+                                v1, v2
+                            )),
+                        }
+                    }
+                    fun => Err(format!("unknown function {}", fun)),
+                }
             }
         }
     }

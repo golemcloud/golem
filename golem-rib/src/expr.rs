@@ -1117,7 +1117,6 @@ impl Expr {
         self.bind_variables_of_let_assignment();
         self.infer_variants(function_type_registry);
         self.infer_enums(function_type_registry);
-
         Ok(())
     }
 

@@ -42,7 +42,7 @@ mod internal {
                 type_annotation,
             } = expr
             {
-                if enum_cases.cases.contains(&variable_id.name()) {
+                if enum_cases.cases.contains(&variable_id.name()) && !variable_id.is_local() {
                     *expr = Expr::Call {
                         call_type: CallType::EnumConstructor(variable_id.name()),
                         generic_type_parameter: None,
@@ -71,14 +71,17 @@ mod internal {
                     inferred_type,
                     ..
                 } => {
-                    // Retrieve the possible no-arg variant from the registry
-                    let key = RegistryKey::FunctionName(variable_id.name().clone());
-                    if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) =
-                        function_type_registry.types.get(&key)
-                    {
-                        enum_cases.push(variable_id.name());
-                        *inferred_type = inferred_type
-                            .merge(AnalysedType::Enum(typed_enum.clone()).clone().into());
+                    // If variable is local, it takes priority over being a global enum
+                    if !variable_id.is_local() {
+                        // Retrieve the possible no-arg variant from the registry
+                        let key = RegistryKey::FunctionName(variable_id.name().clone());
+                        if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) =
+                            function_type_registry.types.get(&key)
+                        {
+                            enum_cases.push(variable_id.name());
+                            *inferred_type = inferred_type
+                                .merge(AnalysedType::Enum(typed_enum.clone()).clone().into());
+                        }
                     }
                 }
 

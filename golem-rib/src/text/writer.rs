@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::expr::Expr;
-use crate::{ArmPattern, MatchArm, Range};
+use crate::{ArmPattern, CallType, MatchArm, Range};
 use std::fmt::Display;
 use std::io::Write;
 
@@ -375,15 +375,36 @@ impl<W: Write> Writer<W> {
                     self.write_str("]")?;
                 }
 
-                self.write_display("(")?;
-                for (idx, param) in args.iter().enumerate() {
-                    if idx != 0 {
-                        self.write_display(",")?;
-                        self.write_display(" ")?;
+                match call_type {
+                    CallType::Function { .. } | CallType::InstanceCreation(_) => {
+                        self.write_display("(")?;
+                        for (idx, param) in args.iter().enumerate() {
+                            if idx != 0 {
+                                self.write_display(",")?;
+                                self.write_display(" ")?;
+                            }
+                            self.write_expr(param)?;
+                        }
+                        self.write_display(")")
                     }
-                    self.write_expr(param)?;
+                    CallType::VariantConstructor(_) => {
+                        if !args.is_empty() {
+                            self.write_str("(")?;
+                            for (idx, param) in args.iter().enumerate() {
+                                if idx != 0 {
+                                    self.write_display(",")?;
+                                    self.write_display(" ")?;
+                                }
+                                self.write_expr(param)?;
+                            }
+                            self.write_str(")")
+                        } else {
+                            Ok(())
+                        }
+                    }
+
+                    CallType::EnumConstructor(_) => Ok(()),
                 }
-                self.write_display(")")
             }
 
             Expr::Unwrap { expr, .. } => {
