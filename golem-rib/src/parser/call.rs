@@ -175,6 +175,19 @@ where
             }
         },
     );
+    let indexed_static_method_syntax = (
+        string("[static]"),
+        indexed_resource_syntax(),
+        token('.'),
+        identifier(),
+    )
+        .map(|(_, (resource, resource_params), _, method)| {
+            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
+                resource,
+                resource_params,
+                method,
+            }
+        });
 
     let raw_constructor_syntax = (identifier(), token('.'), string("new"))
         .map(|(resource, _, _)| DynamicParsedFunctionReference::RawResourceConstructor { resource })
@@ -214,6 +227,7 @@ where
         attempt(indexed_constructor_syntax),
         attempt(indexed_drop_syntax),
         attempt(indexed_method_syntax),
+        attempt(indexed_static_method_syntax),
         attempt(raw_constructor_syntax),
         attempt(raw_drop_syntax),
         attempt(raw_method_syntax),

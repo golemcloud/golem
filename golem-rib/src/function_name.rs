@@ -1414,6 +1414,100 @@ mod function_name_tests {
     }
 
     #[test]
+    fn parse_function_name_indexed_method() {
+        let parsed = ParsedFunctionName::parse(
+            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).something}",
+        )
+        .expect("Parsing failed");
+        assert_eq!(
+            parsed.site().interface_name(),
+            Some("ns:name/interface".to_string())
+        );
+        assert_eq!(
+            parsed.function().function_name(),
+            "[method]resource1.something".to_string()
+        );
+        assert!(parsed.function().is_indexed_resource());
+        assert_eq!(
+            parsed.function().raw_resource_params(),
+            Some(&vec![
+                "\"hello\"".to_string(),
+                "{field-a: some(1)}".to_string(),
+            ])
+        );
+        assert_eq!(
+            parsed.function().resource_method_name(),
+            Some("something".to_string())
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
+                },
+                function: ParsedFunctionReference::IndexedResourceMethod {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "{field-a: some(1)}".to_string(),
+                    ],
+                    method: "something".to_string(),
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn parse_function_name_indexed_static_method() {
+        let parsed = ParsedFunctionName::parse(
+            "ns:name/interface.{[static]resource1(\"hello\", { field-a: some(1) }).something}",
+        )
+        .expect("Parsing failed");
+        assert_eq!(
+            parsed.site().interface_name(),
+            Some("ns:name/interface".to_string())
+        );
+        assert_eq!(
+            parsed.function().function_name(),
+            "[static]resource1.something".to_string()
+        );
+        assert!(parsed.function().is_indexed_resource());
+        assert_eq!(
+            parsed.function().raw_resource_params(),
+            Some(&vec![
+                "\"hello\"".to_string(),
+                "{field-a: some(1)}".to_string(),
+            ])
+        );
+        assert_eq!(
+            parsed.function().resource_method_name(),
+            Some("something".to_string())
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
+                },
+                function: ParsedFunctionReference::IndexedResourceStaticMethod {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "{field-a: some(1)}".to_string(),
+                    ],
+                    method: "something".to_string(),
+                },
+            },
+        );
+    }
+
+    #[test]
     fn parse_function_name_method_syntax_sugar() {
         let parsed = ParsedFunctionName::parse("ns:name/interface.{resource1.do-something}")
             .expect("Parsing failed");
@@ -1708,7 +1802,8 @@ mod function_name_tests {
     }
 
     fn round_trip_function_name_parse(input: &str) {
-        let parsed = ParsedFunctionName::parse(input).expect("Input Parsing failed");
+        let parsed =
+            ParsedFunctionName::parse(input).expect(&format!("Input Parsing failed for {input}"));
         let parsed_written =
             ParsedFunctionName::parse(parsed.to_string()).expect("Round-trip parsing failed");
         assert_eq!(parsed, parsed_written);
