@@ -67,6 +67,8 @@ async fn zig_example_3(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     assert_eq!(result, vec![Value::U64(21)])
@@ -112,6 +114,8 @@ async fn tinygo_example(
             break;
         }
     }
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -204,6 +208,8 @@ async fn tinygo_http_client(
 
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -244,6 +250,8 @@ async fn grain_example_1(
     tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
     rx.recv_many(&mut events, 100).await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -298,6 +306,8 @@ async fn java_example_1(
             break;
         }
     }
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -390,6 +400,8 @@ async fn java_shopping_cart(
         .invoke_and_await(&worker_id, "checkout", vec![])
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     assert_eq!(
@@ -447,6 +459,8 @@ async fn c_example_1(
         }
     }
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     let first_line = log_event_to_string(&events[1]);
@@ -485,6 +499,8 @@ async fn c_example_2(
         }
     }
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     let first_line = log_event_to_string(&events[1]);
@@ -517,6 +533,8 @@ async fn c_example_3(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result == vec![Value::U64(536870912)]);
@@ -544,6 +562,8 @@ async fn c_example_4(
         .invoke_and_await(&worker_id, "run", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
