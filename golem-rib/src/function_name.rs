@@ -15,7 +15,7 @@
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::position::Stream;
-use combine::{eof, EasyParser};
+use combine::{eof, EasyParser, Parser};
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
