@@ -1132,7 +1132,8 @@ fn encode_host_function_request_as_value(
             let payload: SerializableInvokeRequest = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem::rpc::wasm-rpc::invoke-and-await" => {
+        "golem::rpc::wasm-rpc::invoke-and-await"
+        | "golem::rpc::wasm-rpc::invoke-and-await result" => {
             let payload: SerializableInvokeRequest = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
@@ -1459,7 +1460,8 @@ fn encode_host_function_response_as_value(
             let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem::rpc::wasm-rpc::invoke-and-await" => {
+        "golem::rpc::wasm-rpc::invoke-and-await"
+        | "golem::rpc::wasm-rpc::invoke-and-await result" => {
             let payload: Result<Result<TypeAnnotatedValue, SerializableError>, String> =
                 try_deserialize(bytes);
 

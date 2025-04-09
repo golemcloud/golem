@@ -112,6 +112,8 @@ async fn revert_successful_invocations(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     assert_eq!(result1, vec![5u64.into_value()]);
@@ -168,6 +170,8 @@ async fn revert_failed_worker(
         .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result1.is_ok());
@@ -222,6 +226,8 @@ async fn revert_auto_update(
 
     info!("result: {:?}", result1);
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0. After the revert, calling f2 again returns a random number.

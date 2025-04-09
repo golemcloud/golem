@@ -94,6 +94,8 @@ async fn counter_resource_test_1(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -167,6 +169,8 @@ async fn counter_resource_test_1_with_restart(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -234,6 +238,8 @@ async fn context_inheritance(
             vec![],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 
