@@ -24,6 +24,7 @@ pub mod text;
 pub mod to_cloud;
 pub mod to_oss;
 pub mod wave;
+pub mod worker;
 
 use crate::cloud::{AccountId, ProjectId};
 use crate::command::shared_args::StreamArgs;

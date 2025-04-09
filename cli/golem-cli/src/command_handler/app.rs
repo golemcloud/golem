@@ -468,6 +468,7 @@ impl AppCommandHandler {
                                 Error::Ambiguous {
                                     pattern,
                                     highlighted_options,
+                                    ..
                                 } => {
                                     format!(
                                         "  - {}, did you mean one of {}?",

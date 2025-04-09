@@ -25,10 +25,12 @@ pub struct Match {
     pub exact_match: bool,
 }
 
+#[derive(Debug)]
 pub enum Error {
     Ambiguous {
         pattern: String,
         highlighted_options: Vec<String>,
+        raw_options: Vec<String>,
     },
     NotFound {
         pattern: String,
@@ -99,6 +101,10 @@ impl<'a> FuzzySearch<'a> {
             }),
             _ => Err(Error::Ambiguous {
                 pattern: pattern.to_string(),
+                raw_options: fuzzy_matches
+                    .iter()
+                    .map(|(_, _, option)| option.to_string())
+                    .collect(),
                 highlighted_options: fuzzy_matches
                     .into_iter()
                     .map(|(_, indices, option)| {

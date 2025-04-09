@@ -39,6 +39,7 @@ use crate::model::text::help::{
 };
 use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
 use crate::model::to_oss::ToOss;
+use crate::model::worker::fuzzy_match_function_name;
 use crate::model::{
     ComponentName, ComponentNameMatchKind, Format, IdempotencyKey, ProjectName,
     WorkerConnectOptions, WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch,
@@ -282,52 +283,57 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        let component_functions = show_exported_functions(&component.metadata.exports);
-        let fuzzy_search = FuzzySearch::new(component_functions.iter().map(|s| s.as_str()));
-        let function_name = match fuzzy_search.find(function_name) {
+        let matched_function_name =
+            fuzzy_match_function_name(function_name, &component.metadata.exports);
+        let function_name = match matched_function_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
                 match_.option
             }
-            Err(error) => match error {
-                Error::Ambiguous {
-                    highlighted_options,
-                    ..
-                } => {
-                    logln("");
-                    log_error(format!(
-                        "The requested function name ({}) is ambiguous.",
-                        function_name.log_color_error_highlight()
-                    ));
-                    logln("");
-                    logln("Did you mean one of");
-                    for option in highlighted_options {
-                        logln(format!(" - {}", option.bold()));
+            Err(error) => {
+                let component_functions =
+                    show_exported_functions(&component.metadata.exports, false);
+
+                match error {
+                    Error::Ambiguous {
+                        highlighted_options,
+                        ..
+                    } => {
+                        logln("");
+                        log_error(format!(
+                            "The requested function name ({}) is ambiguous.",
+                            function_name.log_color_error_highlight()
+                        ));
+                        logln("");
+                        logln("Did you mean one of");
+                        for option in highlighted_options {
+                            logln(format!(" - {}", option.bold()));
+                        }
+                        logln("?");
+                        logln("");
+                        log_text_view(&AvailableFunctionNamesHelp {
+                            component_name: worker_name_match.component_name.0,
+                            function_names: component_functions,
+                        });
+
+                        bail!(NonSuccessfulExit);
                     }
-                    logln("?");
-                    logln("");
-                    log_text_view(&AvailableFunctionNamesHelp {
-                        component_name: worker_name_match.component_name.0,
-                        function_names: component_functions,
-                    });
+                    Error::NotFound { .. } => {
+                        logln("");
+                        log_error(format!(
+                            "The requested function name ({}) was not found.",
+                            function_name.log_color_error_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AvailableFunctionNamesHelp {
+                            component_name: worker_name_match.component_name.0,
+                            function_names: component_functions,
+                        });
 
-                    bail!(NonSuccessfulExit);
+                        bail!(NonSuccessfulExit);
+                    }
                 }
-                Error::NotFound { .. } => {
-                    logln("");
-                    log_error(format!(
-                        "The requested function name ({}) was not found.",
-                        function_name.log_color_error_highlight()
-                    ));
-                    logln("");
-                    log_text_view(&AvailableFunctionNamesHelp {
-                        component_name: worker_name_match.component_name.0,
-                        function_names: component_functions,
-                    });
-
-                    bail!(NonSuccessfulExit);
-                }
-            },
+            }
         };
 
         if enqueue {
