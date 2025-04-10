@@ -50,7 +50,7 @@ impl HttpMiddlewares {
             match middleware {
                 HttpMiddleware::Cors(cors) => {
                     cors.apply_cors(rich_request)
-                        .map_err(|error| MiddlewareError::CorsError(error))?;
+                        .map_err(MiddlewareError::CorsError)?;
                 }
                 HttpMiddleware::AuthenticateRequest(auth) => {
                     let result = auth

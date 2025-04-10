@@ -156,7 +156,7 @@ impl HttpCors {
         };
 
         match self.check_origin(&origin) {
-            OriginStatus::NotAllowed => return Err(CorsError::OriginNotAllowed.into()),
+            OriginStatus::NotAllowed => return Err(CorsError::OriginNotAllowed),
             _ => {} // otherwise allowed
         }
 
@@ -172,13 +172,13 @@ impl HttpCors {
                     && !Self::split_origin(&self.allow_methods)
                         .any(|m| m.eq_ignore_ascii_case(method.as_str()))
                 {
-                    return Err(CorsError::MethodNotAllowed.into());
+                    return Err(CorsError::MethodNotAllowed);
                 }
             } else {
-                return Err(CorsError::MethodNotAllowed.into());
+                return Err(CorsError::MethodNotAllowed);
             }
 
-            self.check_headers_allowed(&request)?;
+            self.check_headers_allowed(request)?;
         }
 
         Ok(())
