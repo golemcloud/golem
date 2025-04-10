@@ -15,13 +15,9 @@
 use crate::gateway_middleware::http::authentication::HttpAuthenticationMiddleware;
 use std::ops::Deref;
 
-use crate::gateway_execution::request::RichRequest;
 use crate::gateway_middleware::http::cors::HttpCors;
-use crate::gateway_middleware::MiddlewareError;
+
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
-use http::header::{
-    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
-};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {

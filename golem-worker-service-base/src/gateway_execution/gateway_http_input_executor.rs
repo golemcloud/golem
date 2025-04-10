@@ -461,6 +461,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                     let response = err.to_response_from_safe_display(|error| match error {
                         MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
                         MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+                        MiddlewareError::CorsError(_) => StatusCode::FORBIDDEN,
                     });
                     Err(response)?
                 }
