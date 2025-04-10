@@ -24,7 +24,6 @@ use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
-    pub security: Option<Vec<SecuritySchemeReference>>, // This is needed at global level only for request (user facing http api definition)
     pub version: ApiVersion,
     pub routes: Vec<RouteRequest>,
     pub draft: bool,
@@ -53,18 +52,11 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest> for HttpApiDefinition
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
 
-        let security = if global_securities.is_empty() {
-            None
-        } else {
-            Some(global_securities)
-        };
-
         let result = Self {
             id: ApiDefinitionId(id.value),
             version: ApiVersion(value.version),
             routes: route_requests,
             draft: value.draft,
-            security,
         };
 
         Ok(result)
@@ -72,7 +64,6 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest> for HttpApiDefinition
 }
 
 // In a RouteRequest, security is defined at the outer level
-// to keep it consistent with the openAPI style of defining security at the root level.
 // Also this security has minimal information (and avoid details such as client-id, secret etc).
 // When `RouteRequest` is converted to `Route`, this security is pushed as middleware in the binding
 // along with fetching more details about the security scheme

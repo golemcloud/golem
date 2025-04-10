@@ -101,9 +101,6 @@ impl HttpApiDefinitionRequest {
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
                 version: self.version,
-                security: self
-                    .security
-                    .map(|x| x.into_iter().map(SecuritySchemeReference::new).collect()),
                 routes,
                 draft: self.draft,
             },

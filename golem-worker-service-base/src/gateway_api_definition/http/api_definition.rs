@@ -36,7 +36,7 @@ use rib::RibError;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -82,21 +82,23 @@ impl HttpApiDefinition {
     ) -> Result<Self, ApiDefinitionError> {
         let mut registry = HashMap::new();
 
-        if let Some(security_schemes) = request.security {
-            for security_scheme_reference in security_schemes {
-                let security_scheme = security_scheme_service
-                    .get(
-                        &security_scheme_reference.security_scheme_identifier,
-                        namespace,
-                    )
-                    .await
-                    .map_err(ApiDefinitionError::SecuritySchemeError)?;
+        let security_schemes_in_definition = request
+            .routes
+            .iter()
+            .filter_map(|route| {
+                route.security.as_ref().map(|security_scheme_reference| {
+                    security_scheme_reference.security_scheme_identifier.clone()
+                })
+            })
+            .collect::<HashSet<_>>();
 
-                registry.insert(
-                    security_scheme_reference.security_scheme_identifier.clone(),
-                    security_scheme.clone(),
-                );
-            }
+        for security_scheme_identifier in security_schemes_in_definition {
+            let security_scheme = security_scheme_service
+                .get(&security_scheme_identifier, namespace)
+                .await
+                .map_err(ApiDefinitionError::SecuritySchemeError)?;
+
+            registry.insert(security_scheme_identifier, security_scheme);
         }
 
         let mut routes = vec![];
@@ -104,7 +106,7 @@ impl HttpApiDefinition {
         for route in request.routes {
             let mut http_middlewares = vec![];
 
-            if let Some(security) = route.security {
+            if let Some(security) = &route.security {
                 let security_scheme = security_scheme_service
                     .get(&security.security_scheme_identifier, namespace)
                     .await
@@ -146,17 +148,9 @@ impl HttpApiDefinition {
 
 impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
     fn from(value: HttpApiDefinition) -> Self {
-        let global_security = value.security_schemes();
-        let security = if global_security.is_empty() {
-            None
-        } else {
-            Some(global_security)
-        };
-
         Self {
             id: value.id(),
             version: value.version(),
-            security,
             routes: value.routes.into_iter().map(RouteRequest::from).collect(),
             draft: value.draft,
         }
