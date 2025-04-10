@@ -43,8 +43,6 @@ impl OpenApiHttpApiDefinition {
             GOLEM_API_DEFINITION_VERSION,
         )?);
 
-        let security = get_global_security(open_api);
-
         let routes = get_routes(&open_api.paths, conversion_context).await?;
 
         Ok(HttpApiDefinitionRequest {
@@ -52,7 +50,6 @@ impl OpenApiHttpApiDefinition {
             version: api_definition_version,
             routes,
             draft: true,
-            security,
         })
     }
 }
@@ -148,24 +145,6 @@ mod internal {
 
     pub(super) const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
-    pub(super) fn get_global_security(open_api: &OpenAPI) -> Option<Vec<SecuritySchemeReference>> {
-        open_api.security.as_ref().and_then(|requirements| {
-            let global_security: Vec<_> = requirements
-                .iter()
-                .flat_map(|x| {
-                    x.keys().map(|key| SecuritySchemeReference {
-                        security_scheme_identifier: SecuritySchemeIdentifier::new(key.clone()),
-                    })
-                })
-                .collect();
-
-            if global_security.is_empty() {
-                Some(global_security)
-            } else {
-                None
-            }
-        })
-    }
     pub(super) fn get_root_extension_str(
         open_api: &OpenAPI,
         key_name: &str,
@@ -267,7 +246,6 @@ mod internal {
                             path: path_pattern.clone(),
                             binding: GatewayBinding::static_binding(binding),
                             security,
-                            cors: None
                         })
                     }
 
@@ -279,7 +257,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::Default(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
@@ -290,7 +267,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::Default(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::HttpHandler, _) => {
@@ -301,7 +277,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::HttpHandler(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::CorsPreflight, method) => {
@@ -319,7 +294,6 @@ mod internal {
                         method,
                         binding: GatewayBinding::static_binding(binding),
                         security,
-                        cors: None,
                     })
                 } else {
                     Err(format!(
@@ -628,7 +602,6 @@ mod tests {
                 HttpCors::default(),
             )),
             security: None,
-            cors: None,
         }
     }
 
@@ -640,7 +613,6 @@ mod tests {
             method: MethodPattern::Options,
             binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors_preflight)),
             security: None,
-            cors: None,
         }
     }
 

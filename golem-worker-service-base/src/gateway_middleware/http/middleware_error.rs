@@ -19,13 +19,26 @@ use golem_common::SafeDisplay;
 #[derive(Debug)]
 pub enum MiddlewareError {
     Unauthorized(AuthorisationError),
+    CorsError(CorsError),
     InternalError(String),
+}
+
+#[derive(Debug)]
+pub enum CorsError {
+    OriginNotAllowed,
+    MethodNotAllowed,
+    HeadersNotAllowed,
 }
 
 impl SafeDisplay for MiddlewareError {
     fn to_safe_string(&self) -> String {
         match self {
             MiddlewareError::Unauthorized(msg) => format!("Unauthorized: {}", msg.to_safe_string()),
+            MiddlewareError::CorsError(error) => match error {
+                CorsError::OriginNotAllowed => "CORS Error: Origin not allowed".to_string(),
+                CorsError::MethodNotAllowed => "CORS Error: Method not allowed".to_string(),
+                CorsError::HeadersNotAllowed => "CORS Error: Headers not allowed".to_string(),
+            },
             MiddlewareError::InternalError(msg) => {
                 format!("Internal Server Error: {}", msg)
             }

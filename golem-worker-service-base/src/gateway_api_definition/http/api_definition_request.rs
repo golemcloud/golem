@@ -15,7 +15,6 @@
 use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::GatewayBinding;
-use crate::gateway_middleware::HttpCors;
 use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 
@@ -25,7 +24,6 @@ use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
-    pub security: Option<Vec<SecuritySchemeReference>>, // This is needed at global level only for request (user facing http api definition)
     pub version: ApiVersion,
     pub routes: Vec<RouteRequest>,
     pub draft: bool,
@@ -54,18 +52,11 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest> for HttpApiDefinition
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
 
-        let security = if global_securities.is_empty() {
-            None
-        } else {
-            Some(global_securities)
-        };
-
         let result = Self {
             id: ApiDefinitionId(id.value),
             version: ApiVersion(value.version),
             routes: route_requests,
             draft: value.draft,
-            security,
         };
 
         Ok(result)
@@ -73,7 +64,6 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest> for HttpApiDefinition
 }
 
 // In a RouteRequest, security is defined at the outer level
-// to keep it consistent with the openAPI style of defining security at the root level.
 // Also this security has minimal information (and avoid details such as client-id, secret etc).
 // When `RouteRequest` is converted to `Route`, this security is pushed as middleware in the binding
 // along with fetching more details about the security scheme
@@ -82,7 +72,6 @@ pub struct RouteRequest {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
     pub binding: GatewayBinding,
-    pub cors: Option<HttpCors>,
     pub security: Option<SecuritySchemeReference>,
 }
 
@@ -93,15 +82,12 @@ impl From<Route> for RouteRequest {
             .clone()
             .and_then(|x| x.get_http_authentication_middleware());
 
-        let cors_middleware = value.middlewares.and_then(|x| x.get_cors_middleware());
-
         RouteRequest {
             method: value.method,
             path: value.path,
             binding: value.binding,
             security: security_middleware
                 .map(|x| SecuritySchemeReference::from(x.security_scheme_with_metadata)),
-            cors: cors_middleware,
         }
     }
 }
@@ -123,16 +109,11 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for RouteRequest {
             })
         });
 
-        let cors = value.middleware.and_then(|x| x.cors);
-
-        let cors = cors.map(HttpCors::try_from).transpose()?;
-
         let result = Self {
             method,
             path,
             binding: gateway_binding,
             security,
-            cors,
         };
 
         Ok(result)

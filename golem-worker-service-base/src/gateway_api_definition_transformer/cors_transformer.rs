@@ -169,9 +169,7 @@ mod tests {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Default(worker_binding.clone()),
-            middlewares: Some(HttpMiddlewares(vec![
-                HttpMiddleware::AddCorsHeaders(cors()),
-            ])),
+            middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::Cors(cors())])),
         }
     }
 

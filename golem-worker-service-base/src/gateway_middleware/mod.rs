@@ -48,7 +48,10 @@ impl HttpMiddlewares {
 
         for middleware in self.0.iter() {
             match middleware {
-                HttpMiddleware::AddCorsHeaders(_) => {}
+                HttpMiddleware::Cors(cors) => {
+                    cors.apply_cors(rich_request)
+                        .map_err(MiddlewareError::CorsError)?;
+                }
                 HttpMiddleware::AuthenticateRequest(auth) => {
                     let result = auth
                         .apply_http_auth(rich_request, session_store, identity_provider)
@@ -77,8 +80,8 @@ impl HttpMiddlewares {
     ) -> Result<(), MiddlewareError> {
         for middleware in self.0.iter() {
             match middleware {
-                HttpMiddleware::AddCorsHeaders(cors) => {
-                    HttpMiddleware::apply_cors(response, cors);
+                HttpMiddleware::Cors(cors) => {
+                    cors.add_header_in_response(response);
                 }
                 HttpMiddleware::AuthenticateRequest(_) => {}
             }
@@ -134,7 +137,7 @@ impl TryFrom<HttpMiddlewares> for golem_api_grpc::proto::golem::apidefinition::M
 
         for http_middleware in value.0.iter() {
             match http_middleware {
-                HttpMiddleware::AddCorsHeaders(cors0) => {
+                HttpMiddleware::Cors(cors0) => {
                     cors = Some(golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors0.clone()));
                 }
                 HttpMiddleware::AuthenticateRequest(http_request_authentication) => {
