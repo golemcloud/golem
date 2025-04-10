@@ -205,7 +205,14 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
 
     let function = find_function(&mut store, instance, &parsed)?;
-    validate_function_parameters(&mut store, &function, &full_function_name, &function_input)?;
+
+    validate_function_parameters(
+        &mut store,
+        &function,
+        &full_function_name,
+        &function_input,
+        parsed.function().is_indexed_resource(),
+    )?;
 
     if store.data().is_live() {
         store
@@ -268,11 +275,20 @@ fn validate_function_parameters(
     function: &FindFunctionResult,
     raw_function_name: &str,
     function_input: &[Value],
+    ignore_first: bool,
 ) -> Result<(), GolemError> {
     match function {
         FindFunctionResult::ExportedFunction(func) => {
             let store = store.as_context_mut();
-            let param_types = func.params(&store);
+            let param_types: Vec<_> = if ignore_first {
+                // For indexed resources we are going to inject the resource handle as the first parameter
+                // later so we only have to validate the remaining parameters
+                let params = func.params(&store);
+                params.iter().skip(1).cloned().collect()
+            } else {
+                let params = func.params(&store);
+                params.to_vec()
+            };
 
             if function_input.len() != param_types.len() {
                 return Err(GolemError::ParamTypeMismatch {
