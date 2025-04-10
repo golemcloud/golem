@@ -21,6 +21,7 @@ use poem_openapi::Object;
 use rib::{Expr, GetLiteralValue, RibInput, TypeName};
 use serde::{Deserialize, Serialize};
 
+//
 // Optimise this further when we choose to break backward compatibility
 // where Cors headers will pre-store distinct headers, methods etc
 // instead of comma separated strings.
@@ -83,12 +84,10 @@ impl HttpCors {
             Err(_) => return OriginStatus::NotAllowed,
         };
 
-        // Exact match
         if Self::split_origin(&self.allow_origin).any(|o| o == origin_str) {
             return OriginStatus::AllowedExact;
         }
 
-        // Wildcard match (e.g., *.example.com)
         if Self::split_origin(&self.allow_origin)
             .any(|pattern| pattern.contains('*') && Self::wildcard_match(pattern, origin_str))
         {
@@ -124,7 +123,7 @@ impl HttpCors {
         if let Some(headers_value) = request_headers {
             let allow_list: Vec<_> = Self::split_origin(&self.allow_headers).collect();
             if allow_list.is_empty() {
-                return Ok(Some(headers_value)); // everything allowed
+                return Ok(Some(headers_value));
             }
 
             let header_str = headers_value
@@ -151,7 +150,7 @@ impl HttpCors {
         let origin = match request.headers().get(header::ORIGIN) {
             Some(origin) => origin.clone(),
             None => {
-                panic!("Origin header is missing in the request");
+                return Ok(())
             }
         };
 
@@ -187,14 +186,12 @@ impl HttpCors {
     pub fn add_header_in_response(&self, response: &mut poem::Response) {
         response.headers_mut().insert(
             ACCESS_CONTROL_ALLOW_ORIGIN,
-            // hot path, and this unwrap will not fail unless we bypassed it during configuration
             self.get_allow_origin().clone().parse().unwrap(),
         );
 
         if let Some(allow_credentials) = &self.get_allow_credentials() {
             response.headers_mut().insert(
                 ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                // hot path, and this unwrap will not fail unless we bypassed it during configuration
                 allow_credentials.to_string().clone().parse().unwrap(),
             );
         }
@@ -202,7 +199,6 @@ impl HttpCors {
         if let Some(expose_headers) = &self.get_expose_headers() {
             response.headers_mut().insert(
                 ACCESS_CONTROL_EXPOSE_HEADERS,
-                // hot path, and this unwrap will not fail unless we bypassed it during configuration
                 expose_headers.clone().parse().unwrap(),
             );
         }
