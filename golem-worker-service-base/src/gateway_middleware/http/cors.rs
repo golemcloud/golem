@@ -21,13 +21,12 @@ use poem_openapi::Object;
 use rib::{Expr, GetLiteralValue, RibInput, TypeName};
 use serde::{Deserialize, Serialize};
 
-//
-// Optimise this further when we choose to break backward compatibility
-// where Cors headers will pre-store distinct headers, methods etc
-// instead of comma separated strings.
-// This is ok until then, as most of the time on CORS check is
-// done by browsers only for OPTIONS preflight
-// request, which is cached by the browsers
+// Make sure to store CORS headers as Vec<HeaderValue> and not as String
+// avoiding computation in the hot path
+// Other strings don't hurt as it is only done for pre-flight request, which gets cached in browsers,
+// however, good to change when we can break the backward
+// compatibility.
+// Tracked under: https://github.com/golemcloud/golem/issues/1512
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
