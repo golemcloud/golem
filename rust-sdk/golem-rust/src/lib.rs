@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,9 @@ use std::str::FromStr;
 #[rustfmt::skip]
 pub mod bindings;
 
+#[cfg(feature = "durability")]
+pub mod durability;
+
 #[cfg(feature = "json")]
 mod json;
 
@@ -28,6 +31,7 @@ mod json;
 pub use json::*;
 
 mod transaction;
+pub mod value_and_type;
 
 use bindings::golem::api::host::*;
 

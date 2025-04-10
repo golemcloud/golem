@@ -10161,6 +10161,28 @@ pub mod golem {
                         .finish()
                 }
             }
+            #[derive(Clone)]
+            pub struct PersistedTypedDurableFunctionInvocation {
+                pub timestamp: Datetime,
+                pub function_name: _rt::String,
+                pub response: ValueAndType,
+                pub function_type: DurableFunctionType,
+                pub entry_version: OplogEntryVersion,
+            }
+            impl ::core::fmt::Debug for PersistedTypedDurableFunctionInvocation {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("PersistedTypedDurableFunctionInvocation")
+                        .field("timestamp", &self.timestamp)
+                        .field("function-name", &self.function_name)
+                        .field("response", &self.response)
+                        .field("function-type", &self.function_type)
+                        .field("entry-version", &self.entry_version)
+                        .finish()
+                }
+            }
             #[allow(unused_unsafe, clippy::all)]
             /// Observes a function call (produces logs and metrics)
             pub fn observe_function_call(iface: &str, function: &str) {
@@ -11463,6 +11485,570 @@ pub mod golem {
                         response: _rt::Vec::from_raw_parts(l6.cast(), len8, len8),
                         function_type: v12,
                         entry_version: OplogEntryVersion::_lift(l13 as u8),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Reads the next persisted durable function invocation from the oplog during replay, assuming it
+            /// was created with `persist-typed-durable-function-invocation`
+            pub fn read_persisted_typed_durable_function_invocation() -> PersistedTypedDurableFunctionInvocation {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 72]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 72]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:durability/durability@1.2.0")]
+                    extern "C" {
+                        #[link_name = "read-persisted-typed-durable-function-invocation"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i32>();
+                    let l3 = *ptr0.add(16).cast::<*mut u8>();
+                    let l4 = *ptr0.add(20).cast::<usize>();
+                    let len5 = l4;
+                    let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                    let l6 = *ptr0.add(24).cast::<*mut u8>();
+                    let l7 = *ptr0.add(28).cast::<usize>();
+                    let base53 = l6;
+                    let len53 = l7;
+                    let mut result53 = _rt::Vec::with_capacity(len53);
+                    for i in 0..len53 {
+                        let base = base53.add(i * 24);
+                        let e53 = {
+                            let l8 = i32::from(*base.add(0).cast::<u8>());
+                            use super::super::super::__with_name2::WitNode as V52;
+                            let v52 = match l8 {
+                                0 => {
+                                    let e52 = {
+                                        let l9 = *base.add(8).cast::<*mut u8>();
+                                        let l10 = *base.add(12).cast::<usize>();
+                                        let len11 = l10;
+                                        _rt::Vec::from_raw_parts(l9.cast(), len11, len11)
+                                    };
+                                    V52::RecordValue(e52)
+                                }
+                                1 => {
+                                    let e52 = {
+                                        let l12 = *base.add(8).cast::<i32>();
+                                        let l13 = i32::from(*base.add(12).cast::<u8>());
+                                        (
+                                            l12 as u32,
+                                            match l13 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l14 = *base.add(16).cast::<i32>();
+                                                        l14
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                        )
+                                    };
+                                    V52::VariantValue(e52)
+                                }
+                                2 => {
+                                    let e52 = {
+                                        let l15 = *base.add(8).cast::<i32>();
+                                        l15 as u32
+                                    };
+                                    V52::EnumValue(e52)
+                                }
+                                3 => {
+                                    let e52 = {
+                                        let l16 = *base.add(8).cast::<*mut u8>();
+                                        let l17 = *base.add(12).cast::<usize>();
+                                        let base19 = l16;
+                                        let len19 = l17;
+                                        let mut result19 = _rt::Vec::with_capacity(len19);
+                                        for i in 0..len19 {
+                                            let base = base19.add(i * 1);
+                                            let e19 = {
+                                                let l18 = i32::from(*base.add(0).cast::<u8>());
+                                                _rt::bool_lift(l18 as u8)
+                                            };
+                                            result19.push(e19);
+                                        }
+                                        _rt::cabi_dealloc(base19, len19 * 1, 1);
+                                        result19
+                                    };
+                                    V52::FlagsValue(e52)
+                                }
+                                4 => {
+                                    let e52 = {
+                                        let l20 = *base.add(8).cast::<*mut u8>();
+                                        let l21 = *base.add(12).cast::<usize>();
+                                        let len22 = l21;
+                                        _rt::Vec::from_raw_parts(l20.cast(), len22, len22)
+                                    };
+                                    V52::TupleValue(e52)
+                                }
+                                5 => {
+                                    let e52 = {
+                                        let l23 = *base.add(8).cast::<*mut u8>();
+                                        let l24 = *base.add(12).cast::<usize>();
+                                        let len25 = l24;
+                                        _rt::Vec::from_raw_parts(l23.cast(), len25, len25)
+                                    };
+                                    V52::ListValue(e52)
+                                }
+                                6 => {
+                                    let e52 = {
+                                        let l26 = i32::from(*base.add(8).cast::<u8>());
+                                        match l26 {
+                                            0 => None,
+                                            1 => {
+                                                let e = {
+                                                    let l27 = *base.add(12).cast::<i32>();
+                                                    l27
+                                                };
+                                                Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                        }
+                                    };
+                                    V52::OptionValue(e52)
+                                }
+                                7 => {
+                                    let e52 = {
+                                        let l28 = i32::from(*base.add(8).cast::<u8>());
+                                        match l28 {
+                                            0 => {
+                                                let e = {
+                                                    let l29 = i32::from(*base.add(12).cast::<u8>());
+                                                    match l29 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l30 = *base.add(16).cast::<i32>();
+                                                                l30
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    }
+                                                };
+                                                Ok(e)
+                                            }
+                                            1 => {
+                                                let e = {
+                                                    let l31 = i32::from(*base.add(12).cast::<u8>());
+                                                    match l31 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l32 = *base.add(16).cast::<i32>();
+                                                                l32
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    }
+                                                };
+                                                Err(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                        }
+                                    };
+                                    V52::ResultValue(e52)
+                                }
+                                8 => {
+                                    let e52 = {
+                                        let l33 = i32::from(*base.add(8).cast::<u8>());
+                                        l33 as u8
+                                    };
+                                    V52::PrimU8(e52)
+                                }
+                                9 => {
+                                    let e52 = {
+                                        let l34 = i32::from(*base.add(8).cast::<u16>());
+                                        l34 as u16
+                                    };
+                                    V52::PrimU16(e52)
+                                }
+                                10 => {
+                                    let e52 = {
+                                        let l35 = *base.add(8).cast::<i32>();
+                                        l35 as u32
+                                    };
+                                    V52::PrimU32(e52)
+                                }
+                                11 => {
+                                    let e52 = {
+                                        let l36 = *base.add(8).cast::<i64>();
+                                        l36 as u64
+                                    };
+                                    V52::PrimU64(e52)
+                                }
+                                12 => {
+                                    let e52 = {
+                                        let l37 = i32::from(*base.add(8).cast::<i8>());
+                                        l37 as i8
+                                    };
+                                    V52::PrimS8(e52)
+                                }
+                                13 => {
+                                    let e52 = {
+                                        let l38 = i32::from(*base.add(8).cast::<i16>());
+                                        l38 as i16
+                                    };
+                                    V52::PrimS16(e52)
+                                }
+                                14 => {
+                                    let e52 = {
+                                        let l39 = *base.add(8).cast::<i32>();
+                                        l39
+                                    };
+                                    V52::PrimS32(e52)
+                                }
+                                15 => {
+                                    let e52 = {
+                                        let l40 = *base.add(8).cast::<i64>();
+                                        l40
+                                    };
+                                    V52::PrimS64(e52)
+                                }
+                                16 => {
+                                    let e52 = {
+                                        let l41 = *base.add(8).cast::<f32>();
+                                        l41
+                                    };
+                                    V52::PrimFloat32(e52)
+                                }
+                                17 => {
+                                    let e52 = {
+                                        let l42 = *base.add(8).cast::<f64>();
+                                        l42
+                                    };
+                                    V52::PrimFloat64(e52)
+                                }
+                                18 => {
+                                    let e52 = {
+                                        let l43 = *base.add(8).cast::<i32>();
+                                        _rt::char_lift(l43 as u32)
+                                    };
+                                    V52::PrimChar(e52)
+                                }
+                                19 => {
+                                    let e52 = {
+                                        let l44 = i32::from(*base.add(8).cast::<u8>());
+                                        _rt::bool_lift(l44 as u8)
+                                    };
+                                    V52::PrimBool(e52)
+                                }
+                                20 => {
+                                    let e52 = {
+                                        let l45 = *base.add(8).cast::<*mut u8>();
+                                        let l46 = *base.add(12).cast::<usize>();
+                                        let len47 = l46;
+                                        let bytes47 = _rt::Vec::from_raw_parts(
+                                            l45.cast(),
+                                            len47,
+                                            len47,
+                                        );
+                                        _rt::string_lift(bytes47)
+                                    };
+                                    V52::PrimString(e52)
+                                }
+                                n => {
+                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
+                                    let e52 = {
+                                        let l48 = *base.add(8).cast::<*mut u8>();
+                                        let l49 = *base.add(12).cast::<usize>();
+                                        let len50 = l49;
+                                        let bytes50 = _rt::Vec::from_raw_parts(
+                                            l48.cast(),
+                                            len50,
+                                            len50,
+                                        );
+                                        let l51 = *base.add(16).cast::<i64>();
+                                        (
+                                            super::super::super::__with_name2::Uri {
+                                                value: _rt::string_lift(bytes50),
+                                            },
+                                            l51 as u64,
+                                        )
+                                    };
+                                    V52::Handle(e52)
+                                }
+                            };
+                            v52
+                        };
+                        result53.push(e53);
+                    }
+                    _rt::cabi_dealloc(base53, len53 * 24, 8);
+                    let l54 = *ptr0.add(32).cast::<*mut u8>();
+                    let l55 = *ptr0.add(36).cast::<usize>();
+                    let base96 = l54;
+                    let len96 = l55;
+                    let mut result96 = _rt::Vec::with_capacity(len96);
+                    for i in 0..len96 {
+                        let base = base96.add(i * 24);
+                        let e96 = {
+                            let l56 = i32::from(*base.add(0).cast::<u8>());
+                            use super::super::super::__with_name2::WitTypeNode as V95;
+                            let v95 = match l56 {
+                                0 => {
+                                    let e95 = {
+                                        let l57 = *base.add(8).cast::<*mut u8>();
+                                        let l58 = *base.add(12).cast::<usize>();
+                                        let base63 = l57;
+                                        let len63 = l58;
+                                        let mut result63 = _rt::Vec::with_capacity(len63);
+                                        for i in 0..len63 {
+                                            let base = base63.add(i * 12);
+                                            let e63 = {
+                                                let l59 = *base.add(0).cast::<*mut u8>();
+                                                let l60 = *base.add(4).cast::<usize>();
+                                                let len61 = l60;
+                                                let bytes61 = _rt::Vec::from_raw_parts(
+                                                    l59.cast(),
+                                                    len61,
+                                                    len61,
+                                                );
+                                                let l62 = *base.add(8).cast::<i32>();
+                                                (_rt::string_lift(bytes61), l62)
+                                            };
+                                            result63.push(e63);
+                                        }
+                                        _rt::cabi_dealloc(base63, len63 * 12, 4);
+                                        result63
+                                    };
+                                    V95::RecordType(e95)
+                                }
+                                1 => {
+                                    let e95 = {
+                                        let l64 = *base.add(8).cast::<*mut u8>();
+                                        let l65 = *base.add(12).cast::<usize>();
+                                        let base71 = l64;
+                                        let len71 = l65;
+                                        let mut result71 = _rt::Vec::with_capacity(len71);
+                                        for i in 0..len71 {
+                                            let base = base71.add(i * 16);
+                                            let e71 = {
+                                                let l66 = *base.add(0).cast::<*mut u8>();
+                                                let l67 = *base.add(4).cast::<usize>();
+                                                let len68 = l67;
+                                                let bytes68 = _rt::Vec::from_raw_parts(
+                                                    l66.cast(),
+                                                    len68,
+                                                    len68,
+                                                );
+                                                let l69 = i32::from(*base.add(8).cast::<u8>());
+                                                (
+                                                    _rt::string_lift(bytes68),
+                                                    match l69 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l70 = *base.add(12).cast::<i32>();
+                                                                l70
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                )
+                                            };
+                                            result71.push(e71);
+                                        }
+                                        _rt::cabi_dealloc(base71, len71 * 16, 4);
+                                        result71
+                                    };
+                                    V95::VariantType(e95)
+                                }
+                                2 => {
+                                    let e95 = {
+                                        let l72 = *base.add(8).cast::<*mut u8>();
+                                        let l73 = *base.add(12).cast::<usize>();
+                                        let base77 = l72;
+                                        let len77 = l73;
+                                        let mut result77 = _rt::Vec::with_capacity(len77);
+                                        for i in 0..len77 {
+                                            let base = base77.add(i * 8);
+                                            let e77 = {
+                                                let l74 = *base.add(0).cast::<*mut u8>();
+                                                let l75 = *base.add(4).cast::<usize>();
+                                                let len76 = l75;
+                                                let bytes76 = _rt::Vec::from_raw_parts(
+                                                    l74.cast(),
+                                                    len76,
+                                                    len76,
+                                                );
+                                                _rt::string_lift(bytes76)
+                                            };
+                                            result77.push(e77);
+                                        }
+                                        _rt::cabi_dealloc(base77, len77 * 8, 4);
+                                        result77
+                                    };
+                                    V95::EnumType(e95)
+                                }
+                                3 => {
+                                    let e95 = {
+                                        let l78 = *base.add(8).cast::<*mut u8>();
+                                        let l79 = *base.add(12).cast::<usize>();
+                                        let base83 = l78;
+                                        let len83 = l79;
+                                        let mut result83 = _rt::Vec::with_capacity(len83);
+                                        for i in 0..len83 {
+                                            let base = base83.add(i * 8);
+                                            let e83 = {
+                                                let l80 = *base.add(0).cast::<*mut u8>();
+                                                let l81 = *base.add(4).cast::<usize>();
+                                                let len82 = l81;
+                                                let bytes82 = _rt::Vec::from_raw_parts(
+                                                    l80.cast(),
+                                                    len82,
+                                                    len82,
+                                                );
+                                                _rt::string_lift(bytes82)
+                                            };
+                                            result83.push(e83);
+                                        }
+                                        _rt::cabi_dealloc(base83, len83 * 8, 4);
+                                        result83
+                                    };
+                                    V95::FlagsType(e95)
+                                }
+                                4 => {
+                                    let e95 = {
+                                        let l84 = *base.add(8).cast::<*mut u8>();
+                                        let l85 = *base.add(12).cast::<usize>();
+                                        let len86 = l85;
+                                        _rt::Vec::from_raw_parts(l84.cast(), len86, len86)
+                                    };
+                                    V95::TupleType(e95)
+                                }
+                                5 => {
+                                    let e95 = {
+                                        let l87 = *base.add(8).cast::<i32>();
+                                        l87
+                                    };
+                                    V95::ListType(e95)
+                                }
+                                6 => {
+                                    let e95 = {
+                                        let l88 = *base.add(8).cast::<i32>();
+                                        l88
+                                    };
+                                    V95::OptionType(e95)
+                                }
+                                7 => {
+                                    let e95 = {
+                                        let l89 = i32::from(*base.add(8).cast::<u8>());
+                                        let l91 = i32::from(*base.add(16).cast::<u8>());
+                                        (
+                                            match l89 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l90 = *base.add(12).cast::<i32>();
+                                                        l90
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            match l91 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l92 = *base.add(20).cast::<i32>();
+                                                        l92
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                        )
+                                    };
+                                    V95::ResultType(e95)
+                                }
+                                8 => V95::PrimU8Type,
+                                9 => V95::PrimU16Type,
+                                10 => V95::PrimU32Type,
+                                11 => V95::PrimU64Type,
+                                12 => V95::PrimS8Type,
+                                13 => V95::PrimS16Type,
+                                14 => V95::PrimS32Type,
+                                15 => V95::PrimS64Type,
+                                16 => V95::PrimF32Type,
+                                17 => V95::PrimF64Type,
+                                18 => V95::PrimCharType,
+                                19 => V95::PrimBoolType,
+                                20 => V95::PrimStringType,
+                                n => {
+                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
+                                    let e95 = {
+                                        let l93 = *base.add(8).cast::<i64>();
+                                        let l94 = i32::from(*base.add(16).cast::<u8>());
+                                        (
+                                            l93 as u64,
+                                            super::super::super::__with_name2::ResourceMode::_lift(
+                                                l94 as u8,
+                                            ),
+                                        )
+                                    };
+                                    V95::HandleType(e95)
+                                }
+                            };
+                            v95
+                        };
+                        result96.push(e96);
+                    }
+                    _rt::cabi_dealloc(base96, len96 * 24, 8);
+                    let l97 = i32::from(*ptr0.add(40).cast::<u8>());
+                    use super::super::super::golem::api::oplog::WrappedFunctionType as V100;
+                    let v100 = match l97 {
+                        0 => V100::ReadLocal,
+                        1 => V100::WriteLocal,
+                        2 => V100::ReadRemote,
+                        3 => V100::WriteRemote,
+                        n => {
+                            debug_assert_eq!(n, 4, "invalid enum discriminant");
+                            let e100 = {
+                                let l98 = i32::from(*ptr0.add(48).cast::<u8>());
+                                match l98 {
+                                    0 => None,
+                                    1 => {
+                                        let e = {
+                                            let l99 = *ptr0.add(56).cast::<i64>();
+                                            l99 as u64
+                                        };
+                                        Some(e)
+                                    }
+                                    _ => _rt::invalid_enum_discriminant(),
+                                }
+                            };
+                            V100::WriteRemoteBatched(e100)
+                        }
+                    };
+                    let l101 = i32::from(*ptr0.add(64).cast::<u8>());
+                    PersistedTypedDurableFunctionInvocation {
+                        timestamp: super::super::super::__with_name1::Datetime {
+                            seconds: l1 as u64,
+                            nanoseconds: l2 as u32,
+                        },
+                        function_name: _rt::string_lift(bytes5),
+                        response: super::super::super::__with_name2::ValueAndType {
+                            value: super::super::super::__with_name2::WitValue {
+                                nodes: result53,
+                            },
+                            typ: super::super::super::__with_name2::WitType {
+                                nodes: result96,
+                            },
+                        },
+                        function_type: v100,
+                        entry_version: OplogEntryVersion::_lift(l101 as u8),
                     }
                 }
             }
@@ -45651,8 +46237,8 @@ mod _rt {
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:rust:golem-rust:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 30707] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf1\xee\x01\x01A\x02\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 30946] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xe0\xf0\x01\x01A\x02\
 \x01Ap\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
@@ -45664,7 +46250,7 @@ on\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x0
 s/monotonic-clock@0.2.0\x05\x02\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\
 \0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\
 \x02\x03\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x03\x02\x03\0\x02\x08datetime\x01\
-BS\x02\x03\x02\x01\x04\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08po\
+BX\x02\x03\x02\x01\x04\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08po\
 llable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x04\x01\
 r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0ccomponent-id\x07\x0b\
 worker-names\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0anode-index\x03\0\x0a\x01\
@@ -45702,580 +46288,585 @@ e\x01\x0dfunction-names\x0ffunction-params4\0<\x04\0/[method]wasm-rpc.schedule-c
 ancelable-invocation\x01=\x01h.\x01i\x03\x01@\x01\x04self>\0?\x04\0&[method]futu\
 re-invoke-result.subscribe\x01@\x01k5\x01@\x01\x04self>\0\xc1\0\x04\0\x20[method\
 ]future-invoke-result.get\x01B\x01h/\x01@\x01\x04self\xc3\0\x01\0\x04\0![method]\
-cancellation-token.cancel\x01D\x01@\x01\x03vnt*\0(\x04\0\x0dextract-value\x01E\x01\
-@\x01\x03vnt*\0\x1d\x04\0\x0cextract-type\x01F\x03\0\x15golem:rpc/types@0.2.0\x05\
-\x05\x02\x03\0\x01\x08duration\x02\x03\0\x03\x0ccomponent-id\x02\x03\0\x03\x04uu\
-id\x02\x03\0\x03\x09worker-id\x01Bu\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\
-\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04\
-uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x09worker-id\x03\0\x06\x01w\x04\0\x0bop\
-log-index\x03\0\x08\x01r\x02\x09worker-id\x07\x09oplog-idx\x09\x04\0\x0apromise-\
-id\x03\0\x0a\x01w\x04\0\x11component-version\x03\0\x0c\x01r\x01\x05values\x04\0\x0a\
-account-id\x03\0\x0e\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-del\
-ay\x01\x0amultiplieru\x11max-jitter-factor\x10\x04\0\x0cretry-policy\x03\0\x11\x01\
-q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\
-\0\x11persistence-level\x03\0\x13\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0b\
-update-mode\x03\0\x15\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\
-\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x17\x01m\x04\x05equal\x09\
-not-equal\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x19\x01m\x07\
-\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\
-\0\x0dworker-status\x03\0\x1b\x01r\x02\x0acomparator\x1a\x05values\x04\0\x12work\
-er-name-filter\x03\0\x1d\x01r\x02\x0acomparator\x18\x05value\x1c\x04\0\x14worker\
--status-filter\x03\0\x1f\x01r\x02\x0acomparator\x18\x05valuew\x04\0\x15worker-ve\
-rsion-filter\x03\0!\x01r\x02\x0acomparator\x18\x05valuew\x04\0\x18worker-created\
--at-filter\x03\0#\x01r\x03\x04names\x0acomparator\x1a\x05values\x04\0\x11worker-\
-env-filter\x03\0%\x01q\x05\x04name\x01\x1e\0\x06status\x01\x20\0\x07version\x01\"\
-\0\x0acreated-at\x01$\0\x03env\x01&\0\x04\0\x16worker-property-filter\x03\0'\x01\
-p(\x01r\x01\x07filters)\x04\0\x11worker-all-filter\x03\0*\x01p+\x01r\x01\x07filt\
-ers,\x04\0\x11worker-any-filter\x03\0-\x01ps\x01o\x02ss\x01p0\x01r\x06\x09worker\
--id\x07\x04args/\x03env1\x06status\x1c\x11component-versionw\x0bretry-countw\x04\
-\0\x0fworker-metadata\x03\02\x04\0\x0bget-workers\x03\x01\x01q\x02\x15revert-to-\
-oplog-index\x01\x09\0\x17revert-last-invocations\x01w\0\x04\0\x14revert-worker-t\
-arget\x03\05\x01k.\x01i4\x01@\x03\x0ccomponent-id\x03\x06filter7\x07precise\x7f\0\
-8\x04\0\x18[constructor]get-workers\x019\x01h4\x01p3\x01k;\x01@\x01\x04self:\0<\x04\
-\0\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0b\x04\0\x0ecreate-promise\x01\
->\x01p}\x01@\x01\x0apromise-id\x0b\0?\x04\0\x0dawait-promise\x01@\x01k?\x01@\x01\
-\x0apromise-id\x0b\0\xc1\0\x04\0\x0cpoll-promise\x01B\x01@\x02\x0apromise-id\x0b\
-\x04data?\0\x7f\x04\0\x10complete-promise\x01C\x01@\x01\x0apromise-id\x0b\x01\0\x04\
-\0\x0edelete-promise\x01D\x01@\0\0\x09\x04\0\x0fget-oplog-index\x01E\x01@\x01\x09\
-oplog-idx\x09\x01\0\x04\0\x0fset-oplog-index\x01F\x01@\x01\x08replicas}\x01\0\x04\
-\0\x0coplog-commit\x01G\x04\0\x14mark-begin-operation\x01E\x01@\x01\x05begin\x09\
-\x01\0\x04\0\x12mark-end-operation\x01H\x01@\0\0\x12\x04\0\x10get-retry-policy\x01\
-I\x01@\x01\x10new-retry-policy\x12\x01\0\x04\0\x10set-retry-policy\x01J\x01@\0\0\
-\x14\x04\0\x1bget-oplog-persistence-level\x01K\x01@\x01\x15new-persistence-level\
-\x14\x01\0\x04\0\x1bset-oplog-persistence-level\x01L\x01@\0\0\x7f\x04\0\x14get-i\
-dempotence-mode\x01M\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-m\
-ode\x01N\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01O\x01@\x03\x09worker-\
-id\x07\x0etarget-version\x0d\x04mode\x16\x01\0\x04\0\x0dupdate-worker\x01P\x01@\0\
-\03\x04\0\x11get-self-metadata\x01Q\x01k3\x01@\x01\x09worker-id\x07\0\xd2\0\x04\0\
-\x13get-worker-metadata\x01S\x01@\x03\x10source-worker-id\x07\x10target-worker-i\
-d\x07\x11oplog-idx-cut-off\x09\x01\0\x04\0\x0bfork-worker\x01T\x01@\x02\x09worke\
-r-id\x07\x0drevert-target6\x01\0\x04\0\x0drevert-worker\x01U\x01k\x03\x01@\x01\x13\
-component-references\0\xd6\0\x04\0\x14resolve-component-id\x01W\x01k\x07\x01@\x02\
-\x13component-references\x0bworker-names\0\xd8\0\x04\0\x11resolve-worker-id\x01Y\
-\x04\0\x18resolve-worker-id-strict\x01Y\x03\0\x14golem:api/host@1.1.6\x05\x0a\x01\
-B7\x02\x03\x02\x01\x04\x04\0\x08datetime\x03\0\0\x04\0\x04span\x03\x01\x04\0\x12\
-invocation-context\x03\x01\x01q\x01\x06string\x01s\0\x04\0\x0fattribute-value\x03\
-\0\x04\x01r\x02\x03keys\x05value\x05\x04\0\x09attribute\x03\0\x06\x01p\x05\x01r\x02\
-\x03keys\x06values\x08\x04\0\x0fattribute-chain\x03\0\x09\x01s\x04\0\x08trace-id\
-\x03\0\x0b\x01s\x04\0\x07span-id\x03\0\x0d\x01h\x02\x01@\x01\x04self\x0f\0\x01\x04\
-\0\x17[method]span.started-at\x01\x10\x01@\x03\x04self\x0f\x04names\x05value\x05\
-\x01\0\x04\0\x1a[method]span.set-attribute\x01\x11\x01p\x07\x01@\x02\x04self\x0f\
-\x0aattributes\x12\x01\0\x04\0\x1b[method]span.set-attributes\x01\x13\x01@\x01\x04\
-self\x0f\x01\0\x04\0\x13[method]span.finish\x01\x14\x01h\x03\x01@\x01\x04self\x15\
-\0\x0c\x04\0#[method]invocation-context.trace-id\x01\x16\x01@\x01\x04self\x15\0\x0e\
-\x04\0\"[method]invocation-context.span-id\x01\x17\x01i\x03\x01k\x18\x01@\x01\x04\
-self\x15\0\x19\x04\0![method]invocation-context.parent\x01\x1a\x01k\x05\x01@\x03\
-\x04self\x15\x03keys\x09inherited\x7f\0\x1b\x04\0([method]invocation-context.get\
--attribute\x01\x1c\x01@\x02\x04self\x15\x09inherited\x7f\0\x12\x04\0)[method]inv\
-ocation-context.get-attributes\x01\x1d\x01@\x02\x04self\x15\x03keys\0\x08\x04\0.\
-[method]invocation-context.get-attribute-chain\x01\x1e\x01p\x0a\x01@\x01\x04self\
-\x15\0\x1f\x04\0/[method]invocation-context.get-attribute-chains\x01\x20\x01o\x02\
-ss\x01p!\x01@\x01\x04self\x15\0\"\x04\00[method]invocation-context.trace-context\
--headers\x01#\x01i\x02\x01@\x01\x04names\0$\x04\0\x0astart-span\x01%\x01@\0\0\x18\
-\x04\0\x0fcurrent-context\x01&\x01@\x01\x05allow\x7f\0\x7f\x04\0&allow-forwardin\
-g-trace-context-headers\x01'\x03\0\x17golem:api/context@1.1.6\x05\x0b\x02\x03\0\x03\
-\x09wit-value\x02\x03\0\x04\x0aaccount-id\x02\x03\0\x04\x11component-version\x02\
-\x03\0\x04\x0boplog-index\x02\x03\0\x04\x0cretry-policy\x02\x03\0\x04\x04uuid\x02\
-\x03\0\x04\x09worker-id\x02\x03\0\x05\x09attribute\x02\x03\0\x05\x0fattribute-va\
-lue\x02\x03\0\x05\x07span-id\x02\x03\0\x05\x08trace-id\x01B\x82\x01\x02\x03\x02\x01\
-\x04\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x0c\x04\0\x09wit-value\x03\0\x02\x02\
-\x03\x02\x01\x0d\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01\x0e\x04\0\x11comp\
-onent-version\x03\0\x06\x02\x03\x02\x01\x0f\x04\0\x0boplog-index\x03\0\x08\x02\x03\
-\x02\x01\x10\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01\x11\x04\0\x04uuid\x03\
-\0\x0c\x02\x03\x02\x01\x12\x04\0\x09worker-id\x03\0\x0e\x02\x03\x02\x01\x13\x04\0\
-\x09attribute\x03\0\x10\x02\x03\x02\x01\x14\x04\0\x0fattribute-value\x03\0\x12\x02\
-\x03\x02\x01\x15\x04\0\x07span-id\x03\0\x14\x02\x03\x02\x01\x16\x04\0\x08trace-i\
-d\x03\0\x16\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remot\
-e\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\x18\0\x04\0\x15wrapped-fun\
-ction-type\x03\0\x19\x01o\x02ss\x01p\x1b\x01r\x04\x0finstallation-id\x0d\x04name\
-s\x07versions\x0aparameters\x1c\x04\0\x1fplugin-installation-description\x03\0\x1d\
-\x01ps\x01k\x0f\x01p\x1e\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component\
--version\x07\x04args\x1f\x03env\x1c\x0aaccount-id\x05\x06parent\x20\x0ecomponent\
--sizew\x20initial-total-linear-memory-sizew\x16initial-active-plugins!\x04\0\x11\
-create-parameters\x03\0\"\x01r\x05\x09timestamp\x01\x0dfunction-names\x07request\
-\x03\x08response\x03\x15wrapped-function-type\x1a\x04\0$imported-function-invoke\
-d-parameters\x03\0$\x01k\x15\x01kw\x01p\x11\x01r\x06\x07span-id\x15\x05start\x01\
-\x06parent&\x0elinked-context'\x0aattributes(\x09inherited\x7f\x04\0\x0flocal-sp\
-an-data\x03\0)\x01r\x01\x07span-id\x15\x04\0\x12external-span-data\x03\0+\x01q\x02\
-\x0alocal-span\x01*\0\x0dexternal-span\x01,\0\x04\0\x09span-data\x03\0-\x01p\x03\
-\x01p.\x01p0\x01r\x07\x09timestamp\x01\x0dfunction-names\x07request/\x0fidempote\
-ncy-keys\x08trace-id\x17\x0ctrace-states\x1f\x12invocation-context1\x04\0$export\
-ed-function-invoked-parameters\x03\02\x01r\x03\x09timestamp\x01\x08response\x03\x0d\
-consumed-fuelx\x04\0&exported-function-completed-parameters\x03\04\x01r\x02\x09t\
-imestamp\x01\x05errors\x04\0\x10error-parameters\x03\06\x01r\x03\x09timestamp\x01\
-\x05start\x09\x03end\x09\x04\0\x0fjump-parameters\x03\08\x01r\x02\x09timestamp\x01\
-\x0cretry-policy\x0b\x04\0\x1echange-retry-policy-parameters\x03\0:\x01r\x02\x09\
-timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-parameters\x03\0<\x01\
-r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remote-write-parameters\x03\
-\0>\x01k/\x01r\x03\x0fidempotency-keys\x0dfunction-names\x05input\xc0\0\x04\0'ex\
-ported-function-invocation-parameters\x03\0A\x01q\x02\x11exported-function\x01\xc2\
-\0\0\x0dmanual-update\x01\x07\0\x04\0\x11worker-invocation\x03\0C\x01r\x02\x09ti\
-mestamp\x01\x0ainvocation\xc4\0\x04\0$pending-worker-invocation-parameters\x03\0\
-E\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot-based\x01\xc7\0\0\x04\0\x12updat\
-e-description\x03\0H\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x12update-d\
-escription\xc9\0\x04\0\x19pending-update-parameters\x03\0J\x01r\x04\x09timestamp\
-\x01\x0etarget-version\x07\x12new-component-sizew\x12new-active-plugins!\x04\0\x1c\
-successful-update-parameters\x03\0L\x01ks\x01r\x03\x09timestamp\x01\x0etarget-ve\
-rsion\x07\x07details\xce\0\x04\0\x18failed-update-parameters\x03\0O\x01r\x02\x09\
-timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\x03\0Q\x01w\x04\0\x12wor\
-ker-resource-id\x03\0S\x01r\x02\x09timestamp\x01\x0bresource-id\xd4\0\x04\0\x1ac\
-reate-resource-parameters\x03\0U\x01r\x02\x09timestamp\x01\x0bresource-id\xd4\0\x04\
-\0\x18drop-resource-parameters\x03\0W\x01r\x04\x09timestamp\x01\x0bresource-id\xd4\
-\0\x0dresource-names\x0fresource-params/\x04\0\x1cdescribe-resource-parameters\x03\
-\0Y\x01m\x08\x06stdout\x06stderr\x05trace\x05debug\x04info\x04warn\x05error\x08c\
-ritical\x04\0\x09log-level\x03\0[\x01r\x04\x09timestamp\x01\x05level\xdc\0\x07co\
-ntexts\x07messages\x04\0\x0elog-parameters\x03\0]\x01r\x02\x09timestamp\x01\x06p\
-lugin\x1e\x04\0\x1aactivate-plugin-parameters\x03\0_\x01r\x02\x09timestamp\x01\x06\
-plugin\x1e\x04\0\x1cdeactivate-plugin-parameters\x03\0a\x01r\x03\x09timestamp\x01\
-\x05start\x09\x03end\x09\x04\0\x11revert-parameters\x03\0c\x01r\x02\x09timestamp\
-\x01\x0fidempotency-keys\x04\0\x1ccancel-invocation-parameters\x03\0e\x01r\x05\x09\
-timestamp\x01\x07span-id\x15\x06parent&\x0elinked-context&\x0aattributes(\x04\0\x15\
-start-span-parameters\x03\0g\x01r\x02\x09timestamp\x01\x07span-id\x15\x04\0\x16f\
-inish-span-parameters\x03\0i\x01r\x04\x09timestamp\x01\x07span-id\x15\x03keys\x05\
-value\x13\x04\0\x1dset-span-attribute-parameters\x03\0k\x01q\x20\x06create\x01#\0\
-\x19imported-function-invoked\x01%\0\x19exported-function-invoked\x013\0\x1bexpo\
-rted-function-completed\x015\0\x07suspend\x01\x01\0\x05error\x017\0\x05no-op\x01\
-\x01\0\x04jump\x019\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13change-ret\
-ry-policy\x01;\0\x13begin-atomic-region\x01\x01\0\x11end-atomic-region\x01=\0\x12\
-begin-remote-write\x01\x01\0\x10end-remote-write\x01?\0\x19pending-worker-invoca\
-tion\x01\xc6\0\0\x0epending-update\x01\xcb\0\0\x11successful-update\x01\xcd\0\0\x0d\
-failed-update\x01\xd0\0\0\x0bgrow-memory\x01\xd2\0\0\x0fcreate-resource\x01\xd6\0\
-\0\x0ddrop-resource\x01\xd8\0\0\x11describe-resource\x01\xda\0\0\x03log\x01\xde\0\
-\0\x07restart\x01\x01\0\x0factivate-plugin\x01\xe0\0\0\x11deactivate-plugin\x01\xe2\
-\0\0\x06revert\x01\xe4\0\0\x11cancel-invocation\x01\xe6\0\0\x0astart-span\x01\xe8\
-\0\0\x0bfinish-span\x01\xea\0\0\x12set-span-attribute\x01\xec\0\0\x04\0\x0boplog\
--entry\x03\0m\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01io\x01\
-@\x02\x09worker-id\x0f\x05start\x09\0\xf1\0\x04\0\x16[constructor]get-oplog\x01r\
-\x01ho\x01p\xee\0\x01k\xf4\0\x01@\x01\x04self\xf3\0\0\xf5\0\x04\0\x1a[method]get\
--oplog.get-next\x01v\x01ip\x01@\x02\x09worker-id\x0f\x04texts\0\xf7\0\x04\0\x19[\
-constructor]search-oplog\x01x\x01hp\x01o\x02\x09\xee\0\x01p\xfa\0\x01k\xfb\0\x01\
-@\x01\x04self\xf9\0\0\xfc\0\x04\0\x1d[method]search-oplog.get-next\x01}\x03\0\x15\
-golem:api/oplog@1.1.6\x05\x17\x02\x03\0\x04\x11persistence-level\x02\x03\0\x06\x0b\
-oplog-index\x02\x03\0\x06\x15wrapped-function-type\x02\x03\0\x03\x0evalue-and-ty\
-pe\x01B\x20\x02\x03\x02\x01\x18\x04\0\x11persistence-level\x03\0\0\x02\x03\x02\x01\
-\x19\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01\x1a\x04\0\x15wrapped-functio\
-n-type\x03\0\x04\x02\x03\x02\x01\x04\x04\0\x08datetime\x03\0\x06\x02\x03\x02\x01\
-\x1b\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15durable-function-type\x03\0\x05\x01\
-r\x02\x07is-live\x7f\x11persistence-level\x01\x04\0\x17durable-execution-state\x03\
-\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-entry-version\x03\0\x0d\x01p}\x01r\x05\
-\x09timestamp\x07\x0dfunction-names\x08response\x0f\x0dfunction-type\x0a\x0dentr\
-y-version\x0e\x04\0%persisted-durable-function-invocation\x03\0\x10\x01@\x02\x05\
-ifaces\x08functions\x01\0\x04\0\x15observe-function-call\x01\x12\x01@\x01\x0dfun\
-ction-type\x0a\0\x03\x04\0\x16begin-durable-function\x01\x13\x01@\x03\x0dfunctio\
-n-type\x0a\x0bbegin-index\x03\x0dforced-commit\x7f\x01\0\x04\0\x14end-durable-fu\
-nction\x01\x14\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-state\x01\x15\x01\
-@\x04\x0dfunction-names\x07request\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\
-\x04\0#persist-durable-function-invocation\x01\x16\x01@\x04\x0dfunction-names\x07\
-request\x09\x08response\x09\x0dfunction-type\x0a\x01\0\x04\0)persist-typed-durab\
-le-function-invocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-functio\
-n-invocation\x01\x18\x03\0!golem:durability/durability@1.2.0\x05\x1c\x01B\x13\x01\
-r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\0\x01o\x04}}}}\x01o\x08{{{{\
-{{{{\x01q\x02\x04ipv4\x01\x02\0\x04ipv6\x01\x03\0\x04\0\x0aip-address\x03\0\x04\x01\
-o\x06}}}}}}\x01r\x01\x06octets\x06\x04\0\x0bmac-address\x03\0\x07\x01r\x03\x04ye\
-arz\x05month}\x03day}\x04\0\x04date\x03\0\x09\x01r\x04\x04hour}\x06minute}\x06se\
-cond}\x0ananosecondy\x04\0\x04time\x03\0\x0b\x01r\x02\x04date\x0a\x04time\x0c\x04\
-\0\x09timestamp\x03\0\x0d\x01r\x02\x09timestamp\x0e\x06offsetz\x04\0\x0btimestam\
-ptz\x03\0\x0f\x01r\x02\x04time\x0c\x06offsetz\x04\0\x06timetz\x03\0\x11\x03\0\x17\
-golem:rdbms/types@0.0.1\x05\x1d\x02\x03\0\x08\x04date\x02\x03\0\x08\x04time\x02\x03\
-\0\x08\x09timestamp\x01B>\x02\x03\x02\x01\x1e\x04\0\x04date\x03\0\0\x02\x03\x02\x01\
-\x1f\x04\0\x04time\x03\0\x02\x02\x03\x02\x01\x20\x04\0\x09timestamp\x03\0\x04\x01\
-q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01s\0\x17query-ex\
-ecution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01s\0\x04\0\x05\
-error\x03\0\x06\x01q#\x07boolean\0\0\x07tinyint\0\0\x08smallint\0\0\x09mediumint\
-\0\0\x03int\0\0\x06bigint\0\0\x10tinyint-unsigned\0\0\x11smallint-unsigned\0\0\x12\
-mediumint-unsigned\0\0\x0cint-unsigned\0\0\x0fbigint-unsigned\0\0\x05float\0\0\x06\
-double\0\0\x07decimal\0\0\x04date\0\0\x08datetime\0\0\x09timestamp\0\0\x04time\0\
-\0\x04year\0\0\x07fixchar\0\0\x07varchar\0\0\x08tinytext\0\0\x04text\0\0\x0amedi\
-umtext\0\0\x08longtext\0\0\x06binary\0\0\x09varbinary\0\0\x08tinyblob\0\0\x04blo\
-b\0\0\x0amediumblob\0\0\x08longblob\0\0\x0benumeration\0\0\x03set\0\0\x03bit\0\0\
-\x04json\0\0\x04\0\x0edb-column-type\x03\0\x08\x01r\x04\x07ordinalw\x04names\x07\
-db-type\x09\x0cdb-type-names\x04\0\x09db-column\x03\0\x0a\x01p}\x01p\x7f\x01q$\x07\
-boolean\x01\x7f\0\x07tinyint\x01~\0\x08smallint\x01|\0\x09mediumint\x01z\0\x03in\
-t\x01z\0\x06bigint\x01x\0\x10tinyint-unsigned\x01}\0\x11smallint-unsigned\x01{\0\
-\x12mediumint-unsigned\x01y\0\x0cint-unsigned\x01y\0\x0fbigint-unsigned\x01w\0\x05\
-float\x01v\0\x06double\x01u\0\x07decimal\x01s\0\x04date\x01\x01\0\x08datetime\x01\
-\x05\0\x09timestamp\x01\x05\0\x04time\x01\x03\0\x04year\x01{\0\x07fixchar\x01s\0\
-\x07varchar\x01s\0\x08tinytext\x01s\0\x04text\x01s\0\x0amediumtext\x01s\0\x08lon\
-gtext\x01s\0\x06binary\x01\x0c\0\x09varbinary\x01\x0c\0\x08tinyblob\x01\x0c\0\x04\
-blob\x01\x0c\0\x0amediumblob\x01\x0c\0\x08longblob\x01\x0c\0\x0benumeration\x01s\
-\0\x03set\x01s\0\x03bit\x01\x0d\0\x04json\x01s\0\x04null\0\0\x04\0\x08db-value\x03\
-\0\x0e\x01p\x0f\x01r\x01\x06values\x10\x04\0\x06db-row\x03\0\x11\x01p\x0b\x01p\x12\
-\x01r\x02\x07columns\x13\x04rows\x14\x04\0\x09db-result\x03\0\x15\x04\0\x10db-re\
-sult-stream\x03\x01\x04\0\x0ddb-connection\x03\x01\x04\0\x0edb-transaction\x03\x01\
-\x01h\x17\x01@\x01\x04self\x1a\0\x13\x04\0$[method]db-result-stream.get-columns\x01\
-\x1b\x01k\x14\x01@\x01\x04self\x1a\0\x1c\x04\0![method]db-result-stream.get-next\
-\x01\x1d\x01i\x18\x01j\x01\x1e\x01\x07\x01@\x01\x07addresss\0\x1f\x04\0\x1a[stat\
-ic]db-connection.open\x01\x20\x01h\x18\x01j\x01\x16\x01\x07\x01@\x03\x04self!\x09\
-statements\x06params\x10\0\"\x04\0\x1b[method]db-connection.query\x01#\x01i\x17\x01\
-j\x01$\x01\x07\x01@\x03\x04self!\x09statements\x06params\x10\0%\x04\0\"[method]d\
-b-connection.query-stream\x01&\x01j\x01w\x01\x07\x01@\x03\x04self!\x09statements\
-\x06params\x10\0'\x04\0\x1d[method]db-connection.execute\x01(\x01i\x19\x01j\x01)\
-\x01\x07\x01@\x01\x04self!\0*\x04\0'[method]db-connection.begin-transaction\x01+\
-\x01h\x19\x01@\x03\x04self,\x09statements\x06params\x10\0\"\x04\0\x1c[method]db-\
-transaction.query\x01-\x01@\x03\x04self,\x09statements\x06params\x10\0%\x04\0#[m\
-ethod]db-transaction.query-stream\x01.\x01@\x03\x04self,\x09statements\x06params\
-\x10\0'\x04\0\x1e[method]db-transaction.execute\x01/\x01j\0\x01\x07\x01@\x01\x04\
-self,\00\x04\0\x1d[method]db-transaction.commit\x011\x04\0\x1f[method]db-transac\
-tion.rollback\x011\x03\0\x17golem:rdbms/mysql@0.0.1\x05!\x02\x03\0\x08\x06timetz\
-\x02\x03\0\x08\x0btimestamptz\x02\x03\0\x08\x04uuid\x02\x03\0\x08\x0aip-address\x02\
-\x03\0\x08\x0bmac-address\x01B\x87\x01\x02\x03\x02\x01\x1e\x04\0\x04date\x03\0\0\
-\x02\x03\x02\x01\x1f\x04\0\x04time\x03\0\x02\x02\x03\x02\x01\"\x04\0\x06timetz\x03\
-\0\x04\x02\x03\x02\x01\x20\x04\0\x09timestamp\x03\0\x06\x02\x03\x02\x01#\x04\0\x0b\
-timestamptz\x03\0\x08\x02\x03\x02\x01$\x04\0\x04uuid\x03\0\x0a\x02\x03\x02\x01%\x04\
-\0\x0aip-address\x03\0\x0c\x02\x03\x02\x01&\x04\0\x0bmac-address\x03\0\x0e\x01q\x05\
-\x12connection-failure\x01s\0\x17query-parameter-failure\x01s\0\x17query-executi\
-on-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01s\0\x04\0\x05erro\
-r\x03\0\x10\x01r\x03\x06monthsz\x04daysz\x0cmicrosecondsx\x04\0\x08interval\x03\0\
-\x12\x01q\x03\x08included\x01z\0\x08excluded\x01z\0\x09unbounded\0\0\x04\0\x09in\
-t4bound\x03\0\x14\x01q\x03\x08included\x01x\0\x08excluded\x01x\0\x09unbounded\0\0\
-\x04\0\x09int8bound\x03\0\x16\x01q\x03\x08included\x01s\0\x08excluded\x01s\0\x09\
-unbounded\0\0\x04\0\x08numbound\x03\0\x18\x01q\x03\x08included\x01\x07\0\x08excl\
-uded\x01\x07\0\x09unbounded\0\0\x04\0\x07tsbound\x03\0\x1a\x01q\x03\x08included\x01\
-\x09\0\x08excluded\x01\x09\0\x09unbounded\0\0\x04\0\x09tstzbound\x03\0\x1c\x01q\x03\
-\x08included\x01\x01\0\x08excluded\x01\x01\0\x09unbounded\0\0\x04\0\x09datebound\
-\x03\0\x1e\x01r\x02\x05start\x15\x03end\x15\x04\0\x09int4range\x03\0\x20\x01r\x02\
-\x05start\x17\x03end\x17\x04\0\x09int8range\x03\0\"\x01r\x02\x05start\x19\x03end\
-\x19\x04\0\x08numrange\x03\0$\x01r\x02\x05start\x1b\x03end\x1b\x04\0\x07tsrange\x03\
-\0&\x01r\x02\x05start\x1d\x03end\x1d\x04\0\x09tstzrange\x03\0(\x01r\x02\x05start\
-\x1f\x03end\x1f\x04\0\x09daterange\x03\0*\x01r\x01\x04names\x04\0\x10enumeration\
--type\x03\0,\x01r\x02\x04names\x05values\x04\0\x0benumeration\x03\0.\x04\0\x0dla\
-zy-db-value\x03\x01\x01i0\x01p1\x01r\x02\x04names\x06values2\x04\0\x09composite\x03\
-\03\x01r\x02\x04names\x05value1\x04\0\x06domain\x03\05\x01q\x03\x08included\x011\
-\0\x08excluded\x011\0\x09unbounded\0\0\x04\0\x0bvalue-bound\x03\07\x01r\x02\x05s\
-tart8\x03end8\x04\0\x0cvalues-range\x03\09\x01r\x02\x04names\x05value:\x04\0\x05\
-range\x03\0;\x01p}\x01p\x7f\x01q*\x09character\x01~\0\x04int2\x01|\0\x04int4\x01\
-z\0\x04int8\x01x\0\x06float4\x01v\0\x06float8\x01u\0\x07numeric\x01s\0\x07boolea\
-n\x01\x7f\0\x04text\x01s\0\x07varchar\x01s\0\x06bpchar\x01s\0\x09timestamp\x01\x07\
-\0\x0btimestamptz\x01\x09\0\x04date\x01\x01\0\x04time\x01\x03\0\x06timetz\x01\x05\
-\0\x08interval\x01\x13\0\x05bytea\x01=\0\x04json\x01s\0\x05jsonb\x01s\0\x08jsonp\
-ath\x01s\0\x03xml\x01s\0\x04uuid\x01\x0b\0\x04inet\x01\x0d\0\x04cidr\x01\x0d\0\x07\
-macaddr\x01\x0f\0\x03bit\x01>\0\x06varbit\x01>\0\x09int4range\x01!\0\x09int8rang\
-e\x01#\0\x08numrange\x01%\0\x07tsrange\x01'\0\x09tstzrange\x01)\0\x09daterange\x01\
-+\0\x05money\x01x\0\x03oid\x01y\0\x0benumeration\x01/\0\x09composite\x014\0\x06d\
-omain\x016\0\x05array\x012\0\x05range\x01<\0\x04null\0\0\x04\0\x08db-value\x03\0\
-?\x04\0\x13lazy-db-column-type\x03\x01\x01iA\x01o\x02s\xc2\0\x01p\xc3\0\x01r\x02\
-\x04names\x0aattributes\xc4\0\x04\0\x0ecomposite-type\x03\0E\x01r\x02\x04names\x09\
-base-type\xc2\0\x04\0\x0bdomain-type\x03\0G\x01r\x02\x04names\x09base-type\xc2\0\
-\x04\0\x0arange-type\x03\0I\x01q)\x09character\0\0\x04int2\0\0\x04int4\0\0\x04in\
-t8\0\0\x06float4\0\0\x06float8\0\0\x07numeric\0\0\x07boolean\0\0\x04text\0\0\x07\
-varchar\0\0\x06bpchar\0\0\x09timestamp\0\0\x0btimestamptz\0\0\x04date\0\0\x04tim\
-e\0\0\x06timetz\0\0\x08interval\0\0\x05bytea\0\0\x04uuid\0\0\x03xml\0\0\x04json\0\
-\0\x05jsonb\0\0\x08jsonpath\0\0\x04inet\0\0\x04cidr\0\0\x07macaddr\0\0\x03bit\0\0\
-\x06varbit\0\0\x09int4range\0\0\x09int8range\0\0\x08numrange\0\0\x07tsrange\0\0\x09\
-tstzrange\0\0\x09daterange\0\0\x05money\0\0\x03oid\0\0\x0benumeration\x01-\0\x09\
-composite\x01\xc6\0\0\x06domain\x01\xc8\0\0\x05array\x01\xc2\0\0\x05range\x01\xca\
-\0\0\x04\0\x0edb-column-type\x03\0K\x01r\x04\x07ordinalw\x04names\x07db-type\xcc\
-\0\x0cdb-type-names\x04\0\x09db-column\x03\0M\x01p\xc0\0\x01r\x01\x06values\xcf\0\
-\x04\0\x06db-row\x03\0P\x01p\xce\0\x01p\xd1\0\x01r\x02\x07columns\xd2\0\x04rows\xd3\
-\0\x04\0\x09db-result\x03\0T\x04\0\x10db-result-stream\x03\x01\x04\0\x0ddb-conne\
-ction\x03\x01\x04\0\x0edb-transaction\x03\x01\x01@\x01\x05value\xc0\0\01\x04\0\x1a\
-[constructor]lazy-db-value\x01Y\x01h0\x01@\x01\x04self\xda\0\0\xc0\0\x04\0\x19[m\
-ethod]lazy-db-value.get\x01[\x01@\x01\x05value\xcc\0\0\xc2\0\x04\0\x20[construct\
-or]lazy-db-column-type\x01\\\x01hA\x01@\x01\x04self\xdd\0\0\xcc\0\x04\0\x1f[meth\
-od]lazy-db-column-type.get\x01^\x01hV\x01@\x01\x04self\xdf\0\0\xd2\0\x04\0$[meth\
-od]db-result-stream.get-columns\x01`\x01k\xd3\0\x01@\x01\x04self\xdf\0\0\xe1\0\x04\
-\0![method]db-result-stream.get-next\x01b\x01iW\x01j\x01\xe3\0\x01\x11\x01@\x01\x07\
-addresss\0\xe4\0\x04\0\x1a[static]db-connection.open\x01e\x01hW\x01j\x01\xd5\0\x01\
-\x11\x01@\x03\x04self\xe6\0\x09statements\x06params\xcf\0\0\xe7\0\x04\0\x1b[meth\
-od]db-connection.query\x01h\x01iV\x01j\x01\xe9\0\x01\x11\x01@\x03\x04self\xe6\0\x09\
-statements\x06params\xcf\0\0\xea\0\x04\0\"[method]db-connection.query-stream\x01\
-k\x01j\x01w\x01\x11\x01@\x03\x04self\xe6\0\x09statements\x06params\xcf\0\0\xec\0\
-\x04\0\x1d[method]db-connection.execute\x01m\x01iX\x01j\x01\xee\0\x01\x11\x01@\x01\
-\x04self\xe6\0\0\xef\0\x04\0'[method]db-connection.begin-transaction\x01p\x01hX\x01\
-@\x03\x04self\xf1\0\x09statements\x06params\xcf\0\0\xe7\0\x04\0\x1c[method]db-tr\
-ansaction.query\x01r\x01@\x03\x04self\xf1\0\x09statements\x06params\xcf\0\0\xea\0\
-\x04\0#[method]db-transaction.query-stream\x01s\x01@\x03\x04self\xf1\0\x09statem\
-ents\x06params\xcf\0\0\xec\0\x04\0\x1e[method]db-transaction.execute\x01t\x01j\0\
-\x01\x11\x01@\x01\x04self\xf1\0\0\xf5\0\x04\0\x1d[method]db-transaction.commit\x01\
-v\x04\0\x1f[method]db-transaction.rollback\x01v\x03\0\x1agolem:rdbms/postgres@0.\
-0.1\x05'\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d\
-[method]error.to-debug-string\x01\x02\x03\0\x13wasi:io/error@0.2.0\x05(\x02\x03\0\
-\x0b\x05error\x01B(\x02\x03\x02\x01)\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\
-\0\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06\
-closed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0d\
-output-stream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03\
-lenw\0\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-strea\
-m.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\
-\0\x19[method]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-ski\
-p\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subs\
-cribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.ch\
-eck-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\
-\x1b[method]output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-wri\
-te-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.f\
-lush\x01\x15\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\
-\x11\0\x0f\x04\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\
-\x03lenw\0\x13\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]o\
-utput-stream.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\
-\x09\x03lenw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]o\
-utput-stream.blocking-splice\x01\x18\x03\0\x15wasi:io/streams@0.2.0\x05*\x02\x03\
-\0\x0c\x0cinput-stream\x02\x03\0\x0c\x0doutput-stream\x01B+\x02\x03\x02\x01+\x04\
-\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01,\x04\0\x0doutput-stream\x03\0\x02\x01\
-s\x04\0\x0econtainer-name\x03\0\x04\x01s\x04\0\x0bobject-name\x03\0\x06\x01w\x04\
-\0\x09timestamp\x03\0\x08\x01w\x04\0\x0bobject-size\x03\0\x0a\x01s\x04\0\x05erro\
-r\x03\0\x0c\x01r\x02\x04name\x05\x0acreated-at\x09\x04\0\x12container-metadata\x03\
-\0\x0e\x01r\x04\x04name\x07\x09container\x05\x0acreated-at\x09\x04size\x0b\x04\0\
-\x0fobject-metadata\x03\0\x10\x01r\x02\x09container\x05\x06object\x07\x04\0\x09o\
-bject-id\x03\0\x12\x04\0\x0eoutgoing-value\x03\x01\x04\0\x0eincoming-value\x03\x01\
-\x04\0\x19incoming-value-async-body\x03\0\x01\x01p}\x04\0\x18incoming-value-sync\
--body\x03\0\x17\x01i\x14\x01@\0\0\x19\x04\0)[static]outgoing-value.new-outgoing-\
-value\x01\x1a\x01h\x14\x01i\x03\x01j\x01\x1c\0\x01@\x01\x04self\x1b\0\x1d\x04\00\
-[method]outgoing-value.outgoing-value-write-body\x01\x1e\x01h\x15\x01j\x01\x18\x01\
-\x0d\x01@\x01\x04self\x1f\0\x20\x04\02[method]incoming-value.incoming-value-cons\
-ume-sync\x01!\x01i\x16\x01j\x01\"\x01\x0d\x01@\x01\x04self\x1f\0#\x04\03[method]\
-incoming-value.incoming-value-consume-async\x01$\x01@\x01\x04self\x1f\0w\x04\0\x1b\
-[method]incoming-value.size\x01%\x03\0\x14wasi:blobstore/types\x05-\x02\x03\0\x0d\
-\x12container-metadata\x02\x03\0\x0d\x05error\x02\x03\0\x0d\x0eincoming-value\x02\
-\x03\0\x0d\x0fobject-metadata\x02\x03\0\x0d\x0bobject-name\x02\x03\0\x0d\x0eoutg\
-oing-value\x01B;\x02\x03\x02\x01+\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01,\
-\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01.\x04\0\x12container-metadata\x03\
-\0\x04\x02\x03\x02\x01/\x04\0\x05error\x03\0\x06\x02\x03\x02\x010\x04\0\x0eincom\
-ing-value\x03\0\x08\x02\x03\x02\x011\x04\0\x0fobject-metadata\x03\0\x0a\x02\x03\x02\
-\x012\x04\0\x0bobject-name\x03\0\x0c\x02\x03\x02\x013\x04\0\x0eoutgoing-value\x03\
-\0\x0e\x04\0\x09container\x03\x01\x04\0\x13stream-object-names\x03\x01\x01h\x10\x01\
-j\x01s\x01\x07\x01@\x01\x04self\x12\0\x13\x04\0\x16[method]container.name\x01\x14\
-\x01j\x01\x05\x01\x07\x01@\x01\x04self\x12\0\x15\x04\0\x16[method]container.info\
-\x01\x16\x01i\x09\x01j\x01\x17\x01\x07\x01@\x04\x04self\x12\x04name\x0d\x05start\
-w\x03endw\0\x18\x04\0\x1a[method]container.get-data\x01\x19\x01h\x0f\x01j\0\x01\x07\
-\x01@\x03\x04self\x12\x04name\x0d\x04data\x1a\0\x1b\x04\0\x1c[method]container.w\
-rite-data\x01\x1c\x01i\x11\x01j\x01\x1d\x01\x07\x01@\x01\x04self\x12\0\x1e\x04\0\
-\x1e[method]container.list-objects\x01\x1f\x01@\x02\x04self\x12\x04name\x0d\0\x1b\
-\x04\0\x1f[method]container.delete-object\x01\x20\x01p\x0d\x01@\x02\x04self\x12\x05\
-names!\0\x1b\x04\0\x20[method]container.delete-objects\x01\"\x01j\x01\x7f\x01\x07\
-\x01@\x02\x04self\x12\x04name\x0d\0#\x04\0\x1c[method]container.has-object\x01$\x01\
-j\x01\x0b\x01\x07\x01@\x02\x04self\x12\x04name\x0d\0%\x04\0\x1d[method]container\
-.object-info\x01&\x01@\x01\x04self\x12\0\x1b\x04\0\x17[method]container.clear\x01\
-'\x01h\x11\x01o\x02!\x7f\x01j\x01)\x01\x07\x01@\x02\x04self(\x03lenw\0*\x04\04[m\
-ethod]stream-object-names.read-stream-object-names\x01+\x01o\x02w\x7f\x01j\x01,\x01\
-\x07\x01@\x02\x04self(\x03numw\0-\x04\04[method]stream-object-names.skip-stream-\
-object-names\x01.\x03\0\x18wasi:blobstore/container\x054\x02\x03\0\x0e\x09contai\
-ner\x02\x03\0\x0d\x0econtainer-name\x02\x03\0\x0d\x09object-id\x01B\x16\x02\x03\x02\
-\x015\x04\0\x09container\x03\0\0\x02\x03\x02\x01/\x04\0\x05error\x03\0\x02\x02\x03\
-\x02\x016\x04\0\x0econtainer-name\x03\0\x04\x02\x03\x02\x017\x04\0\x09object-id\x03\
-\0\x06\x01i\x01\x01j\x01\x08\x01\x03\x01@\x01\x04name\x05\0\x09\x04\0\x10create-\
-container\x01\x0a\x04\0\x0dget-container\x01\x0a\x01j\0\x01\x03\x01@\x01\x04name\
-\x05\0\x0b\x04\0\x10delete-container\x01\x0c\x01j\x01\x7f\x01\x03\x01@\x01\x04na\
-me\x05\0\x0d\x04\0\x10container-exists\x01\x0e\x01@\x02\x03src\x07\x04dest\x07\0\
-\x0b\x04\0\x0bcopy-object\x01\x0f\x04\0\x0bmove-object\x01\x0f\x03\0\x18wasi:blo\
-bstore/blobstore\x058\x02\x03\0\x0c\x05error\x01Br\x02\x03\x02\x01+\x04\0\x0cinp\
-ut-stream\x03\0\0\x02\x03\x02\x01,\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\
-9\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\x04\x04\0\x08datetime\x03\0\x06\x01w\x04\
-\0\x08filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-device\x10character-device\
-\x09directory\x04fifo\x0dsymbolic-link\x0cregular-file\x06socket\x04\0\x0fdescri\
-ptor-type\x03\0\x0a\x01n\x06\x04read\x05write\x13file-integrity-sync\x13data-int\
-egrity-sync\x14requested-write-sync\x10mutate-directory\x04\0\x10descriptor-flag\
-s\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\0\x0e\x01n\x04\x06\
-create\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-flags\x03\0\x10\x01w\x04\
-\0\x0alink-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-count\x13\x04si\
-ze\x09\x15data-access-timestamp\x14\x1bdata-modification-timestamp\x14\x17status\
--change-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\x09no-change\0\
-\0\x03now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\x17\x01r\x02\x04\
-type\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06access\x0bwould-bl\
-ock\x07already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05exist\x0efile-t\
-oo-large\x15illegal-byte-sequence\x0bin-progress\x0binterrupted\x07invalid\x02io\
-\x0cis-directory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-too-long\x09n\
-o-device\x08no-entry\x07no-lock\x13insufficient-memory\x12insufficient-space\x0d\
-not-directory\x09not-empty\x0fnot-recoverable\x0bunsupported\x06no-tty\x0eno-suc\
-h-device\x08overflow\x0dnot-permitted\x04pipe\x09read-only\x0cinvalid-seek\x0ete\
-xt-file-busy\x0ccross-device\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\x06normal\x0a\
-sequential\x06random\x09will-need\x09dont-need\x08no-reuse\x04\0\x06advice\x03\0\
-\x1d\x01r\x02\x05lowerw\x05upperw\x04\0\x13metadata-hash-value\x03\0\x1f\x04\0\x0a\
-descriptor\x03\x01\x04\0\x16directory-entry-stream\x03\x01\x01h!\x01i\x01\x01j\x01\
-$\x01\x1c\x01@\x02\x04self#\x06offset\x09\0%\x04\0\"[method]descriptor.read-via-\
-stream\x01&\x01i\x03\x01j\x01'\x01\x1c\x01@\x02\x04self#\x06offset\x09\0(\x04\0#\
-[method]descriptor.write-via-stream\x01)\x01@\x01\x04self#\0(\x04\0$[method]desc\
-riptor.append-via-stream\x01*\x01j\0\x01\x1c\x01@\x04\x04self#\x06offset\x09\x06\
-length\x09\x06advice\x1e\0+\x04\0\x19[method]descriptor.advise\x01,\x01@\x01\x04\
-self#\0+\x04\0\x1c[method]descriptor.sync-data\x01-\x01j\x01\x0d\x01\x1c\x01@\x01\
-\x04self#\0.\x04\0\x1c[method]descriptor.get-flags\x01/\x01j\x01\x0b\x01\x1c\x01\
-@\x01\x04self#\00\x04\0\x1b[method]descriptor.get-type\x011\x01@\x02\x04self#\x04\
-size\x09\0+\x04\0\x1b[method]descriptor.set-size\x012\x01@\x03\x04self#\x15data-\
-access-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1c[method]desc\
-riptor.set-times\x013\x01p}\x01o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\x04self#\x06\
-length\x09\x06offset\x09\06\x04\0\x17[method]descriptor.read\x017\x01j\x01\x09\x01\
-\x1c\x01@\x03\x04self#\x06buffer4\x06offset\x09\08\x04\0\x18[method]descriptor.w\
-rite\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\x04self#\0;\x04\0![method]descriptor\
-.read-directory\x01<\x04\0\x17[method]descriptor.sync\x01-\x01@\x02\x04self#\x04\
-paths\0+\x04\0&[method]descriptor.create-directory-at\x01=\x01j\x01\x16\x01\x1c\x01\
-@\x01\x04self#\0>\x04\0\x17[method]descriptor.stat\x01?\x01@\x03\x04self#\x0apat\
-h-flags\x0f\x04paths\0>\x04\0\x1a[method]descriptor.stat-at\x01@\x01@\x05\x04sel\
-f#\x0apath-flags\x0f\x04paths\x15data-access-timestamp\x18\x1bdata-modification-\
-timestamp\x18\0+\x04\0\x1f[method]descriptor.set-times-at\x01A\x01@\x05\x04self#\
-\x0eold-path-flags\x0f\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\x1a\
-[method]descriptor.link-at\x01B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\x04self#\x0a\
-path-flags\x0f\x04paths\x0aopen-flags\x11\x05flags\x0d\0\xc4\0\x04\0\x1a[method]\
-descriptor.open-at\x01E\x01j\x01s\x01\x1c\x01@\x02\x04self#\x04paths\0\xc6\0\x04\
-\0\x1e[method]descriptor.readlink-at\x01G\x04\0&[method]descriptor.remove-direct\
-ory-at\x01=\x01@\x04\x04self#\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\
-\0\x1c[method]descriptor.rename-at\x01H\x01@\x03\x04self#\x08old-paths\x08new-pa\
-ths\0+\x04\0\x1d[method]descriptor.symlink-at\x01I\x04\0![method]descriptor.unli\
-nk-file-at\x01=\x01@\x02\x04self#\x05other#\0\x7f\x04\0![method]descriptor.is-sa\
-me-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\x20[method]d\
-escriptor.metadata-hash\x01L\x01@\x03\x04self#\x0apath-flags\x0f\x04paths\0\xcb\0\
-\x04\0#[method]descriptor.metadata-hash-at\x01M\x01h\"\x01k\x1a\x01j\x01\xcf\0\x01\
-\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry-stream.read-di\
-rectory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\x04\0\x15file\
-system-error-code\x01T\x03\0\x1bwasi:filesystem/types@0.2.0\x05:\x02\x03\0\x10\x0a\
-descriptor\x01B\x07\x02\x03\x02\x01;\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\
-\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x03\0\x1ewasi:files\
-ystem/preopens@0.2.0\x05<\x01B\xc0\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\
-\0\0\x02\x03\x02\x01+\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\x01,\x04\0\x0d\
-output-stream\x03\0\x04\x02\x03\x02\x01)\x04\0\x08io-error\x03\0\x06\x02\x03\x02\
-\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\
-\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\
-\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05\
-other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info\
--code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0d\
-alert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0a\
-field-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01\
-k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destination-not-found\0\
-\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\0\x19destinatio\
-n-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-terminated\0\0\x12co\
-nnection-timeout\0\0\x17connection-read-timeout\0\0\x18connection-write-timeout\0\
-\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15TLS-certificate-\
-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\0\0\x1cHTTP-req\
-uest-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHTTP-request-met\
-hod-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-URI-too-long\0\0\
-\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-header-size\x01\x19\
-\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request-trailer-size\x01\x17\
-\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-section-size\x01\x15\0\x19\
-HTTP-response-header-size\x01\x17\0\x17HTTP-response-body-size\x01\x18\0\"HTTP-r\
-esponse-trailer-section-size\x01\x15\0\x1aHTTP-response-trailer-size\x01\x17\0\x1d\
-HTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-response-content-coding\x01\x0e\0\
-\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\0\x13HTTP-protocol-error\0\
-\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0einternal-error\x01\x0e\0\x04\
-\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\0\0\x09forbidden\0\0\x09im\
-mutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01\
-p}\x04\0\x0bfield-value\x03\0\x20\x04\0\x06fields\x03\x01\x04\0\x07headers\x03\0\
-\"\x04\0\x08trailers\x03\0\"\x04\0\x10incoming-request\x03\x01\x04\0\x10outgoing\
--request\x03\x01\x04\0\x0frequest-options\x03\x01\x04\0\x11response-outparam\x03\
-\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\0\x11incoming-response\x03\x01\x04\0\x0d\
-incoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\x04\0\x11outgoing-respons\
-e\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18future-incoming-response\x03\x01\
-\x01i\"\x01@\0\01\x04\0\x13[constructor]fields\x012\x01o\x02\x1f!\x01p3\x01j\x01\
-1\x01\x1d\x01@\x01\x07entries4\05\x04\0\x18[static]fields.from-list\x016\x01h\"\x01\
-p!\x01@\x02\x04self7\x04name\x1f\08\x04\0\x12[method]fields.get\x019\x01@\x02\x04\
-self7\x04name\x1f\0\x7f\x04\0\x12[method]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\
-\x04self7\x04name\x1f\x05value8\0;\x04\0\x12[method]fields.set\x01<\x01@\x02\x04\
-self7\x04name\x1f\0;\x04\0\x15[method]fields.delete\x01=\x01@\x03\x04self7\x04na\
-me\x1f\x05value!\0;\x04\0\x15[method]fields.append\x01>\x01@\x01\x04self7\04\x04\
-\0\x16[method]fields.entries\x01?\x01@\x01\x04self7\01\x04\0\x14[method]fields.c\
-lone\x01@\x01h%\x01@\x01\x04self\xc1\0\0\x0b\x04\0\x1f[method]incoming-request.m\
-ethod\x01B\x01@\x01\x04self\xc1\0\0\x0e\x04\0([method]incoming-request.path-with\
--query\x01C\x01k\x0d\x01@\x01\x04self\xc1\0\0\xc4\0\x04\0\x1f[method]incoming-re\
-quest.scheme\x01E\x04\0\"[method]incoming-request.authority\x01C\x01i#\x01@\x01\x04\
-self\xc1\0\0\xc6\0\x04\0\x20[method]incoming-request.headers\x01G\x01i,\x01j\x01\
-\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\x04\0\x20[method]incoming-request.consum\
-e\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\xcb\0\x04\0\x1d[constructor]outgoing-re\
-quest\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d\
-[method]outgoing-request.body\x01P\x01@\x01\x04self\xcd\0\0\x0b\x04\0\x1f[method\
-]outgoing-request.method\x01Q\x01j\0\0\x01@\x02\x04self\xcd\0\x06method\x0b\0\xd2\
-\0\x04\0#[method]outgoing-request.set-method\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\
-\0([method]outgoing-request.path-with-query\x01T\x01@\x02\x04self\xcd\0\x0fpath-\
-with-query\x0e\0\xd2\0\x04\0,[method]outgoing-request.set-path-with-query\x01U\x01\
-@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[method]outgoing-request.scheme\x01V\x01@\x02\
-\x04self\xcd\0\x06scheme\xc4\0\0\xd2\0\x04\0#[method]outgoing-request.set-scheme\
-\x01W\x04\0\"[method]outgoing-request.authority\x01T\x01@\x02\x04self\xcd\0\x09a\
-uthority\x0e\0\xd2\0\x04\0&[method]outgoing-request.set-authority\x01X\x01@\x01\x04\
-self\xcd\0\0\xc6\0\x04\0\x20[method]outgoing-request.headers\x01Y\x01i'\x01@\0\0\
-\xda\0\x04\0\x1c[constructor]request-options\x01[\x01h'\x01k\x01\x01@\x01\x04sel\
-f\xdc\0\0\xdd\0\x04\0'[method]request-options.connect-timeout\x01^\x01@\x02\x04s\
-elf\xdc\0\x08duration\xdd\0\0\xd2\0\x04\0+[method]request-options.set-connect-ti\
-meout\x01_\x04\0*[method]request-options.first-byte-timeout\x01^\x04\0.[method]r\
-equest-options.set-first-byte-timeout\x01_\x04\0-[method]request-options.between\
--bytes-timeout\x01^\x04\01[method]request-options.set-between-bytes-timeout\x01_\
-\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\
-\0\x04\0\x1d[static]response-outparam.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\
-\0\x20[method]incoming-response.status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0\
-![method]incoming-response.headers\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![me\
-thod]incoming-response.consume\x01g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04\
-self\xe8\0\0\xea\0\x04\0\x1c[method]incoming-body.stream\x01k\x01i-\x01@\x01\x04\
-this\xc8\0\0\xec\0\x04\0\x1c[static]incoming-body.finish\x01m\x01h-\x01i\x09\x01\
-@\x01\x04self\xee\0\0\xef\0\x04\0![method]future-trailers.subscribe\x01p\x01i$\x01\
-k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\
-\0\xf5\0\x04\0\x1b[method]future-trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\
-\0\x04\0\x1e[constructor]outgoing-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\
-\0%[method]outgoing-response.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-c\
-ode*\0\xd2\0\x04\0)[method]outgoing-response.set-status-code\x01z\x01@\x01\x04se\
-lf\xf8\0\0\xc6\0\x04\0![method]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\
-\0\0\xcf\0\x04\0\x1e[method]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\
-\0\0\x01@\x01\x04self\xfd\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\
-\x01\x01j\0\x01\x1b\x01@\x02\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c\
-[static]outgoing-body.finish\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\
-\0*[method]future-incoming-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\
-\x01\x1b\x01j\x01\x86\x01\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0\
-$[method]future-incoming-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03\
-err\x8a\x01\0\x8b\x01\x04\0\x0fhttp-error-code\x01\x8c\x01\x03\0\x15wasi:http/ty\
-pes@0.2.0\x05=\x02\x03\0\x12\x10outgoing-request\x02\x03\0\x12\x0frequest-option\
-s\x02\x03\0\x12\x18future-incoming-response\x02\x03\0\x12\x0aerror-code\x01B\x0f\
-\x02\x03\x02\x01>\x04\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01?\x04\0\x0fre\
-quest-options\x03\0\x02\x02\x03\x02\x01@\x04\0\x18future-incoming-response\x03\0\
-\x04\x02\x03\x02\x01A\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01\
-i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06\
-handle\x01\x0d\x03\0\x20wasi:http/outgoing-handler@0.2.0\x05B\x01B\x04\x04\0\x05\
-error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x13[method]error.trace\x01\x02\
-\x03\0'wasi:keyvalue/wasi-keyvalue-error@0.1.0\x05C\x02\x03\0\x14\x05error\x01B,\
-\x02\x03\x02\x01+\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01,\x04\0\x0doutput\
--stream\x03\0\x02\x02\x03\x02\x01D\x04\0\x05error\x03\0\x04\x04\0\x06bucket\x03\x01\
-\x01s\x04\0\x03key\x03\0\x07\x04\0\x0eoutgoing-value\x03\x01\x04\0\x19outgoing-v\
-alue-body-async\x03\0\x03\x01p}\x04\0\x18outgoing-value-body-sync\x03\0\x0b\x04\0\
-\x0eincoming-value\x03\x01\x04\0\x19incoming-value-async-body\x03\0\x01\x01p}\x04\
-\0\x18incoming-value-sync-body\x03\0\x0f\x01i\x06\x01i\x05\x01j\x01\x11\x01\x12\x01\
-@\x01\x04names\0\x13\x04\0\x1a[static]bucket.open-bucket\x01\x14\x01i\x09\x01@\0\
-\0\x15\x04\0)[static]outgoing-value.new-outgoing-value\x01\x16\x01h\x09\x01i\x0a\
-\x01j\x01\x18\x01\x12\x01@\x01\x04self\x17\0\x19\x04\06[method]outgoing-value.ou\
-tgoing-value-write-body-async\x01\x1a\x01j\0\x01\x12\x01@\x02\x04self\x17\x05val\
-ue\x0c\0\x1b\x04\05[method]outgoing-value.outgoing-value-write-body-sync\x01\x1c\
-\x01h\x0d\x01j\x01\x10\x01\x12\x01@\x01\x04self\x1d\0\x1e\x04\02[method]incoming\
--value.incoming-value-consume-sync\x01\x1f\x01i\x0e\x01j\x01\x20\x01\x12\x01@\x01\
-\x04self\x1d\0!\x04\03[method]incoming-value.incoming-value-consume-async\x01\"\x01\
-j\x01w\x01\x12\x01@\x01\x04self\x1d\0#\x04\0*[method]incoming-value.incoming-val\
-ue-size\x01$\x03\0\x19wasi:keyvalue/types@0.1.0\x05E\x02\x03\0\x15\x06bucket\x02\
-\x03\0\x15\x05error\x02\x03\0\x15\x03key\x02\x03\0\x15\x0eincoming-value\x02\x03\
-\0\x15\x0eoutgoing-value\x01B\x1e\x02\x03\x02\x01F\x04\0\x06bucket\x03\0\0\x02\x03\
-\x02\x01G\x04\0\x05error\x03\0\x02\x02\x03\x02\x01H\x04\0\x03key\x03\0\x04\x02\x03\
-\x02\x01I\x04\0\x0eincoming-value\x03\0\x06\x02\x03\x02\x01J\x04\0\x0eoutgoing-v\
-alue\x03\0\x08\x01h\x01\x01p\x05\x01i\x07\x01k\x0c\x01p\x0d\x01i\x03\x01j\x01\x0e\
-\x01\x0f\x01@\x02\x06bucket\x0a\x04keys\x0b\0\x10\x04\0\x08get-many\x01\x11\x01j\
-\x01\x0b\x01\x0f\x01@\x01\x06bucket\x0a\0\x12\x04\0\x04keys\x01\x13\x01h\x09\x01\
-o\x02\x05\x14\x01p\x15\x01j\0\x01\x0f\x01@\x02\x06bucket\x0a\x0akey-values\x16\0\
-\x17\x04\0\x08set-many\x01\x18\x01@\x02\x06bucket\x0a\x04keys\x0b\0\x17\x04\0\x0b\
-delete-many\x01\x19\x03\0\"wasi:keyvalue/eventual-batch@0.1.0\x05K\x01B\x1a\x02\x03\
-\x02\x01F\x04\0\x06bucket\x03\0\0\x02\x03\x02\x01G\x04\0\x05error\x03\0\x02\x02\x03\
-\x02\x01I\x04\0\x0eincoming-value\x03\0\x04\x02\x03\x02\x01H\x04\0\x03key\x03\0\x06\
-\x02\x03\x02\x01J\x04\0\x0eoutgoing-value\x03\0\x08\x01h\x01\x01i\x05\x01k\x0b\x01\
-i\x03\x01j\x01\x0c\x01\x0d\x01@\x02\x06bucket\x0a\x03key\x07\0\x0e\x04\0\x03get\x01\
-\x0f\x01h\x09\x01j\0\x01\x0d\x01@\x03\x06bucket\x0a\x03key\x07\x0eoutgoing-value\
-\x10\0\x11\x04\0\x03set\x01\x12\x01@\x02\x06bucket\x0a\x03key\x07\0\x11\x04\0\x06\
-delete\x01\x13\x01j\x01\x7f\x01\x0d\x01@\x02\x06bucket\x0a\x03key\x07\0\x14\x04\0\
-\x06exists\x01\x15\x03\0\x1cwasi:keyvalue/eventual@0.1.0\x05L\x01B\x04\x01m\x06\x05\
-trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\
-\x05level\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x03\0\x14wasi:l\
-ogging/logging\x05M\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0dacc\
-ess-denied\x0dnot-supported\x10invalid-argument\x0dout-of-memory\x07timeout\x14c\
-oncurrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinvalid-state\x10new-so\
-cket-limit\x14address-not-bindable\x0eaddress-in-use\x12remote-unreachable\x12co\
-nnection-refused\x10connection-reset\x12connection-aborted\x12datagram-too-large\
-\x11name-unresolvable\x1atemporary-resolver-failure\x1apermanent-resolver-failur\
-e\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-fam\
-ily\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\
-\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0a\
-ip-address\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-socket-addre\
-ss\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope-idy\x04\0\x13\
-ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\
-\x11ip-socket-address\x03\0\x0f\x03\0\x1awasi:sockets/network@0.2.0\x05N\x02\x03\
-\0\x19\x07network\x02\x03\0\x19\x0aerror-code\x02\x03\0\x19\x0aip-address\x01B\x16\
-\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01O\x04\0\x07network\
-\x03\0\x02\x02\x03\x02\x01P\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01Q\x04\0\
-\x0aip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\
-\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-s\
-tream.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([me\
-thod]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\
-\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x03\
-\0!wasi:sockets/ip-name-lookup@0.2.0\x05R\x01B\x05\x02\x03\x02\x01O\x04\0\x07net\
-work\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x03\0#wasi:\
-sockets/instance-network@0.2.0\x05S\x04\0\x15golem:rust/golem-rust\x04\0\x0b\x10\
-\x01\0\x0agolem-rust\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-comp\
-onent\x070.220.0\x10wit-bindgen-rust\x060.36.0";
+cancellation-token.cancel\x01D\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc5\0\x04\0\
+\x0aparse-uuid\x01F\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01G\x01@\x01\
+\x03vnt*\0(\x04\0\x0dextract-value\x01H\x01@\x01\x03vnt*\0\x1d\x04\0\x0cextract-\
+type\x01I\x03\0\x15golem:rpc/types@0.2.0\x05\x05\x02\x03\0\x01\x08duration\x02\x03\
+\0\x03\x0ccomponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x09worker-id\x01Bu\x02\
+\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0ccomponen\
+t-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\
+\0\x09worker-id\x03\0\x06\x01w\x04\0\x0boplog-index\x03\0\x08\x01r\x02\x09worker\
+-id\x07\x09oplog-idx\x09\x04\0\x0apromise-id\x03\0\x0a\x01w\x04\0\x11component-v\
+ersion\x03\0\x0c\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x0e\x01ku\x01r\x05\
+\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter\
+-factor\x10\x04\0\x0cretry-policy\x03\0\x11\x01q\x03\x0fpersist-nothing\0\0\x1bp\
+ersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x13\
+\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x15\x01m\x06\
+\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11\
+filter-comparator\x03\0\x17\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\
+\0\x18string-filter-comparator\x03\0\x19\x01m\x07\x07running\x04idle\x09suspende\
+d\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1b\
+\x01r\x02\x0acomparator\x1a\x05values\x04\0\x12worker-name-filter\x03\0\x1d\x01r\
+\x02\x0acomparator\x18\x05value\x1c\x04\0\x14worker-status-filter\x03\0\x1f\x01r\
+\x02\x0acomparator\x18\x05valuew\x04\0\x15worker-version-filter\x03\0!\x01r\x02\x0a\
+comparator\x18\x05valuew\x04\0\x18worker-created-at-filter\x03\0#\x01r\x03\x04na\
+mes\x0acomparator\x1a\x05values\x04\0\x11worker-env-filter\x03\0%\x01q\x05\x04na\
+me\x01\x1e\0\x06status\x01\x20\0\x07version\x01\"\0\x0acreated-at\x01$\0\x03env\x01\
+&\0\x04\0\x16worker-property-filter\x03\0'\x01p(\x01r\x01\x07filters)\x04\0\x11w\
+orker-all-filter\x03\0*\x01p+\x01r\x01\x07filters,\x04\0\x11worker-any-filter\x03\
+\0-\x01ps\x01o\x02ss\x01p0\x01r\x06\x09worker-id\x07\x04args/\x03env1\x06status\x1c\
+\x11component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\02\x04\0\x0b\
+get-workers\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\x09\0\x17revert-last-i\
+nvocations\x01w\0\x04\0\x14revert-worker-target\x03\05\x01k.\x01i4\x01@\x03\x0cc\
+omponent-id\x03\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-workers\x01\
+9\x01h4\x01p3\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01\
+=\x01@\0\0\x0b\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0b\0?\x04\
+\0\x0dawait-promise\x01@\x01k?\x01@\x01\x0apromise-id\x0b\0\xc1\0\x04\0\x0cpoll-\
+promise\x01B\x01@\x02\x0apromise-id\x0b\x04data?\0\x7f\x04\0\x10complete-promise\
+\x01C\x01@\x01\x0apromise-id\x0b\x01\0\x04\0\x0edelete-promise\x01D\x01@\0\0\x09\
+\x04\0\x0fget-oplog-index\x01E\x01@\x01\x09oplog-idx\x09\x01\0\x04\0\x0fset-oplo\
+g-index\x01F\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01G\x04\0\x14mar\
+k-begin-operation\x01E\x01@\x01\x05begin\x09\x01\0\x04\0\x12mark-end-operation\x01\
+H\x01@\0\0\x12\x04\0\x10get-retry-policy\x01I\x01@\x01\x10new-retry-policy\x12\x01\
+\0\x04\0\x10set-retry-policy\x01J\x01@\0\0\x14\x04\0\x1bget-oplog-persistence-le\
+vel\x01K\x01@\x01\x15new-persistence-level\x14\x01\0\x04\0\x1bset-oplog-persiste\
+nce-level\x01L\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01M\x01@\x01\x0aidemp\
+otent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01N\x01@\0\0\x05\x04\0\x18generat\
+e-idempotency-key\x01O\x01@\x03\x09worker-id\x07\x0etarget-version\x0d\x04mode\x16\
+\x01\0\x04\0\x0dupdate-worker\x01P\x01@\0\03\x04\0\x11get-self-metadata\x01Q\x01\
+k3\x01@\x01\x09worker-id\x07\0\xd2\0\x04\0\x13get-worker-metadata\x01S\x01@\x03\x10\
+source-worker-id\x07\x10target-worker-id\x07\x11oplog-idx-cut-off\x09\x01\0\x04\0\
+\x0bfork-worker\x01T\x01@\x02\x09worker-id\x07\x0drevert-target6\x01\0\x04\0\x0d\
+revert-worker\x01U\x01k\x03\x01@\x01\x13component-references\0\xd6\0\x04\0\x14re\
+solve-component-id\x01W\x01k\x07\x01@\x02\x13component-references\x0bworker-name\
+s\0\xd8\0\x04\0\x11resolve-worker-id\x01Y\x04\0\x18resolve-worker-id-strict\x01Y\
+\x03\0\x14golem:api/host@1.1.6\x05\x0a\x01B7\x02\x03\x02\x01\x04\x04\0\x08dateti\
+me\x03\0\0\x04\0\x04span\x03\x01\x04\0\x12invocation-context\x03\x01\x01q\x01\x06\
+string\x01s\0\x04\0\x0fattribute-value\x03\0\x04\x01r\x02\x03keys\x05value\x05\x04\
+\0\x09attribute\x03\0\x06\x01p\x05\x01r\x02\x03keys\x06values\x08\x04\0\x0fattri\
+bute-chain\x03\0\x09\x01s\x04\0\x08trace-id\x03\0\x0b\x01s\x04\0\x07span-id\x03\0\
+\x0d\x01h\x02\x01@\x01\x04self\x0f\0\x01\x04\0\x17[method]span.started-at\x01\x10\
+\x01@\x03\x04self\x0f\x04names\x05value\x05\x01\0\x04\0\x1a[method]span.set-attr\
+ibute\x01\x11\x01p\x07\x01@\x02\x04self\x0f\x0aattributes\x12\x01\0\x04\0\x1b[me\
+thod]span.set-attributes\x01\x13\x01@\x01\x04self\x0f\x01\0\x04\0\x13[method]spa\
+n.finish\x01\x14\x01h\x03\x01@\x01\x04self\x15\0\x0c\x04\0#[method]invocation-co\
+ntext.trace-id\x01\x16\x01@\x01\x04self\x15\0\x0e\x04\0\"[method]invocation-cont\
+ext.span-id\x01\x17\x01i\x03\x01k\x18\x01@\x01\x04self\x15\0\x19\x04\0![method]i\
+nvocation-context.parent\x01\x1a\x01k\x05\x01@\x03\x04self\x15\x03keys\x09inheri\
+ted\x7f\0\x1b\x04\0([method]invocation-context.get-attribute\x01\x1c\x01@\x02\x04\
+self\x15\x09inherited\x7f\0\x12\x04\0)[method]invocation-context.get-attributes\x01\
+\x1d\x01@\x02\x04self\x15\x03keys\0\x08\x04\0.[method]invocation-context.get-att\
+ribute-chain\x01\x1e\x01p\x0a\x01@\x01\x04self\x15\0\x1f\x04\0/[method]invocatio\
+n-context.get-attribute-chains\x01\x20\x01o\x02ss\x01p!\x01@\x01\x04self\x15\0\"\
+\x04\00[method]invocation-context.trace-context-headers\x01#\x01i\x02\x01@\x01\x04\
+names\0$\x04\0\x0astart-span\x01%\x01@\0\0\x18\x04\0\x0fcurrent-context\x01&\x01\
+@\x01\x05allow\x7f\0\x7f\x04\0&allow-forwarding-trace-context-headers\x01'\x03\0\
+\x17golem:api/context@1.1.6\x05\x0b\x02\x03\0\x03\x09wit-value\x02\x03\0\x04\x0a\
+account-id\x02\x03\0\x04\x11component-version\x02\x03\0\x04\x0boplog-index\x02\x03\
+\0\x04\x0cretry-policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-id\x02\x03\0\
+\x05\x09attribute\x02\x03\0\x05\x0fattribute-value\x02\x03\0\x05\x07span-id\x02\x03\
+\0\x05\x08trace-id\x01B\x82\x01\x02\x03\x02\x01\x04\x04\0\x08datetime\x03\0\0\x02\
+\x03\x02\x01\x0c\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0d\x04\0\x0aaccou\
+nt-id\x03\0\x04\x02\x03\x02\x01\x0e\x04\0\x11component-version\x03\0\x06\x02\x03\
+\x02\x01\x0f\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\x10\x04\0\x0cretry-p\
+olicy\x03\0\x0a\x02\x03\x02\x01\x11\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01\x12\x04\
+\0\x09worker-id\x03\0\x0e\x02\x03\x02\x01\x13\x04\0\x09attribute\x03\0\x10\x02\x03\
+\x02\x01\x14\x04\0\x0fattribute-value\x03\0\x12\x02\x03\x02\x01\x15\x04\0\x07spa\
+n-id\x03\0\x14\x02\x03\x02\x01\x16\x04\0\x08trace-id\x03\0\x16\x01k\x09\x01q\x05\
+\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14\
+write-remote-batched\x01\x18\0\x04\0\x15wrapped-function-type\x03\0\x19\x01o\x02\
+ss\x01p\x1b\x01r\x04\x0finstallation-id\x0d\x04names\x07versions\x0aparameters\x1c\
+\x04\0\x1fplugin-installation-description\x03\0\x1d\x01ps\x01k\x0f\x01p\x1e\x01r\
+\x0a\x09timestamp\x01\x09worker-id\x0f\x11component-version\x07\x04args\x1f\x03e\
+nv\x1c\x0aaccount-id\x05\x06parent\x20\x0ecomponent-sizew\x20initial-total-linea\
+r-memory-sizew\x16initial-active-plugins!\x04\0\x11create-parameters\x03\0\"\x01\
+r\x05\x09timestamp\x01\x0dfunction-names\x07request\x03\x08response\x03\x15wrapp\
+ed-function-type\x1a\x04\0$imported-function-invoked-parameters\x03\0$\x01k\x15\x01\
+kw\x01p\x11\x01r\x06\x07span-id\x15\x05start\x01\x06parent&\x0elinked-context'\x0a\
+attributes(\x09inherited\x7f\x04\0\x0flocal-span-data\x03\0)\x01r\x01\x07span-id\
+\x15\x04\0\x12external-span-data\x03\0+\x01q\x02\x0alocal-span\x01*\0\x0dexterna\
+l-span\x01,\0\x04\0\x09span-data\x03\0-\x01p\x03\x01p.\x01p0\x01r\x07\x09timesta\
+mp\x01\x0dfunction-names\x07request/\x0fidempotency-keys\x08trace-id\x17\x0ctrac\
+e-states\x1f\x12invocation-context1\x04\0$exported-function-invoked-parameters\x03\
+\02\x01r\x03\x09timestamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-f\
+unction-completed-parameters\x03\04\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10\
+error-parameters\x03\06\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0f\
+jump-parameters\x03\08\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1ech\
+ange-retry-policy-parameters\x03\0:\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\
+\x04\0\x1cend-atomic-region-parameters\x03\0<\x01r\x02\x09timestamp\x01\x0bbegin\
+-index\x09\x04\0\x1bend-remote-write-parameters\x03\0>\x01k/\x01r\x03\x0fidempot\
+ency-keys\x0dfunction-names\x05input\xc0\0\x04\0'exported-function-invocation-pa\
+rameters\x03\0A\x01q\x02\x11exported-function\x01\xc2\0\0\x0dmanual-update\x01\x07\
+\0\x04\0\x11worker-invocation\x03\0C\x01r\x02\x09timestamp\x01\x0ainvocation\xc4\
+\0\x04\0$pending-worker-invocation-parameters\x03\0E\x01p}\x01q\x02\x0bauto-upda\
+te\0\0\x0esnapshot-based\x01\xc7\0\0\x04\0\x12update-description\x03\0H\x01r\x03\
+\x09timestamp\x01\x0etarget-version\x07\x12update-description\xc9\0\x04\0\x19pen\
+ding-update-parameters\x03\0J\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12\
+new-component-sizew\x12new-active-plugins!\x04\0\x1csuccessful-update-parameters\
+\x03\0L\x01ks\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x07details\xce\0\x04\
+\0\x18failed-update-parameters\x03\0O\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16\
+grow-memory-parameters\x03\0Q\x01w\x04\0\x12worker-resource-id\x03\0S\x01r\x02\x09\
+timestamp\x01\x0bresource-id\xd4\0\x04\0\x1acreate-resource-parameters\x03\0U\x01\
+r\x02\x09timestamp\x01\x0bresource-id\xd4\0\x04\0\x18drop-resource-parameters\x03\
+\0W\x01r\x04\x09timestamp\x01\x0bresource-id\xd4\0\x0dresource-names\x0fresource\
+-params/\x04\0\x1cdescribe-resource-parameters\x03\0Y\x01m\x08\x06stdout\x06stde\
+rr\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\
+\0[\x01r\x04\x09timestamp\x01\x05level\xdc\0\x07contexts\x07messages\x04\0\x0elo\
+g-parameters\x03\0]\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1aactivate-pl\
+ugin-parameters\x03\0_\x01r\x02\x09timestamp\x01\x06plugin\x1e\x04\0\x1cdeactiva\
+te-plugin-parameters\x03\0a\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\
+\0\x11revert-parameters\x03\0c\x01r\x02\x09timestamp\x01\x0fidempotency-keys\x04\
+\0\x1ccancel-invocation-parameters\x03\0e\x01r\x05\x09timestamp\x01\x07span-id\x15\
+\x06parent&\x0elinked-context&\x0aattributes(\x04\0\x15start-span-parameters\x03\
+\0g\x01r\x02\x09timestamp\x01\x07span-id\x15\x04\0\x16finish-span-parameters\x03\
+\0i\x01r\x04\x09timestamp\x01\x07span-id\x15\x03keys\x05value\x13\x04\0\x1dset-s\
+pan-attribute-parameters\x03\0k\x01q\x20\x06create\x01#\0\x19imported-function-i\
+nvoked\x01%\0\x19exported-function-invoked\x013\0\x1bexported-function-completed\
+\x015\0\x07suspend\x01\x01\0\x05error\x017\0\x05no-op\x01\x01\0\x04jump\x019\0\x0b\
+interrupted\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01;\0\x13begin\
+-atomic-region\x01\x01\0\x11end-atomic-region\x01=\0\x12begin-remote-write\x01\x01\
+\0\x10end-remote-write\x01?\0\x19pending-worker-invocation\x01\xc6\0\0\x0ependin\
+g-update\x01\xcb\0\0\x11successful-update\x01\xcd\0\0\x0dfailed-update\x01\xd0\0\
+\0\x0bgrow-memory\x01\xd2\0\0\x0fcreate-resource\x01\xd6\0\0\x0ddrop-resource\x01\
+\xd8\0\0\x11describe-resource\x01\xda\0\0\x03log\x01\xde\0\0\x07restart\x01\x01\0\
+\x0factivate-plugin\x01\xe0\0\0\x11deactivate-plugin\x01\xe2\0\0\x06revert\x01\xe4\
+\0\0\x11cancel-invocation\x01\xe6\0\0\x0astart-span\x01\xe8\0\0\x0bfinish-span\x01\
+\xea\0\0\x12set-span-attribute\x01\xec\0\0\x04\0\x0boplog-entry\x03\0m\x04\0\x09\
+get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01io\x01@\x02\x09worker-id\x0f\x05\
+start\x09\0\xf1\0\x04\0\x16[constructor]get-oplog\x01r\x01ho\x01p\xee\0\x01k\xf4\
+\0\x01@\x01\x04self\xf3\0\0\xf5\0\x04\0\x1a[method]get-oplog.get-next\x01v\x01ip\
+\x01@\x02\x09worker-id\x0f\x04texts\0\xf7\0\x04\0\x19[constructor]search-oplog\x01\
+x\x01hp\x01o\x02\x09\xee\0\x01p\xfa\0\x01k\xfb\0\x01@\x01\x04self\xf9\0\0\xfc\0\x04\
+\0\x1d[method]search-oplog.get-next\x01}\x03\0\x15golem:api/oplog@1.1.6\x05\x17\x02\
+\x03\0\x04\x11persistence-level\x02\x03\0\x06\x0boplog-index\x02\x03\0\x06\x15wr\
+apped-function-type\x02\x03\0\x03\x0evalue-and-type\x01B$\x02\x03\x02\x01\x18\x04\
+\0\x11persistence-level\x03\0\0\x02\x03\x02\x01\x19\x04\0\x0boplog-index\x03\0\x02\
+\x02\x03\x02\x01\x1a\x04\0\x15wrapped-function-type\x03\0\x04\x02\x03\x02\x01\x04\
+\x04\0\x08datetime\x03\0\x06\x02\x03\x02\x01\x1b\x04\0\x0evalue-and-type\x03\0\x08\
+\x04\0\x15durable-function-type\x03\0\x05\x01r\x02\x07is-live\x7f\x11persistence\
+-level\x01\x04\0\x17durable-execution-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\
+\x13oplog-entry-version\x03\0\x0d\x01p}\x01r\x05\x09timestamp\x07\x0dfunction-na\
+mes\x08response\x0f\x0dfunction-type\x0a\x0dentry-version\x0e\x04\0%persisted-du\
+rable-function-invocation\x03\0\x10\x01r\x05\x09timestamp\x07\x0dfunction-names\x08\
+response\x09\x0dfunction-type\x0a\x0dentry-version\x0e\x04\0+persisted-typed-dur\
+able-function-invocation\x03\0\x12\x01@\x02\x05ifaces\x08functions\x01\0\x04\0\x15\
+observe-function-call\x01\x14\x01@\x01\x0dfunction-type\x0a\0\x03\x04\0\x16begin\
+-durable-function\x01\x15\x01@\x03\x0dfunction-type\x0a\x0bbegin-index\x03\x0dfo\
+rced-commit\x7f\x01\0\x04\0\x14end-durable-function\x01\x16\x01@\0\0\x0c\x04\0\x1f\
+current-durable-execution-state\x01\x17\x01@\x04\x0dfunction-names\x07request\x0f\
+\x08response\x0f\x0dfunction-type\x0a\x01\0\x04\0#persist-durable-function-invoc\
+ation\x01\x18\x01@\x04\x0dfunction-names\x07request\x09\x08response\x09\x0dfunct\
+ion-type\x0a\x01\0\x04\0)persist-typed-durable-function-invocation\x01\x19\x01@\0\
+\0\x11\x04\0*read-persisted-durable-function-invocation\x01\x1a\x01@\0\0\x13\x04\
+\00read-persisted-typed-durable-function-invocation\x01\x1b\x03\0!golem:durabili\
+ty/durability@1.2.0\x05\x1c\x01B\x13\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04\
+uuid\x03\0\0\x01o\x04}}}}\x01o\x08{{{{{{{{\x01q\x02\x04ipv4\x01\x02\0\x04ipv6\x01\
+\x03\0\x04\0\x0aip-address\x03\0\x04\x01o\x06}}}}}}\x01r\x01\x06octets\x06\x04\0\
+\x0bmac-address\x03\0\x07\x01r\x03\x04yearz\x05month}\x03day}\x04\0\x04date\x03\0\
+\x09\x01r\x04\x04hour}\x06minute}\x06second}\x0ananosecondy\x04\0\x04time\x03\0\x0b\
+\x01r\x02\x04date\x0a\x04time\x0c\x04\0\x09timestamp\x03\0\x0d\x01r\x02\x09times\
+tamp\x0e\x06offsetz\x04\0\x0btimestamptz\x03\0\x0f\x01r\x02\x04time\x0c\x06offse\
+tz\x04\0\x06timetz\x03\0\x11\x03\0\x17golem:rdbms/types@0.0.1\x05\x1d\x02\x03\0\x08\
+\x04date\x02\x03\0\x08\x04time\x02\x03\0\x08\x09timestamp\x01B>\x02\x03\x02\x01\x1e\
+\x04\0\x04date\x03\0\0\x02\x03\x02\x01\x1f\x04\0\x04time\x03\0\x02\x02\x03\x02\x01\
+\x20\x04\0\x09timestamp\x03\0\x04\x01q\x05\x12connection-failure\x01s\0\x17query\
+-parameter-failure\x01s\0\x17query-execution-failure\x01s\0\x16query-response-fa\
+ilure\x01s\0\x05other\x01s\0\x04\0\x05error\x03\0\x06\x01q#\x07boolean\0\0\x07ti\
+nyint\0\0\x08smallint\0\0\x09mediumint\0\0\x03int\0\0\x06bigint\0\0\x10tinyint-u\
+nsigned\0\0\x11smallint-unsigned\0\0\x12mediumint-unsigned\0\0\x0cint-unsigned\0\
+\0\x0fbigint-unsigned\0\0\x05float\0\0\x06double\0\0\x07decimal\0\0\x04date\0\0\x08\
+datetime\0\0\x09timestamp\0\0\x04time\0\0\x04year\0\0\x07fixchar\0\0\x07varchar\0\
+\0\x08tinytext\0\0\x04text\0\0\x0amediumtext\0\0\x08longtext\0\0\x06binary\0\0\x09\
+varbinary\0\0\x08tinyblob\0\0\x04blob\0\0\x0amediumblob\0\0\x08longblob\0\0\x0be\
+numeration\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\0\x0edb-column-type\x03\0\x08\
+\x01r\x04\x07ordinalw\x04names\x07db-type\x09\x0cdb-type-names\x04\0\x09db-colum\
+n\x03\0\x0a\x01p}\x01p\x7f\x01q$\x07boolean\x01\x7f\0\x07tinyint\x01~\0\x08small\
+int\x01|\0\x09mediumint\x01z\0\x03int\x01z\0\x06bigint\x01x\0\x10tinyint-unsigne\
+d\x01}\0\x11smallint-unsigned\x01{\0\x12mediumint-unsigned\x01y\0\x0cint-unsigne\
+d\x01y\0\x0fbigint-unsigned\x01w\0\x05float\x01v\0\x06double\x01u\0\x07decimal\x01\
+s\0\x04date\x01\x01\0\x08datetime\x01\x05\0\x09timestamp\x01\x05\0\x04time\x01\x03\
+\0\x04year\x01{\0\x07fixchar\x01s\0\x07varchar\x01s\0\x08tinytext\x01s\0\x04text\
+\x01s\0\x0amediumtext\x01s\0\x08longtext\x01s\0\x06binary\x01\x0c\0\x09varbinary\
+\x01\x0c\0\x08tinyblob\x01\x0c\0\x04blob\x01\x0c\0\x0amediumblob\x01\x0c\0\x08lo\
+ngblob\x01\x0c\0\x0benumeration\x01s\0\x03set\x01s\0\x03bit\x01\x0d\0\x04json\x01\
+s\0\x04null\0\0\x04\0\x08db-value\x03\0\x0e\x01p\x0f\x01r\x01\x06values\x10\x04\0\
+\x06db-row\x03\0\x11\x01p\x0b\x01p\x12\x01r\x02\x07columns\x13\x04rows\x14\x04\0\
+\x09db-result\x03\0\x15\x04\0\x10db-result-stream\x03\x01\x04\0\x0ddb-connection\
+\x03\x01\x04\0\x0edb-transaction\x03\x01\x01h\x17\x01@\x01\x04self\x1a\0\x13\x04\
+\0$[method]db-result-stream.get-columns\x01\x1b\x01k\x14\x01@\x01\x04self\x1a\0\x1c\
+\x04\0![method]db-result-stream.get-next\x01\x1d\x01i\x18\x01j\x01\x1e\x01\x07\x01\
+@\x01\x07addresss\0\x1f\x04\0\x1a[static]db-connection.open\x01\x20\x01h\x18\x01\
+j\x01\x16\x01\x07\x01@\x03\x04self!\x09statements\x06params\x10\0\"\x04\0\x1b[me\
+thod]db-connection.query\x01#\x01i\x17\x01j\x01$\x01\x07\x01@\x03\x04self!\x09st\
+atements\x06params\x10\0%\x04\0\"[method]db-connection.query-stream\x01&\x01j\x01\
+w\x01\x07\x01@\x03\x04self!\x09statements\x06params\x10\0'\x04\0\x1d[method]db-c\
+onnection.execute\x01(\x01i\x19\x01j\x01)\x01\x07\x01@\x01\x04self!\0*\x04\0'[me\
+thod]db-connection.begin-transaction\x01+\x01h\x19\x01@\x03\x04self,\x09statemen\
+ts\x06params\x10\0\"\x04\0\x1c[method]db-transaction.query\x01-\x01@\x03\x04self\
+,\x09statements\x06params\x10\0%\x04\0#[method]db-transaction.query-stream\x01.\x01\
+@\x03\x04self,\x09statements\x06params\x10\0'\x04\0\x1e[method]db-transaction.ex\
+ecute\x01/\x01j\0\x01\x07\x01@\x01\x04self,\00\x04\0\x1d[method]db-transaction.c\
+ommit\x011\x04\0\x1f[method]db-transaction.rollback\x011\x03\0\x17golem:rdbms/my\
+sql@0.0.1\x05!\x02\x03\0\x08\x06timetz\x02\x03\0\x08\x0btimestamptz\x02\x03\0\x08\
+\x04uuid\x02\x03\0\x08\x0aip-address\x02\x03\0\x08\x0bmac-address\x01B\x87\x01\x02\
+\x03\x02\x01\x1e\x04\0\x04date\x03\0\0\x02\x03\x02\x01\x1f\x04\0\x04time\x03\0\x02\
+\x02\x03\x02\x01\"\x04\0\x06timetz\x03\0\x04\x02\x03\x02\x01\x20\x04\0\x09timest\
+amp\x03\0\x06\x02\x03\x02\x01#\x04\0\x0btimestamptz\x03\0\x08\x02\x03\x02\x01$\x04\
+\0\x04uuid\x03\0\x0a\x02\x03\x02\x01%\x04\0\x0aip-address\x03\0\x0c\x02\x03\x02\x01\
+&\x04\0\x0bmac-address\x03\0\x0e\x01q\x05\x12connection-failure\x01s\0\x17query-\
+parameter-failure\x01s\0\x17query-execution-failure\x01s\0\x16query-response-fai\
+lure\x01s\0\x05other\x01s\0\x04\0\x05error\x03\0\x10\x01r\x03\x06monthsz\x04days\
+z\x0cmicrosecondsx\x04\0\x08interval\x03\0\x12\x01q\x03\x08included\x01z\0\x08ex\
+cluded\x01z\0\x09unbounded\0\0\x04\0\x09int4bound\x03\0\x14\x01q\x03\x08included\
+\x01x\0\x08excluded\x01x\0\x09unbounded\0\0\x04\0\x09int8bound\x03\0\x16\x01q\x03\
+\x08included\x01s\0\x08excluded\x01s\0\x09unbounded\0\0\x04\0\x08numbound\x03\0\x18\
+\x01q\x03\x08included\x01\x07\0\x08excluded\x01\x07\0\x09unbounded\0\0\x04\0\x07\
+tsbound\x03\0\x1a\x01q\x03\x08included\x01\x09\0\x08excluded\x01\x09\0\x09unboun\
+ded\0\0\x04\0\x09tstzbound\x03\0\x1c\x01q\x03\x08included\x01\x01\0\x08excluded\x01\
+\x01\0\x09unbounded\0\0\x04\0\x09datebound\x03\0\x1e\x01r\x02\x05start\x15\x03en\
+d\x15\x04\0\x09int4range\x03\0\x20\x01r\x02\x05start\x17\x03end\x17\x04\0\x09int\
+8range\x03\0\"\x01r\x02\x05start\x19\x03end\x19\x04\0\x08numrange\x03\0$\x01r\x02\
+\x05start\x1b\x03end\x1b\x04\0\x07tsrange\x03\0&\x01r\x02\x05start\x1d\x03end\x1d\
+\x04\0\x09tstzrange\x03\0(\x01r\x02\x05start\x1f\x03end\x1f\x04\0\x09daterange\x03\
+\0*\x01r\x01\x04names\x04\0\x10enumeration-type\x03\0,\x01r\x02\x04names\x05valu\
+es\x04\0\x0benumeration\x03\0.\x04\0\x0dlazy-db-value\x03\x01\x01i0\x01p1\x01r\x02\
+\x04names\x06values2\x04\0\x09composite\x03\03\x01r\x02\x04names\x05value1\x04\0\
+\x06domain\x03\05\x01q\x03\x08included\x011\0\x08excluded\x011\0\x09unbounded\0\0\
+\x04\0\x0bvalue-bound\x03\07\x01r\x02\x05start8\x03end8\x04\0\x0cvalues-range\x03\
+\09\x01r\x02\x04names\x05value:\x04\0\x05range\x03\0;\x01p}\x01p\x7f\x01q*\x09ch\
+aracter\x01~\0\x04int2\x01|\0\x04int4\x01z\0\x04int8\x01x\0\x06float4\x01v\0\x06\
+float8\x01u\0\x07numeric\x01s\0\x07boolean\x01\x7f\0\x04text\x01s\0\x07varchar\x01\
+s\0\x06bpchar\x01s\0\x09timestamp\x01\x07\0\x0btimestamptz\x01\x09\0\x04date\x01\
+\x01\0\x04time\x01\x03\0\x06timetz\x01\x05\0\x08interval\x01\x13\0\x05bytea\x01=\
+\0\x04json\x01s\0\x05jsonb\x01s\0\x08jsonpath\x01s\0\x03xml\x01s\0\x04uuid\x01\x0b\
+\0\x04inet\x01\x0d\0\x04cidr\x01\x0d\0\x07macaddr\x01\x0f\0\x03bit\x01>\0\x06var\
+bit\x01>\0\x09int4range\x01!\0\x09int8range\x01#\0\x08numrange\x01%\0\x07tsrange\
+\x01'\0\x09tstzrange\x01)\0\x09daterange\x01+\0\x05money\x01x\0\x03oid\x01y\0\x0b\
+enumeration\x01/\0\x09composite\x014\0\x06domain\x016\0\x05array\x012\0\x05range\
+\x01<\0\x04null\0\0\x04\0\x08db-value\x03\0?\x04\0\x13lazy-db-column-type\x03\x01\
+\x01iA\x01o\x02s\xc2\0\x01p\xc3\0\x01r\x02\x04names\x0aattributes\xc4\0\x04\0\x0e\
+composite-type\x03\0E\x01r\x02\x04names\x09base-type\xc2\0\x04\0\x0bdomain-type\x03\
+\0G\x01r\x02\x04names\x09base-type\xc2\0\x04\0\x0arange-type\x03\0I\x01q)\x09cha\
+racter\0\0\x04int2\0\0\x04int4\0\0\x04int8\0\0\x06float4\0\0\x06float8\0\0\x07nu\
+meric\0\0\x07boolean\0\0\x04text\0\0\x07varchar\0\0\x06bpchar\0\0\x09timestamp\0\
+\0\x0btimestamptz\0\0\x04date\0\0\x04time\0\0\x06timetz\0\0\x08interval\0\0\x05b\
+ytea\0\0\x04uuid\0\0\x03xml\0\0\x04json\0\0\x05jsonb\0\0\x08jsonpath\0\0\x04inet\
+\0\0\x04cidr\0\0\x07macaddr\0\0\x03bit\0\0\x06varbit\0\0\x09int4range\0\0\x09int\
+8range\0\0\x08numrange\0\0\x07tsrange\0\0\x09tstzrange\0\0\x09daterange\0\0\x05m\
+oney\0\0\x03oid\0\0\x0benumeration\x01-\0\x09composite\x01\xc6\0\0\x06domain\x01\
+\xc8\0\0\x05array\x01\xc2\0\0\x05range\x01\xca\0\0\x04\0\x0edb-column-type\x03\0\
+K\x01r\x04\x07ordinalw\x04names\x07db-type\xcc\0\x0cdb-type-names\x04\0\x09db-co\
+lumn\x03\0M\x01p\xc0\0\x01r\x01\x06values\xcf\0\x04\0\x06db-row\x03\0P\x01p\xce\0\
+\x01p\xd1\0\x01r\x02\x07columns\xd2\0\x04rows\xd3\0\x04\0\x09db-result\x03\0T\x04\
+\0\x10db-result-stream\x03\x01\x04\0\x0ddb-connection\x03\x01\x04\0\x0edb-transa\
+ction\x03\x01\x01@\x01\x05value\xc0\0\01\x04\0\x1a[constructor]lazy-db-value\x01\
+Y\x01h0\x01@\x01\x04self\xda\0\0\xc0\0\x04\0\x19[method]lazy-db-value.get\x01[\x01\
+@\x01\x05value\xcc\0\0\xc2\0\x04\0\x20[constructor]lazy-db-column-type\x01\\\x01\
+hA\x01@\x01\x04self\xdd\0\0\xcc\0\x04\0\x1f[method]lazy-db-column-type.get\x01^\x01\
+hV\x01@\x01\x04self\xdf\0\0\xd2\0\x04\0$[method]db-result-stream.get-columns\x01\
+`\x01k\xd3\0\x01@\x01\x04self\xdf\0\0\xe1\0\x04\0![method]db-result-stream.get-n\
+ext\x01b\x01iW\x01j\x01\xe3\0\x01\x11\x01@\x01\x07addresss\0\xe4\0\x04\0\x1a[sta\
+tic]db-connection.open\x01e\x01hW\x01j\x01\xd5\0\x01\x11\x01@\x03\x04self\xe6\0\x09\
+statements\x06params\xcf\0\0\xe7\0\x04\0\x1b[method]db-connection.query\x01h\x01\
+iV\x01j\x01\xe9\0\x01\x11\x01@\x03\x04self\xe6\0\x09statements\x06params\xcf\0\0\
+\xea\0\x04\0\"[method]db-connection.query-stream\x01k\x01j\x01w\x01\x11\x01@\x03\
+\x04self\xe6\0\x09statements\x06params\xcf\0\0\xec\0\x04\0\x1d[method]db-connect\
+ion.execute\x01m\x01iX\x01j\x01\xee\0\x01\x11\x01@\x01\x04self\xe6\0\0\xef\0\x04\
+\0'[method]db-connection.begin-transaction\x01p\x01hX\x01@\x03\x04self\xf1\0\x09\
+statements\x06params\xcf\0\0\xe7\0\x04\0\x1c[method]db-transaction.query\x01r\x01\
+@\x03\x04self\xf1\0\x09statements\x06params\xcf\0\0\xea\0\x04\0#[method]db-trans\
+action.query-stream\x01s\x01@\x03\x04self\xf1\0\x09statements\x06params\xcf\0\0\xec\
+\0\x04\0\x1e[method]db-transaction.execute\x01t\x01j\0\x01\x11\x01@\x01\x04self\xf1\
+\0\0\xf5\0\x04\0\x1d[method]db-transaction.commit\x01v\x04\0\x1f[method]db-trans\
+action.rollback\x01v\x03\0\x1agolem:rdbms/postgres@0.0.1\x05'\x01B\x04\x04\0\x05\
+error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-str\
+ing\x01\x02\x03\0\x13wasi:io/error@0.2.0\x05(\x02\x03\0\x0b\x05error\x01B(\x02\x03\
+\x02\x01)\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x02\
+\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstr\
+eam-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\
+\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19\
+[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\
+\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-str\
+eam.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\
+\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01\
+@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\
+\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.w\
+rite\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\
+\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]ou\
+tput-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]o\
+utput-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method\
+]output-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-z\
+eroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[\
+method]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\
+\x18\x03\0\x15wasi:io/streams@0.2.0\x05*\x02\x03\0\x0c\x0cinput-stream\x02\x03\0\
+\x0c\x0doutput-stream\x01B+\x02\x03\x02\x01+\x04\0\x0cinput-stream\x03\0\0\x02\x03\
+\x02\x01,\x04\0\x0doutput-stream\x03\0\x02\x01s\x04\0\x0econtainer-name\x03\0\x04\
+\x01s\x04\0\x0bobject-name\x03\0\x06\x01w\x04\0\x09timestamp\x03\0\x08\x01w\x04\0\
+\x0bobject-size\x03\0\x0a\x01s\x04\0\x05error\x03\0\x0c\x01r\x02\x04name\x05\x0a\
+created-at\x09\x04\0\x12container-metadata\x03\0\x0e\x01r\x04\x04name\x07\x09con\
+tainer\x05\x0acreated-at\x09\x04size\x0b\x04\0\x0fobject-metadata\x03\0\x10\x01r\
+\x02\x09container\x05\x06object\x07\x04\0\x09object-id\x03\0\x12\x04\0\x0eoutgoi\
+ng-value\x03\x01\x04\0\x0eincoming-value\x03\x01\x04\0\x19incoming-value-async-b\
+ody\x03\0\x01\x01p}\x04\0\x18incoming-value-sync-body\x03\0\x17\x01i\x14\x01@\0\0\
+\x19\x04\0)[static]outgoing-value.new-outgoing-value\x01\x1a\x01h\x14\x01i\x03\x01\
+j\x01\x1c\0\x01@\x01\x04self\x1b\0\x1d\x04\00[method]outgoing-value.outgoing-val\
+ue-write-body\x01\x1e\x01h\x15\x01j\x01\x18\x01\x0d\x01@\x01\x04self\x1f\0\x20\x04\
+\02[method]incoming-value.incoming-value-consume-sync\x01!\x01i\x16\x01j\x01\"\x01\
+\x0d\x01@\x01\x04self\x1f\0#\x04\03[method]incoming-value.incoming-value-consume\
+-async\x01$\x01@\x01\x04self\x1f\0w\x04\0\x1b[method]incoming-value.size\x01%\x03\
+\0\x14wasi:blobstore/types\x05-\x02\x03\0\x0d\x12container-metadata\x02\x03\0\x0d\
+\x05error\x02\x03\0\x0d\x0eincoming-value\x02\x03\0\x0d\x0fobject-metadata\x02\x03\
+\0\x0d\x0bobject-name\x02\x03\0\x0d\x0eoutgoing-value\x01B;\x02\x03\x02\x01+\x04\
+\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01,\x04\0\x0doutput-stream\x03\0\x02\x02\
+\x03\x02\x01.\x04\0\x12container-metadata\x03\0\x04\x02\x03\x02\x01/\x04\0\x05er\
+ror\x03\0\x06\x02\x03\x02\x010\x04\0\x0eincoming-value\x03\0\x08\x02\x03\x02\x01\
+1\x04\0\x0fobject-metadata\x03\0\x0a\x02\x03\x02\x012\x04\0\x0bobject-name\x03\0\
+\x0c\x02\x03\x02\x013\x04\0\x0eoutgoing-value\x03\0\x0e\x04\0\x09container\x03\x01\
+\x04\0\x13stream-object-names\x03\x01\x01h\x10\x01j\x01s\x01\x07\x01@\x01\x04sel\
+f\x12\0\x13\x04\0\x16[method]container.name\x01\x14\x01j\x01\x05\x01\x07\x01@\x01\
+\x04self\x12\0\x15\x04\0\x16[method]container.info\x01\x16\x01i\x09\x01j\x01\x17\
+\x01\x07\x01@\x04\x04self\x12\x04name\x0d\x05startw\x03endw\0\x18\x04\0\x1a[meth\
+od]container.get-data\x01\x19\x01h\x0f\x01j\0\x01\x07\x01@\x03\x04self\x12\x04na\
+me\x0d\x04data\x1a\0\x1b\x04\0\x1c[method]container.write-data\x01\x1c\x01i\x11\x01\
+j\x01\x1d\x01\x07\x01@\x01\x04self\x12\0\x1e\x04\0\x1e[method]container.list-obj\
+ects\x01\x1f\x01@\x02\x04self\x12\x04name\x0d\0\x1b\x04\0\x1f[method]container.d\
+elete-object\x01\x20\x01p\x0d\x01@\x02\x04self\x12\x05names!\0\x1b\x04\0\x20[met\
+hod]container.delete-objects\x01\"\x01j\x01\x7f\x01\x07\x01@\x02\x04self\x12\x04\
+name\x0d\0#\x04\0\x1c[method]container.has-object\x01$\x01j\x01\x0b\x01\x07\x01@\
+\x02\x04self\x12\x04name\x0d\0%\x04\0\x1d[method]container.object-info\x01&\x01@\
+\x01\x04self\x12\0\x1b\x04\0\x17[method]container.clear\x01'\x01h\x11\x01o\x02!\x7f\
+\x01j\x01)\x01\x07\x01@\x02\x04self(\x03lenw\0*\x04\04[method]stream-object-name\
+s.read-stream-object-names\x01+\x01o\x02w\x7f\x01j\x01,\x01\x07\x01@\x02\x04self\
+(\x03numw\0-\x04\04[method]stream-object-names.skip-stream-object-names\x01.\x03\
+\0\x18wasi:blobstore/container\x054\x02\x03\0\x0e\x09container\x02\x03\0\x0d\x0e\
+container-name\x02\x03\0\x0d\x09object-id\x01B\x16\x02\x03\x02\x015\x04\0\x09con\
+tainer\x03\0\0\x02\x03\x02\x01/\x04\0\x05error\x03\0\x02\x02\x03\x02\x016\x04\0\x0e\
+container-name\x03\0\x04\x02\x03\x02\x017\x04\0\x09object-id\x03\0\x06\x01i\x01\x01\
+j\x01\x08\x01\x03\x01@\x01\x04name\x05\0\x09\x04\0\x10create-container\x01\x0a\x04\
+\0\x0dget-container\x01\x0a\x01j\0\x01\x03\x01@\x01\x04name\x05\0\x0b\x04\0\x10d\
+elete-container\x01\x0c\x01j\x01\x7f\x01\x03\x01@\x01\x04name\x05\0\x0d\x04\0\x10\
+container-exists\x01\x0e\x01@\x02\x03src\x07\x04dest\x07\0\x0b\x04\0\x0bcopy-obj\
+ect\x01\x0f\x04\0\x0bmove-object\x01\x0f\x03\0\x18wasi:blobstore/blobstore\x058\x02\
+\x03\0\x0c\x05error\x01Br\x02\x03\x02\x01+\x04\0\x0cinput-stream\x03\0\0\x02\x03\
+\x02\x01,\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x019\x04\0\x05error\x03\0\
+\x04\x02\x03\x02\x01\x04\x04\0\x08datetime\x03\0\x06\x01w\x04\0\x08filesize\x03\0\
+\x08\x01m\x08\x07unknown\x0cblock-device\x10character-device\x09directory\x04fif\
+o\x0dsymbolic-link\x0cregular-file\x06socket\x04\0\x0fdescriptor-type\x03\0\x0a\x01\
+n\x06\x04read\x05write\x13file-integrity-sync\x13data-integrity-sync\x14requeste\
+d-write-sync\x10mutate-directory\x04\0\x10descriptor-flags\x03\0\x0c\x01n\x01\x0e\
+symlink-follow\x04\0\x0apath-flags\x03\0\x0e\x01n\x04\x06create\x09directory\x09\
+exclusive\x08truncate\x04\0\x0aopen-flags\x03\0\x10\x01w\x04\0\x0alink-count\x03\
+\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-count\x13\x04size\x09\x15data-acces\
+s-timestamp\x14\x1bdata-modification-timestamp\x14\x17status-change-timestamp\x14\
+\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\x09no-change\0\0\x03now\0\0\x09time\
+stamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\x17\x01r\x02\x04type\x0b\x04names\x04\
+\0\x0fdirectory-entry\x03\0\x19\x01m%\x06access\x0bwould-block\x07already\x0ebad\
+-descriptor\x04busy\x08deadlock\x05quota\x05exist\x0efile-too-large\x15illegal-b\
+yte-sequence\x0bin-progress\x0binterrupted\x07invalid\x02io\x0cis-directory\x04l\
+oop\x0etoo-many-links\x0cmessage-size\x0dname-too-long\x09no-device\x08no-entry\x07\
+no-lock\x13insufficient-memory\x12insufficient-space\x0dnot-directory\x09not-emp\
+ty\x0fnot-recoverable\x0bunsupported\x06no-tty\x0eno-such-device\x08overflow\x0d\
+not-permitted\x04pipe\x09read-only\x0cinvalid-seek\x0etext-file-busy\x0ccross-de\
+vice\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\x06normal\x0asequential\x06random\x09\
+will-need\x09dont-need\x08no-reuse\x04\0\x06advice\x03\0\x1d\x01r\x02\x05lowerw\x05\
+upperw\x04\0\x13metadata-hash-value\x03\0\x1f\x04\0\x0adescriptor\x03\x01\x04\0\x16\
+directory-entry-stream\x03\x01\x01h!\x01i\x01\x01j\x01$\x01\x1c\x01@\x02\x04self\
+#\x06offset\x09\0%\x04\0\"[method]descriptor.read-via-stream\x01&\x01i\x03\x01j\x01\
+'\x01\x1c\x01@\x02\x04self#\x06offset\x09\0(\x04\0#[method]descriptor.write-via-\
+stream\x01)\x01@\x01\x04self#\0(\x04\0$[method]descriptor.append-via-stream\x01*\
+\x01j\0\x01\x1c\x01@\x04\x04self#\x06offset\x09\x06length\x09\x06advice\x1e\0+\x04\
+\0\x19[method]descriptor.advise\x01,\x01@\x01\x04self#\0+\x04\0\x1c[method]descr\
+iptor.sync-data\x01-\x01j\x01\x0d\x01\x1c\x01@\x01\x04self#\0.\x04\0\x1c[method]\
+descriptor.get-flags\x01/\x01j\x01\x0b\x01\x1c\x01@\x01\x04self#\00\x04\0\x1b[me\
+thod]descriptor.get-type\x011\x01@\x02\x04self#\x04size\x09\0+\x04\0\x1b[method]\
+descriptor.set-size\x012\x01@\x03\x04self#\x15data-access-timestamp\x18\x1bdata-\
+modification-timestamp\x18\0+\x04\0\x1c[method]descriptor.set-times\x013\x01p}\x01\
+o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\x04self#\x06length\x09\x06offset\x09\06\x04\
+\0\x17[method]descriptor.read\x017\x01j\x01\x09\x01\x1c\x01@\x03\x04self#\x06buf\
+fer4\x06offset\x09\08\x04\0\x18[method]descriptor.write\x019\x01i\"\x01j\x01:\x01\
+\x1c\x01@\x01\x04self#\0;\x04\0![method]descriptor.read-directory\x01<\x04\0\x17\
+[method]descriptor.sync\x01-\x01@\x02\x04self#\x04paths\0+\x04\0&[method]descrip\
+tor.create-directory-at\x01=\x01j\x01\x16\x01\x1c\x01@\x01\x04self#\0>\x04\0\x17\
+[method]descriptor.stat\x01?\x01@\x03\x04self#\x0apath-flags\x0f\x04paths\0>\x04\
+\0\x1a[method]descriptor.stat-at\x01@\x01@\x05\x04self#\x0apath-flags\x0f\x04pat\
+hs\x15data-access-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1f[\
+method]descriptor.set-times-at\x01A\x01@\x05\x04self#\x0eold-path-flags\x0f\x08o\
+ld-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\x1a[method]descriptor.link-at\x01\
+B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x0ao\
+pen-flags\x11\x05flags\x0d\0\xc4\0\x04\0\x1a[method]descriptor.open-at\x01E\x01j\
+\x01s\x01\x1c\x01@\x02\x04self#\x04paths\0\xc6\0\x04\0\x1e[method]descriptor.rea\
+dlink-at\x01G\x04\0&[method]descriptor.remove-directory-at\x01=\x01@\x04\x04self\
+#\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\x1c[method]descriptor.re\
+name-at\x01H\x01@\x03\x04self#\x08old-paths\x08new-paths\0+\x04\0\x1d[method]des\
+criptor.symlink-at\x01I\x04\0![method]descriptor.unlink-file-at\x01=\x01@\x02\x04\
+self#\x05other#\0\x7f\x04\0![method]descriptor.is-same-object\x01J\x01j\x01\x20\x01\
+\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\x20[method]descriptor.metadata-hash\x01L\x01\
+@\x03\x04self#\x0apath-flags\x0f\x04paths\0\xcb\0\x04\0#[method]descriptor.metad\
+ata-hash-at\x01M\x01h\"\x01k\x1a\x01j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\
+\xd0\0\x04\03[method]directory-entry-stream.read-directory-entry\x01Q\x01h\x05\x01\
+k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\x04\0\x15filesystem-error-code\x01T\x03\0\x1b\
+wasi:filesystem/types@0.2.0\x05:\x02\x03\0\x10\x0adescriptor\x01B\x07\x02\x03\x02\
+\x01;\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\
+\0\x0fget-directories\x01\x05\x03\0\x1ewasi:filesystem/preopens@0.2.0\x05<\x01B\xc0\
+\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01+\x04\0\x0cinp\
+ut-stream\x03\0\x02\x02\x03\x02\x01,\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\
+\x01)\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x08\
+\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\
+\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06method\x03\
+\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\
+\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-payload\x03\
+\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-alert-re\
+ceived-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\x04\0\
+\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-\
+error\x01\x11\0\x15destination-not-found\0\0\x17destination-unavailable\0\0\x19d\
+estination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\x12connection-refu\
+sed\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\x17connection-rea\
+d-timeout\0\0\x18connection-write-timeout\0\0\x18connection-limit-reached\0\0\x12\
+TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\
+\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-reques\
+t-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18HTTP-request-URI-inv\
+alid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\
+\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-trailer-section-size\x01\
+\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HT\
+TP-response-header-section-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\
+\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\
+\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\
+\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTT\
+P-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configur\
+ation-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\
+\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\
+\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\
+\0\x06fields\x03\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10\
+incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-opti\
+ons\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\
+\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-t\
+railers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\
+\x04\0\x18future-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructo\
+r]fields\x012\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\
+\x18[static]fields.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\
+\0\x12[method]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[meth\
+od]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\
+\0\x12[method]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]\
+fields.delete\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]f\
+ields.append\x01>\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\
+\x01\x04self7\01\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\
+\0\x0b\x04\0\x1f[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\
+\x04\0([method]incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\
+\0\0\xc4\0\x04\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming\
+-request.authority\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]in\
+coming-request.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\
+\x04\0\x20[method]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\
+\xcb\0\x04\0\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01\
+@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\
+\x04self\xcd\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\
+\x02\x04self\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-meth\
+od\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-qu\
+ery\x01T\x01@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]out\
+going-request.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[\
+method]outgoing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\
+\0\x04\0#[method]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-reques\
+t.authority\x01T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]o\
+utgoing-request.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[meth\
+od]outgoing-request.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]requ\
+est-options\x01[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]req\
+uest-options.connect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\
+\0\x04\0+[method]request-options.set-connect-timeout\x01_\x04\0*[method]request-\
+options.first-byte-timeout\x01^\x04\0.[method]request-options.set-first-byte-tim\
+eout\x01_\x04\0-[method]request-options.between-bytes-timeout\x01^\x04\01[method\
+]request-options.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\
+\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outpa\
+ram.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.\
+status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.heade\
+rs\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01\
+g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[metho\
+d]incoming-body.stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[stati\
+c]incoming-body.finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0!\
+[method]future-trailers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01\
+j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-\
+trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoi\
+ng-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response\
+.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]o\
+utgoing-response.set-status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![meth\
+od]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[metho\
+d]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\
+\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\
+\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\
+\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incomin\
+g-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\
+\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming\
+-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\
+\0\x0fhttp-error-code\x01\x8c\x01\x03\0\x15wasi:http/types@0.2.0\x05=\x02\x03\0\x12\
+\x10outgoing-request\x02\x03\0\x12\x0frequest-options\x02\x03\0\x12\x18future-in\
+coming-response\x02\x03\0\x12\x0aerror-code\x01B\x0f\x02\x03\x02\x01>\x04\0\x10o\
+utgoing-request\x03\0\0\x02\x03\x02\x01?\x04\0\x0frequest-options\x03\0\x02\x02\x03\
+\x02\x01@\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\x01A\x04\0\x0a\
+error-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01\
+@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\x03\0\x20wasi:\
+http/outgoing-handler@0.2.0\x05B\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\
+\x04self\x01\0s\x04\0\x13[method]error.trace\x01\x02\x03\0'wasi:keyvalue/wasi-ke\
+yvalue-error@0.1.0\x05C\x02\x03\0\x14\x05error\x01B,\x02\x03\x02\x01+\x04\0\x0ci\
+nput-stream\x03\0\0\x02\x03\x02\x01,\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\
+\x01D\x04\0\x05error\x03\0\x04\x04\0\x06bucket\x03\x01\x01s\x04\0\x03key\x03\0\x07\
+\x04\0\x0eoutgoing-value\x03\x01\x04\0\x19outgoing-value-body-async\x03\0\x03\x01\
+p}\x04\0\x18outgoing-value-body-sync\x03\0\x0b\x04\0\x0eincoming-value\x03\x01\x04\
+\0\x19incoming-value-async-body\x03\0\x01\x01p}\x04\0\x18incoming-value-sync-bod\
+y\x03\0\x0f\x01i\x06\x01i\x05\x01j\x01\x11\x01\x12\x01@\x01\x04names\0\x13\x04\0\
+\x1a[static]bucket.open-bucket\x01\x14\x01i\x09\x01@\0\0\x15\x04\0)[static]outgo\
+ing-value.new-outgoing-value\x01\x16\x01h\x09\x01i\x0a\x01j\x01\x18\x01\x12\x01@\
+\x01\x04self\x17\0\x19\x04\06[method]outgoing-value.outgoing-value-write-body-as\
+ync\x01\x1a\x01j\0\x01\x12\x01@\x02\x04self\x17\x05value\x0c\0\x1b\x04\05[method\
+]outgoing-value.outgoing-value-write-body-sync\x01\x1c\x01h\x0d\x01j\x01\x10\x01\
+\x12\x01@\x01\x04self\x1d\0\x1e\x04\02[method]incoming-value.incoming-value-cons\
+ume-sync\x01\x1f\x01i\x0e\x01j\x01\x20\x01\x12\x01@\x01\x04self\x1d\0!\x04\03[me\
+thod]incoming-value.incoming-value-consume-async\x01\"\x01j\x01w\x01\x12\x01@\x01\
+\x04self\x1d\0#\x04\0*[method]incoming-value.incoming-value-size\x01$\x03\0\x19w\
+asi:keyvalue/types@0.1.0\x05E\x02\x03\0\x15\x06bucket\x02\x03\0\x15\x05error\x02\
+\x03\0\x15\x03key\x02\x03\0\x15\x0eincoming-value\x02\x03\0\x15\x0eoutgoing-valu\
+e\x01B\x1e\x02\x03\x02\x01F\x04\0\x06bucket\x03\0\0\x02\x03\x02\x01G\x04\0\x05er\
+ror\x03\0\x02\x02\x03\x02\x01H\x04\0\x03key\x03\0\x04\x02\x03\x02\x01I\x04\0\x0e\
+incoming-value\x03\0\x06\x02\x03\x02\x01J\x04\0\x0eoutgoing-value\x03\0\x08\x01h\
+\x01\x01p\x05\x01i\x07\x01k\x0c\x01p\x0d\x01i\x03\x01j\x01\x0e\x01\x0f\x01@\x02\x06\
+bucket\x0a\x04keys\x0b\0\x10\x04\0\x08get-many\x01\x11\x01j\x01\x0b\x01\x0f\x01@\
+\x01\x06bucket\x0a\0\x12\x04\0\x04keys\x01\x13\x01h\x09\x01o\x02\x05\x14\x01p\x15\
+\x01j\0\x01\x0f\x01@\x02\x06bucket\x0a\x0akey-values\x16\0\x17\x04\0\x08set-many\
+\x01\x18\x01@\x02\x06bucket\x0a\x04keys\x0b\0\x17\x04\0\x0bdelete-many\x01\x19\x03\
+\0\"wasi:keyvalue/eventual-batch@0.1.0\x05K\x01B\x1a\x02\x03\x02\x01F\x04\0\x06b\
+ucket\x03\0\0\x02\x03\x02\x01G\x04\0\x05error\x03\0\x02\x02\x03\x02\x01I\x04\0\x0e\
+incoming-value\x03\0\x04\x02\x03\x02\x01H\x04\0\x03key\x03\0\x06\x02\x03\x02\x01\
+J\x04\0\x0eoutgoing-value\x03\0\x08\x01h\x01\x01i\x05\x01k\x0b\x01i\x03\x01j\x01\
+\x0c\x01\x0d\x01@\x02\x06bucket\x0a\x03key\x07\0\x0e\x04\0\x03get\x01\x0f\x01h\x09\
+\x01j\0\x01\x0d\x01@\x03\x06bucket\x0a\x03key\x07\x0eoutgoing-value\x10\0\x11\x04\
+\0\x03set\x01\x12\x01@\x02\x06bucket\x0a\x03key\x07\0\x11\x04\0\x06delete\x01\x13\
+\x01j\x01\x7f\x01\x0d\x01@\x02\x06bucket\x0a\x03key\x07\0\x14\x04\0\x06exists\x01\
+\x15\x03\0\x1cwasi:keyvalue/eventual@0.1.0\x05L\x01B\x04\x01m\x06\x05trace\x05de\
+bug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05leve\
+l\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x03\0\x14wasi:logging/l\
+ogging\x05M\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-deni\
+ed\x0dnot-supported\x10invalid-argument\x0dout-of-memory\x07timeout\x14concurren\
+cy-conflict\x0fnot-in-progress\x0bwould-block\x0dinvalid-state\x10new-socket-lim\
+it\x14address-not-bindable\x0eaddress-in-use\x12remote-unreachable\x12connection\
+-refused\x10connection-reset\x12connection-aborted\x12datagram-too-large\x11name\
+-unresolvable\x1atemporary-resolver-failure\x1apermanent-resolver-failure\x04\0\x0a\
+error-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\
+\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-add\
+ress\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\
+\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01\
+r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-ad\
+dress\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-\
+address\x03\0\x0f\x03\0\x1awasi:sockets/network@0.2.0\x05N\x02\x03\0\x19\x07netw\
+ork\x02\x03\0\x19\x0aerror-code\x02\x03\0\x19\x0aip-address\x01B\x16\x02\x03\x02\
+\x01\x01\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01O\x04\0\x07network\x03\0\x02\x02\
+\x03\x02\x01P\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01Q\x04\0\x0aip-address\
+\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\
+\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-stream.resolve\
+-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-\
+address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\
+\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x03\0!wasi:soc\
+kets/ip-name-lookup@0.2.0\x05R\x01B\x05\x02\x03\x02\x01O\x04\0\x07network\x03\0\0\
+\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x03\0#wasi:sockets/inst\
+ance-network@0.2.0\x05S\x04\0\x15golem:rust/golem-rust\x04\0\x0b\x10\x01\0\x0ago\
+lem-rust\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.2\
+20.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
