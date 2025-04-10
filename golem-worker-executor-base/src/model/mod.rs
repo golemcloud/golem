@@ -256,6 +256,12 @@ impl TrapType {
                             Some(GolemError::InvalidRequest { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
+                            Some(GolemError::ParamTypeMismatch { details }) => {
+                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                            }
+                            Some(GolemError::ValueMismatch { details }) => {
+                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                            }
                             _ => TrapType::Error(WorkerError::Unknown(format!("{:#}", error))),
                         },
                     },
