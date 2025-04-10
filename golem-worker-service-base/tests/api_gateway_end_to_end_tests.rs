@@ -41,7 +41,7 @@ use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
-use http::header::LOCATION;
+use http::header::{LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
@@ -1354,7 +1354,7 @@ async fn test_api_def_with_custom_cors_preflight_1() {
     .unwrap();
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_cors_preflight("/foo/{user-id}", &cors).await;
+        get_api_def_with_cors_preflight_route_only("/foo/{user-id}", &cors).await;
 
     let session_store = internal::get_session_store();
 
@@ -1398,12 +1398,8 @@ async fn test_api_def_with_custom_cors_preflight_2() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_cors_preflight_for_get_endpoint_resource(
-            "/foo/{user-id}",
-            response_mapping,
-            &cors,
-        )
-        .await;
+        get_api_def_with_preflight_and_get_endpoint("/foo/{user-id}", response_mapping, &cors)
+            .await;
 
     let session_store = internal::get_session_store();
 
@@ -1453,6 +1449,67 @@ async fn test_api_def_with_custom_cors_preflight_2() {
         allow_credentials_in_actual_response,
         cors.get_allow_credentials().unwrap()
     );
+}
+
+#[test]
+async fn test_api_def_with_custom_cors_preflight_3() {
+    let empty_headers = HeaderMap::new();
+    let preflight_request =
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    // We intentionally make the origin different for the get endpoint
+    let mut api_request =
+        get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    api_request
+        .headers_mut()
+        .insert(ORIGIN, HeaderValue::from_static("http://wrongdomain.com"));
+
+    let cors = HttpCors::from_parameters(
+        Some("http://example.com".to_string()),
+        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some(true),
+        Some(3600),
+    )
+    .unwrap();
+
+    let response_mapping = r#"
+      let id: u64 = request.path.user-id;
+      let worker-name = "shopping-cart-${id}";
+      let worker = instance(worker-name);
+      let response = worker.get-cart-contents("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_preflight_and_get_endpoint("/foo/{user-id}", response_mapping, &cors)
+            .await;
+
+    let session_store = internal::get_session_store();
+
+    let preflight_response = execute(
+        preflight_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+    let actual_response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let pre_flight_response = get_preflight_from_response(preflight_response);
+
+    assert_eq!(pre_flight_response, cors);
+
+    // Since the origin is different for the get endpoint, we expect a forbidden response
+    assert_eq!(actual_response.status(), StatusCode::FORBIDDEN);
 }
 
 #[test]
@@ -2093,7 +2150,10 @@ async fn get_api_def_with_default_cors_preflight(path_pattern: &str) -> HttpApiD
     .unwrap()
 }
 
-async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) -> HttpApiDefinition {
+async fn get_api_def_with_cors_preflight_route_only(
+    path_pattern: &str,
+    cors: &HttpCors,
+) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -2145,7 +2205,7 @@ async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) ->
     .unwrap()
 }
 
-async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
+async fn get_api_def_with_preflight_and_get_endpoint(
     path_pattern: &str,
     rib_expression: &str,
     cors: &HttpCors,
