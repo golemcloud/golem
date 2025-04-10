@@ -16,7 +16,7 @@ use crate::gateway_execution::request::RichRequest;
 use crate::gateway_middleware::CorsError;
 use bigdecimal::BigDecimal;
 use http::header::*;
-use http::{header, Method};
+use http::Method;
 use poem_openapi::Object;
 use rib::{Expr, GetLiteralValue, RibInput, TypeName};
 use serde::{Deserialize, Serialize};
@@ -118,7 +118,7 @@ impl HttpCors {
         &self,
         req: &'a RichRequest,
     ) -> Result<Option<&'a HeaderValue>, CorsError> {
-        let request_headers = req.headers().get(header::ACCESS_CONTROL_REQUEST_HEADERS);
+        let request_headers = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS);
 
         if let Some(headers_value) = request_headers {
             let allow_list: Vec<_> = Self::split_origin(&self.allow_headers).collect();
@@ -147,22 +147,19 @@ impl HttpCors {
     }
 
     pub fn apply_cors(&self, request: &RichRequest) -> Result<(), CorsError> {
-        let origin = match request.headers().get(header::ORIGIN) {
+        let origin = match request.headers().get(ORIGIN) {
             Some(origin) => origin.clone(),
-            None => {
-                return Ok(())
-            }
+            None => return Ok(()),
         };
 
-        match self.check_origin(&origin) {
-            OriginStatus::NotAllowed => return Err(CorsError::OriginNotAllowed),
-            _ => {} // otherwise allowed
+        if let OriginStatus::NotAllowed = self.check_origin(&origin) {
+            return Err(CorsError::OriginNotAllowed);
         }
 
         if request.underlying.method() == Method::OPTIONS {
             let allow_method = request
                 .headers()
-                .get(header::ACCESS_CONTROL_REQUEST_METHOD)
+                .get(ACCESS_CONTROL_REQUEST_METHOD)
                 .and_then(|val| val.to_str().ok())
                 .and_then(|m| m.parse::<Method>().ok());
 
