@@ -1850,8 +1850,8 @@ async fn grpc_api_definition_request_to_http(
                                     .as_ref()
                                     .and_then(|cp| cp.allow_credentials),
                             },
-                            cors: None,     // TODO: map this from route.middleware?
-                            security: None, // TODO: map this from route.middleware?
+                            cors: None,
+                            security: None,
                         }
                     }))
                     .await

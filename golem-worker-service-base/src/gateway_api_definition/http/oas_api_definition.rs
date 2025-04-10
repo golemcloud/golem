@@ -267,7 +267,6 @@ mod internal {
                             path: path_pattern.clone(),
                             binding: GatewayBinding::static_binding(binding),
                             security,
-                            cors: None
                         })
                     }
 
@@ -279,7 +278,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::Default(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
@@ -290,7 +288,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::Default(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::HttpHandler, _) => {
@@ -301,7 +298,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::HttpHandler(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::CorsPreflight, method) => {
@@ -319,7 +315,6 @@ mod internal {
                         method,
                         binding: GatewayBinding::static_binding(binding),
                         security,
-                        cors: None,
                     })
                 } else {
                     Err(format!(
@@ -628,7 +623,6 @@ mod tests {
                 HttpCors::default(),
             )),
             security: None,
-            cors: None,
         }
     }
 
@@ -640,7 +634,6 @@ mod tests {
             method: MethodPattern::Options,
             binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors_preflight)),
             security: None,
-            cors: None,
         }
     }
 

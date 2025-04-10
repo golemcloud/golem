@@ -113,10 +113,6 @@ impl HttpApiDefinition {
                 http_middlewares.push(HttpMiddleware::authenticate_request(security_scheme));
             }
 
-            if let Some(cors) = route.cors {
-                http_middlewares.push(HttpMiddleware::cors(cors));
-            }
-
             routes.push(Route {
                 method: route.method,
                 path: route.path,

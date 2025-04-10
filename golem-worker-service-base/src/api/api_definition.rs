@@ -230,7 +230,6 @@ pub struct RouteRequestData {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GatewayBindingData,
-    pub cors: Option<HttpCors>,
     pub security: Option<String>,
 }
 
@@ -251,7 +250,6 @@ impl RouteRequestData {
             path,
             binding,
             security,
-            cors: self.cors,
         })
     }
 }
@@ -323,37 +321,21 @@ pub struct ResolvedGatewayBindingComponent {
 pub struct GatewayBindingData {
     #[oai(rename = "bindingType")]
     pub binding_type: Option<GatewayBindingType>, // descriminator to keep backward compatibility
-
-    // WORKER
-    // For binding type - worker
+    // For binding type - worker/default and file-server
     // Optional only to keep backward compatibility
     pub component: Option<GatewayBindingComponent>,
-    // For binding type - worker
+    // worker-name is optional to keep backward compatibility
+    // this is not required anymore with first class worker support in rib
+    // which is embedded in response field
     pub worker_name: Option<String>,
-    // For binding type - worker
+    // For binding type - worker/default
     pub idempotency_key: Option<String>,
-    // For binding type - worker
-    // Optional only to keep backward compatibility
+    // For binding type - worker/default and fileserver, this is required
+    // For binding type cors-preflight, this is optional otherwise default cors-preflight settings
+    // is used
     pub response: Option<String>,
-    // For binding type - worker
+    // For binding type - worker/default
     pub invocation_context: Option<String>,
-
-    // CORS binding type
-    //  For binding type - cors-middleware
-    // Optional only to keep backward compatibility
-    pub allow_origin: Option<String>,
-    //  For binding type - cors-middleware
-    // Optional only to keep backward compatibility
-    pub allow_methods: Option<String>,
-    //  For binding type - cors-middleware
-    // Optional only to keep backward compatibility
-    pub allow_headers: Option<String>,
-    //  For binding type - cors-middleware
-    pub expose_headers: Option<String>,
-    //  For binding type - cors-middleware
-    pub max_age: Option<u64>,
-    //  For binding type - cors-middleware
-    pub allow_credentials: Option<bool>,
 }
 
 impl GatewayBindingData {
