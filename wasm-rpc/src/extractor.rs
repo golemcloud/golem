@@ -322,7 +322,7 @@ impl<'a> WitNodePointer<'a> {
     }
 }
 
-impl<'a, 'b> WitValueExtractor<'a> for WitNodePointer<'b> {
+impl<'a> WitValueExtractor<'a> for WitNodePointer<'_> {
     fn u8(&'a self) -> Option<u8> {
         self.u8()
     }
