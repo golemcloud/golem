@@ -15,7 +15,9 @@
 use crate::gateway_middleware::http::authentication::HttpAuthenticationMiddleware;
 use std::ops::Deref;
 
+use crate::gateway_execution::request::RichRequest;
 use crate::gateway_middleware::http::cors::HttpCors;
+use crate::gateway_middleware::MiddlewareError;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -23,14 +25,14 @@ use http::header::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {
-    AddCorsHeaders(HttpCors),
+    Cors(HttpCors),
     AuthenticateRequest(Box<HttpAuthenticationMiddleware>), // Middleware to authenticate before feeding the input to the binding executor
 }
 
 impl HttpMiddleware {
     pub fn get_cors(&self) -> Option<HttpCors> {
         match self {
-            HttpMiddleware::AddCorsHeaders(cors) => Some(cors.clone()),
+            HttpMiddleware::Cors(cors) => Some(cors.clone()),
             HttpMiddleware::AuthenticateRequest(_) => None,
         }
     }
@@ -40,7 +42,7 @@ impl HttpMiddleware {
             HttpMiddleware::AuthenticateRequest(authentication) => {
                 Some(authentication.deref().clone())
             }
-            HttpMiddleware::AddCorsHeaders(_) => None,
+            HttpMiddleware::Cors(_) => None,
         }
     }
 
@@ -52,30 +54,6 @@ impl HttpMiddleware {
         }))
     }
     pub fn cors(cors: HttpCors) -> Self {
-        HttpMiddleware::AddCorsHeaders(cors)
-    }
-
-    pub fn apply_cors(response: &mut poem::Response, cors: &HttpCors) {
-        response.headers_mut().insert(
-            ACCESS_CONTROL_ALLOW_ORIGIN,
-            // hot path, and this unwrap will not fail unless we bypassed it during configuration
-            cors.get_allow_origin().clone().parse().unwrap(),
-        );
-
-        if let Some(allow_credentials) = &cors.get_allow_credentials() {
-            response.headers_mut().insert(
-                ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                // hot path, and this unwrap will not fail unless we bypassed it during configuration
-                allow_credentials.to_string().clone().parse().unwrap(),
-            );
-        }
-
-        if let Some(expose_headers) = &cors.get_expose_headers() {
-            response.headers_mut().insert(
-                ACCESS_CONTROL_EXPOSE_HEADERS,
-                // hot path, and this unwrap will not fail unless we bypassed it during configuration
-                expose_headers.clone().parse().unwrap(),
-            );
-        }
+        HttpMiddleware::Cors(cors)
     }
 }

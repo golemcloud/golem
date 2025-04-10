@@ -461,7 +461,7 @@ impl From<HttpMiddlewares> for MiddlewareData {
 
         for i in value.0.iter() {
             match i {
-                HttpMiddleware::AddCorsHeaders(cors0) => cors = Some(cors0.clone()),
+                HttpMiddleware::Cors(cors0) => cors = Some(cors0.clone()),
                 HttpMiddleware::AuthenticateRequest(auth0) => {
                     let security_scheme_reference = SecuritySchemeReferenceData::from(
                         auth0.security_scheme_with_metadata.clone(),
