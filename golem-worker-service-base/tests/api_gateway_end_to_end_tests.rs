@@ -616,6 +616,65 @@ async fn test_api_def_with_request_body_1() {
     assert_eq!(result, expected);
 }
 
+#[test]
+async fn test_api_def_with_request_body_2() {
+    let empty_headers = HeaderMap::new();
+
+    let api_request = get_gateway_request(
+        "/foo/2",
+        None,
+        &empty_headers,
+        Value::String("address".to_string()),
+    );
+
+    let worker_name = r#"
+        let userid: u64 = request.path.user-id;
+        let max: u64 = 100;
+        let zero: u64 = 0;
+        let one: u64 = 1;
+        let res = if userid > max then zero else one;
+        "shopping-cart-${res}"
+    "#;
+
+    let response_mapping = r#"
+        let response = golem:it/api.{get-cart-contents}(request.body, request.body);
+        response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
+
+    let session_store = internal::get_session_store();
+
+    let test_response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(test_response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1".to_string(),
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("address".to_string()),
+            Value::String("address".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
 // A test where one of the keys in the request body is expected to be a number
 // based on rib script, but the actual value is a string
 #[test]
@@ -1086,7 +1145,7 @@ async fn test_api_def_with_security_with_expired_token() {
 
 /// regression test for: https://zivergeteam.slack.com/archives/C057S2E4XT5/p1741430776997879
 #[test]
-async fn test_api_def_with_security_for_valid_input_relative_callback() {
+async fn test_api_def_with_security_with_relative_callback() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
@@ -1193,41 +1252,7 @@ async fn test_api_def_with_security_for_valid_input_relative_callback() {
 }
 
 #[test]
-async fn test_api_def_with_cors_preflight_for_valid_input() {
-    let empty_headers = HeaderMap::new();
-    let api_request =
-        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
-
-    let cors = HttpCors::from_parameters(
-        Some("http://example.com".to_string()),
-        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
-        Some("Content-Type, Authorization".to_string()),
-        Some("Content-Type, Authorization".to_string()),
-        Some(true),
-        Some(3600),
-    )
-    .unwrap();
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_cors_preflight("/foo/{user-id}", &cors).await;
-
-    let session_store = internal::get_session_store();
-
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::get_provider_with_valid_id_token(),
-    )
-    .await;
-
-    let result = internal::get_preflight_from_response(response);
-
-    assert_eq!(result, cors);
-}
-
-#[test]
-async fn test_api_def_with_default_cors_preflight_for_valid_input() {
+async fn test_api_def_with_default_cors_preflight_1() {
     let empty_headers = HeaderMap::new();
     let api_request =
         get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -1253,7 +1278,7 @@ async fn test_api_def_with_default_cors_preflight_for_valid_input() {
 }
 
 #[test]
-async fn test_api_def_with_cors_preflight_default_for_preflight_input_and_simple_input() {
+async fn test_api_def_with_default_cors_preflight_2() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
         get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -1313,7 +1338,41 @@ async fn test_api_def_with_cors_preflight_default_for_preflight_input_and_simple
 }
 
 #[test]
-async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input() {
+async fn test_api_def_with_custom_cors_preflight_1() {
+    let empty_headers = HeaderMap::new();
+    let api_request =
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let cors = HttpCors::from_parameters(
+        Some("http://example.com".to_string()),
+        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some(true),
+        Some(3600),
+    )
+    .unwrap();
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_cors_preflight("/foo/{user-id}", &cors).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::get_provider_with_valid_id_token(),
+    )
+    .await;
+
+    let result = internal::get_preflight_from_response(response);
+
+    assert_eq!(result, cors);
+}
+
+#[test]
+async fn test_api_def_with_custom_cors_preflight_2() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
         get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -1397,7 +1456,7 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
 }
 
 #[test]
-async fn test_api_def_with_path_and_query_params_1() {
+async fn test_api_def_with_path_and_query_1() {
     let empty_headers = HeaderMap::new();
     let api_request =
         get_gateway_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
@@ -1491,70 +1550,8 @@ async fn test_api_def_with_path_and_query_2() {
     assert_eq!(result, expected);
 }
 
-// Test that ensures that the input requirement of path and query is a number, but the actual inputs are strings
-// Also both request.header.value and request.headers.value works
-// Along with these, it also makes use of parameters from request body
 #[test]
-async fn test_api_def_with_path_and_query_and_header_and_body() {
-    let mut headers = HeaderMap::new();
-    headers.insert("baz", HeaderValue::from_static("42"));
-    headers.insert("qux", HeaderValue::from_static("qux_value"));
-
-    let body = serde_json::json!({
-        "quux": "quux_value"
-    });
-
-    let api_request = get_gateway_request("/foo/1", Some("bar=2"), &headers, body);
-
-    // Default types for path and query parameters are string
-    let response_mapping = r#"
-        let path_foo = request.path.foo;
-        let query_bar = request.query.bar;
-        let header_baz = request.headers.baz;
-        let header_qux = request.header.qux;
-        let body_quux: string = request.body.quux;
-        let arg1 = "${path_foo}-${query_bar}";
-        let arg2 = "${header_baz}-${header_qux}-${body_quux}";
-        let my-instance = instance("shopping-cart-${path_foo}");
-        let response = my-instance.get-cart-contents(arg1, arg2);
-        response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{foo}?{bar}", None, response_mapping).await;
-
-    let session_store = internal::get_session_store();
-
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    let test_response = internal::get_details_from_response(response).await;
-
-    let result = (
-        test_response.worker_name,
-        test_response.function_name,
-        test_response.function_params,
-    );
-
-    let expected = (
-        "shopping-cart-1".to_string(),
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("1-2".to_string()),
-            Value::String("42-qux_value-quux_value".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input() {
+async fn test_api_def_with_path_and_query_3() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request(
         "/foo/1",
@@ -1610,66 +1607,7 @@ async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input(
 }
 
 #[test]
-async fn test_api_def_with_request_body_params_lookup_for_valid_input1() {
-    let empty_headers = HeaderMap::new();
-
-    let api_request = get_gateway_request(
-        "/foo/2",
-        None,
-        &empty_headers,
-        Value::String("address".to_string()),
-    );
-
-    let worker_name = r#"
-        let userid: u64 = request.path.user-id;
-        let max: u64 = 100;
-        let zero: u64 = 0;
-        let one: u64 = 1;
-        let res = if userid > max then zero else one;
-        "shopping-cart-${res}"
-    "#;
-
-    let response_mapping = r#"
-        let response = golem:it/api.{get-cart-contents}(request.body, request.body);
-        response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
-
-    let session_store = internal::get_session_store();
-
-    let test_response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    let test_response = internal::get_details_from_response(test_response).await;
-
-    let result = (
-        test_response.worker_name,
-        test_response.function_name,
-        test_response.function_params,
-    );
-
-    let expected = (
-        "shopping-cart-1".to_string(),
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("address".to_string()),
-            Value::String("address".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
+async fn test_api_def_with_path_and_request_body_1() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -1736,7 +1674,7 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
 }
 
 #[test]
-async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
+async fn test_api_def_with_path_and_request_body_2() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -1800,8 +1738,70 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
     assert_eq!(result, expected);
 }
 
+// Test that ensures that the input requirement of path and query is a number, but the actual inputs are strings
+// Also both request.header.value and request.headers.value works
+// Along with these, it also makes use of parameters from request body
 #[test]
-async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
+async fn test_api_def_with_path_and_query_and_header_and_body() {
+    let mut headers = HeaderMap::new();
+    headers.insert("baz", HeaderValue::from_static("42"));
+    headers.insert("qux", HeaderValue::from_static("qux_value"));
+
+    let body = serde_json::json!({
+        "quux": "quux_value"
+    });
+
+    let api_request = get_gateway_request("/foo/1", Some("bar=2"), &headers, body);
+
+    // Default types for path and query parameters are string
+    let response_mapping = r#"
+        let path_foo = request.path.foo;
+        let query_bar = request.query.bar;
+        let header_baz = request.headers.baz;
+        let header_qux = request.header.qux;
+        let body_quux: string = request.body.quux;
+        let arg1 = "${path_foo}-${query_bar}";
+        let arg2 = "${header_baz}-${header_qux}-${body_quux}";
+        let my-instance = instance("shopping-cart-${path_foo}");
+        let response = my-instance.get-cart-contents(arg1, arg2);
+        response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{foo}?{bar}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1".to_string(),
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("1-2".to_string()),
+            Value::String("42-qux_value-quux_value".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_api_def_with_idempotency_key() {
     async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
         let api_request = get_gateway_request("/getcartcontent/1", None, header_map, Value::Null);
 
