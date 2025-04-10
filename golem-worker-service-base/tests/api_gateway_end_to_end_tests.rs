@@ -694,7 +694,7 @@ async fn test_api_def_with_security() {
         &auth_call_back_url,
         &identity_provider,
     )
-        .await;
+    .await;
 
     let session_store = internal::get_session_store();
 
@@ -704,7 +704,7 @@ async fn test_api_def_with_security() {
         &session_store,
         &identity_provider,
     )
-        .await;
+    .await;
 
     let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
 
@@ -756,7 +756,7 @@ async fn test_api_def_with_security() {
         &session_store,
         &identity_provider,
     )
-        .await;
+    .await;
 
     let redirect_response_headers = final_redirect_response.headers();
 
@@ -769,7 +769,7 @@ async fn test_api_def_with_security() {
         &session_store,
         &identity_provider,
     )
-        .await;
+    .await;
 
     let test_response = internal::get_details_from_response(response).await;
 
