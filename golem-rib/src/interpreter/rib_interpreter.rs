@@ -1400,16 +1400,27 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         arg_size: usize,
     ) -> Result<(), String> {
-        let literals = interpreter_stack.try_pop_n_literals(arg_size)?;
+        let value_and_types = interpreter_stack.try_pop_n_val(arg_size)?;
 
-        let str = literals
-            .into_iter()
-            .fold(String::new(), |mut acc, literal| {
-                acc.push_str(&literal.as_string());
-                acc
-            });
+        let mut result = String::new();
 
-        interpreter_stack.push_val(str.into_value_and_type());
+        for val in value_and_types {
+            match &val.value {
+                Value::String(s) => {
+                    // Avoid extra quotes when concatenating strings
+                    result.push_str(s);
+                }
+                Value::Char(char) => {
+                    // Avoid extra single quotes when concatenating chars
+                    result.push(*char);
+                }
+                _ => {
+                    result.push_str(&val.to_string());
+                }
+            }
+        }
+
+        interpreter_stack.push_val(result.into_value_and_type());
 
         Ok(())
     }
@@ -1910,6 +1921,29 @@ mod tests {
             .value;
 
         assert_eq!(result, Value::String("21-foo".to_string()))
+    }
+
+    #[test]
+    async fn test_interpreter_concatenation() {
+        let mut interpreter = test_utils::interpreter_dynamic_response(None);
+
+        let rib_expr = r#"
+            let x = "foo";
+            let y = "bar";
+            let z = {foo: "baz"};
+            let n: u32 = 42;
+            let result = "${x}-${y}-${z}-${n}";
+            result
+        "#;
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let compiled = compiler::compile(expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("foo-bar-{foo: \"baz\"}-42".to_string())
+        );
     }
 
     #[test]

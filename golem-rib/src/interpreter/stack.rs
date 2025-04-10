@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::{GetLiteralValue, LiteralValue};
+use crate::GetLiteralValue;
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
@@ -91,19 +91,6 @@ impl InterpreterStack {
                 ))
             })
             .collect::<Result<Vec<ValueAndType>, String>>()
-    }
-
-    pub fn try_pop_n_literals(&mut self, n: usize) -> Result<Vec<LiteralValue>, String> {
-        let values = self.try_pop_n_val(n)?;
-        values
-            .iter()
-            .map(|type_value| {
-                type_value.get_literal().ok_or(format!(
-                    "internal error: failed to convert last {} in the stack to literals {type_value:?}",
-                    n
-                ))
-            })
-            .collect::<Result<Vec<_>, String>>()
     }
 
     pub fn pop_str(&mut self) -> Option<String> {
