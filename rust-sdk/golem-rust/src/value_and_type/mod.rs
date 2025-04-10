@@ -546,6 +546,6 @@ impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
 impl<K: FromValueAndType + Eq + Hash, V: FromValueAndType> FromValueAndType for HashMap<K, V> {
     fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
         let items: Vec<(K, V)> = FromValueAndType::from_extractor(extractor)?;
-        Ok(HashMap::from_iter(items.into_iter()))
+        Ok(HashMap::from_iter(items))
     }
 }

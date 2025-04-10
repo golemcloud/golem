@@ -329,12 +329,12 @@ impl TypeNodeBuilder for WitTypeBuilder {
     }
 
     fn r#enum(mut self, values: &[&str]) -> Self::Result {
-        let _ = self.add_enum(values.into_iter().map(|s| s.to_string()).collect());
+        let _ = self.add_enum(values.iter().map(|s| s.to_string()).collect());
         self.build()
     }
 
     fn flags(mut self, values: &[&str]) -> Self::Result {
-        let _ = self.add_enum(values.into_iter().map(|s| s.to_string()).collect());
+        let _ = self.add_enum(values.iter().map(|s| s.to_string()).collect());
         self.build()
     }
 
@@ -526,7 +526,7 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
     fn r#enum(mut self, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_enum(values.into_iter().map(|s| s.to_string()).collect());
+            .add_enum(values.iter().map(|s| s.to_string()).collect());
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, child_index);
@@ -536,7 +536,7 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
     fn flags(mut self, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_flags(values.into_iter().map(|s| s.to_string()).collect());
+            .add_flags(values.iter().map(|s| s.to_string()).collect());
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, child_index);
@@ -626,162 +626,33 @@ pub struct WitTypeRecordFieldBuilder<ParentBuilder: TypeNodeBuilder> {
 
 impl<ParentBuilder: TypeNodeBuilder> WitTypeRecordFieldBuilder<ParentBuilder> {
     fn finish(mut self, field_idx: NodeIndex) -> WitTypeRecordBuilder<ParentBuilder> {
-        self.builder.add(self.name, field_idx);
+        self.apply(field_idx);
         self.builder
+    }
+
+    fn apply(&mut self, field_idx: NodeIndex) {
+        self.builder.add(self.name.clone(), field_idx);
     }
 }
 
-impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeRecordFieldBuilder<ParentBuilder> {
+impl<ParentBuilder: TypeNodeBuilder> InnerTypeNodeBuilder
+    for WitTypeRecordFieldBuilder<ParentBuilder>
+{
     type Result = WitTypeRecordBuilder<ParentBuilder>;
 
     fn parent_builder(&mut self) -> &mut WitTypeBuilder {
         self.builder.builder.parent_builder()
     }
 
-    fn u8(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u8();
-        self.finish(child_index)
+    fn finish(self, result_index: NodeIndex) -> Self::Result {
+        self.finish(result_index)
     }
 
-    fn u16(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u16();
-        self.finish(child_index)
+    fn apply(&mut self, result_index: NodeIndex) {
+        self.apply(result_index);
     }
 
-    fn u32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u32();
-        self.finish(child_index)
-    }
-
-    fn u64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u64();
-        self.finish(child_index)
-    }
-
-    fn s8(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s8();
-        self.finish(child_index)
-    }
-
-    fn s16(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s16();
-        self.finish(child_index)
-    }
-
-    fn s32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s32();
-        self.finish(child_index)
-    }
-
-    fn s64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s64();
-        self.finish(child_index)
-    }
-
-    fn f32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_f32();
-        self.finish(child_index)
-    }
-
-    fn f64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_f64();
-        self.finish(child_index)
-    }
-
-    fn string(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_string();
-        self.finish(child_index)
-    }
-
-    fn bool(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_bool();
-        self.finish(child_index)
-    }
-
-    fn char(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_char();
-        self.finish(child_index)
-    }
-
-    fn option(mut self) -> WitTypeContainerBuilder<Self> {
-        let option_idx = self.parent_builder().add_option();
-        self.builder.add(self.name.clone(), option_idx);
-        WitTypeContainerBuilder {
-            builder: self,
-            target_idx: option_idx,
-        }
-    }
-
-    fn list(mut self) -> WitTypeContainerBuilder<Self> {
-        let list_idx = self.parent_builder().add_list();
-        self.builder.add(self.name.clone(), list_idx);
-        WitTypeContainerBuilder {
-            builder: self,
-            target_idx: list_idx,
-        }
-    }
-
-    fn r#enum(mut self, values: &[&str]) -> Self::Result {
-        let child_index = self
-            .parent_builder()
-            .add_enum(values.into_iter().map(|s| s.to_string()).collect());
-        self.finish(child_index)
-    }
-
-    fn flags(mut self, values: &[&str]) -> Self::Result {
-        let child_index = self
-            .parent_builder()
-            .add_flags(values.into_iter().map(|s| s.to_string()).collect());
-        self.finish(child_index)
-    }
-
-    fn record(mut self) -> WitTypeRecordBuilder<Self> {
-        let record_idx = self.parent_builder().add_record();
-        self.builder.add(self.name.clone(), record_idx);
-        WitTypeRecordBuilder {
-            builder: self,
-            target_idx: record_idx,
-            fields: Vec::new(),
-        }
-    }
-
-    fn tuple(mut self) -> WitTypeTupleBuilder<Self> {
-        let tuple_idx = self.parent_builder().add_tuple();
-        self.builder.add(self.name.clone(), tuple_idx);
-        WitTypeTupleBuilder {
-            builder: self,
-            target_idx: tuple_idx,
-            fields: Vec::new(),
-        }
-    }
-
-    fn variant(mut self) -> WitTypeVariantBuilder<Self> {
-        let variant_idx = self.parent_builder().add_variant();
-        self.builder.add(self.name.clone(), variant_idx);
-        WitTypeVariantBuilder {
-            builder: self,
-            target_idx: variant_idx,
-            cases: Vec::new(),
-        }
-    }
-
-    fn result(mut self) -> WitTypeResultBuilder<Self> {
-        let result_idx = self.parent_builder().add_result();
-        self.builder.add(self.name.clone(), result_idx);
-        WitTypeResultBuilder {
-            builder: self,
-            target_idx: result_idx,
-            ok: None,
-            err: None,
-        }
-    }
-
-    fn handle(mut self, resource_id: ResourceId, resource_mode: ResourceMode) -> Self::Result {
-        let child_index = self.parent_builder().add_handle(resource_id, resource_mode);
-        self.finish(child_index)
-    }
-
-    fn finish(self) -> Self::Result {
+    fn into_parent(self) -> Self::Result {
         self.builder
     }
 }
@@ -815,162 +686,33 @@ pub struct WitTypeTupleItemBuilder<ParentBuilder: TypeNodeBuilder> {
 
 impl<ParentBuilder: TypeNodeBuilder> WitTypeTupleItemBuilder<ParentBuilder> {
     fn finish(mut self, field_idx: NodeIndex) -> WitTypeTupleBuilder<ParentBuilder> {
-        self.builder.add(field_idx);
+        self.apply(field_idx);
         self.builder
+    }
+
+    fn apply(&mut self, field_idx: NodeIndex) {
+        self.builder.add(field_idx);
     }
 }
 
-impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeTupleItemBuilder<ParentBuilder> {
+impl<ParentBuilder: TypeNodeBuilder> InnerTypeNodeBuilder
+    for WitTypeTupleItemBuilder<ParentBuilder>
+{
     type Result = WitTypeTupleBuilder<ParentBuilder>;
 
     fn parent_builder(&mut self) -> &mut WitTypeBuilder {
         self.builder.builder.parent_builder()
     }
 
-    fn u8(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u8();
-        self.finish(child_index)
+    fn finish(self, result_index: NodeIndex) -> Self::Result {
+        self.finish(result_index)
     }
 
-    fn u16(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u16();
-        self.finish(child_index)
+    fn apply(&mut self, result_index: NodeIndex) {
+        self.apply(result_index);
     }
 
-    fn u32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u32();
-        self.finish(child_index)
-    }
-
-    fn u64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u64();
-        self.finish(child_index)
-    }
-
-    fn s8(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s8();
-        self.finish(child_index)
-    }
-
-    fn s16(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s16();
-        self.finish(child_index)
-    }
-
-    fn s32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s32();
-        self.finish(child_index)
-    }
-
-    fn s64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s64();
-        self.finish(child_index)
-    }
-
-    fn f32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_f32();
-        self.finish(child_index)
-    }
-
-    fn f64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_f64();
-        self.finish(child_index)
-    }
-
-    fn string(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_string();
-        self.finish(child_index)
-    }
-
-    fn bool(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_bool();
-        self.finish(child_index)
-    }
-
-    fn char(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_char();
-        self.finish(child_index)
-    }
-
-    fn option(mut self) -> WitTypeContainerBuilder<Self> {
-        let option_idx = self.parent_builder().add_option();
-        self.builder.add(option_idx);
-        WitTypeContainerBuilder {
-            builder: self,
-            target_idx: option_idx,
-        }
-    }
-
-    fn list(mut self) -> WitTypeContainerBuilder<Self> {
-        let list_idx = self.parent_builder().add_list();
-        self.builder.add(list_idx);
-        WitTypeContainerBuilder {
-            builder: self,
-            target_idx: list_idx,
-        }
-    }
-
-    fn r#enum(mut self, values: &[&str]) -> Self::Result {
-        let child_index = self
-            .parent_builder()
-            .add_enum(values.into_iter().map(|s| s.to_string()).collect());
-        self.finish(child_index)
-    }
-
-    fn flags(mut self, values: &[&str]) -> Self::Result {
-        let child_index = self
-            .parent_builder()
-            .add_flags(values.into_iter().map(|s| s.to_string()).collect());
-        self.finish(child_index)
-    }
-
-    fn record(mut self) -> WitTypeRecordBuilder<Self> {
-        let record_idx = self.parent_builder().add_record();
-        self.builder.add(record_idx);
-        WitTypeRecordBuilder {
-            builder: self,
-            target_idx: record_idx,
-            fields: Vec::new(),
-        }
-    }
-
-    fn tuple(mut self) -> WitTypeTupleBuilder<Self> {
-        let tuple_idx = self.parent_builder().add_tuple();
-        self.builder.add(tuple_idx);
-        WitTypeTupleBuilder {
-            builder: self,
-            target_idx: tuple_idx,
-            fields: Vec::new(),
-        }
-    }
-
-    fn variant(mut self) -> WitTypeVariantBuilder<Self> {
-        let variant_idx = self.parent_builder().add_variant();
-        self.builder.add(variant_idx);
-        WitTypeVariantBuilder {
-            builder: self,
-            target_idx: variant_idx,
-            cases: Vec::new(),
-        }
-    }
-
-    fn result(mut self) -> WitTypeResultBuilder<Self> {
-        let result_idx = self.parent_builder().add_result();
-        self.builder.add(result_idx);
-        WitTypeResultBuilder {
-            builder: self,
-            target_idx: result_idx,
-            ok: None,
-            err: None,
-        }
-    }
-
-    fn handle(mut self, resource_id: ResourceId, resource_mode: ResourceMode) -> Self::Result {
-        let child_index = self.parent_builder().add_handle(resource_id, resource_mode);
-        self.finish(child_index)
-    }
-
-    fn finish(self) -> Self::Result {
+    fn into_parent(self) -> Self::Result {
         self.builder
     }
 }
@@ -1013,162 +755,33 @@ pub struct WitTypeVariantCaseBuilder<ParentBuilder: TypeNodeBuilder> {
 
 impl<ParentBuilder: TypeNodeBuilder> WitTypeVariantCaseBuilder<ParentBuilder> {
     fn finish(mut self, field_idx: NodeIndex) -> WitTypeVariantBuilder<ParentBuilder> {
-        self.builder.add(self.name, field_idx);
+        self.apply(field_idx);
         self.builder
+    }
+
+    fn apply(&mut self, field_idx: NodeIndex) {
+        self.builder.add(self.name.clone(), field_idx);
     }
 }
 
-impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeVariantCaseBuilder<ParentBuilder> {
+impl<ParentBuilder: TypeNodeBuilder> InnerTypeNodeBuilder
+    for WitTypeVariantCaseBuilder<ParentBuilder>
+{
     type Result = WitTypeVariantBuilder<ParentBuilder>;
 
     fn parent_builder(&mut self) -> &mut WitTypeBuilder {
         self.builder.builder.parent_builder()
     }
 
-    fn u8(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u8();
-        self.finish(child_index)
+    fn finish(self, result_index: NodeIndex) -> Self::Result {
+        self.finish(result_index)
     }
 
-    fn u16(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u16();
-        self.finish(child_index)
+    fn apply(&mut self, result_index: NodeIndex) {
+        self.apply(result_index);
     }
 
-    fn u32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u32();
-        self.finish(child_index)
-    }
-
-    fn u64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_u64();
-        self.finish(child_index)
-    }
-
-    fn s8(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s8();
-        self.finish(child_index)
-    }
-
-    fn s16(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s16();
-        self.finish(child_index)
-    }
-
-    fn s32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s32();
-        self.finish(child_index)
-    }
-
-    fn s64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_s64();
-        self.finish(child_index)
-    }
-
-    fn f32(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_f32();
-        self.finish(child_index)
-    }
-
-    fn f64(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_f64();
-        self.finish(child_index)
-    }
-
-    fn string(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_string();
-        self.finish(child_index)
-    }
-
-    fn bool(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_bool();
-        self.finish(child_index)
-    }
-
-    fn char(mut self) -> Self::Result {
-        let child_index = self.parent_builder().add_char();
-        self.finish(child_index)
-    }
-
-    fn option(mut self) -> WitTypeContainerBuilder<Self> {
-        let option_idx = self.parent_builder().add_option();
-        self.builder.add(self.name.clone(), option_idx);
-        WitTypeContainerBuilder {
-            builder: self,
-            target_idx: option_idx,
-        }
-    }
-
-    fn list(mut self) -> WitTypeContainerBuilder<Self> {
-        let list_idx = self.parent_builder().add_list();
-        self.builder.add(self.name.clone(), list_idx);
-        WitTypeContainerBuilder {
-            builder: self,
-            target_idx: list_idx,
-        }
-    }
-
-    fn r#enum(mut self, values: &[&str]) -> Self::Result {
-        let child_index = self
-            .parent_builder()
-            .add_enum(values.into_iter().map(|s| s.to_string()).collect());
-        self.finish(child_index)
-    }
-
-    fn flags(mut self, values: &[&str]) -> Self::Result {
-        let child_index = self
-            .parent_builder()
-            .add_flags(values.into_iter().map(|s| s.to_string()).collect());
-        self.finish(child_index)
-    }
-
-    fn record(mut self) -> WitTypeRecordBuilder<Self> {
-        let record_idx = self.parent_builder().add_record();
-        self.builder.add(self.name.clone(), record_idx);
-        WitTypeRecordBuilder {
-            builder: self,
-            target_idx: record_idx,
-            fields: Vec::new(),
-        }
-    }
-
-    fn tuple(mut self) -> WitTypeTupleBuilder<Self> {
-        let tuple_idx = self.parent_builder().add_tuple();
-        self.builder.add(self.name.clone(), tuple_idx);
-        WitTypeTupleBuilder {
-            builder: self,
-            target_idx: tuple_idx,
-            fields: Vec::new(),
-        }
-    }
-
-    fn variant(mut self) -> WitTypeVariantBuilder<Self> {
-        let variant_idx = self.parent_builder().add_variant();
-        self.builder.add(self.name.clone(), variant_idx);
-        WitTypeVariantBuilder {
-            builder: self,
-            target_idx: variant_idx,
-            cases: Vec::new(),
-        }
-    }
-
-    fn result(mut self) -> WitTypeResultBuilder<Self> {
-        let result_idx = self.parent_builder().add_result();
-        self.builder.add(self.name.clone(), result_idx);
-        WitTypeResultBuilder {
-            builder: self,
-            target_idx: result_idx,
-            ok: None,
-            err: None,
-        }
-    }
-
-    fn handle(mut self, resource_id: ResourceId, resource_mode: ResourceMode) -> Self::Result {
-        let child_index = self.parent_builder().add_handle(resource_id, resource_mode);
-        self.finish(child_index)
-    }
-
-    fn finish(self) -> Self::Result {
+    fn into_parent(self) -> Self::Result {
         self.builder
     }
 }
@@ -1237,11 +850,41 @@ impl<ParentBuilder: TypeNodeBuilder> WitTypeResultCaseBuilder<ParentBuilder> {
     }
 }
 
-impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeResultCaseBuilder<ParentBuilder> {
+impl<ParentBuilder: TypeNodeBuilder> InnerTypeNodeBuilder
+    for WitTypeResultCaseBuilder<ParentBuilder>
+{
     type Result = WitTypeResultBuilder<ParentBuilder>;
 
     fn parent_builder(&mut self) -> &mut WitTypeBuilder {
         self.builder.builder.parent_builder()
+    }
+
+    fn finish(self, result_index: NodeIndex) -> Self::Result {
+        self.finish(result_index)
+    }
+
+    fn apply(&mut self, result_index: NodeIndex) {
+        self.apply(result_index);
+    }
+
+    fn into_parent(self) -> Self::Result {
+        self.builder
+    }
+}
+
+pub trait InnerTypeNodeBuilder {
+    type Result;
+    fn parent_builder(&mut self) -> &mut WitTypeBuilder;
+    fn finish(self, result_index: NodeIndex) -> Self::Result;
+    fn apply(&mut self, result_index: NodeIndex);
+    fn into_parent(self) -> Self::Result;
+}
+
+impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
+    type Result = B::Result;
+
+    fn parent_builder(&mut self) -> &mut WitTypeBuilder {
+        self.parent_builder()
     }
 
     fn u8(mut self) -> Self::Result {
@@ -1330,14 +973,14 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeResultCaseBuilde
     fn r#enum(mut self, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_enum(values.into_iter().map(|s| s.to_string()).collect());
+            .add_enum(values.iter().map(|s| s.to_string()).collect());
         self.finish(child_index)
     }
 
     fn flags(mut self, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_flags(values.into_iter().map(|s| s.to_string()).collect());
+            .add_flags(values.iter().map(|s| s.to_string()).collect());
         self.finish(child_index)
     }
 
@@ -1388,6 +1031,6 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeResultCaseBuilde
     }
 
     fn finish(self) -> Self::Result {
-        self.builder
+        self.into_parent()
     }
 }
