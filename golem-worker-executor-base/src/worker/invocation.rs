@@ -275,12 +275,12 @@ fn validate_function_parameters(
     function: &FindFunctionResult,
     raw_function_name: &str,
     function_input: &[Value],
-    ignore_first: bool,
+    using_indexed_resource: bool,
 ) -> Result<(), GolemError> {
     match function {
         FindFunctionResult::ExportedFunction(func) => {
             let store = store.as_context_mut();
-            let param_types: Vec<_> = if ignore_first {
+            let param_types: Vec<_> = if using_indexed_resource {
                 // For indexed resources we are going to inject the resource handle as the first parameter
                 // later so we only have to validate the remaining parameters
                 let params = func.params(&store);
@@ -301,32 +301,37 @@ fn validate_function_parameters(
             }
         }
         FindFunctionResult::ResourceDrop => {
-            if function_input.len() != 1 {
+            let expected = if using_indexed_resource { 0 } else { 1 };
+            if function_input.len() != expected {
                 return Err(GolemError::ValueMismatch {
                     details: "unexpected parameter count for drop".to_string(),
                 });
             }
 
-            let store = store.as_context_mut();
-            let self_uri = store.data().self_uri();
+            if !using_indexed_resource {
+                let store = store.as_context_mut();
+                let self_uri = store.data().self_uri();
 
-            match function_input.first() {
-                Some(Value::Handle { uri, resource_id }) => {
-                    if uri == &self_uri.value {
-                        Ok(*resource_id)
-                    } else {
-                        Err(GolemError::ValueMismatch {
-                            details: format!(
-                                "trying to drop handle for on wrong worker ({} vs {}) {}",
-                                uri, self_uri.value, raw_function_name
-                            ),
-                        })
+                match function_input.first() {
+                    Some(Value::Handle { uri, resource_id }) => {
+                        if uri == &self_uri.value {
+                            Ok(*resource_id)
+                        } else {
+                            Err(GolemError::ValueMismatch {
+                                details: format!(
+                                    "trying to drop handle for on wrong worker ({} vs {}) {}",
+                                    uri, self_uri.value, raw_function_name
+                                ),
+                            })
+                        }
                     }
-                }
-                _ => Err(GolemError::ValueMismatch {
-                    details: format!("unexpected function input for drop for {raw_function_name}"),
-                }),
-            }?;
+                    _ => Err(GolemError::ValueMismatch {
+                        details: format!(
+                            "unexpected function input for drop for {raw_function_name}"
+                        ),
+                    }),
+                }?;
+            }
         }
         FindFunctionResult::IncomingHttpHandlerBridge => {}
     }
