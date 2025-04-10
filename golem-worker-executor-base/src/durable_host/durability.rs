@@ -17,6 +17,7 @@ use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::preview2::golem::durability::durability;
+use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -24,7 +25,7 @@ use bincode::{Decode, Encode};
 use bytes::Bytes;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex};
 use golem_common::model::Timestamp;
-use golem_common::serialization::{serialize, try_deserialize};
+use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -44,6 +45,13 @@ pub struct PersistedDurableFunctionInvocation {
     response: Vec<u8>,
     function_type: DurableFunctionType,
     oplog_entry_version: OplogEntryVersion,
+}
+
+impl PersistedDurableFunctionInvocation {
+    pub fn response_as_value_and_type(&self) -> Result<ValueAndType, GolemError> {
+        deserialize(&self.response)
+            .map_err(|err| GolemError::runtime(format!("Failed to deserialize payload: {err}")))
+    }
 }
 
 #[async_trait]
@@ -247,6 +255,21 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<durability::PersistedDurableFunctionInvocation> {
         let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
         Ok(invocation.into())
+    }
+
+    async fn read_persisted_typed_durable_function_invocation(
+        &mut self,
+    ) -> anyhow::Result<PersistedTypedDurableFunctionInvocation> {
+        let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
+        let response = invocation.response_as_value_and_type()?;
+        let untyped: durability::PersistedDurableFunctionInvocation = invocation.into();
+        Ok(PersistedTypedDurableFunctionInvocation {
+            timestamp: untyped.timestamp,
+            function_name: untyped.function_name,
+            response: response.into(),
+            function_type: untyped.function_type,
+            entry_version: untyped.entry_version,
+        })
     }
 }
 
