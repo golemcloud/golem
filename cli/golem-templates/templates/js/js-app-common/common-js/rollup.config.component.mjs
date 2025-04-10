@@ -17,7 +17,7 @@ export default function componentRollupConfig() {
             .readdirSync(generated_interfaces_dir, {withFileTypes: true})
             .filter(dirent => dirent.isFile() && dirent.name.endsWith(".d.ts"))
             .flatMap(dirent =>
-                [...fs.readFileSync(path.join(dirent.parentPath, dirent.name))
+                [...fs.readFileSync(path.join(generated_interfaces_dir, dirent.name))
                     .toString()
                     .matchAll(moduleRegex)]
                     .map((match) => {

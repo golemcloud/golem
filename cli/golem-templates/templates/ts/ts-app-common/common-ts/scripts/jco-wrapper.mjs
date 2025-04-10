@@ -42,7 +42,7 @@ function asyncAction (cmd) {
       catch (e) {
         process.stdout.write(`(jco ${cmd.name}) `);
         if (typeof e === 'string') {
-          console.error(c`{red.bold Error}: ${e}\n`);
+          console.error(`{red.bold Error}: ${e}\n`);
         } else {
           console.error(e);
         }
