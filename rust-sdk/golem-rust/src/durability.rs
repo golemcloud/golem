@@ -237,8 +237,8 @@ mod tests {
         }
 
         impl FromValueAndType for CustomError {
-            fn from_extractor<'a>(
-                extractor: &'a impl WitValueExtractor<'a>,
+            fn from_extractor<'a, 'b>(
+                extractor: &'a impl WitValueExtractor<'a, 'b>,
             ) -> Result<Self, String> {
                 match extractor.enum_value() {
                     Some(0) => Ok(CustomError::Error1),
