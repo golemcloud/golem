@@ -271,6 +271,8 @@ pub enum ReplBootstrapError {
     ReplHistoryFileError(String),
 }
 
+impl std::error::Error for ReplBootstrapError {}
+
 impl Display for ReplBootstrapError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
