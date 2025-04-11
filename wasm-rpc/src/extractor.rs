@@ -1,6 +1,6 @@
 use crate::{Uri, WitNode, WitValue};
 
-pub trait WitValueExtractor<'a> {
+pub trait WitValueExtractor<'a, 'b> {
     fn u8(&'a self) -> Option<u8>;
     fn u16(&'a self) -> Option<u16>;
     fn u32(&'a self) -> Option<u32>;
@@ -13,20 +13,20 @@ pub trait WitValueExtractor<'a> {
     fn f64(&'a self) -> Option<f64>;
     fn char(&'a self) -> Option<char>;
     fn bool(&'a self) -> Option<bool>;
-    fn string(&'a self) -> Option<&'a str>;
-    fn field(&'a self, field_idx: usize) -> Option<WitNodePointer<'a>>;
-    fn variant(&'a self) -> Option<(u32, Option<WitNodePointer<'a>>)>;
+    fn string(&'a self) -> Option<&'b str>;
+    fn field(&'a self, field_idx: usize) -> Option<WitNodePointer<'b>>;
+    fn variant(&'a self) -> Option<(u32, Option<WitNodePointer<'b>>)>;
     fn enum_value(&'a self) -> Option<u32>;
-    fn flags(&'a self) -> Option<&'a [bool]>;
-    fn tuple_element(&'a self, element_idx: usize) -> Option<WitNodePointer<'a>>;
-    fn list_elements<R>(&'a self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>>;
-    fn option(&'a self) -> Option<Option<WitNodePointer<'a>>>;
-    fn result(&'a self) -> Option<Result<Option<WitNodePointer<'a>>, Option<WitNodePointer<'a>>>>;
+    fn flags(&'a self) -> Option<&'b [bool]>;
+    fn tuple_element(&'a self, element_idx: usize) -> Option<WitNodePointer<'b>>;
+    fn list_elements<R>(&'a self, f: impl Fn(WitNodePointer<'b>) -> R) -> Option<Vec<R>>;
+    fn option(&'a self) -> Option<Option<WitNodePointer<'b>>>;
+    fn result(&'a self) -> Option<Result<Option<WitNodePointer<'b>>, Option<WitNodePointer<'b>>>>;
 
     fn handle(&'a self) -> Option<(Uri, u64)>;
 }
 
-impl<'a> WitValueExtractor<'a> for WitValue {
+impl<'a: 'b, 'b> WitValueExtractor<'a, 'b> for WitValue {
     fn u8(&self) -> Option<u8> {
         WitNodePointer::new(self, 0).u8()
     }
@@ -75,16 +75,16 @@ impl<'a> WitValueExtractor<'a> for WitValue {
         WitNodePointer::new(self, 0).bool()
     }
 
-    fn string(&'a self) -> Option<&'a str> {
+    fn string(&'a self) -> Option<&'b str> {
         let ptr = WitNodePointer::<'a>::new(self, 0);
         ptr.string()
     }
 
-    fn field(&'a self, field_idx: usize) -> Option<WitNodePointer<'a>> {
+    fn field(&'a self, field_idx: usize) -> Option<WitNodePointer<'b>> {
         WitNodePointer::new(self, 0).field(field_idx)
     }
 
-    fn variant(&'a self) -> Option<(u32, Option<WitNodePointer<'a>>)> {
+    fn variant(&'a self) -> Option<(u32, Option<WitNodePointer<'b>>)> {
         WitNodePointer::new(self, 0).variant()
     }
 
@@ -92,23 +92,23 @@ impl<'a> WitValueExtractor<'a> for WitValue {
         WitNodePointer::new(self, 0).enum_value()
     }
 
-    fn flags(&'a self) -> Option<&'a [bool]> {
+    fn flags(&'a self) -> Option<&'b [bool]> {
         WitNodePointer::new(self, 0).flags()
     }
 
-    fn tuple_element(&'a self, element_idx: usize) -> Option<WitNodePointer<'a>> {
+    fn tuple_element(&'a self, element_idx: usize) -> Option<WitNodePointer<'b>> {
         WitNodePointer::new(self, 0).tuple_element(element_idx)
     }
 
-    fn list_elements<R>(&'a self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>> {
+    fn list_elements<R>(&'a self, f: impl Fn(WitNodePointer<'b>) -> R) -> Option<Vec<R>> {
         WitNodePointer::new(self, 0).list_elements(f)
     }
 
-    fn option(&'a self) -> Option<Option<WitNodePointer<'a>>> {
+    fn option(&'a self) -> Option<Option<WitNodePointer<'b>>> {
         WitNodePointer::new(self, 0).option()
     }
 
-    fn result(&'a self) -> Option<Result<Option<WitNodePointer<'a>>, Option<WitNodePointer<'a>>>> {
+    fn result(&'a self) -> Option<Result<Option<WitNodePointer<'b>>, Option<WitNodePointer<'b>>>> {
         WitNodePointer::new(self, 0).result()
     }
 
@@ -322,7 +322,7 @@ impl<'a> WitNodePointer<'a> {
     }
 }
 
-impl<'a> WitValueExtractor<'a> for WitNodePointer<'_> {
+impl<'a, 'b> WitValueExtractor<'a, 'b> for WitNodePointer<'b> {
     fn u8(&'a self) -> Option<u8> {
         self.u8()
     }
@@ -371,15 +371,15 @@ impl<'a> WitValueExtractor<'a> for WitNodePointer<'_> {
         self.bool()
     }
 
-    fn string(&'a self) -> Option<&'a str> {
+    fn string(&'a self) -> Option<&'b str> {
         self.string()
     }
 
-    fn field(&'a self, field_idx: usize) -> Option<WitNodePointer<'a>> {
+    fn field(&'a self, field_idx: usize) -> Option<WitNodePointer<'b>> {
         self.field(field_idx)
     }
 
-    fn variant(&'a self) -> Option<(u32, Option<WitNodePointer<'a>>)> {
+    fn variant(&'a self) -> Option<(u32, Option<WitNodePointer<'b>>)> {
         self.variant()
     }
 
@@ -387,23 +387,23 @@ impl<'a> WitValueExtractor<'a> for WitNodePointer<'_> {
         self.enum_value()
     }
 
-    fn flags(&'a self) -> Option<&'a [bool]> {
+    fn flags(&'a self) -> Option<&'b [bool]> {
         self.flags()
     }
 
-    fn tuple_element(&'a self, element_idx: usize) -> Option<WitNodePointer<'a>> {
+    fn tuple_element(&'a self, element_idx: usize) -> Option<WitNodePointer<'b>> {
         self.tuple_element(element_idx)
     }
 
-    fn list_elements<R>(&'a self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>> {
+    fn list_elements<R>(&'a self, f: impl Fn(WitNodePointer<'b>) -> R) -> Option<Vec<R>> {
         self.list_elements(f)
     }
 
-    fn option(&'a self) -> Option<Option<WitNodePointer<'a>>> {
+    fn option(&'a self) -> Option<Option<WitNodePointer<'b>>> {
         self.option()
     }
 
-    fn result(&'a self) -> Option<Result<Option<WitNodePointer<'a>>, Option<WitNodePointer<'a>>>> {
+    fn result(&'a self) -> Option<Result<Option<WitNodePointer<'b>>, Option<WitNodePointer<'b>>>> {
         self.result()
     }
 
@@ -416,7 +416,6 @@ impl<'a> WitValueExtractor<'a> for WitNodePointer<'_> {
 mod tests {
     use test_r::test;
 
-    use super::*;
     use crate::*;
 
     #[test]
@@ -446,7 +445,7 @@ mod tests {
 
     #[test]
     fn single_record_generic() {
-        fn u8_field<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Option<u8> {
+        fn u8_field<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Option<u8> {
             extractor.u8()
         }
 
@@ -604,5 +603,61 @@ mod tests {
                 42
             )
         );
+    }
+
+    #[test]
+    fn extraction_is_composable() {
+        // (42, "hello", { "world" })
+        let value = WitValue::builder()
+            .tuple()
+            .item()
+            .s32(42)
+            .item()
+            .string("hello")
+            .item()
+            .record()
+            .item()
+            .string("world")
+            .finish()
+            .finish();
+
+        let world = value
+            .tuple_element(2)
+            .unwrap()
+            .field(0)
+            .unwrap()
+            .string()
+            .unwrap();
+        assert_eq!(world, "world");
+    }
+
+    #[test]
+    fn extraction_is_composable_using_flags() {
+        // (42, "hello", { `101` })
+        let value = WitValue::builder()
+            .tuple()
+            .item()
+            .s32(42)
+            .item()
+            .string("hello")
+            .item()
+            .record()
+            .item()
+            .flags(vec![true, false, true])
+            .finish()
+            .finish();
+
+        let flags = value
+            .tuple_element(2)
+            .map(|record| record.field(0).unwrap().flags().unwrap())
+            .unwrap();
+
+        if flags[0] {
+            println!("Flag 0 is set");
+        }
+
+        assert!(flags[0]);
+        assert!(!flags[1]);
+        assert!(flags[2]);
     }
 }
