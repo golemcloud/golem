@@ -68,17 +68,15 @@ impl RibEdit {
     }
 
     fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {
-        let mut start = end_pos;
-
-        while start > 0
-            && line[start - 1..start].chars().all(|c| {
-                c.is_alphanumeric() || c == '_' || c == '.' || c == '-' || c == '(' || c == ')'
+        line[0..end_pos]
+            .char_indices()
+            .rev()
+            .find_map(|(pos, c)| {
+                let is_token_char =
+                    c.is_alphanumeric() || c == '_' || c == '.' || c == '-' || c == '(' || c == ')';
+                (!is_token_char).then(|| pos + c.len_utf8())
             })
-        {
-            start -= 1;
-        }
-
-        start
+            .unwrap_or(0)
     }
 
     fn complete_method_calls(
