@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repl_state::ReplState;
+use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use rib::{
     Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr, InferredType, RibByteCode,
     RibError, VariableId,
@@ -36,6 +37,9 @@ pub fn compile_rib_script(
 
     let identifiers = get_identifiers(&inferred_expr);
 
+    let variants = function_registry.get_variants();
+    let enums = function_registry.get_enums();
+
     let new_byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(|e| RibError::InternalError(e.to_string()))?;
 
@@ -47,6 +51,8 @@ pub fn compile_rib_script(
         rib_byte_code: byte_code,
         instance_variables,
         identifiers,
+        variants,
+        enums,
     })
 }
 
@@ -55,6 +61,8 @@ pub struct CompilerOutput {
     pub rib_byte_code: RibByteCode,
     pub instance_variables: InstanceVariables,
     pub identifiers: Vec<VariableId>,
+    pub variants: Vec<TypeVariant>,
+    pub enums: Vec<TypeEnum>,
 }
 
 #[derive(Default, Clone)]
