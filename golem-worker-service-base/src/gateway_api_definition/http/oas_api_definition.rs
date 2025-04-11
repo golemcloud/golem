@@ -293,7 +293,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::SwaggerUi,
                             security,
-                            cors: None,
                         })
                     }
                     (GatewayBindingType::CorsPreflight, method) => {

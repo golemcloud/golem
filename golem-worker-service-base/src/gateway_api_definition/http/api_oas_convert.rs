@@ -130,6 +130,27 @@ fn process_route(
     Ok(())
 }
 
+// Helper function: Adds both path and query parameters to the operation
+fn add_parameters(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+    let (path_parameters, query_parameters) = get_parameters(route);
+
+    // Add path parameters
+    for (param_name, param_type) in path_parameters {
+        let parameter = create_parameter(&param_name, param_type, true);
+        operation
+            .parameters
+            .push(openapiv3::ReferenceOr::Item(parameter));
+    }
+
+    // Add query parameters
+    for (param_name, param_type) in query_parameters {
+        let parameter = create_parameter(&param_name, param_type, false);
+        operation
+            .parameters
+            .push(openapiv3::ReferenceOr::Item(parameter));
+    }
+}
+
 // Helper function: Creates an operation for a route
 fn create_operation(
     route: &RouteResponseData,
@@ -140,8 +161,8 @@ fn create_operation(
 ) -> Result<openapiv3::Operation, String> {
     let mut operation = openapiv3::Operation::default();
 
-    // Add path parameters
-    add_path_parameters(&mut operation, route);
+    // Add parameters (both path and query)
+    add_parameters(&mut operation, route);
 
     // Add request body
     add_request_body(&mut operation, route);
@@ -158,16 +179,120 @@ fn create_operation(
     Ok(operation)
 }
 
-// Helper function: Adds path parameters to the operation
-fn add_path_parameters(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
-    // Extract path parameters from the route path
-    let params = extract_path_parameters(&route.path.to_string());
-    for param_name in params {
-        let param_type = determine_parameter_type(route, &param_name);
-        let parameter = create_path_parameter(&param_name, param_type);
-        operation
-            .parameters
-            .push(openapiv3::ReferenceOr::Item(parameter));
+// Define a type alias for the parameter tuple
+type ParameterTuple = (String, openapiv3::Schema);
+
+// Helper function: Gets path and query parameters with their types from route
+// Returns two separate lists: one for path parameters and one for query parameters
+fn get_parameters(route: &RouteResponseData) -> (Vec<ParameterTuple>, Vec<ParameterTuple>) {
+    let mut path_parameters = Vec::new();
+    let mut query_parameters = Vec::new();
+
+    // Check worker_name_input first
+    if let Some(worker_name_input) = &route.binding.worker_name_input {
+        if let Some(AnalysedType::Record(request_record)) = worker_name_input.types.get("request") {
+            // Check for path field
+            if let Some(path_field) = request_record
+                .fields
+                .iter()
+                .find(|field| field.name == "path")
+            {
+                if let AnalysedType::Record(path_record) = &path_field.typ {
+                    for field in &path_record.fields {
+                        let schema = create_schema_from_analysed_type(&field.typ);
+                        path_parameters.push((field.name.clone(), schema));
+                    }
+                }
+            }
+            // Check for query field
+            if let Some(query_field) = request_record
+                .fields
+                .iter()
+                .find(|field| field.name == "query")
+            {
+                if let AnalysedType::Record(query_record) = &query_field.typ {
+                    for field in &query_record.fields {
+                        let schema = create_schema_from_analysed_type(&field.typ);
+                        query_parameters.push((field.name.clone(), schema));
+                    }
+                }
+            }
+        }
+    }
+
+    // Check response_mapping_input
+    if let Some(response_mapping_input) = &route.binding.response_mapping_input {
+        if let Some(AnalysedType::Record(request_record)) =
+            response_mapping_input.types.get("request")
+        {
+            // Check for path field
+            if let Some(path_field) = request_record
+                .fields
+                .iter()
+                .find(|field| field.name == "path")
+            {
+                if let AnalysedType::Record(path_record) = &path_field.typ {
+                    for field in &path_record.fields {
+                        let schema = create_schema_from_analysed_type(&field.typ);
+                        path_parameters.push((field.name.clone(), schema));
+                    }
+                }
+            }
+            // Check for query field
+            if let Some(query_field) = request_record
+                .fields
+                .iter()
+                .find(|field| field.name == "query")
+            {
+                if let AnalysedType::Record(query_record) = &query_field.typ {
+                    for field in &query_record.fields {
+                        let schema = create_schema_from_analysed_type(&field.typ);
+                        query_parameters.push((field.name.clone(), schema));
+                    }
+                }
+            }
+        }
+    }
+
+    (path_parameters, query_parameters)
+}
+
+// Helper function: Creates a parameter (common logic for both query and path parameters)
+fn create_parameter(
+    param_name: &str,
+    param_type: openapiv3::Schema,
+    is_path: bool,
+) -> openapiv3::Parameter {
+    let parameter_data = openapiv3::ParameterData {
+        name: param_name.to_string(),
+        description: Some(format!(
+            "{} parameter: {}",
+            if is_path { "Path" } else { "Query" },
+            param_name
+        )),
+        required: true,
+        deprecated: None,
+        explode: Some(false),
+        format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
+            param_type,
+        )),
+        example: None,
+        examples: Default::default(),
+        extensions: Default::default(),
+    };
+
+    if is_path {
+        openapiv3::Parameter::Path {
+            parameter_data,
+            style: openapiv3::PathStyle::Simple,
+        }
+    } else {
+        openapiv3::Parameter::Query {
+            parameter_data,
+            style: openapiv3::QueryStyle::Form,
+            allow_empty_value: Some(false),
+            allow_reserved: false,
+        }
     }
 }
 
@@ -195,6 +320,10 @@ fn add_responses(operation: &mut openapiv3::Operation, route: &RouteResponseData
     // {status: 200, body: string}, {status: 400, body: string}
     // We create one response using method default status code, and another response using the default response
     // Create the default response (same structure as the specific response)
+
+    // We can keep only the default response, for easier reading
+    // specific response is only here as opeapi best practices
+
     let default_response = create_response(default_status, route);
 
     // Add the specific response to the operation
@@ -265,98 +394,6 @@ fn finalize_openapi(
 
     // Set global security if needed
     set_global_security(open_api, response_data);
-}
-
-// Helper function: Extracts path parameters from the route path
-// Todo: Query parameters should be handled here
-fn extract_path_parameters(path: &str) -> Vec<String> {
-    let mut params = Vec::new();
-    for segment in path.split('/') {
-        if segment.starts_with('{') && segment.ends_with('}') {
-            params.push(segment[1..segment.len() - 1].to_string());
-        }
-    }
-    params
-}
-
-// Helper function to determine parameter type
-fn determine_parameter_type(route: &RouteResponseData, param_name: &str) -> openapiv3::Schema {
-    use golem_wasm_ast::analysis::AnalysedType;
-
-    // Check worker_name_input first, then check request key and then look for path field within the request
-    if let Some(worker_name_input) = &route.binding.worker_name_input {
-        if let Some(AnalysedType::Record(request_record)) = worker_name_input.types.get("request") {
-            if let Some(path_field) = request_record
-                .fields
-                .iter()
-                .find(|field| field.name == "path")
-            {
-                if let AnalysedType::Record(path_record) = &path_field.typ {
-                    if let Some(param_type) = path_record
-                        .fields
-                        .iter()
-                        .find(|field| field.name == param_name)
-                    {
-                        return create_schema_from_analysed_type(&param_type.typ);
-                    }
-                }
-            }
-        }
-    }
-
-    // Check response_mapping_input, request key and then look for path field within the request
-    if let Some(response_mapping_input) = &route.binding.response_mapping_input {
-        if let Some(AnalysedType::Record(request_record)) =
-            response_mapping_input.types.get("request")
-        {
-            if let Some(path_field) = request_record
-                .fields
-                .iter()
-                .find(|field| field.name == "path")
-            {
-                if let AnalysedType::Record(path_record) = &path_field.typ {
-                    if let Some(param_type) = path_record
-                        .fields
-                        .iter()
-                        .find(|field| field.name == param_name)
-                    {
-                        return create_schema_from_analysed_type(&param_type.typ);
-                    }
-                }
-            }
-        }
-    }
-
-    // Default to string if no type information is available
-    openapiv3::Schema {
-        schema_data: openapiv3::SchemaData {
-            nullable: false,
-            ..Default::default()
-        },
-        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-            openapiv3::StringType::default(),
-        )),
-    }
-}
-
-// Helper function: Creates a path parameter
-fn create_path_parameter(param_name: &str, param_type: openapiv3::Schema) -> openapiv3::Parameter {
-    openapiv3::Parameter::Path {
-        parameter_data: openapiv3::ParameterData {
-            name: param_name.to_string(),
-            description: Some(format!("Path parameter: {}", param_name)),
-            required: true,
-            deprecated: None,
-            explode: Some(false),
-            format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
-                param_type,
-            )),
-            example: None,
-            examples: Default::default(),
-            extensions: Default::default(),
-        },
-        style: openapiv3::PathStyle::Simple,
-    }
 }
 
 // Helper function: Creates a request body

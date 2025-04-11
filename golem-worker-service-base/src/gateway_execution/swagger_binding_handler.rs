@@ -18,6 +18,7 @@ use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::request::RichRequest;
 use crate::service::gateway::api_definition::ApiDefinitionService;
+
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -214,7 +215,7 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             Ok(Some(compiled_def)) => {
                 match HttpApiDefinitionResponseData::from_compiled_http_api_definition(
                     compiled_def,
-                    &definition_service.conversion_context(&EmptyAuthCtx::default()),
+                    &definition_service.conversion_context(namespace, &EmptyAuthCtx::default()),
                 )
                 .await
                 {

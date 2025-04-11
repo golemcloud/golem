@@ -490,7 +490,7 @@ impl GrpcApiDefinitionService {
             definition,
             &self
                 .definition_service
-                .conversion_context(&EmptyAuthCtx::default()),
+                .conversion_context(&DefaultNamespace::default(), &EmptyAuthCtx::default()),
         )
         .await
         .map_err(|e| internal_error(format!("Failed to convert to response data: {}", e)))?;
