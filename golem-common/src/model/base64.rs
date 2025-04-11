@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
 
 /// Represents a binary data encoded with base64.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct Base64(pub Vec<u8>);
 
 impl Deref for Base64 {
@@ -149,11 +149,5 @@ impl<'de> BorrowDecode<'de> for Base64 {
     fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let vec: Vec<u8> = Vec::borrow_decode(decoder)?;
         Ok(Base64(vec))
-    }
-}
-
-impl Default for Base64 {
-    fn default() -> Self {
-        Base64(Vec::new())
     }
 }
