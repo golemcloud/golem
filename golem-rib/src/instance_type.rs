@@ -142,7 +142,7 @@ impl InstanceType {
         let resource_constructor_name = fully_qualified_resource_constructor.resource_name.clone();
 
         let mut resource_method_dict = vec![];
-        for (f, function_type) in self.function_dict().map.iter() {
+        for (f, function_type) in self.function_dict().name_and_types.iter() {
             if let FunctionName::ResourceMethod(resource_method) = f {
                 if resource_method.resource_name == resource_constructor_name
                     && resource_method.interface_name == interface_name
@@ -207,7 +207,7 @@ impl InstanceType {
                 TypeParameter::Interface(iface) => {
                     let interfaces = self
                         .function_dict()
-                        .map
+                        .name_and_types
                         .into_iter()
                         .filter(|(f, _)| f.interface_name() == Some(iface.clone()))
                         .collect::<Vec<_>>();
@@ -258,7 +258,7 @@ impl InstanceType {
                 TypeParameter::PackageName(pkg) => {
                     let packages = self
                         .function_dict()
-                        .map
+                        .name_and_types
                         .into_iter()
                         .filter(|(f, _)| f.package_name() == Some(pkg.clone()))
                         .collect::<Vec<_>>();
@@ -307,7 +307,7 @@ impl InstanceType {
                 TypeParameter::FullyQualifiedInterface(fq_iface) => {
                     let functions = self
                         .function_dict()
-                        .map
+                        .name_and_types
                         .into_iter()
                         .filter(|(f, _)| {
                             f.package_name() == Some(fq_iface.package_name.clone())
@@ -354,36 +354,26 @@ impl InstanceType {
         }
     }
 
-    pub fn function_dict_for_resource(&self) -> FunctionDictionary {
-        match self {
-            InstanceType::Resource {
-                resource_method_dict,
-                ..
-            } => resource_method_dict.into(),
-            _ => FunctionDictionary::default(),
-        }
+    pub fn resource_method_dictionary(&self) -> FunctionDictionary {
+        let name_and_types = self
+            .function_dict()
+            .name_and_types
+            .into_iter()
+            .filter(|(f, _)| matches!(f, FunctionName::ResourceMethod(_)))
+            .collect::<Vec<_>>();
+
+        FunctionDictionary { name_and_types }
     }
 
-    pub fn function_dict_without_resource(&self) -> FunctionDictionary {
-        match self {
-            InstanceType::Global {
-                functions_global: function_dict,
-                ..
-            } => function_dict.clone(),
-            InstanceType::Package {
-                functions_in_package: function_dict,
-                ..
-            } => function_dict.clone(),
-            InstanceType::Interface {
-                functions_in_interface: function_dict,
-                ..
-            } => function_dict.clone(),
-            InstanceType::PackageInterface {
-                functions_in_package_interface: function_dict,
-                ..
-            } => function_dict.clone(),
-            InstanceType::Resource { .. } => FunctionDictionary::default(),
-        }
+    pub fn function_dict_without_resource_methods(&self) -> FunctionDictionary {
+        let name_and_types = self
+            .function_dict()
+            .name_and_types
+            .into_iter()
+            .filter(|(f, _)| !matches!(f, FunctionName::ResourceMethod(_)))
+            .collect::<Vec<_>>();
+
+        FunctionDictionary { name_and_types }
     }
 
     pub fn function_dict(&self) -> FunctionDictionary {
@@ -427,8 +417,8 @@ impl InstanceType {
             Some(type_parameter) => match type_parameter {
                 TypeParameter::Interface(interface_name) => {
                     let function_dict = FunctionDictionary {
-                        map: function_dict
-                            .map
+                        name_and_types: function_dict
+                            .name_and_types
                             .into_iter()
                             .filter(|(f, _)| f.interface_name() == Some(interface_name.clone()))
                             .collect::<Vec<_>>(),
@@ -442,8 +432,8 @@ impl InstanceType {
                 }
                 TypeParameter::PackageName(package_name) => {
                     let function_dict = FunctionDictionary {
-                        map: function_dict
-                            .map
+                        name_and_types: function_dict
+                            .name_and_types
                             .into_iter()
                             .filter(|(f, _)| f.package_name() == Some(package_name.clone()))
                             .collect(),
@@ -457,8 +447,8 @@ impl InstanceType {
                 }
                 TypeParameter::FullyQualifiedInterface(fq_interface) => {
                     let function_dict = FunctionDictionary {
-                        map: function_dict
-                            .map
+                        name_and_types: function_dict
+                            .name_and_types
                             .into_iter()
                             .filter(|(f, _)| {
                                 f.package_name() == Some(fq_interface.package_name.clone())
@@ -488,12 +478,15 @@ pub struct Function {
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct FunctionDictionary {
-    pub map: Vec<(FunctionName, FunctionType)>,
+    pub name_and_types: Vec<(FunctionName, FunctionType)>,
 }
 
 impl FunctionDictionary {
     pub fn function_names(&self) -> Vec<String> {
-        self.map.iter().map(|(f, _)| f.name()).collect::<Vec<_>>()
+        self.name_and_types
+            .iter()
+            .map(|(f, _)| f.name())
+            .collect::<Vec<_>>()
     }
 }
 
@@ -505,7 +498,7 @@ pub struct ResourceMethodDictionary {
 impl From<&ResourceMethodDictionary> for FunctionDictionary {
     fn from(value: &ResourceMethodDictionary) -> Self {
         FunctionDictionary {
-            map: value
+            name_and_types: value
                 .map
                 .iter()
                 .map(|(k, v)| (FunctionName::ResourceMethod(k.clone()), v.clone()))
@@ -592,7 +585,9 @@ impl FunctionDictionary {
             };
         }
 
-        Ok(FunctionDictionary { map })
+        Ok(FunctionDictionary {
+            name_and_types: map,
+        })
     }
 }
 
@@ -803,7 +798,7 @@ fn search_function_in_instance(
 ) -> Result<Function, String> {
     let functions: Vec<(FunctionName, FunctionType)> = instance
         .function_dict()
-        .map
+        .name_and_types
         .into_iter()
         .filter(|(f, _)| f.name() == *function_name)
         .collect();
@@ -951,7 +946,9 @@ impl TryFrom<ProtoFunctionDictionary> for FunctionDictionary {
             map.push((function_name, function_type));
         }
 
-        Ok(FunctionDictionary { map })
+        Ok(FunctionDictionary {
+            name_and_types: map,
+        })
     }
 }
 

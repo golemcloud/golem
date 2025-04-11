@@ -173,12 +173,14 @@ pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariabl
                         InstanceType::Resource { .. } => {
                             let key = InstanceKey::Resource(variable_id.name());
                             instance_variables
-                                .insert(key, instance_type.function_dict_for_resource());
+                                .insert(key, instance_type.resource_method_dictionary());
                         }
                         _ => {
                             let key = InstanceKey::Worker(variable_id.name());
-                            instance_variables
-                                .insert(key, instance_type.function_dict_without_resource());
+                            instance_variables.insert(
+                                key,
+                                instance_type.function_dict_without_resource_methods(),
+                            );
                         }
                     };
                 }
