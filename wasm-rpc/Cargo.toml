@@ -42,7 +42,7 @@ proptest-arbitrary-interop = "0.1.0"
 test-r = { workspace = true }
 
 [build-dependencies]
-prost-build = "0.13.5"
+prost-build = { version = "0.13.5", optional = true }
 cargo_metadata = "0.19.2"
 
 [features]
@@ -75,7 +75,7 @@ poem_openapi = [
     "typeinfo",
     "golem-wasm-ast/poem_openapi",
 ]
-protobuf = ["dep:bincode", "dep:serde", "dep:prost", "golem-wasm-ast/protobuf"]
+protobuf = ["dep:bincode", "dep:serde", "dep:prost", "dep:prost-build", "golem-wasm-ast/protobuf"]
 serde = ["dep:serde"]
 stub = []
 text = ["typeinfo", "dep:wasm-wave", "golem-wasm-ast/wave"]

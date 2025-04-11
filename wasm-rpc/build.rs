@@ -1,8 +1,9 @@
-use cargo_metadata::MetadataCommand;
-use std::env;
 use std::io::Result;
 
+#[cfg(feature = "protobuf")]
 fn main() -> Result<()> {
+    use std::env;
+
     let wasm_ast_root =
         env::var("GOLEM_WASM_AST_ROOT").unwrap_or_else(|_| find_package_root("golem-wasm-ast"));
 
@@ -24,11 +25,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "protobuf")]
 fn find_package_root(name: &str) -> String {
+    use cargo_metadata::MetadataCommand;
+
     let metadata = MetadataCommand::new()
         .manifest_path("./Cargo.toml")
         .exec()
         .unwrap();
     let package = metadata.packages.iter().find(|p| p.name == name).unwrap();
     package.manifest_path.parent().unwrap().to_string()
+}
+
+#[cfg(not(feature = "protobuf"))]
+fn main() -> Result<()> {
+    Ok(())
 }
