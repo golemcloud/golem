@@ -30,6 +30,10 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
