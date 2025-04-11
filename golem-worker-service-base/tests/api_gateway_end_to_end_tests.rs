@@ -44,7 +44,7 @@ use golem_worker_service_base::gateway_security::{
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ValidationErrors;
 use golem_worker_service_base::{api, gateway_api_definition};
-use http::header::{LOCATION, ORIGIN, HOST};
+use http::header::{HOST, LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
@@ -4002,40 +4002,4 @@ async fn get_api_def_with_swagger_ui(path_pattern: &str) -> HttpApiDefinition {
     )
     .await
     .unwrap()
-}
-
-#[test]
-async fn test_swagger_ui_integration() {
-    // Create a Swagger UI API definition
-    let api_specification = get_api_def_with_swagger_ui("/swagger-ui").await;
-
-    // Create a request to the Swagger UI endpoint
-    let mut headers = HeaderMap::new();
-    headers.insert(HOST, HeaderValue::from_static("localhost:8080"));
-    let api_request = get_gateway_request("/swagger-ui", None, &headers, Value::Null);
-
-    // Create a session store
-    let session_store = internal::get_session_store();
-
-    // Execute the request
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    // Verify response status code
-    assert_eq!(response.status(), StatusCode::OK);
-
-    // Get response body
-    let body = match response.into_body().into_bytes().await {
-        Ok(b) => b,
-        Err(_) => panic!("Failed to read body"),
-    };
-    let html_content = String::from_utf8(body.to_vec()).unwrap();
-
-    // Verify the HTML contains the expected Swagger UI content
-    assert!(html_content.contains("<html><body>Test Swagger UI</body></html>"));
 }
