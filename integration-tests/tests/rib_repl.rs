@@ -140,6 +140,115 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     );
 }
 
+#[test]
+#[tracing::instrument]
+async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
+    let mut rib_repl = RibRepl::bootstrap(
+        None,
+        Arc::new(TestRibReplDependencyManager::new(deps.clone())),
+        Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
+        None,
+        Some(ComponentSource {
+            component_name: "shopping-cart-resource".to_string(),
+            source_path: deps
+                .component_directory()
+                .join("shopping-cart-resource.wasm"),
+        }),
+    )
+    .await
+    .expect("Failed to bootstrap REPL");
+
+    let rib1 = r#"
+      let worker = instance("my_worker")
+    "#;
+
+    let rib2 = r#"
+      let resource = worker.cart("foo")
+    "#;
+
+    let rib3 = r#"
+      resource.get-cart-contents()
+     "#;
+
+    let rib4 = r#"
+      resource.add-item({
+        product-id: "123",
+        name: "item1",
+        price: 10.0,
+        quantity: 2
+      })
+    "#;
+
+    let rib5 = r#"
+      resource.get-cart-contents()
+     "#;
+
+    let result = rib_repl
+        .execute_rib(rib1)
+        .await
+        .expect("Failed to process command");
+
+    assert_eq!(result, Some(RibResult::Unit));
+
+    let result = rib_repl
+        .execute_rib(rib2)
+        .await
+        .expect("Failed to process command");
+
+    assert_eq!(result, Some(RibResult::Unit));
+
+    let result = rib_repl
+        .execute_rib(rib3)
+        .await
+        .map_err(|err| err.to_string())
+        .expect("Failed to process rib");
+
+    assert_eq!(
+        result,
+        Some(RibResult::Val(ValueAndType::new(
+            Value::List(vec![]),
+            list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ],),),
+        )))
+    );
+
+    let result = rib_repl
+        .execute_rib(rib4)
+        .await
+        .map_err(|err| err.to_string())
+        .expect("Failed to process rib");
+
+    assert_eq!(result, Some(RibResult::Unit));
+
+    let result = rib_repl
+        .execute_rib(rib5)
+        .await
+        .map_err(|err| err.to_string())
+        .expect("Failed to process rib");
+
+    assert_eq!(
+        result,
+        Some(RibResult::Val(ValueAndType::new(
+            Value::List(vec![Value::Record(vec![
+                Value::String("123".to_string()),
+                Value::String("item1".to_string()),
+                Value::F32(10.0),
+                Value::U32(2),
+            ])]),
+            list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ],)),
+        )))
+    );
+}
+
 struct TestRibReplDependencyManager {
     dependencies: EnvBasedTestDependencies,
 }
