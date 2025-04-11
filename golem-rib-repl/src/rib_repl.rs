@@ -94,11 +94,11 @@ impl RibRepl {
 
                 match dependencies {
                     Ok(dependencies) => {
-                        let component_dependencies = dependencies.component_dependencies;
+                        let mut component_dependencies = dependencies.component_dependencies;
 
                         match &component_dependencies.len() {
                             0 => Err(ReplBootstrapError::NoComponentsFound),
-                            1 => Ok(component_dependencies[0].clone()),
+                            1 => Ok(component_dependencies.pop().unwrap()),
                             _ => Err(ReplBootstrapError::MultipleComponentsFound(
                                 "multiple components detected. rib repl currently support only a single component".to_string(),
                             )),
