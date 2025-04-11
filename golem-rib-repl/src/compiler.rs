@@ -45,15 +45,14 @@ pub fn compile_rib_script(
 
     Ok(CompilerOutput {
         rib_byte_code: byte_code,
-        inferred_expr,
         instance_variables,
         identifiers,
     })
 }
 
+#[derive(Clone)]
 pub struct CompilerOutput {
     pub rib_byte_code: RibByteCode,
-    pub inferred_expr: InferredExpr,
     pub instance_variables: InstanceVariables,
     pub identifiers: Vec<VariableId>,
 }

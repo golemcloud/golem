@@ -17,7 +17,7 @@ use crate::value_generator::generate_value;
 use colored::Colorize;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
-use rib::{Expr, InferredExpr, VariableId};
+use rib::{Expr, VariableId};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -27,30 +27,36 @@ use std::borrow::Cow;
 
 #[derive(Default)]
 pub struct RibEdit {
-    pub progressed_inferred_expr: Option<InferredExpr>,
-    pub instance_variables: Option<InstanceVariables>,
-    pub identifiers: Vec<VariableId>,
+    pub compiler_output: Option<CompilerOutput>,
     pub key_words: Vec<&'static str>,
     pub std_function_names: Vec<&'static str>,
 }
 
 impl RibEdit {
+    pub fn instance_variables(&self) -> Option<&InstanceVariables> {
+        self.compiler_output
+            .as_ref()
+            .map(|output| &output.instance_variables)
+    }
+
+    pub fn identifiers(&self) -> Option<&Vec<VariableId>> {
+        self.compiler_output
+            .as_ref()
+            .map(|output| &output.identifiers)
+    }
+
     pub fn init() -> RibEdit {
         RibEdit {
-            progressed_inferred_expr: None,
-            instance_variables: None,
+            compiler_output: None,
             key_words: vec![
                 "let", "if", "else", "match", "for", "in", "true", "false", "yield", "some",
                 "none", "ok", "err",
             ],
             std_function_names: vec!["instance"],
-            identifiers: vec![],
         }
     }
     pub fn update_progression(&mut self, compiler_output: &CompilerOutput) {
-        self.progressed_inferred_expr = Some(compiler_output.inferred_expr.clone());
-        self.instance_variables = Some(compiler_output.instance_variables.clone());
-        self.identifiers = compiler_output.identifiers.clone();
+        self.compiler_output = Some(compiler_output.clone());
     }
 
     fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {
@@ -136,7 +142,7 @@ impl Completer for RibEdit {
         end_pos: usize,
         _ctx: &Context<'_>, // a context has access to only the current line
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-        let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
+        let instance_variables: Option<&InstanceVariables> = self.instance_variables();
         let instance_variable_names: Option<Vec<String>> =
             instance_variables.clone().map(|x| x.variable_names());
 
@@ -148,7 +154,7 @@ impl Completer for RibEdit {
 
         // Check if the word is a method call
         if let Some((new_start, new_completions)) =
-            Self::complete_method_calls(word, instance_variables.as_ref(), start, end_pos)?
+            Self::complete_method_calls(word, instance_variables, start, end_pos)?
         {
             completions.extend(new_completions);
             return Ok((new_start, completions));
@@ -163,7 +169,7 @@ impl Completer for RibEdit {
                 }
             }
 
-            for var in self.identifiers.iter() {
+            for var in self.identifiers().unwrap_or(&vec![]).iter() {
                 if var.name().starts_with(word) {
                     completions.push(var.name());
                 }
@@ -192,7 +198,7 @@ impl Hinter for RibEdit {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
-        let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
+        let instance_variables: Option<&InstanceVariables> = self.instance_variables();
         let instance_variable_names: Option<Vec<String>> =
             instance_variables.clone().map(|x| x.variable_names());
 
@@ -212,7 +218,7 @@ impl Hinter for RibEdit {
             }
         }
 
-        for var in self.identifiers.iter() {
+        for var in self.identifiers().unwrap_or(&vec![]).iter() {
             if var.name().starts_with(word) {
                 // return only remaining part of the variable name
                 let hint = &var.name()[word.len()..];
