@@ -37,33 +37,37 @@ pub struct RibRepl {
     printer: Box<dyn ReplPrinter>,
     editor: Editor<RibEdit, DefaultHistory>,
     repl_state: ReplState,
+    prompt: String,
+}
+
+/// Config options:
+///
+/// - `history_file`: Optional path to a file where the REPL history will be stored and loaded from.
+///   If `None`, it will be loaded from `~/.rib_history`.
+/// - `dependency_manager`: This is responsible for how to load all the components or a specific
+///   custom component.
+/// - `worker_function_invoke`: An implementation of the `WorkerFunctionInvoke` trait,
+/// - `printer`: Optional custom printer for displaying results and errors in the REPL. If `None`
+///   a default printer will be used.
+/// - `component_source`: Optional details about the component to be loaded, including its name
+///   and source file path. If `None`, the REPL will try to load all the components using the
+///   `dependency_manager`, otherwise, `dependency_manager` will load only the specified component.
+/// - `prompt`: optional custom prompt, defaults to `>>>` in cyan
+pub struct RibReplConfig {
+    pub history_file: Option<PathBuf>,
+    pub dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
+    pub worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+    pub printer: Option<Box<dyn ReplPrinter>>,
+    pub component_source: Option<ComponentSource>,
+    pub prompt: Option<String>,
 }
 
 impl RibRepl {
     /// Bootstraps and initializes the Rib REPL environment and returns a `RibRepl` instance,
     /// which can be used to `run` the REPL.
     ///
-    /// # Arguments
-    ///
-    /// - `history_file`: Optional path to a file where the REPL history will be stored and loaded from.
-    ///   If `None`, it will be loaded from `~/.rib_history`.
-    /// - `dependency_manager`: This is responsible for how to load all the components or a specific
-    ///   custom component.
-    /// - `worker_function_invoke`: An implementation of the `WorkerFunctionInvoke` trait,
-    /// - `printer`: Optional custom printer for displaying results and errors in the REPL. If `None`
-    ///   a default printer will be used.
-    /// - `component_source`: Optional details about the component to be loaded, including its name
-    ///   and source file path. If `None`, the REPL will try to load all the components using the
-    ///   `dependency_manager`, otherwise, `dependency_manager` will load only the specified component.
-    ///
-    pub async fn bootstrap(
-        history_file: Option<PathBuf>,
-        dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
-        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
-        printer: Option<Box<dyn ReplPrinter>>,
-        component_source: Option<ComponentSource>,
-    ) -> Result<RibRepl, ReplBootstrapError> {
-        let history_file_path = history_file.unwrap_or_else(get_default_history_file);
+    pub async fn bootstrap(config: RibReplConfig) -> Result<RibRepl, ReplBootstrapError> {
+        let history_file_path = config.history_file.unwrap_or_else(get_default_history_file);
 
         let rib_editor = RibEdit::init();
 
@@ -84,13 +88,14 @@ impl RibRepl {
             }
         }
 
-        let component_dependency = match component_source {
-            Some(ref details) => dependency_manager
+        let component_dependency = match config.component_source {
+            Some(ref details) => config
+                .dependency_manager
                 .add_component(&details.source_path, details.component_name.clone())
                 .await
                 .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string())),
             None => {
-                let dependencies = dependency_manager.get_dependencies().await;
+                let dependencies = config.dependency_manager.get_dependencies().await;
 
                 match dependencies {
                     Ok(dependencies) => {
@@ -114,16 +119,19 @@ impl RibRepl {
 
         let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(
             component_dependency.clone(),
-            worker_function_invoke,
+            config.worker_function_invoke,
         ));
 
         let repl_state = ReplState::new(&component_dependency, rib_function_invoke);
 
         Ok(RibRepl {
             history_file_path,
-            printer: printer.unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
+            printer: config
+                .printer
+                .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state,
+            prompt: config.prompt.unwrap_or_else(|| ">>> ".cyan().to_string()),
         })
     }
 
@@ -132,7 +140,7 @@ impl RibRepl {
     /// This method is exposed for users who want to manage their own REPL loop
     /// instead of using the built-in [`Self::run`] method.
     pub fn read_line(&mut self) -> rustyline::Result<String> {
-        self.editor.readline(">>> ".cyan().to_string().as_str())
+        self.editor.readline(&self.prompt)
     }
 
     /// Executes a single line of Rib code and returns the result.
