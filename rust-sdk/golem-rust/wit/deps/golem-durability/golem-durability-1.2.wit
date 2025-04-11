@@ -26,6 +26,14 @@ interface durability {
         entry-version: oplog-entry-version
     }
 
+    record persisted-typed-durable-function-invocation {
+        timestamp: datetime,
+        function-name: string,
+        response: value-and-type,
+        function-type: durable-function-type,
+        entry-version: oplog-entry-version
+    }
+
     /// Observes a function call (produces logs and metrics)
     observe-function-call: func(iface: string, function: string);
 
@@ -71,4 +79,8 @@ interface durability {
 
     /// Reads the next persisted durable function invocation from the oplog during replay
     read-persisted-durable-function-invocation: func() -> persisted-durable-function-invocation;
+
+    /// Reads the next persisted durable function invocation from the oplog during replay, assuming it
+    /// was created with `persist-typed-durable-function-invocation`
+    read-persisted-typed-durable-function-invocation: func() -> persisted-typed-durable-function-invocation;
 }
