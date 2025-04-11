@@ -30,21 +30,12 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: cargo-bins/cargo-binstall@main
-      - name: Install cargo-component
-        run: cargo binstall --no-confirm cargo-component@0.20.0
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
         run: cargo clippy -- -Dwarnings
       - name: Tests
         run: cargo test --all-features
-      - name: Build golem-rust component
-        run: cargo component build -p golem-rust
 
   publish:
     needs: [build]
