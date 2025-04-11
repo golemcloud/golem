@@ -69,6 +69,13 @@ impl InstanceVariables {
             .map(|k| k.to_string())
             .collect()
     }
+
+    pub fn method_names(&self) -> Vec<String> {
+        self.instance_variables
+            .values()
+            .flat_map(|dict| dict.function_names())
+            .collect()
+    }
 }
 
 pub fn get_identifiers(inferred_expr: &InferredExpr) -> Vec<VariableId> {

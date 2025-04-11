@@ -235,7 +235,8 @@ impl Validator for RibEdit {
         &self,
         context: &mut rustyline::validate::ValidationContext,
     ) -> rustyline::Result<ValidationResult> {
-        let expr = Expr::from_text(context.input());
+        let input = context.input();
+        let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
@@ -246,24 +247,23 @@ impl Validator for RibEdit {
 
 impl Highlighter for RibEdit {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        let identifiers = self.compiler_output
+            .as_ref()
+            .map(|output| &output.identifiers);
+        let instance_vars = self.compiler_output
+            .as_ref()
+            .map(|output| &output.instance_variables);
+
         let mut highlighted = String::new();
         let mut word = String::new();
-        let chars = line.chars().peekable();
+        let mut chars = line.chars().peekable();
 
-        for c in chars {
-            if c.is_alphanumeric() || c == '_' {
+        while let Some(c) = chars.next() {
+            if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
                 word.push(c);
             } else {
                 if !word.is_empty() {
-                    if self.key_words.contains(&word.as_str()) {
-                        highlighted.push_str(&format!("{}", word.blue()));
-                    } else if self.std_function_names.contains(&word.as_str()) {
-                        highlighted.push_str(&format!("{}", word.cyan()));
-                    } else if word.chars().all(|ch| ch.is_numeric()) {
-                        highlighted.push_str(&format!("{}", word.yellow()));
-                    } else {
-                        highlighted.push_str(&word);
-                    }
+                    highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
                     word.clear();
                 }
                 highlighted.push(c);
@@ -271,13 +271,39 @@ impl Highlighter for RibEdit {
         }
 
         if !word.is_empty() {
-            if self.key_words.contains(&word.as_str()) {
-                highlighted.push_str(&format!("{}", word.blue()));
-            } else {
-                highlighted.push_str(&word);
-            }
+            highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
         }
 
         Cow::Owned(highlighted)
+    }
+}
+
+fn highlight_word(
+    word: &str,
+    context: &RibEdit,
+    identifiers: Option<&Vec<VariableId>>,
+    instance_vars: Option<&InstanceVariables>,
+) -> String {
+    if context.key_words.contains(&word) {
+        word.blue().to_string()
+    } else if let Some((obj, method)) = word.split_once('.') {
+        let is_instance = instance_vars.map_or(false, |vars| vars.instance_variables.contains_key(obj));
+        let is_method = instance_vars.map_or(false, |vars| vars.method_names().contains(&method.to_string()));
+
+        if is_instance && is_method {
+            format!("{}.{}", obj.green(), method.cyan())
+        } else {
+            word.to_string()
+        }
+    } else if identifiers.map_or(false, |vars| vars.iter().any(|var| var.name() == word)) {
+        word.green().to_string()
+    } else if instance_vars.map_or(false, |vars| vars.instance_variables.contains_key(word)) {
+        word.magenta().to_string()
+    } else if context.std_function_names.contains(&word) {
+        word.cyan().to_string()
+    } else if word.chars().all(|ch| ch.is_numeric()) {
+        word.yellow().to_string()
+    } else {
+        word.to_string()
     }
 }

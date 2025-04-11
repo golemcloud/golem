@@ -142,6 +142,8 @@ impl RibRepl {
     /// For a built-in REPL loop, see [`Self::run`].
     pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibError> {
         if !rib.is_empty() {
+            let rib = rib.strip_suffix(";").unwrap_or(rib);
+
             self.update_rib(rib);
 
             // Add every rib script into the history (in memory) and save it
