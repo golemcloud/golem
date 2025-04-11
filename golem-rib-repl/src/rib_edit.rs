@@ -72,8 +72,8 @@ impl RibEdit {
 
         while start > 0
             && line[start - 1..start].chars().all(|c| {
-            c.is_alphanumeric() || c == '_' || c == '.' || c == '-' || c == '(' || c == ')'
-        })
+                c.is_alphanumeric() || c == '_' || c == '.' || c == '-' || c == '(' || c == ')'
+            })
         {
             start -= 1;
         }
@@ -102,8 +102,8 @@ impl RibEdit {
         let mut completions = Vec::new();
 
         if let Some(worker_instance_func_dict) =
-            instance_vars.get_worker_instance_method_dict(instance_var_name) {
-
+            instance_vars.get_worker_instance_method_dict(instance_var_name)
+        {
             for (function, tpe) in &worker_instance_func_dict.map {
                 let name_with_paren = format!("{}(", function.name());
 
@@ -135,8 +135,8 @@ impl RibEdit {
         }
 
         if let Some(resource_instance_func_dict) =
-            instance_vars.get_resource_instance_method_dict(instance_var_name){
-
+            instance_vars.get_resource_instance_method_dict(instance_var_name)
+        {
             for (resource_method_name, tpe) in &resource_instance_func_dict.map {
                 let resource_method_with_paren = format!("{}(", resource_method_name.name());
 
@@ -166,16 +166,13 @@ impl RibEdit {
                     completions.push(resource_method_name.name());
                 }
             }
-
         }
 
         if completions.is_empty() {
             Ok(None)
         } else {
             Ok(Some((start + dot_pos + 1, completions)))
-
         }
-
     }
 
     pub fn complete_variants(
@@ -403,8 +400,9 @@ fn highlight_word(
 
     // Method call (e.g., obj.method)
     if let Some((obj, method)) = word.split_once('.') {
-        let is_instance =
-            instance_vars.map_or(false, |vars| vars.instance_keys().contains(&obj.to_string()));
+        let is_instance = instance_vars.map_or(false, |vars| {
+            vars.instance_keys().contains(&obj.to_string())
+        });
 
         let is_method = instance_vars.map_or(false, |vars| {
             vars.method_names().contains(&method.to_string())
@@ -425,8 +423,9 @@ fn highlight_word(
     }
 
     // Instance variable
-    let is_instance_var =
-        instance_vars.map_or(false, |vars| vars.instance_keys().contains(&word.to_string()));
+    let is_instance_var = instance_vars.map_or(false, |vars| {
+        vars.instance_keys().contains(&word.to_string())
+    });
 
     if is_instance_var {
         return word.cyan().to_string();

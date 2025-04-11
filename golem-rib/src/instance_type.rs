@@ -354,9 +354,7 @@ impl InstanceType {
         }
     }
 
-    pub fn function_dict_for_resource(
-        &self,
-    ) -> FunctionDictionary {
+    pub fn function_dict_for_resource(&self) -> FunctionDictionary {
         match self {
             InstanceType::Resource {
                 resource_method_dict,
@@ -366,9 +364,7 @@ impl InstanceType {
         }
     }
 
-    pub fn function_dict_without_resource(
-        &self,
-    ) -> FunctionDictionary {
+    pub fn function_dict_without_resource(&self) -> FunctionDictionary {
         match self {
             InstanceType::Global {
                 functions_global: function_dict,

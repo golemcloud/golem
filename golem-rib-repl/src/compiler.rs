@@ -171,16 +171,16 @@ pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariabl
                 if let InferredType::Instance { instance_type } = expr.inferred_type() {
                     match *instance_type {
                         InstanceType::Resource { .. } => {
-                            let key= InstanceKey::Resource(variable_id.name());
-                            instance_variables.insert(key, instance_type.function_dict_for_resource());
-
-                        },
+                            let key = InstanceKey::Resource(variable_id.name());
+                            instance_variables
+                                .insert(key, instance_type.function_dict_for_resource());
+                        }
                         _ => {
                             let key = InstanceKey::Worker(variable_id.name());
-                            instance_variables.insert(key, instance_type.function_dict_without_resource());
-                        },
+                            instance_variables
+                                .insert(key, instance_type.function_dict_without_resource());
+                        }
                     };
-
                 }
 
                 queue.push_front(expr)
