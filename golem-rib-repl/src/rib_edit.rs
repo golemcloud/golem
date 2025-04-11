@@ -345,7 +345,7 @@ impl Validator for RibEdit {
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
-            Err(e) => Ok(ValidationResult::Invalid(Some(e))),
+            Err(err) => Ok(ValidationResult::Invalid(Some(format!("\n{}\n", err)))),
         }
     }
 }
