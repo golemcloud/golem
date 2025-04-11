@@ -25,3 +25,19 @@ world golem-rust {
   import wasi:sockets/ip-name-lookup@0.2.0;
   import wasi:sockets/instance-network@0.2.0;
 }
+
+world golem-rust-load-snapshot {
+  include golem-rust;
+
+  export golem:api/load-snapshot@1.1.6;
+}
+
+world golem-rust-save-snapshot {
+    include golem-rust;
+    export golem:api/save-snapshot@1.1.6;
+}
+
+world golem-rust-oplog-processor {
+    include golem-rust;
+    export golem:api/oplog-processor@1.1.6;
+}
