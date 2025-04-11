@@ -159,7 +159,7 @@ impl RibEdit {
                         .join(", ");
                     completions.push(format!("{})", args_str));
 
-                    return Ok(Some((end_pos, completions))); // Only one possible completion, return early
+                    return Ok(Some((end_pos, completions)));
                 }
 
                 if resource_method_name.name().starts_with(method_prefix) {
@@ -241,7 +241,7 @@ impl Completer for RibEdit {
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
         let instance_variables: Option<&InstanceVariables> = self.instance_variables();
         let instance_variable_names: Option<Vec<String>> =
-            instance_variables.clone().map(|x| x.variable_names());
+            instance_variables.map(|x| x.variable_names());
 
         let mut completions = Vec::new();
 
@@ -249,7 +249,6 @@ impl Completer for RibEdit {
 
         let word = &line[start..end_pos];
 
-        // Check if the word is a method call
         if let Some((new_start, new_completions)) =
             Self::complete_method_calls(word, instance_variables, start, end_pos)?
         {
@@ -307,7 +306,7 @@ impl Hinter for RibEdit {
     fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
         let instance_variables: Option<&InstanceVariables> = self.instance_variables();
         let instance_variable_names: Option<Vec<String>> =
-            instance_variables.clone().map(|x| x.variable_names());
+            instance_variables.map(|x| x.variable_names());
 
         let start = Self::backtrack_and_get_start_pos(line, pos);
         let word = &line[start..pos];
@@ -327,7 +326,6 @@ impl Hinter for RibEdit {
 
         for var in self.identifiers().unwrap_or(&vec![]).iter() {
             if var.name().starts_with(word) {
-                // return only remaining part of the variable name
                 let hint = &var.name()[word.len()..];
                 return Some(hint.to_string());
             }
@@ -365,9 +363,9 @@ impl Highlighter for RibEdit {
 
         let mut highlighted = String::new();
         let mut word = String::new();
-        let mut chars = line.chars().peekable();
+        let chars = line.chars().peekable();
 
-        while let Some(c) = chars.next() {
+        for c in chars {
             if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
                 word.push(c);
             } else {
@@ -393,20 +391,16 @@ fn highlight_word(
     identifiers: Option<&Vec<VariableId>>,
     instance_vars: Option<&InstanceVariables>,
 ) -> String {
-    // Keyword
     if context.key_words.contains(&word) {
         return word.cyan().to_string();
     }
 
-    // Method call (e.g., obj.method)
     if let Some((obj, method)) = word.split_once('.') {
-        let is_instance = instance_vars.map_or(false, |vars| {
-            vars.instance_keys().contains(&obj.to_string())
-        });
+        let is_instance =
+            instance_vars.is_some_and(|vars| vars.instance_keys().contains(&obj.to_string()));
 
-        let is_method = instance_vars.map_or(false, |vars| {
-            vars.method_names().contains(&method.to_string())
-        });
+        let is_method =
+            instance_vars.is_some_and(|vars| vars.method_names().contains(&method.to_string()));
 
         if is_instance && is_method {
             return format!("{}.{}", obj.blue(), method.green());
@@ -415,32 +409,26 @@ fn highlight_word(
         }
     }
 
-    // Identifier
-    let is_identifier = identifiers.map_or(false, |vars| vars.iter().any(|var| var.name() == word));
+    let is_identifier = identifiers.is_some_and(|vars| vars.iter().any(|var| var.name() == word));
 
     if is_identifier {
         return word.blue().to_string();
     }
 
-    // Instance variable
-    let is_instance_var = instance_vars.map_or(false, |vars| {
-        vars.instance_keys().contains(&word.to_string())
-    });
+    let is_instance_var =
+        instance_vars.is_some_and(|vars| vars.instance_keys().contains(&word.to_string()));
 
     if is_instance_var {
         return word.cyan().to_string();
     }
 
-    // Standard function name
     if context.std_function_names.contains(&word) {
         return word.green().to_string();
     }
 
-    // Numeric literals
     if word.chars().all(|ch| ch.is_numeric()) {
         return word.green().to_string();
     }
 
-    // Fallback: no highlighting
     word.to_string()
 }

@@ -57,10 +57,8 @@ impl FunctionTypeRegistry {
         let mut enums = vec![];
 
         for registry_value in self.types.values() {
-            if let RegistryValue::Value(analysed_type) = registry_value {
-                if let AnalysedType::Enum(type_enum) = analysed_type {
-                    enums.push(type_enum.clone())
-                }
+            if let RegistryValue::Value(AnalysedType::Enum(type_enum)) = registry_value {
+                enums.push(type_enum.clone())
             }
         }
 
