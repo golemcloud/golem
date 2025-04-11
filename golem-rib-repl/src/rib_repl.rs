@@ -332,6 +332,6 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                 args.0,
             )
             .await
-            .map_err(|e| format!("Failed to invoke function: {}", e.to_string()))
+            .map_err(|e| format!("Failed to invoke function: {}", e))
     }
 }
