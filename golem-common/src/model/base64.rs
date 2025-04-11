@@ -151,3 +151,9 @@ impl<'de> BorrowDecode<'de> for Base64 {
         Ok(Base64(vec))
     }
 }
+
+impl Default for Base64 {
+    fn default() -> Self {
+        Base64(Vec::new())
+    }
+}
