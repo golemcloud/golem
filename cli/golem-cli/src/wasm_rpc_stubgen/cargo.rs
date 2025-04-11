@@ -18,7 +18,9 @@ use crate::log::{log_action, log_warn_action, LogColorize};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::StubDefinition;
 use crate::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
-use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION, WIT_BINDGEN_VERSION};
+use crate::wasm_rpc_stubgen::{
+    GOLEM_API_VERSION, GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION, WIT_BINDGEN_VERSION,
+};
 use anyhow::{anyhow, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
@@ -458,6 +460,30 @@ pub fn regenerate_cargo_package_component(
                         bind_to_golem_rust.push((
                             interface_path,
                             "golem_rust::wasm_rpc::wasi::clocks::wall_clock".to_string(),
+                        ));
+                    } else if interface_path
+                        == format!("golem:api/load-snapshot@{GOLEM_API_VERSION}")
+                    {
+                        bind_to_golem_rust.push((
+                            interface_path,
+                            "golem_rust::load_snapshot::exports::golem::api::load_snapshot"
+                                .to_string(),
+                        ));
+                    } else if interface_path
+                        == format!("golem:api/save-snapshot@{GOLEM_API_VERSION}")
+                    {
+                        bind_to_golem_rust.push((
+                            interface_path,
+                            "golem_rust::save_snapshot::exports::golem::api::save_snapshot"
+                                .to_string(),
+                        ));
+                    } else if interface_path
+                        == format!("golem:api/oplog-processor@{GOLEM_API_VERSION}")
+                    {
+                        bind_to_golem_rust.push((
+                            interface_path,
+                            "golem_rust::oplog_processor::exports::golem::api::oplog_processor"
+                                .to_string(),
                         ));
                     } else {
                         bind_to_golem_rust.push((
