@@ -17,9 +17,9 @@ use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_rib_repl::WorkerFunctionInvoke;
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
+use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
@@ -36,16 +36,17 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
-    let mut rib_repl = RibRepl::bootstrap(
-        None,
-        Arc::new(TestRibReplDependencyManager::new(deps.clone())),
-        Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
-        None,
-        Some(ComponentSource {
+    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
+        history_file: None,
+        dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
+        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
+        printer: None,
+        component_source: Some(ComponentSource {
             component_name: "shopping-cart".to_string(),
             source_path: deps.component_directory().join("shopping-cart.wasm"),
         }),
-    )
+        prompt: None,
+    })
     .await
     .expect("Failed to bootstrap REPL");
 
@@ -143,18 +144,19 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
-    let mut rib_repl = RibRepl::bootstrap(
-        None,
-        Arc::new(TestRibReplDependencyManager::new(deps.clone())),
-        Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
-        None,
-        Some(ComponentSource {
+    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
+        history_file: None,
+        dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
+        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
+        printer: None,
+        component_source: Some(ComponentSource {
             component_name: "shopping-cart-resource".to_string(),
             source_path: deps
                 .component_directory()
                 .join("shopping-cart-resource.wasm"),
         }),
-    )
+        prompt: None,
+    })
     .await
     .expect("Failed to bootstrap REPL");
 
