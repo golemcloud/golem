@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use crate::repl_state::ReplState;
-use rib::{
-    Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr, InferredType, RibByteCode,
-    RibError, VariableId,
-};
+use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
+use rib::*;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Display;
 
 pub fn compile_rib_script(
     rib_script: &str,
@@ -36,6 +35,9 @@ pub fn compile_rib_script(
 
     let identifiers = get_identifiers(&inferred_expr);
 
+    let variants = function_registry.get_variants();
+    let enums = function_registry.get_enums();
+
     let new_byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(|e| RibError::InternalError(e.to_string()))?;
 
@@ -45,22 +47,65 @@ pub fn compile_rib_script(
 
     Ok(CompilerOutput {
         rib_byte_code: byte_code,
-        inferred_expr,
         instance_variables,
         identifiers,
+        variants,
+        enums,
     })
 }
 
+#[derive(Clone)]
 pub struct CompilerOutput {
     pub rib_byte_code: RibByteCode,
-    pub inferred_expr: InferredExpr,
     pub instance_variables: InstanceVariables,
     pub identifiers: Vec<VariableId>,
+    pub variants: Vec<TypeVariant>,
+    pub enums: Vec<TypeEnum>,
 }
 
 #[derive(Default, Clone)]
 pub struct InstanceVariables {
-    pub instance_variables: HashMap<String, FunctionDictionary>,
+    pub instance_variables: HashMap<InstanceKey, FunctionDictionary>,
+}
+
+impl InstanceVariables {
+    pub fn instance_keys(&self) -> Vec<String> {
+        self.instance_variables
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
+    }
+
+    pub fn get_worker_instance_method_dict(
+        &self,
+        instance_key: &str,
+    ) -> Option<&FunctionDictionary> {
+        self.instance_variables
+            .get(&InstanceKey::Worker(instance_key.to_string()))
+    }
+
+    pub fn get_resource_instance_method_dict(
+        &self,
+        instance_key: &str,
+    ) -> Option<&FunctionDictionary> {
+        self.instance_variables
+            .get(&InstanceKey::Resource(instance_key.to_string()))
+    }
+}
+
+#[derive(Hash, Clone, PartialEq, Eq)]
+pub enum InstanceKey {
+    Worker(String),
+    Resource(String),
+}
+
+impl Display for InstanceKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstanceKey::Worker(key) => write!(f, "{}", key),
+            InstanceKey::Resource(key) => write!(f, "{}", key),
+        }
+    }
 }
 
 impl InstanceVariables {
@@ -68,6 +113,13 @@ impl InstanceVariables {
         self.instance_variables
             .keys()
             .map(|k| k.to_string())
+            .collect()
+    }
+
+    pub fn method_names(&self) -> Vec<String> {
+        self.instance_variables
+            .values()
+            .flat_map(|dict| dict.function_names())
             .collect()
     }
 }
@@ -117,7 +169,20 @@ pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariabl
                 variable_id, expr, ..
             } => {
                 if let InferredType::Instance { instance_type } = expr.inferred_type() {
-                    instance_variables.insert(variable_id.name(), instance_type.function_dict());
+                    match *instance_type {
+                        InstanceType::Resource { .. } => {
+                            let key = InstanceKey::Resource(variable_id.name());
+                            instance_variables
+                                .insert(key, instance_type.resource_method_dictionary());
+                        }
+                        _ => {
+                            let key = InstanceKey::Worker(variable_id.name());
+                            instance_variables.insert(
+                                key,
+                                instance_type.function_dict_without_resource_methods(),
+                            );
+                        }
+                    };
                 }
 
                 queue.push_front(expr)

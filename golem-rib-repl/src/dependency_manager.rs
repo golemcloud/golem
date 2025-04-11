@@ -26,7 +26,7 @@ pub trait RibDependencyManager {
     ///
     /// Note: It is the responsibility of the REPL client to resolve component paths.
     /// In the future, Rib may support multiple components.
-    async fn get_dependencies(&self) -> Result<ReplDependencies, String>;
+    async fn get_dependencies(&self) -> anyhow::Result<ReplDependencies>;
 
     /// Deploys a specific component if the REPL was started with a reference to it.
     ///
@@ -44,7 +44,7 @@ pub trait RibDependencyManager {
         &self,
         source_path: &Path,
         component_name: String,
-    ) -> Result<RibComponentMetadata, String>;
+    ) -> anyhow::Result<RibComponentMetadata>;
 }
 
 pub struct ReplDependencies {
@@ -54,5 +54,6 @@ pub struct ReplDependencies {
 #[derive(Clone, Debug)]
 pub struct RibComponentMetadata {
     pub component_id: Uuid,
+    pub component_name: String,
     pub metadata: Vec<AnalysedExport>,
 }

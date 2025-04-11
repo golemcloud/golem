@@ -27,6 +27,7 @@ use rib::{RibError, RibFunctionInvoke};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
+use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -36,33 +37,37 @@ pub struct RibRepl {
     printer: Box<dyn ReplPrinter>,
     editor: Editor<RibEdit, DefaultHistory>,
     repl_state: ReplState,
+    prompt: String,
+}
+
+/// Config options:
+///
+/// - `history_file`: Optional path to a file where the REPL history will be stored and loaded from.
+///   If `None`, it will be loaded from `~/.rib_history`.
+/// - `dependency_manager`: This is responsible for how to load all the components or a specific
+///   custom component.
+/// - `worker_function_invoke`: An implementation of the `WorkerFunctionInvoke` trait,
+/// - `printer`: Optional custom printer for displaying results and errors in the REPL. If `None`
+///   a default printer will be used.
+/// - `component_source`: Optional details about the component to be loaded, including its name
+///   and source file path. If `None`, the REPL will try to load all the components using the
+///   `dependency_manager`, otherwise, `dependency_manager` will load only the specified component.
+/// - `prompt`: optional custom prompt, defaults to `>>>` in cyan
+pub struct RibReplConfig {
+    pub history_file: Option<PathBuf>,
+    pub dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
+    pub worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+    pub printer: Option<Box<dyn ReplPrinter>>,
+    pub component_source: Option<ComponentSource>,
+    pub prompt: Option<String>,
 }
 
 impl RibRepl {
     /// Bootstraps and initializes the Rib REPL environment and returns a `RibRepl` instance,
     /// which can be used to `run` the REPL.
     ///
-    /// # Arguments
-    ///
-    /// - `history_file`: Optional path to a file where the REPL history will be stored and loaded from.
-    ///   If `None`, it will be loaded from `~/.rib_history`.
-    /// - `dependency_manager`: This is responsible for how to load all the components or a specific
-    ///   custom component.
-    /// - `worker_function_invoke`: An implementation of the `WorkerFunctionInvoke` trait,
-    /// - `printer`: Optional custom printer for displaying results and errors in the REPL. If `None`
-    ///   a default printer will be used.
-    /// - `component_source`: Optional details about the component to be loaded, including its name
-    ///   and source file path. If `None`, the REPL will try to load all the components using the
-    ///   `dependency_manager`, otherwise, `dependency_manager` will load only the specified component.
-    ///
-    pub async fn bootstrap(
-        history_file: Option<PathBuf>,
-        dependency_manager: Arc<dyn RibDependencyManager + Sync + Send>,
-        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
-        printer: Option<Box<dyn ReplPrinter>>,
-        component_source: Option<ComponentSource>,
-    ) -> Result<RibRepl, ReplBootstrapError> {
-        let history_file_path = history_file.unwrap_or_else(get_default_history_file);
+    pub async fn bootstrap(config: RibReplConfig) -> Result<RibRepl, ReplBootstrapError> {
+        let history_file_path = config.history_file.unwrap_or_else(get_default_history_file);
 
         let rib_editor = RibEdit::init();
 
@@ -83,21 +88,22 @@ impl RibRepl {
             }
         }
 
-        let component_dependency = match component_source {
-            Some(ref details) => dependency_manager
+        let component_dependency = match config.component_source {
+            Some(ref details) => config
+                .dependency_manager
                 .add_component(&details.source_path, details.component_name.clone())
                 .await
-                .map_err(ReplBootstrapError::ComponentLoadError),
+                .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string())),
             None => {
-                let dependencies = dependency_manager.get_dependencies().await;
+                let dependencies = config.dependency_manager.get_dependencies().await;
 
                 match dependencies {
                     Ok(dependencies) => {
-                        let component_dependencies = dependencies.component_dependencies;
+                        let mut component_dependencies = dependencies.component_dependencies;
 
                         match &component_dependencies.len() {
                             0 => Err(ReplBootstrapError::NoComponentsFound),
-                            1 => Ok(component_dependencies[0].clone()),
+                            1 => Ok(component_dependencies.pop().unwrap()),
                             _ => Err(ReplBootstrapError::MultipleComponentsFound(
                                 "multiple components detected. rib repl currently support only a single component".to_string(),
                             )),
@@ -113,16 +119,19 @@ impl RibRepl {
 
         let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(
             component_dependency.clone(),
-            worker_function_invoke,
+            config.worker_function_invoke,
         ));
 
         let repl_state = ReplState::new(&component_dependency, rib_function_invoke);
 
         Ok(RibRepl {
             history_file_path,
-            printer: printer.unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
+            printer: config
+                .printer
+                .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state,
+            prompt: config.prompt.unwrap_or_else(|| ">>> ".cyan().to_string()),
         })
     }
 
@@ -131,7 +140,7 @@ impl RibRepl {
     /// This method is exposed for users who want to manage their own REPL loop
     /// instead of using the built-in [`Self::run`] method.
     pub fn read_line(&mut self) -> rustyline::Result<String> {
-        self.editor.readline(">>> ".magenta().to_string().as_str())
+        self.editor.readline(&self.prompt)
     }
 
     /// Executes a single line of Rib code and returns the result.
@@ -141,6 +150,8 @@ impl RibRepl {
     /// For a built-in REPL loop, see [`Self::run`].
     pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibError> {
         if !rib.is_empty() {
+            let rib = rib.strip_suffix(";").unwrap_or(rib);
+
             self.update_rib(rib);
 
             // Add every rib script into the history (in memory) and save it
@@ -198,7 +209,7 @@ impl RibRepl {
     /// use [`Self::read_line`] and [`Self::execute_rib`] directly.
     pub async fn run(&mut self) {
         loop {
-            let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
+            let readline = self.read_line();
             match readline {
                 Ok(rib) => {
                     let _ = self.execute_rib(&rib).await;
@@ -249,7 +260,7 @@ fn get_default_history_file() -> PathBuf {
 }
 
 /// Represents errors that can occur during the bootstrap phase of the Rib REPL environment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplBootstrapError {
     /// Multiple components were found, but the REPL requires a single component context.
     ///
@@ -268,6 +279,27 @@ pub enum ReplBootstrapError {
 
     /// Failed to read from or write to the REPL history file.
     ReplHistoryFileError(String),
+}
+
+impl std::error::Error for ReplBootstrapError {}
+
+impl Display for ReplBootstrapError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReplBootstrapError::MultipleComponentsFound(msg) => {
+                write!(f, "Multiple components found: {}", msg)
+            }
+            ReplBootstrapError::NoComponentsFound => {
+                write!(f, "No components found in the given context")
+            }
+            ReplBootstrapError::ComponentLoadError(msg) => {
+                write!(f, "Failed to load component: {}", msg)
+            }
+            ReplBootstrapError::ReplHistoryFileError(msg) => {
+                write!(f, "Failed to read/write REPL history file: {}", msg)
+            }
+        }
+    }
 }
 
 // Note: Currently, the Rib interpreter supports only one component, so the
@@ -301,9 +333,17 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         args: EvaluatedFnArgs,
     ) -> Result<ValueAndType, String> {
         let component_id = self.component_dependency.component_id;
+        let component_name = &self.component_dependency.component_name;
 
         self.worker_function_invoke
-            .invoke(component_id, worker_name, function_name, args)
+            .invoke(
+                component_id,
+                component_name,
+                worker_name.map(|x| x.0),
+                function_name.0.as_str(),
+                args.0,
+            )
             .await
+            .map_err(|e| format!("Failed to invoke function: {}", e))
     }
 }

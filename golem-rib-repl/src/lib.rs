@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use dependency_manager::*;
+pub use invoke::*;
+pub use repl_printer::*;
+pub use rib_repl::*;
+
 mod compiler;
-pub mod dependency_manager;
-pub mod invoke;
-pub mod repl_printer;
+mod dependency_manager;
+mod invoke;
+mod repl_printer;
 mod repl_state;
 mod rib_edit;
-pub mod rib_repl;
+mod rib_repl;
 mod value_generator;
 
 #[cfg(test)]

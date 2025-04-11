@@ -1,4 +1,4 @@
-use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
+use golem_rib_repl::{ComponentSource, RibRepl, RibReplConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
@@ -13,18 +13,19 @@ async fn main() {
         .nth(1)
         .unwrap_or_else(|| "shopping-cart".to_string());
 
-    let mut rib_repl = RibRepl::bootstrap(
-        None,
-        Arc::new(TestRibReplDependencyManager::new(deps.clone())),
-        Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
-        None,
-        Some(ComponentSource {
+    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
+        history_file: None,
+        dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
+        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
+        printer: None,
+        component_source: Some(ComponentSource {
             component_name: component_name.to_string(),
             source_path: deps
                 .component_directory()
                 .join(format!("{}.wasm", component_name)),
         }),
-    )
+        prompt: None,
+    })
     .await
     .expect("Failed to bootstrap REPL");
 

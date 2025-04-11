@@ -15,9 +15,9 @@
 use crate::compiler::{CompilerOutput, InstanceVariables};
 use crate::value_generator::generate_value;
 use colored::Colorize;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
 use golem_wasm_rpc::ValueAndType;
-use rib::{Expr, InferredExpr, VariableId};
+use rib::{Expr, VariableId};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -27,44 +27,56 @@ use std::borrow::Cow;
 
 #[derive(Default)]
 pub struct RibEdit {
-    pub progressed_inferred_expr: Option<InferredExpr>,
-    pub instance_variables: Option<InstanceVariables>,
-    pub identifiers: Vec<VariableId>,
+    pub compiler_output: Option<CompilerOutput>,
     pub key_words: Vec<&'static str>,
     pub std_function_names: Vec<&'static str>,
 }
 
 impl RibEdit {
+    pub fn instance_variables(&self) -> Option<&InstanceVariables> {
+        self.compiler_output
+            .as_ref()
+            .map(|output| &output.instance_variables)
+    }
+
+    pub fn identifiers(&self) -> Option<&Vec<VariableId>> {
+        self.compiler_output
+            .as_ref()
+            .map(|output| &output.identifiers)
+    }
+
+    pub fn variants(&self) -> Option<&Vec<TypeVariant>> {
+        self.compiler_output.as_ref().map(|output| &output.variants)
+    }
+
+    pub fn enums(&self) -> Option<&Vec<TypeEnum>> {
+        self.compiler_output.as_ref().map(|output| &output.enums)
+    }
+
     pub fn init() -> RibEdit {
         RibEdit {
-            progressed_inferred_expr: None,
-            instance_variables: None,
+            compiler_output: None,
             key_words: vec![
                 "let", "if", "else", "match", "for", "in", "true", "false", "yield", "some",
                 "none", "ok", "err",
             ],
             std_function_names: vec!["instance"],
-            identifiers: vec![],
         }
     }
     pub fn update_progression(&mut self, compiler_output: &CompilerOutput) {
-        self.progressed_inferred_expr = Some(compiler_output.inferred_expr.clone());
-        self.instance_variables = Some(compiler_output.instance_variables.clone());
-        self.identifiers = compiler_output.identifiers.clone();
+        self.compiler_output = Some(compiler_output.clone());
     }
 
     fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {
-        let mut start = end_pos;
-
-        while start > 0
-            && line[start - 1..start].chars().all(|c| {
-                c.is_alphanumeric() || c == '_' || c == '.' || c == '-' || c == '(' || c == ')'
+        line[0..end_pos]
+            .char_indices()
+            .rev()
+            .find_map(|(pos, c)| {
+                let is_token_char =
+                    c.is_alphanumeric() || c == '_' || c == '.' || c == '-' || c == '(' || c == ')';
+                (!is_token_char).then(|| pos + c.len_utf8())
             })
-        {
-            start -= 1;
-        }
-
-        start
+            .unwrap_or(0)
     }
 
     fn complete_method_calls(
@@ -85,43 +97,132 @@ impl RibEdit {
             return Ok(None);
         };
 
-        let Some(func_dict) = instance_vars.instance_variables.get(instance_var_name) else {
+        let mut completions = Vec::new();
+
+        if let Some(worker_instance_func_dict) =
+            instance_vars.get_worker_instance_method_dict(instance_var_name)
+        {
+            for (function, tpe) in &worker_instance_func_dict.name_and_types {
+                let name_with_paren = format!("{}(", function.name());
+
+                // If user has typed in `(`, complete the method call with arguments
+                if name_with_paren == method_prefix {
+                    let args = tpe
+                        .parameter_types()
+                        .iter()
+                        .filter_map(|arg| AnalysedType::try_from(arg).ok())
+                        .map(|analysed_type| {
+                            ValueAndType::new(generate_value(&analysed_type), analysed_type)
+                        })
+                        .collect::<Vec<_>>();
+
+                    let args_str = args
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    completions.push(format!("{})", args_str));
+
+                    return Ok(Some((end_pos, completions)));
+                }
+
+                if function.name().starts_with(method_prefix) {
+                    completions.push(function.name());
+                }
+            }
+        }
+
+        if let Some(resource_instance_func_dict) =
+            instance_vars.get_resource_instance_method_dict(instance_var_name)
+        {
+            for (resource_method_name, tpe) in &resource_instance_func_dict.name_and_types {
+                let resource_method_with_paren = format!("{}(", resource_method_name.name());
+
+                // If user has typed in `(`, complete the method call with arguments
+                if resource_method_with_paren == method_prefix {
+                    let args = tpe
+                        .parameter_types()
+                        .iter()
+                        .skip(1) // Skip the first argument, which is the instance itself
+                        .filter_map(|arg| AnalysedType::try_from(arg).ok())
+                        .map(|analysed_type| {
+                            ValueAndType::new(generate_value(&analysed_type), analysed_type)
+                        })
+                        .collect::<Vec<_>>();
+
+                    let args_str = args
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    completions.push(format!("{})", args_str));
+
+                    return Ok(Some((end_pos, completions)));
+                }
+
+                if resource_method_name.name().starts_with(method_prefix) {
+                    completions.push(resource_method_name.name());
+                }
+            }
+        }
+
+        if completions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((start + dot_pos + 1, completions)))
+        }
+    }
+
+    pub fn complete_variants(
+        &self,
+        word: &str,
+        start: usize,
+    ) -> rustyline::Result<Option<(usize, Vec<String>)>> {
+        let Some(variants) = self.variants() else {
             return Ok(None);
         };
 
         let mut completions = Vec::new();
 
-        for (function, tpe) in &func_dict.map {
-            let name_with_paren = format!("{}(", function.name());
-
-            // If user has typed in `(`, complete the method call with arguments
-            if name_with_paren == method_prefix {
-                let args = tpe
-                    .parameter_types()
-                    .iter()
-                    .filter_map(|arg| AnalysedType::try_from(arg).ok())
-                    .map(|analysed_type| {
-                        ValueAndType::new(generate_value(&analysed_type), analysed_type)
-                    })
-                    .collect::<Vec<_>>();
-
-                let args_str = args
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                completions.push(format!("{})", args_str));
-
-                return Ok(Some((end_pos, completions))); // Only one possible completion, return early
-            }
-
-            // Otherwise, suggest method names
-            if function.name().starts_with(method_prefix) {
-                completions.push(function.name());
+        for variant in variants.iter() {
+            for case in variant.cases.iter() {
+                if case.name.starts_with(word) {
+                    completions.push(case.name.clone());
+                }
             }
         }
 
-        Ok(Some((start + dot_pos + 1, completions)))
+        if completions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((start, completions)))
+        }
+    }
+
+    pub fn complete_enums(
+        &self,
+        word: &str,
+        start: usize,
+    ) -> rustyline::Result<Option<(usize, Vec<String>)>> {
+        let Some(enums) = self.enums() else {
+            return Ok(None);
+        };
+
+        let mut completions = Vec::new();
+
+        for enum_ in enums.iter() {
+            for case in enum_.cases.iter() {
+                if case.starts_with(word) {
+                    completions.push(case.clone());
+                }
+            }
+        }
+
+        if completions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((start, completions)))
+        }
     }
 }
 
@@ -136,9 +237,9 @@ impl Completer for RibEdit {
         end_pos: usize,
         _ctx: &Context<'_>, // a context has access to only the current line
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-        let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
+        let instance_variables: Option<&InstanceVariables> = self.instance_variables();
         let instance_variable_names: Option<Vec<String>> =
-            instance_variables.clone().map(|x| x.variable_names());
+            instance_variables.map(|x| x.variable_names());
 
         let mut completions = Vec::new();
 
@@ -146,10 +247,19 @@ impl Completer for RibEdit {
 
         let word = &line[start..end_pos];
 
-        // Check if the word is a method call
         if let Some((new_start, new_completions)) =
-            Self::complete_method_calls(word, instance_variables.as_ref(), start, end_pos)?
+            Self::complete_method_calls(word, instance_variables, start, end_pos)?
         {
+            completions.extend(new_completions);
+            return Ok((new_start, completions));
+        }
+
+        if let Some((new_start, new_completions)) = self.complete_variants(word, start)? {
+            completions.extend(new_completions);
+            return Ok((new_start, completions));
+        }
+
+        if let Some((new_start, new_completions)) = self.complete_enums(word, start)? {
             completions.extend(new_completions);
             return Ok((new_start, completions));
         }
@@ -163,7 +273,7 @@ impl Completer for RibEdit {
                 }
             }
 
-            for var in self.identifiers.iter() {
+            for var in self.identifiers().unwrap_or(&vec![]).iter() {
                 if var.name().starts_with(word) {
                     completions.push(var.name());
                 }
@@ -192,9 +302,9 @@ impl Hinter for RibEdit {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
-        let instance_variables: Option<InstanceVariables> = self.instance_variables.clone();
+        let instance_variables: Option<&InstanceVariables> = self.instance_variables();
         let instance_variable_names: Option<Vec<String>> =
-            instance_variables.clone().map(|x| x.variable_names());
+            instance_variables.map(|x| x.variable_names());
 
         let start = Self::backtrack_and_get_start_pos(line, pos);
         let word = &line[start..pos];
@@ -212,9 +322,8 @@ impl Hinter for RibEdit {
             }
         }
 
-        for var in self.identifiers.iter() {
+        for var in self.identifiers().unwrap_or(&vec![]).iter() {
             if var.name().starts_with(word) {
-                // return only remaining part of the variable name
                 let hint = &var.name()[word.len()..];
                 return Some(hint.to_string());
             }
@@ -229,35 +338,37 @@ impl Validator for RibEdit {
         &self,
         context: &mut rustyline::validate::ValidationContext,
     ) -> rustyline::Result<ValidationResult> {
-        let expr = Expr::from_text(context.input());
+        let input = context.input();
+        let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
-            Err(e) => Ok(ValidationResult::Invalid(Some(e))),
+            Err(err) => Ok(ValidationResult::Invalid(Some(format!("\n{}\n", err)))),
         }
     }
 }
 
 impl Highlighter for RibEdit {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        let identifiers = self
+            .compiler_output
+            .as_ref()
+            .map(|output| &output.identifiers);
+        let instance_vars = self
+            .compiler_output
+            .as_ref()
+            .map(|output| &output.instance_variables);
+
         let mut highlighted = String::new();
         let mut word = String::new();
         let chars = line.chars().peekable();
 
         for c in chars {
-            if c.is_alphanumeric() || c == '_' {
+            if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
                 word.push(c);
             } else {
                 if !word.is_empty() {
-                    if self.key_words.contains(&word.as_str()) {
-                        highlighted.push_str(&format!("{}", word.blue()));
-                    } else if self.std_function_names.contains(&word.as_str()) {
-                        highlighted.push_str(&format!("{}", word.cyan()));
-                    } else if word.chars().all(|ch| ch.is_numeric()) {
-                        highlighted.push_str(&format!("{}", word.yellow()));
-                    } else {
-                        highlighted.push_str(&word);
-                    }
+                    highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
                     word.clear();
                 }
                 highlighted.push(c);
@@ -265,13 +376,57 @@ impl Highlighter for RibEdit {
         }
 
         if !word.is_empty() {
-            if self.key_words.contains(&word.as_str()) {
-                highlighted.push_str(&format!("{}", word.blue()));
-            } else {
-                highlighted.push_str(&word);
-            }
+            highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
         }
 
         Cow::Owned(highlighted)
     }
+}
+
+fn highlight_word(
+    word: &str,
+    context: &RibEdit,
+    identifiers: Option<&Vec<VariableId>>,
+    instance_vars: Option<&InstanceVariables>,
+) -> String {
+    if context.key_words.contains(&word) {
+        return word.cyan().to_string();
+    }
+
+    if let Some((obj, method)) = word.split_once('.') {
+        let is_instance =
+            instance_vars.is_some_and(|vars| vars.instance_keys().contains(&obj.to_string()));
+
+        let is_method =
+            instance_vars.is_some_and(|vars| vars.method_names().contains(&method.to_string()));
+
+        if is_instance && is_method {
+            return format!("{}.{}", obj.blue(), method.green());
+        } else {
+            return word.to_string();
+        }
+    }
+
+    let is_identifier = identifiers.is_some_and(|vars| vars.iter().any(|var| var.name() == word));
+
+    if is_identifier {
+        return word.blue().to_string();
+    }
+
+    let is_instance_var =
+        instance_vars.is_some_and(|vars| vars.instance_keys().contains(&word.to_string()));
+
+    if is_instance_var {
+        return word.cyan().to_string();
+    }
+
+    if context.std_function_names.contains(&word) {
+        return word.green().to_string();
+    }
+
+    if word.chars().all(|ch| ch.is_numeric()) {
+        return word.green().to_string();
+    }
+
+    word.to_string()
 }
