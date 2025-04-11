@@ -154,6 +154,17 @@ impl InteractiveHandler {
         Ok((profile_name.into(), profile, set_as_active))
     }
 
+    pub fn select_component(
+        &self,
+        component_names: Vec<ComponentName>,
+    ) -> anyhow::Result<ComponentName> {
+        Ok(Select::new(
+            "Select a component to be used in Rib REPL:",
+            component_names,
+        )
+        .prompt()?)
+    }
+
     fn confirm<M: AsRef<str>>(&self, default: bool, message: M) -> anyhow::Result<bool> {
         const YES_FLAG_HINT: &str = "To automatically confirm such questions use the '--yes' flag.";
 

@@ -113,7 +113,11 @@ impl ComponentPluginCommandHandler {
             let component = self
                 .ctx
                 .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name, None)
+                .component(
+                    selected_components.project.as_ref(),
+                    component_name.into(),
+                    None,
+                )
                 .await?;
 
             let result = match component {
@@ -186,7 +190,11 @@ impl ComponentPluginCommandHandler {
             let component = self
                 .ctx
                 .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name, None)
+                .component(
+                    selected_components.project.as_ref(),
+                    component_name.into(),
+                    None,
+                )
                 .await?;
 
             let result = match component {
@@ -252,7 +260,11 @@ impl ComponentPluginCommandHandler {
             let component = self
                 .ctx
                 .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name, None)
+                .component(
+                    selected_components.project.as_ref(),
+                    component_name.into(),
+                    None,
+                )
                 .await?;
 
             match component {
@@ -326,7 +338,11 @@ impl ComponentPluginCommandHandler {
             let component = self
                 .ctx
                 .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name, None)
+                .component(
+                    selected_components.project.as_ref(),
+                    component_name.into(),
+                    None,
+                )
                 .await?;
 
             let result = match component {

@@ -51,6 +51,7 @@ use golem_cloud_client::api::TokenClientLive as TokenClientCloud;
 use golem_cloud_client::api::WorkerClientLive as WorkerClientCloud;
 use golem_cloud_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_cloud_client::{Context as ContextCloud, Security};
+use golem_rib_repl::ReplDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
 use std::collections::{BTreeMap, HashSet};
@@ -83,6 +84,7 @@ pub struct Context {
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
+    rib_repl_state: tokio::sync::RwLock<RibReplState>,
 }
 
 impl Context {
@@ -125,11 +127,25 @@ impl Context {
             clients: tokio::sync::OnceCell::new(),
             templates: std::sync::OnceLock::new(),
             app_context_state: tokio::sync::RwLock::default(),
+            rib_repl_state: tokio::sync::RwLock::default(),
         }
     }
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+
+    pub async fn rib_repl_history_file(&self) -> anyhow::Result<PathBuf> {
+        let app_ctx = self.app_context_lock().await;
+        let history_file = match app_ctx.opt()? {
+            Some(app_ctx) => app_ctx.application.rib_repl_history_file().to_path_buf(),
+            None => self.config_dir.join(".rib_repl_history"),
+        };
+        debug!(
+            history_file = %history_file.display(),
+            "Selected Rib REPL history file"
+        );
+        Ok(history_file)
     }
 
     pub fn format(&self) -> Format {
@@ -271,6 +287,18 @@ impl Context {
             steps_filter,
         )
         .await;
+    }
+
+    pub async fn set_rib_repl_dependencies(&self, dependencies: ReplDependencies) {
+        let mut rib_repl_state = self.rib_repl_state.write().await;
+        rib_repl_state.dependencies = dependencies;
+    }
+
+    pub async fn get_rib_repl_dependencies(&self) -> ReplDependencies {
+        let rib_repl_state = self.rib_repl_state.read().await;
+        ReplDependencies {
+            component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
+        }
     }
 
     pub fn templates(
@@ -588,6 +616,20 @@ impl ApplicationContextState {
             Some(Ok(Some(app_ctx))) => Ok(app_ctx),
             Some(Err(err)) => Err(anyhow!(err.clone())),
             None => unreachable!("Uninitialized application context"),
+        }
+    }
+}
+
+pub struct RibReplState {
+    dependencies: ReplDependencies,
+}
+
+impl Default for RibReplState {
+    fn default() -> Self {
+        Self {
+            dependencies: ReplDependencies {
+                component_dependencies: vec![],
+            },
         }
     }
 }

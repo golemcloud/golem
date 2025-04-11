@@ -30,15 +30,15 @@ use crate::model::app::{
     AppComponentName, ApplicationComponentSelectMode, BuildProfileName, DynamicHelpSections,
 };
 use crate::model::app::{DependencyType, InitialComponentFile};
-use crate::model::component::{Component, ComponentView};
+use crate::model::component::{Component, ComponentSelection, ComponentView};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::text::component::{ComponentCreateView, ComponentGetView, ComponentUpdateView};
 use crate::model::text::fmt::{log_error, log_text_view, log_warn};
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::to_cloud::ToCloud;
 use crate::model::{
-    ComponentName, ComponentNameMatchKind, ProjectNameAndId, SelectedComponents, WorkerName,
-    WorkerUpdateMode,
+    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, ProjectNameAndId,
+    SelectedComponents, WorkerUpdateMode,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient as ComponentClientOss;
@@ -801,9 +801,9 @@ impl ComponentCommandHandler {
         let mut components = Vec::with_capacity(selected_component_names.component_names.len());
         for component_name in &selected_component_names.component_names {
             match self
-                .component_by_name(
+                .component(
                     selected_component_names.project.as_ref(),
-                    component_name,
+                    component_name.into(),
                     None,
                 )
                 .await?
@@ -1037,10 +1037,10 @@ impl ComponentCommandHandler {
         project: Option<&ProjectNameAndId>,
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
-        worker_name: Option<&WorkerName>,
+        component_version_selection: Option<ComponentVersionSelection<'_>>,
     ) -> anyhow::Result<Component> {
         match self
-            .component_by_name(project, component_name, worker_name)
+            .component(project, component_name.into(), component_version_selection)
             .await?
         {
             Some(component) => Ok(component),
@@ -1100,7 +1100,7 @@ impl ComponentCommandHandler {
                         .await?;
                     self.ctx
                         .component_handler()
-                        .component_by_name(project, component_name, None)
+                        .component(project, component_name.into(), None)
                         .await?
                         .ok_or_else(|| {
                             anyhow!("Component ({}) not found after deployment", component_name)
@@ -1115,63 +1115,84 @@ impl ComponentCommandHandler {
     // TODO: server: we might want to have a filter for batch name lookups on the server side
     // TODO: server: also the search returns all versions
     // TODO: maybe add transient or persistent cache for all the meta
-    pub async fn component_by_name(
+    // TODO: merge these 3 args into "component lookup" or "selection" struct
+    pub async fn component(
         &self,
         project: Option<&ProjectNameAndId>,
-        component_name: &ComponentName,
-        worker_name: Option<&WorkerName>,
+        component_name_or_id: ComponentSelection<'_>,
+        component_version_selection: Option<ComponentVersionSelection<'_>>,
     ) -> anyhow::Result<Option<Component>> {
-        let component = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => {
-                let mut components = clients
-                    .component
-                    .get_components(Some(&component_name.0))
-                    .await
-                    .map_service_error()?;
-                if !components.is_empty() {
-                    Some(Component::from(components.pop().unwrap()))
-                } else {
-                    None
+        let component = match component_name_or_id {
+            ComponentSelection::Name(component_name) => match self.ctx.golem_clients().await? {
+                GolemClients::Oss(clients) => {
+                    let mut components = clients
+                        .component
+                        .get_components(Some(&component_name.0))
+                        .await
+                        .map_service_error()?;
+                    if !components.is_empty() {
+                        Some(Component::from(components.pop().unwrap()))
+                    } else {
+                        None
+                    }
                 }
-            }
-            GolemClients::Cloud(clients) => {
-                let mut components = clients
-                    .component
-                    .get_components(
-                        project.as_ref().map(|p| &p.project_id.0),
-                        Some(&component_name.0),
-                    )
-                    .await
-                    .map_service_error()?;
-                if !components.is_empty() {
-                    Some(Component::from(components.pop().unwrap()))
-                } else {
-                    None
+                GolemClients::Cloud(clients) => {
+                    let mut components = clients
+                        .component
+                        .get_components(
+                            project.as_ref().map(|p| &p.project_id.0),
+                            Some(&component_name.0),
+                        )
+                        .await
+                        .map_service_error()?;
+                    if !components.is_empty() {
+                        Some(Component::from(components.pop().unwrap()))
+                    } else {
+                        None
+                    }
                 }
-            }
+            },
+            ComponentSelection::Id(component_id) => match self.ctx.golem_clients().await? {
+                GolemClients::Oss(clients) => clients
+                    .component
+                    .get_latest_component_metadata(&component_id)
+                    .await
+                    .map(Component::from)
+                    .map_service_error_not_found_as_opt()?,
+                GolemClients::Cloud(clients) => clients
+                    .component
+                    .get_latest_component_metadata(&component_id)
+                    .await
+                    .map(Component::from)
+                    .map_service_error_not_found_as_opt()?,
+            },
         };
 
-        match (component, worker_name) {
-            (Some(component), Some(worker_name)) => {
-                let worker_metadata = self
-                    .ctx
-                    .worker_handler()
-                    .worker_metadata(
-                        component.versioned_component_id.component_id,
-                        &component.component_name,
-                        worker_name,
-                    )
-                    .await
-                    .ok();
+        match (component, component_version_selection) {
+            (Some(component), Some(component_version_selection)) => {
+                let version = match component_version_selection {
+                    ComponentVersionSelection::ByWorkerName(worker_name) => self
+                        .ctx
+                        .worker_handler()
+                        .worker_metadata(
+                            component.versioned_component_id.component_id,
+                            &component.component_name,
+                            worker_name,
+                        )
+                        .await
+                        .ok()
+                        .map(|worker_metadata| worker_metadata.component_version),
+                    ComponentVersionSelection::ByExplicitVersion(version) => Some(version),
+                };
 
-                match worker_metadata {
-                    Some(worker_metadata) => {
+                match version {
+                    Some(version) => {
                         let component = match self.ctx.golem_clients().await? {
                             GolemClients::Oss(clients) => clients
                                 .component
                                 .get_component_metadata(
                                     &component.versioned_component_id.component_id,
-                                    &worker_metadata.component_version.to_string(),
+                                    &version.to_string(),
                                 )
                                 .await
                                 .map_service_error()
@@ -1180,7 +1201,7 @@ impl ComponentCommandHandler {
                                 .component
                                 .get_component_metadata(
                                     &component.versioned_component_id.component_id,
-                                    &worker_metadata.component_version.to_string(),
+                                    &version.to_string(),
                                 )
                                 .await
                                 .map_service_error()
@@ -1203,7 +1224,7 @@ impl ComponentCommandHandler {
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<ComponentId>> {
         Ok(self
-            .component_by_name(project, component_name, None)
+            .component(project, component_name.into(), None)
             .await?
             .map(|c| ComponentId(c.versioned_component_id.component_id)))
     }

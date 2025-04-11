@@ -36,6 +36,7 @@ golem-client = { workspace = true }
 golem-cloud-client = { workspace = true }
 golem-common = { workspace = true }
 golem-rib = { workspace = true }
+golem-rib-repl = { workspace = true }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-wit = { workspace = true }

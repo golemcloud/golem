@@ -51,7 +51,7 @@ use colored::Colorize;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::api::WorkerClient as WorkerClientOss;
 use golem_client::model::{
-    InvokeParameters as InvokeParametersOss, PublicOplogEntry,
+    InvokeParameters as InvokeParametersOss, InvokeResult, PublicOplogEntry,
     RevertLastInvocations as RevertLastInvocationsOss, RevertToOplogIndex as RevertToOplogIndexOss,
     RevertWorkerTarget as RevertWorkerTargetOss, ScanCursor,
     UpdateWorkerRequest as UpdateWorkerRequestOss,
@@ -190,7 +190,7 @@ impl WorkerCommandHandler {
                 worker_name_match.project.as_ref(),
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
-                worker_name_match.worker_name.as_ref(),
+                worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
             )
             .await?;
 
@@ -279,7 +279,7 @@ impl WorkerCommandHandler {
                 worker_name_match.project.as_ref(),
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
-                worker_name_match.worker_name.as_ref(),
+                worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
             )
             .await?;
 
@@ -358,154 +358,17 @@ impl WorkerCommandHandler {
 
         let arguments = wave_args_to_invoke_args(&component, &function_name, arguments)?;
 
-        let connect_handle = match worker_name_match.worker_name.clone() {
-            Some(worker_name) => {
-                if stream {
-                    let connection = connect_to_worker(
-                        self.ctx.worker_service_url().clone(),
-                        self.ctx.auth_token().await?,
-                        component.versioned_component_id.component_id,
-                        worker_name.0,
-                        stream_args.into(),
-                        self.ctx.allow_insecure(),
-                        self.ctx.format(),
-                    )
-                    .await?;
-                    Some(tokio::task::spawn(async move {
-                        connection.read_messages().await
-                    }))
-                } else {
-                    None
-                }
-            }
-            None => None,
-        };
-
-        let result = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => match &worker_name_match.worker_name {
-                Some(worker_name) => {
-                    if enqueue {
-                        clients
-                            .worker
-                            .invoke_function(
-                                &component.versioned_component_id.component_id,
-                                &worker_name.0,
-                                Some(&idempotency_key.0),
-                                function_name.as_str(),
-                                &InvokeParametersOss { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?;
-                        None
-                    } else {
-                        Some(
-                            clients
-                                .worker_invoke
-                                .invoke_and_await_function(
-                                    &component.versioned_component_id.component_id,
-                                    &worker_name.0,
-                                    Some(&idempotency_key.0),
-                                    function_name.as_str(),
-                                    &InvokeParametersOss { params: arguments },
-                                )
-                                .await
-                                .map_service_error()?,
-                        )
-                    }
-                }
-                None => {
-                    if enqueue {
-                        clients
-                            .worker
-                            .invoke_function_without_name(
-                                &component.versioned_component_id.component_id,
-                                Some(&idempotency_key.0),
-                                function_name.as_str(),
-                                &InvokeParametersOss { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?;
-                        None
-                    } else {
-                        Some(
-                            clients
-                                .worker_invoke
-                                .invoke_and_await_function_without_name(
-                                    &component.versioned_component_id.component_id,
-                                    Some(&idempotency_key.0),
-                                    function_name.as_str(),
-                                    &InvokeParametersOss { params: arguments },
-                                )
-                                .await
-                                .map_service_error()?,
-                        )
-                    }
-                }
-            },
-            GolemClients::Cloud(clients) => match worker_name_match.worker_name {
-                Some(worker_name) => {
-                    if enqueue {
-                        clients
-                            .worker
-                            .invoke_function(
-                                &component.versioned_component_id.component_id,
-                                &worker_name.0,
-                                Some(&idempotency_key.0),
-                                function_name.as_str(),
-                                &InvokeParametersCloud { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?;
-                        None
-                    } else {
-                        Some(
-                            clients
-                                .worker_invoke
-                                .invoke_and_await_function(
-                                    &component.versioned_component_id.component_id,
-                                    &worker_name.0,
-                                    Some(&idempotency_key.0),
-                                    function_name.as_str(),
-                                    &InvokeParametersCloud { params: arguments },
-                                )
-                                .await
-                                .map_service_error()?,
-                        )
-                    }
-                }
-                None => {
-                    if enqueue {
-                        clients
-                            .worker
-                            .invoke_function_without_name(
-                                &component.versioned_component_id.component_id,
-                                Some(&idempotency_key.0),
-                                function_name.as_str(),
-                                &InvokeParametersCloud { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?;
-                        None
-                    } else {
-                        Some(
-                            clients
-                                .worker_invoke
-                                .invoke_and_await_function_without_name(
-                                    &component.versioned_component_id.component_id,
-                                    Some(&idempotency_key.0),
-                                    function_name.as_str(),
-                                    &InvokeParametersCloud { params: arguments },
-                                )
-                                .await
-                                .map_service_error()?,
-                        )
-                    }
-                }
-            }
-            .to_oss(),
-        };
-
-        connect_handle.iter().for_each(|handle| handle.abort());
+        let result = self
+            .invoke_worker(
+                &component,
+                worker_name_match.worker_name.as_ref(),
+                &function_name,
+                arguments,
+                idempotency_key.clone(),
+                enqueue,
+                stream.then_some(stream_args),
+            )
+            .await?;
 
         match result {
             Some(result) => {
@@ -516,7 +379,7 @@ impl WorkerCommandHandler {
                         idempotency_key,
                         result,
                         &component,
-                        function_name.as_str(),
+                        &function_name,
                     ));
             }
             None => {
@@ -525,7 +388,7 @@ impl WorkerCommandHandler {
                     .log_handler()
                     .log_view(&InvokeResultView::new_enqueue(idempotency_key));
             }
-        };
+        }
 
         Ok(())
     }
@@ -842,7 +705,11 @@ impl WorkerCommandHandler {
             match self
                 .ctx
                 .component_handler()
-                .component_by_name(selected_components.project.as_ref(), component_name, None)
+                .component(
+                    selected_components.project.as_ref(),
+                    component_name.into(),
+                    None,
+                )
                 .await?
             {
                 Some(component) => {
@@ -1051,6 +918,167 @@ impl WorkerCommandHandler {
                 .map(|_| ())
                 .map_service_error(),
         }
+    }
+
+    pub async fn invoke_worker(
+        &mut self,
+        component: &Component,
+        worker_name: Option<&WorkerName>,
+        function_name: &str,
+        arguments: Vec<OptionallyTypeAnnotatedValueJson>,
+        idempotency_key: IdempotencyKey,
+        enqueue: bool,
+        stream_args: Option<StreamArgs>,
+    ) -> anyhow::Result<Option<InvokeResult>> {
+        let connect_handle = match &worker_name {
+            Some(worker_name) => match stream_args {
+                Some(stream_args) => {
+                    let connection = connect_to_worker(
+                        self.ctx.worker_service_url().clone(),
+                        self.ctx.auth_token().await?,
+                        component.versioned_component_id.component_id,
+                        worker_name.0.clone(),
+                        stream_args.into(),
+                        self.ctx.allow_insecure(),
+                        self.ctx.format(),
+                    )
+                    .await?;
+                    Some(tokio::task::spawn(async move {
+                        connection.read_messages().await
+                    }))
+                }
+                None => None,
+            },
+            None => None,
+        };
+
+        let result = match self.ctx.golem_clients().await? {
+            GolemClients::Oss(clients) => match worker_name {
+                Some(worker_name) => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function(
+                                &component.versioned_component_id.component_id,
+                                &worker_name.0,
+                                Some(&idempotency_key.0),
+                                function_name,
+                                &InvokeParametersOss { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker_invoke
+                                .invoke_and_await_function(
+                                    &component.versioned_component_id.component_id,
+                                    &worker_name.0,
+                                    Some(&idempotency_key.0),
+                                    function_name,
+                                    &InvokeParametersOss { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+                None => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function_without_name(
+                                &component.versioned_component_id.component_id,
+                                Some(&idempotency_key.0),
+                                function_name,
+                                &InvokeParametersOss { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker_invoke
+                                .invoke_and_await_function_without_name(
+                                    &component.versioned_component_id.component_id,
+                                    Some(&idempotency_key.0),
+                                    function_name,
+                                    &InvokeParametersOss { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+            },
+            GolemClients::Cloud(clients) => match &worker_name {
+                Some(worker_name) => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function(
+                                &component.versioned_component_id.component_id,
+                                &worker_name.0,
+                                Some(&idempotency_key.0),
+                                function_name,
+                                &InvokeParametersCloud { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker_invoke
+                                .invoke_and_await_function(
+                                    &component.versioned_component_id.component_id,
+                                    &worker_name.0,
+                                    Some(&idempotency_key.0),
+                                    function_name,
+                                    &InvokeParametersCloud { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+                None => {
+                    if enqueue {
+                        clients
+                            .worker
+                            .invoke_function_without_name(
+                                &component.versioned_component_id.component_id,
+                                Some(&idempotency_key.0),
+                                function_name,
+                                &InvokeParametersCloud { params: arguments },
+                            )
+                            .await
+                            .map_service_error()?;
+                        None
+                    } else {
+                        Some(
+                            clients
+                                .worker_invoke
+                                .invoke_and_await_function_without_name(
+                                    &component.versioned_component_id.component_id,
+                                    Some(&idempotency_key.0),
+                                    function_name,
+                                    &InvokeParametersCloud { params: arguments },
+                                )
+                                .await
+                                .map_service_error()?,
+                        )
+                    }
+                }
+            }
+            .to_oss(),
+        };
+
+        connect_handle.iter().for_each(|handle| handle.abort());
+
+        Ok(result)
     }
 
     pub async fn worker_metadata(
@@ -1434,10 +1462,10 @@ impl WorkerCommandHandler {
         let component = self
             .ctx
             .component_handler()
-            .component_by_name(
+            .component(
                 worker_name_match.project.as_ref(),
-                &worker_name_match.component_name,
-                worker_name_match.worker_name.as_ref(),
+                (&worker_name_match.component_name).into(),
+                worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
             )
             .await?;
 

@@ -798,6 +798,27 @@ pub mod component {
             true
         }
     }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ComponentReplStartedView(pub ComponentView);
+
+    impl MessageWithFields for ComponentReplStartedView {
+        fn message(&self) -> String {
+            format!(
+                "Started Rib REPL for component {} using version {}",
+                format_message_highlight(&self.0.component_name),
+                format_message_highlight(&self.0.component_version),
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            component_view_fields(&self.0)
+        }
+
+        fn nest_ident_fields() -> bool {
+            true
+        }
+    }
 }
 
 pub mod template {

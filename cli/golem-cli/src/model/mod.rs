@@ -161,6 +161,23 @@ impl Display for WorkerName {
     }
 }
 
+pub enum ComponentVersionSelection<'a> {
+    ByWorkerName(&'a WorkerName),
+    ByExplicitVersion(u64),
+}
+
+impl<'a> From<&'a WorkerName> for ComponentVersionSelection<'a> {
+    fn from(value: &'a WorkerName) -> Self {
+        Self::ByWorkerName(value)
+    }
+}
+
+impl From<u64> for ComponentVersionSelection<'_> {
+    fn from(value: u64) -> Self {
+        Self::ByExplicitVersion(value)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct IdempotencyKey(pub String);
 

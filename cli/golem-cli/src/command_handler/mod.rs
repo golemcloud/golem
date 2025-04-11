@@ -42,6 +42,7 @@ use crate::command_handler::partial_match::ErrorHandler;
 use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
+use crate::command_handler::rib_repl::RibReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::config::{Config, ProfileName};
 use crate::context::Context;
@@ -68,6 +69,7 @@ mod log;
 mod partial_match;
 mod plugin;
 mod profile;
+mod rib_repl;
 mod worker;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
@@ -271,6 +273,15 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
+            GolemCliSubcommand::Repl {
+                component_name,
+                version,
+            } => {
+                self.ctx
+                    .rib_repl_handler()
+                    .cmd_repl(component_name.component_name, version)
+                    .await
+            }
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
         }
     }
@@ -287,7 +298,7 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
 // NOTE: for now every handler can access any other handler, but this can be restricted
 //       by moving these simple factory methods into the specific handlers on demand,
 //       if the need ever arises
-trait Handlers {
+pub trait Handlers {
     fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler;
     fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
     fn api_cloud_handler(&self) -> ApiCloudCommandHandler;
@@ -311,6 +322,7 @@ trait Handlers {
     fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
+    fn rib_repl_handler(&self) -> RibReplHandler;
     fn worker_handler(&self) -> WorkerCommandHandler;
 }
 
@@ -405,6 +417,10 @@ impl Handlers for Arc<Context> {
 
     fn profile_handler(&self) -> ProfileCommandHandler {
         ProfileCommandHandler::new(self.clone())
+    }
+
+    fn rib_repl_handler(&self) -> RibReplHandler {
+        RibReplHandler::new(self.clone())
     }
 
     fn worker_handler(&self) -> WorkerCommandHandler {

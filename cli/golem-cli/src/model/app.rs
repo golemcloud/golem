@@ -421,6 +421,10 @@ impl Application {
         self.temp_dir().join("task-results")
     }
 
+    pub fn rib_repl_history_file(&self) -> PathBuf {
+        self.temp_dir().join(".rib_repl_history")
+    }
+
     fn component(&self, component_name: &AppComponentName) -> &Component {
         self.components
             .get(component_name)

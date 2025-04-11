@@ -35,6 +35,33 @@ use std::fmt::Display;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ComponentSelection<'a> {
+    Name(&'a ComponentName),
+    Id(Uuid),
+}
+
+impl Display for ComponentSelection<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComponentSelection::Name(name) => write!(f, "{}", name),
+            ComponentSelection::Id(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl<'a> From<&'a ComponentName> for ComponentSelection<'a> {
+    fn from(name: &'a ComponentName) -> Self {
+        ComponentSelection::Name(name)
+    }
+}
+
+impl From<Uuid> for ComponentSelection<'_> {
+    fn from(uuid: Uuid) -> Self {
+        ComponentSelection::Id(uuid)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Component {
     pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,
