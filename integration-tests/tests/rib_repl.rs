@@ -21,13 +21,12 @@ use std::sync::Arc;
 use crate::Tracing;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_rib_repl::dependency_manager::{
-    ReplDependencies, RibComponentMetadata, RibDependencyManager,
-};
-use golem_rib_repl::invoke::WorkerFunctionInvoke;
-use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
+use golem_rib_repl::WorkerFunctionInvoke;
+use golem_rib_repl::{ComponentSource, RibRepl};
+use golem_rib_repl::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
+use golem_wasm_ast::analysis::AnalysedType;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibResult};
 use test_r::inherit_test_dep;
 use uuid::Uuid;
@@ -154,7 +153,7 @@ impl TestRibReplDependencyManager {
 
 #[async_trait]
 impl RibDependencyManager for TestRibReplDependencyManager {
-    async fn get_dependencies(&self) -> Result<ReplDependencies, String> {
+    async fn get_dependencies(&self) -> anyhow::Result<ReplDependencies> {
         Err("test will need to run with a single component".to_string())
     }
 
@@ -197,24 +196,23 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
     async fn invoke(
         &self,
         component_id: Uuid,
-        worker_name: Option<EvaluatedWorkerName>,
-        function_name: EvaluatedFqFn,
-        args: EvaluatedFnArgs,
+        _component_name: &str,
+        worker_name: Option<&str>,
+        function_name: &str,
+        args: Vec<ValueAndType>,
     ) -> Result<ValueAndType, String> {
         let target_worker_id = worker_name
             .map(|w| TargetWorkerId {
                 component_id: ComponentId(component_id),
-                worker_name: Some(w.0),
+                worker_name: Some(w.to_string()),
             })
             .unwrap_or_else(|| TargetWorkerId {
                 component_id: ComponentId(component_id),
                 worker_name: None,
             });
 
-        let function_name = function_name.0;
-
         self.embedded_worker_executor
-            .invoke_and_await_typed(target_worker_id, function_name.as_str(), args.0)
+            .invoke_and_await_typed(target_worker_id, function_name, args)
             .await
             .map_err(|e| format!("Failed to invoke function: {:?}", e))
     }

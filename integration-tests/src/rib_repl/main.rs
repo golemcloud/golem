@@ -1,4 +1,4 @@
-use golem_rib_repl::rib_repl::{ComponentSource, RibRepl};
+use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };

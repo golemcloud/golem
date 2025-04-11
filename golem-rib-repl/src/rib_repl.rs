@@ -27,6 +27,7 @@ use rib::{RibError, RibFunctionInvoke};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
+use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -87,7 +88,7 @@ impl RibRepl {
             Some(ref details) => dependency_manager
                 .add_component(&details.source_path, details.component_name.clone())
                 .await
-                .map_err(ReplBootstrapError::ComponentLoadError),
+                .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string())),
             None => {
                 let dependencies = dependency_manager.get_dependencies().await;
 
@@ -249,7 +250,7 @@ fn get_default_history_file() -> PathBuf {
 }
 
 /// Represents errors that can occur during the bootstrap phase of the Rib REPL environment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplBootstrapError {
     /// Multiple components were found, but the REPL requires a single component context.
     ///
@@ -268,6 +269,25 @@ pub enum ReplBootstrapError {
 
     /// Failed to read from or write to the REPL history file.
     ReplHistoryFileError(String),
+}
+
+impl Display for ReplBootstrapError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReplBootstrapError::MultipleComponentsFound(msg) => {
+                write!(f, "Multiple components found: {}", msg)
+            }
+            ReplBootstrapError::NoComponentsFound => {
+                write!(f, "No components found in the given context")
+            }
+            ReplBootstrapError::ComponentLoadError(msg) => {
+                write!(f, "Failed to load component: {}", msg)
+            }
+            ReplBootstrapError::ReplHistoryFileError(msg) => {
+                write!(f, "Failed to read/write REPL history file: {}", msg)
+            }
+        }
+    }
 }
 
 // Note: Currently, the Rib interpreter supports only one component, so the
@@ -301,9 +321,17 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         args: EvaluatedFnArgs,
     ) -> Result<ValueAndType, String> {
         let component_id = self.component_dependency.component_id;
+        let component_name = &self.component_dependency.component_name;
 
         self.worker_function_invoke
-            .invoke(component_id, worker_name, function_name, args)
+            .invoke(
+                component_id,
+                component_name,
+                worker_name.map(|x| x.0),
+                function_name.0.as_str(),
+                args.0,
+            )
             .await
+            .map_err(|e| format!("Failed to invoke function: {}", e.to_string()))
     }
 }
