@@ -14,11 +14,9 @@
 
 use crate::repl_state::ReplState;
 use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
-use rib::{
-    Expr, FunctionDictionary, FunctionTypeRegistry, InferredExpr, InferredType, RibByteCode,
-    RibError, VariableId,
-};
+use rib::*;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Display;
 
 pub fn compile_rib_script(
     rib_script: &str,
@@ -67,7 +65,47 @@ pub struct CompilerOutput {
 
 #[derive(Default, Clone)]
 pub struct InstanceVariables {
-    pub instance_variables: HashMap<String, FunctionDictionary>,
+    pub instance_variables: HashMap<InstanceKey, FunctionDictionary>,
+}
+
+impl InstanceVariables {
+    pub fn instance_keys(&self) -> Vec<String> {
+        self.instance_variables
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
+    }
+
+    pub fn get_worker_instance_method_dict(
+        &self,
+        instance_key: &str,
+    ) -> Option<&FunctionDictionary> {
+        self.instance_variables
+            .get(&InstanceKey::Worker(instance_key.to_string()))
+    }
+
+    pub fn get_resource_instance_method_dict(
+        &self,
+        instance_key: &str,
+    ) -> Option<&FunctionDictionary> {
+        self.instance_variables
+            .get(&InstanceKey::Resource(instance_key.to_string()))
+    }
+}
+
+#[derive(Hash, Clone, PartialEq, Eq)]
+pub enum InstanceKey {
+    Worker(String),
+    Resource(String),
+}
+
+impl Display for InstanceKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstanceKey::Worker(key) => write!(f, "{}", key),
+            InstanceKey::Resource(key) => write!(f, "{}", key),
+        }
+    }
 }
 
 impl InstanceVariables {
@@ -131,7 +169,18 @@ pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariabl
                 variable_id, expr, ..
             } => {
                 if let InferredType::Instance { instance_type } = expr.inferred_type() {
-                    instance_variables.insert(variable_id.name(), instance_type.function_dict());
+                    match *instance_type {
+                        InstanceType::Resource { .. } => {
+                            let key= InstanceKey::Resource(variable_id.name());
+                            instance_variables.insert(key, instance_type.function_dict_for_resource());
+
+                        },
+                        _ => {
+                            let key = InstanceKey::Worker(variable_id.name());
+                            instance_variables.insert(key, instance_type.function_dict_without_resource());
+                        },
+                    };
+
                 }
 
                 queue.push_front(expr)

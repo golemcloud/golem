@@ -354,6 +354,42 @@ impl InstanceType {
         }
     }
 
+    pub fn function_dict_for_resource(
+        &self,
+    ) -> FunctionDictionary {
+        match self {
+            InstanceType::Resource {
+                resource_method_dict,
+                ..
+            } => resource_method_dict.into(),
+            _ => FunctionDictionary::default(),
+        }
+    }
+
+    pub fn function_dict_without_resource(
+        &self,
+    ) -> FunctionDictionary {
+        match self {
+            InstanceType::Global {
+                functions_global: function_dict,
+                ..
+            } => function_dict.clone(),
+            InstanceType::Package {
+                functions_in_package: function_dict,
+                ..
+            } => function_dict.clone(),
+            InstanceType::Interface {
+                functions_in_interface: function_dict,
+                ..
+            } => function_dict.clone(),
+            InstanceType::PackageInterface {
+                functions_in_package_interface: function_dict,
+                ..
+            } => function_dict.clone(),
+            InstanceType::Resource { .. } => FunctionDictionary::default(),
+        }
+    }
+
     pub fn function_dict(&self) -> FunctionDictionary {
         match self {
             InstanceType::Global {
@@ -454,7 +490,7 @@ pub struct Function {
     pub function_type: FunctionType,
 }
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct FunctionDictionary {
     pub map: Vec<(FunctionName, FunctionType)>,
 }
