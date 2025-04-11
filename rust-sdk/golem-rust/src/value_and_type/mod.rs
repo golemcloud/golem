@@ -58,7 +58,7 @@ pub trait FromValueAndType: Sized {
         Self::from_extractor(&value_and_type.value)
     }
 
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String>;
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String>;
 }
 
 impl IntoValue for u8 {
@@ -72,7 +72,7 @@ impl IntoValue for u8 {
 }
 
 impl FromValueAndType for u8 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.u8().ok_or_else(|| "Expected u8".to_string())
     }
 }
@@ -88,7 +88,7 @@ impl IntoValue for u16 {
 }
 
 impl FromValueAndType for u16 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.u16().ok_or_else(|| "Expected u16".to_string())
     }
 }
@@ -104,7 +104,7 @@ impl IntoValue for u32 {
 }
 
 impl FromValueAndType for u32 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.u32().ok_or_else(|| "Expected u32".to_string())
     }
 }
@@ -120,7 +120,7 @@ impl IntoValue for u64 {
 }
 
 impl FromValueAndType for u64 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.u64().ok_or_else(|| "Expected u64".to_string())
     }
 }
@@ -136,7 +136,7 @@ impl IntoValue for i8 {
 }
 
 impl FromValueAndType for i8 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.s8().ok_or_else(|| "Expected i8".to_string())
     }
 }
@@ -152,7 +152,7 @@ impl IntoValue for i16 {
 }
 
 impl FromValueAndType for i16 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.s16().ok_or_else(|| "Expected i16".to_string())
     }
 }
@@ -168,7 +168,7 @@ impl IntoValue for i32 {
 }
 
 impl FromValueAndType for i32 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.s32().ok_or_else(|| "Expected i32".to_string())
     }
 }
@@ -184,7 +184,7 @@ impl IntoValue for i64 {
 }
 
 impl FromValueAndType for i64 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.s64().ok_or_else(|| "Expected i64".to_string())
     }
 }
@@ -200,7 +200,7 @@ impl IntoValue for f32 {
 }
 
 impl FromValueAndType for f32 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.f32().ok_or_else(|| "Expected f32".to_string())
     }
 }
@@ -216,7 +216,7 @@ impl IntoValue for f64 {
 }
 
 impl FromValueAndType for f64 {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.f64().ok_or_else(|| "Expected f64".to_string())
     }
 }
@@ -232,7 +232,7 @@ impl IntoValue for bool {
 }
 
 impl FromValueAndType for bool {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.bool().ok_or_else(|| "Expected bool".to_string())
     }
 }
@@ -248,7 +248,7 @@ impl IntoValue for char {
 }
 
 impl FromValueAndType for char {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor.char().ok_or_else(|| "Expected char".to_string())
     }
 }
@@ -264,7 +264,7 @@ impl IntoValue for String {
 }
 
 impl FromValueAndType for String {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor
             .string()
             .map(|s| s.to_string())
@@ -289,7 +289,7 @@ impl<S: IntoValue, E: IntoValue> IntoValue for Result<S, E> {
 }
 
 impl<S: FromValueAndType, E: FromValueAndType> FromValueAndType for Result<S, E> {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         match extractor.result() {
             Some(Ok(Some(ok))) => S::from_extractor(&ok).map(Ok),
             Some(Ok(None)) => Err("No value in Ok case".to_string()),
@@ -317,7 +317,7 @@ impl<E: IntoValue> IntoValue for Result<(), E> {
 }
 
 impl<E: FromValueAndType> FromValueAndType for Result<(), E> {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         match extractor.result() {
             Some(Ok(Some(_))) => Err("Expected unit Ok case".to_string()),
             Some(Ok(None)) => Ok(Ok(())),
@@ -345,7 +345,7 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
 }
 
 impl<S: FromValueAndType> FromValueAndType for Result<S, ()> {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         match extractor.result() {
             Some(Ok(Some(ok))) => S::from_extractor(&ok).map(Ok),
             Some(Ok(None)) => Err("No value in Ok case".to_string()),
@@ -370,7 +370,7 @@ impl<T: IntoValue> IntoValue for Option<T> {
 }
 
 impl<T: FromValueAndType> FromValueAndType for Option<T> {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor
             .option()
             .ok_or_else(|| "Expected option".to_string())
@@ -409,7 +409,7 @@ impl<T: IntoValue> IntoValue for Bound<T> {
 }
 
 impl<T: FromValueAndType> FromValueAndType for Bound<T> {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         if let Some((case_idx, inner)) = extractor.variant() {
             match case_idx {
                 0 => T::from_extractor(
@@ -446,7 +446,7 @@ impl<T: IntoValue> IntoValue for Vec<T> {
 }
 
 impl<T: FromValueAndType> FromValueAndType for Vec<T> {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         extractor
             .list_elements(|elem| T::from_extractor(&elem))
             .ok_or_else(|| "Expected list".to_string())
@@ -471,7 +471,7 @@ impl<A: IntoValue, B: IntoValue> IntoValue for (A, B) {
 }
 
 impl<A: FromValueAndType, B: FromValueAndType> FromValueAndType for (A, B) {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         let a = A::from_extractor(
             &extractor
                 .tuple_element(0)
@@ -505,7 +505,7 @@ impl<A: IntoValue, B: IntoValue, C: IntoValue> IntoValue for (A, B, C) {
 }
 
 impl<A: FromValueAndType, B: FromValueAndType, C: FromValueAndType> FromValueAndType for (A, B, C) {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         let a = A::from_extractor(
             &extractor
                 .tuple_element(0)
@@ -544,7 +544,7 @@ impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
 }
 
 impl<K: FromValueAndType + Eq + Hash, V: FromValueAndType> FromValueAndType for HashMap<K, V> {
-    fn from_extractor<'a>(extractor: &'a impl WitValueExtractor<'a>) -> Result<Self, String> {
+    fn from_extractor<'a, 'b>(extractor: &'a impl WitValueExtractor<'a, 'b>) -> Result<Self, String> {
         let items: Vec<(K, V)> = FromValueAndType::from_extractor(extractor)?;
         Ok(HashMap::from_iter(items))
     }
