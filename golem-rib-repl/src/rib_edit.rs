@@ -247,10 +247,12 @@ impl Validator for RibEdit {
 
 impl Highlighter for RibEdit {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        let identifiers = self.compiler_output
+        let identifiers = self
+            .compiler_output
             .as_ref()
             .map(|output| &output.identifiers);
-        let instance_vars = self.compiler_output
+        let instance_vars = self
+            .compiler_output
             .as_ref()
             .map(|output| &output.instance_variables);
 
@@ -284,26 +286,52 @@ fn highlight_word(
     identifiers: Option<&Vec<VariableId>>,
     instance_vars: Option<&InstanceVariables>,
 ) -> String {
+    // Keyword
     if context.key_words.contains(&word) {
-        word.blue().to_string()
-    } else if let Some((obj, method)) = word.split_once('.') {
-        let is_instance = instance_vars.map_or(false, |vars| vars.instance_variables.contains_key(obj));
-        let is_method = instance_vars.map_or(false, |vars| vars.method_names().contains(&method.to_string()));
+        return word.blue().to_string();
+    }
+
+    // Method call (e.g., obj.method)
+    if let Some((obj, method)) = word.split_once('.') {
+        let is_instance =
+            instance_vars.map_or(false, |vars| vars.instance_variables.contains_key(obj));
+
+        let is_method = instance_vars.map_or(false, |vars| {
+            vars.method_names().contains(&method.to_string())
+        });
 
         if is_instance && is_method {
-            format!("{}.{}", obj.green(), method.cyan())
+            return format!("{}.{}", obj.blue(), method.green());
         } else {
-            word.to_string()
+            return word.to_string();
         }
-    } else if identifiers.map_or(false, |vars| vars.iter().any(|var| var.name() == word)) {
-        word.green().to_string()
-    } else if instance_vars.map_or(false, |vars| vars.instance_variables.contains_key(word)) {
-        word.magenta().to_string()
-    } else if context.std_function_names.contains(&word) {
-        word.cyan().to_string()
-    } else if word.chars().all(|ch| ch.is_numeric()) {
-        word.yellow().to_string()
-    } else {
-        word.to_string()
     }
+
+    // Identifier
+    let is_identifier = identifiers.map_or(false, |vars| vars.iter().any(|var| var.name() == word));
+
+    if is_identifier {
+        return word.blue().to_string();
+    }
+
+    // Instance variable
+    let is_instance_var =
+        instance_vars.map_or(false, |vars| vars.instance_variables.contains_key(word));
+
+    if is_instance_var {
+        return word.cyan().to_string();
+    }
+
+    // Standard function name
+    if context.std_function_names.contains(&word) {
+        return word.green().to_string();
+    }
+
+    // Numeric literals
+    if word.chars().all(|ch| ch.is_numeric()) {
+        return word.green().to_string();
+    }
+
+    // Fallback: no highlighting
+    word.to_string()
 }

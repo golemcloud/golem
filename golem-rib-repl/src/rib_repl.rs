@@ -132,7 +132,7 @@ impl RibRepl {
     /// This method is exposed for users who want to manage their own REPL loop
     /// instead of using the built-in [`Self::run`] method.
     pub fn read_line(&mut self) -> rustyline::Result<String> {
-        self.editor.readline(">>> ".magenta().to_string().as_str())
+        self.editor.readline(">>> ".cyan().to_string().as_str())
     }
 
     /// Executes a single line of Rib code and returns the result.
@@ -201,7 +201,7 @@ impl RibRepl {
     /// use [`Self::read_line`] and [`Self::execute_rib`] directly.
     pub async fn run(&mut self) {
         loop {
-            let readline = self.editor.readline(">>> ".magenta().to_string().as_str());
+            let readline = self.read_line();
             match readline {
                 Ok(rib) => {
                     let _ = self.execute_rib(&rib).await;
