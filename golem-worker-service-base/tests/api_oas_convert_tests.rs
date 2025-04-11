@@ -1388,15 +1388,6 @@ paths:
           let user: string = request.path.user;
           "worker-${user}"
     options:
-      parameters:
-      - in: path
-        name: user
-        description: 'Path parameter: user'
-        required: true
-        schema:
-          type: string
-        explode: false
-        style: simple
       responses:
         '200':
           description: OK
@@ -1431,4 +1422,226 @@ x-golem-api-definition-version: 0.0.1
 
     // Single assert comparing the complete structure
     assert_eq!(actual_yaml, expected_yaml);
+}
+
+// Test for query parameter
+// Test for first-class worker
+#[test]
+fn test_query_parameter_conversion() {
+    // Sample JSON input with a query parameter
+    let json_data = r#"
+    {
+        "id": "delay-echo",
+        "version": "0.0.3",
+        "routes": [
+            {
+                "method": "Post",
+                "path": "/v0.0.3/echo-query",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "delay-echo",
+                        "version": 0
+                    },
+                    "response": "let worker = instance(\"worker-static-2\");\nlet result = worker.echo-variant(request.query.echo);\nlet body = match result {  rand1(msg) => msg, rand2(msg) => msg, rand3(msg) => msg } ;\nlet status = match result {  rand1(_) => 200: u32, rand2(_) => 200: u32, rand3(_) => 400: u32 } ;\n{status: status, body: body}",
+                    "responseMappingInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "query",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "echo",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U32"
+                                    }
+                                },
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "type": "Str"
+                                    }
+                                }
+                            ],
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": "\"worker-static\"",
+                    "workerNameInput": {
+                        "types": {}
+                    }
+                }
+            }
+        ]
+    }"#;
+
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
+
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
+
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+
+    // Verify query parameter
+    let parameters = &yaml_value["paths"]["/v0.0.3/echo-query"]["post"]["parameters"];
+    assert!(parameters.is_sequence());
+    assert_eq!(parameters[0]["name"], "echo");
+    assert_eq!(parameters[0]["in"], "query");
+    assert_eq!(parameters[0]["required"], true);
+    assert_eq!(parameters[0]["schema"]["type"], "string");
+}
+
+// Test for variant output
+// Test for first-class worker
+#[test]
+fn test_variant_output_structure() {
+    // Sample JSON input with variant output
+    let json_data = r#"
+    {
+        "id": "delay-echo",
+        "version": "0.0.3",
+        "routes": [
+            {
+                "method": "Post",
+                "path": "/v0.0.3/echo-firstclass",
+                "binding": {
+                    "bindingType": "default",
+                    "component": {
+                        "name": "delay-echo",
+                        "version": 0
+                    },
+                    "response": "let worker = instance(\"worker-static\");\nlet result = worker.echo-variant(request.body.message);\n{status: 200: u64, body: result}",
+                    "responseMappingInput": {
+                        "types": {
+                            "request": {
+                                "fields": [
+                                    {
+                                        "name": "body",
+                                        "typ": {
+                                            "fields": [
+                                                {
+                                                    "name": "message",
+                                                    "typ": {
+                                                        "type": "Str"
+                                                    }
+                                                }
+                                            ],
+                                            "type": "Record"
+                                        }
+                                    }
+                                ],
+                                "type": "Record"
+                            }
+                        }
+                    },
+                    "responseMappingOutput": {
+                        "analysed_type": {
+                            "fields": [
+                                {
+                                    "name": "status",
+                                    "typ": {
+                                        "type": "U64"
+                                    }
+                                },
+                                {
+                                    "name": "body",
+                                    "typ": {
+                                        "cases": [
+                                            {
+                                                "name": "rand1",
+                                                "typ": {
+                                                    "type": "Str"
+                                                    }
+                                            },
+                                            {
+                                                "name": "rand2",
+                                                "typ": {
+                                                    "type": "Str"
+                                                    }
+                                            },
+                                            {
+                                                "name": "rand3",
+                                                "typ": {
+                                                    "type": "Str"
+                                                    }
+                                            }
+                                        ],
+                                        "type": "Variant"
+                                    }
+                                }
+                            ],
+                            "type": "Record"
+                        }
+                    },
+                    "workerName": null,
+                    "workerNameInput": null
+                }
+            }
+        ]
+    }"#;
+
+    // Parse the JSON
+    let response_data: HttpApiDefinitionResponseData = from_str(json_data).unwrap();
+
+    // Convert to OpenAPI
+    let openapi_response =
+        OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(&response_data)
+            .unwrap();
+
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+
+    // Verify variant output structure
+    let response_schema = &yaml_value["paths"]["/v0.0.3/echo-firstclass"]["post"]["responses"]
+        ["201"]["content"]["application/json"]["schema"];
+    assert!(response_schema["oneOf"].is_sequence());
+    assert_eq!(response_schema["oneOf"].as_sequence().unwrap().len(), 3);
+
+    // Verify each variant case
+    let rand1 = &response_schema["oneOf"][0];
+    assert_eq!(rand1["properties"]["rand1"]["type"], "string");
+    assert!(rand1["required"]
+        .as_sequence()
+        .unwrap()
+        .contains(&serde_yaml::Value::String("rand1".to_string())));
+
+    let rand2 = &response_schema["oneOf"][1];
+    assert_eq!(rand2["properties"]["rand2"]["type"], "string");
+    assert!(rand2["required"]
+        .as_sequence()
+        .unwrap()
+        .contains(&serde_yaml::Value::String("rand2".to_string())));
+
+    let rand3 = &response_schema["oneOf"][2];
+    assert_eq!(rand3["properties"]["rand3"]["type"], "string");
+    assert!(rand3["required"]
+        .as_sequence()
+        .unwrap()
+        .contains(&serde_yaml::Value::String("rand3".to_string())));
 }

@@ -50,7 +50,6 @@ use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::headers::TraceContextHeaders;
-use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
