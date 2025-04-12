@@ -194,7 +194,8 @@ impl RibEdit {
                 if word == name_with_paren {
                     if let Some(variant_arg_type) = &case.typ {
                         let generated_value = generate_value(variant_arg_type);
-                        let value_and_type = ValueAndType::new(generated_value, variant_arg_type.clone());
+                        let value_and_type =
+                            ValueAndType::new(generated_value, variant_arg_type.clone());
                         let arg_str = value_and_type.to_string();
                         completions.push(format!("{})", arg_str));
                         return Ok(Some((end_pos, completions)));
