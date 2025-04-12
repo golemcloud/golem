@@ -177,6 +177,7 @@ impl RibEdit {
         &self,
         word: &str,
         start: usize,
+        end_pos: usize,
     ) -> rustyline::Result<Option<(usize, Vec<String>)>> {
         let Some(variants) = self.variants() else {
             return Ok(None);
@@ -186,8 +187,22 @@ impl RibEdit {
 
         for variant in variants.iter() {
             for case in variant.cases.iter() {
+                let variant_name = &case.name;
+
+                let name_with_paren = format!("{}(", variant_name);
+
+                if word == name_with_paren {
+                    if let Some(variant_arg_type) = &case.typ {
+                        let generated_value = generate_value(variant_arg_type);
+                        let value_and_type = ValueAndType::new(generated_value, variant_arg_type.clone());
+                        let arg_str = value_and_type.to_string();
+                        completions.push(format!("{})", arg_str));
+                        return Ok(Some((end_pos, completions)));
+                    }
+                }
+
                 if case.name.starts_with(word) {
-                    completions.push(case.name.clone());
+                    completions.push(variant_name.clone());
                 }
             }
         }
@@ -254,7 +269,7 @@ impl Completer for RibEdit {
             return Ok((new_start, completions));
         }
 
-        if let Some((new_start, new_completions)) = self.complete_variants(word, start)? {
+        if let Some((new_start, new_completions)) = self.complete_variants(word, start, end_pos)? {
             completions.extend(new_completions);
             return Ok((new_start, completions));
         }
