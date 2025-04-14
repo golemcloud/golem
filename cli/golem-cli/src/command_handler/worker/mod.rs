@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod stream;
+mod stream_output;
+
 use crate::cloud::AccountId;
 use crate::command::shared_args::{
     NewWorkerArgument, StreamArgs, WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
 };
 use crate::command::worker::WorkerSubcommand;
+use crate::command_handler::worker::stream::WorkerConnection;
 use crate::command_handler::Handlers;
-use crate::connect_output::ConnectOutput;
 use crate::context::{Context, GolemClients};
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
@@ -41,14 +44,11 @@ use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
 use crate::model::to_oss::ToOss;
 use crate::model::worker::fuzzy_match_function_name;
 use crate::model::{
-    ComponentName, ComponentNameMatchKind, Format, IdempotencyKey, ProjectName,
-    WorkerConnectOptions, WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch,
-    WorkerUpdateMode, WorkersMetadataResponseView,
+    ComponentName, ComponentNameMatchKind, IdempotencyKey, ProjectName, WorkerMetadata,
+    WorkerMetadataView, WorkerName, WorkerNameMatch, WorkerUpdateMode, WorkersMetadataResponseView,
 };
-use anyhow::{anyhow, bail, Context as AnyhowContext};
-use bytes::Bytes;
+use anyhow::{anyhow, bail};
 use colored::Colorize;
-use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::api::WorkerClient as WorkerClientOss;
 use golem_client::model::{
     InvokeParameters as InvokeParametersOss, InvokeResult, PublicOplogEntry,
@@ -65,21 +65,13 @@ use golem_cloud_client::model::{
     WorkerCreationRequest as WorkerCreationRequestCloud,
 };
 use golem_common::model::public_oplog::OplogCursor;
-use golem_common::model::WorkerEvent;
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::parse_type_annotated_value;
 use itertools::{EitherOrBoth, Itertools};
-use native_tls::TlsConnector;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
-use tokio::{task, time};
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async_tls_with_config, tungstenite, Connector};
-use tracing::{debug, error, info, trace};
-use url::Url;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 pub struct WorkerCommandHandler {
@@ -409,7 +401,7 @@ impl WorkerCommandHandler {
             format!("to worker {}", format_worker_name_match(&worker_name_match)),
         );
 
-        let connection = connect_to_worker(
+        let connection = WorkerConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
             component.versioned_component_id.component_id,
@@ -417,10 +409,11 @@ impl WorkerCommandHandler {
             stream_args.into(),
             self.ctx.allow_insecure(),
             self.ctx.format(),
+            None,
         )
         .await?;
 
-        connection.read_messages().await;
+        connection.run_forever().await;
 
         Ok(())
     }
@@ -930,10 +923,10 @@ impl WorkerCommandHandler {
         enqueue: bool,
         stream_args: Option<StreamArgs>,
     ) -> anyhow::Result<Option<InvokeResult>> {
-        let connect_handle = match &worker_name {
+        let mut connect_handle = match &worker_name {
             Some(worker_name) => match stream_args {
                 Some(stream_args) => {
-                    let connection = connect_to_worker(
+                    let connection = WorkerConnection::new(
                         self.ctx.worker_service_url().clone(),
                         self.ctx.auth_token().await?,
                         component.versioned_component_id.component_id,
@@ -941,11 +934,18 @@ impl WorkerCommandHandler {
                         stream_args.into(),
                         self.ctx.allow_insecure(),
                         self.ctx.format(),
+                        if enqueue {
+                            None
+                        } else {
+                            Some(golem_common::model::IdempotencyKey::new(
+                                idempotency_key.0.clone(),
+                            ))
+                        },
                     )
                     .await?;
-                    Some(tokio::task::spawn(async move {
-                        connection.read_messages().await
-                    }))
+                    Some(tokio::task::spawn(
+                        async move { connection.run_forever().await },
+                    ))
                 }
                 None => None,
             },
@@ -1076,7 +1076,19 @@ impl WorkerCommandHandler {
             .to_oss(),
         };
 
-        connect_handle.iter().for_each(|handle| handle.abort());
+        if enqueue && connect_handle.is_some() {
+            // When 'enqueue' is used together with 'stream' we switch to infinite worker streaming here
+            if let Some(handle) = connect_handle.take() {
+                let _ = handle.await;
+            }
+        } else {
+            // When a result is returned, we wait a few seconds to make sure we get all the log lines
+            // but the worker stream task will quit as soon as the invocation end marker is reached
+
+            if let Some(handle) = connect_handle.take() {
+                let _ = timeout(Duration::from_secs(3), handle).await;
+            }
+        }
 
         Ok(result)
     }
@@ -1902,206 +1914,4 @@ fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
                 .into()
         }
     }
-}
-
-struct WorkerConnection {
-    pings: JoinHandle<anyhow::Error>,
-    read_messages: JoinHandle<()>,
-}
-
-impl WorkerConnection {
-    async fn read_messages(self) {
-        let pings = self.pings;
-        let read_res = self.read_messages;
-        pin_mut!(pings, read_res);
-        future::select(pings, read_res).await;
-    }
-}
-
-async fn connect_to_worker(
-    worker_service_url: Url,
-    auth_token: Option<String>,
-    component_id: Uuid,
-    worker_name: String,
-    connect_options: WorkerConnectOptions,
-    allow_insecure: bool,
-    format: Format,
-) -> anyhow::Result<WorkerConnection> {
-    let mut url = worker_service_url;
-
-    let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
-
-    url.set_scheme(ws_schema)
-        .map_err(|()| anyhow!("Failed to set ws url schema".to_string()))?;
-    url.path_segments_mut()
-        .map_err(|()| anyhow!("Failed to get url path for ws url".to_string()))?
-        .push("v1")
-        .push("components")
-        .push(&component_id.to_string())
-        .push("workers")
-        .push(&worker_name)
-        .push("connect");
-
-    debug!(url = url.as_str(), "Worker connect");
-
-    let mut request = url
-        .to_string()
-        .into_client_request()
-        .context("Failed to create request")?;
-
-    if let Some(token) = auth_token {
-        let headers = request.headers_mut();
-        headers.insert("Authorization", format!("Bearer {}", token).parse()?);
-    }
-
-    let connector = if allow_insecure {
-        Some(Connector::NativeTls(
-            TlsConnector::builder()
-                .danger_accept_invalid_certs(true)
-                .danger_accept_invalid_hostnames(true)
-                .build()?,
-        ))
-    } else {
-        None
-    };
-
-    let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
-        .await
-        .map_err(|e| match e {
-            tungstenite::error::Error::Http(http_error_response) => {
-                let status = http_error_response.status().as_u16();
-                match http_error_response.body().clone() {
-                    Some(body) => anyhow!(parse_worker_error(status, body)),
-                    None => anyhow!("Websocket connect failed, HTTP error: {}", status),
-                }
-            }
-            _ => anyhow!("Websocket connect failed, error: {}", e),
-        })?;
-
-    let (mut write, read) = ws_stream.split();
-
-    let pings = task::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(1)); // TODO configure
-        let mut cnt: i64 = 1;
-
-        loop {
-            interval.tick().await;
-
-            let ping_result = write
-                .send(Message::Ping(Bytes::from(cnt.to_ne_bytes().to_vec())))
-                .await
-                .context("Failed to send ping");
-
-            if let Err(err) = ping_result {
-                error!("{}", err);
-                break err;
-            }
-
-            cnt += 1;
-        }
-    });
-
-    let output = ConnectOutput::new(connect_options, format);
-
-    let read_messages = task::spawn(async move {
-        read.for_each(move |message_or_error| {
-            let output = output.clone();
-            async move {
-                match message_or_error {
-                    Err(error) => {
-                        error!("Error reading message: {}", error);
-                    }
-                    Ok(message) => {
-                        let instance_connect_msg = match message {
-                            Message::Text(str) => {
-                                let parsed: serde_json::Result<WorkerEvent> =
-                                    serde_json::from_str(str.as_str());
-
-                                match parsed {
-                                    Ok(parsed) => Some(parsed),
-                                    Err(err) => {
-                                        error!("Failed to parse worker connect message: {err}");
-                                        None
-                                    }
-                                }
-                            }
-                            Message::Binary(data) => {
-                                let parsed: serde_json::Result<WorkerEvent> =
-                                    serde_json::from_slice(data.as_ref());
-                                match parsed {
-                                    Ok(parsed) => Some(parsed),
-                                    Err(err) => {
-                                        error!("Failed to parse worker connect message: {err}");
-                                        None
-                                    }
-                                }
-                            }
-                            Message::Ping(_) => {
-                                trace!("Ignore ping");
-                                None
-                            }
-                            Message::Pong(_) => {
-                                trace!("Ignore pong");
-                                None
-                            }
-                            Message::Close(details) => {
-                                match details {
-                                    Some(closed_frame) => {
-                                        info!("Connection Closed: {}", closed_frame);
-                                    }
-                                    None => {
-                                        info!("Connection Closed");
-                                    }
-                                }
-                                None
-                            }
-                            Message::Frame(f) => {
-                                debug!("Ignored unexpected frame {f:?}");
-                                None
-                            }
-                        };
-
-                        match instance_connect_msg {
-                            None => {}
-                            Some(msg) => match msg {
-                                WorkerEvent::StdOut { timestamp, bytes } => {
-                                    output
-                                        .emit_stdout(
-                                            timestamp,
-                                            String::from_utf8_lossy(&bytes).to_string(),
-                                        )
-                                        .await;
-                                }
-                                WorkerEvent::StdErr { timestamp, bytes } => {
-                                    output
-                                        .emit_stderr(
-                                            timestamp,
-                                            String::from_utf8_lossy(&bytes).to_string(),
-                                        )
-                                        .await;
-                                }
-                                WorkerEvent::Log {
-                                    timestamp,
-                                    level,
-                                    context,
-                                    message,
-                                } => {
-                                    output.emit_log(timestamp, level, context, message);
-                                }
-                                WorkerEvent::Close => {} // TODO:
-                                WorkerEvent::InvocationStart { .. } => {} // TODO:
-                                WorkerEvent::InvocationFinished { .. } => {} // TODO:
-                            },
-                        }
-                    }
-                }
-            }
-        })
-        .await;
-    });
-
-    Ok(WorkerConnection {
-        pings,
-        read_messages,
-    })
 }

@@ -22,7 +22,6 @@ pub mod cloud;
 pub mod command;
 pub mod command_handler;
 pub mod config;
-pub mod connect_output;
 pub mod context;
 pub mod diagnose;
 pub mod error;
