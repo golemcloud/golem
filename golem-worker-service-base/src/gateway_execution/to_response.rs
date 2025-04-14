@@ -22,7 +22,7 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::HttpCors as CorsPreflight;
-use crate::gateway_rib_interpreter::EvaluationError;
+use crate::gateway_rib_interpreter::RibRuntimeError;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
@@ -59,7 +59,7 @@ pub enum GatewayHttpError {
     BadRequest(String),
     InternalError(String),
     RibInputTypeMismatch(RibInputTypeMismatch),
-    EvaluationError(EvaluationError),
+    EvaluationError(RibRuntimeError),
     RibInterpretPureError(String),
     HttpHandlerBindingError(HttpHandlerBindingError),
     FileServerBindingError(FileServerBindingError),
@@ -299,7 +299,7 @@ mod internal {
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
     use crate::gateway_execution::request::RichRequest;
-    use crate::gateway_rib_interpreter::EvaluationError;
+    use crate::gateway_rib_interpreter::RibRuntimeError;
     use http::StatusCode;
 
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
@@ -320,18 +320,18 @@ mod internal {
     impl IntermediateHttpResponse {
         pub(crate) fn from(
             evaluation_result: &RibResult,
-        ) -> Result<IntermediateHttpResponse, EvaluationError> {
+        ) -> Result<IntermediateHttpResponse, RibRuntimeError> {
             match evaluation_result {
                 RibResult::Val(rib_result) => {
-                    let status = get_status_code_or_ok(rib_result).map_err(EvaluationError)?;
+                    let status = get_status_code_or_ok(rib_result).map_err(RibRuntimeError)?;
 
                     let headers =
-                        get_response_headers_or_default(rib_result).map_err(EvaluationError)?;
+                        get_response_headers_or_default(rib_result).map_err(RibRuntimeError)?;
 
                     let tav: TypeAnnotatedValue = rib_result
                         .clone()
                         .try_into()
-                        .map_err(|errs: Vec<String>| EvaluationError(errs.join(", ")))?;
+                        .map_err(|errs: Vec<String>| RibRuntimeError(errs.join(", ")))?;
 
                     let body = tav
                         .get_optional(&Path::from_key("body"))

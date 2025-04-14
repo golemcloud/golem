@@ -2358,7 +2358,7 @@ mod internal {
     };
     use golem_worker_service_base::gateway_middleware::HttpCors;
     use golem_worker_service_base::gateway_rib_interpreter::{
-        DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
+        DefaultRibInterpreter, RibRuntimeError, WorkerServiceRibInterpreter,
     };
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
@@ -2518,13 +2518,13 @@ mod internal {
 
     pub fn create_record(
         values: Vec<(String, TypeAnnotatedValue)>,
-    ) -> Result<TypeAnnotatedValue, EvaluationError> {
+    ) -> Result<TypeAnnotatedValue, RibRuntimeError> {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
             let typ = Type::try_from(value)
-                .map_err(|_| EvaluationError("Failed to get type".to_string()))?;
+                .map_err(|_| RibRuntimeError("Failed to get type".to_string()))?;
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),

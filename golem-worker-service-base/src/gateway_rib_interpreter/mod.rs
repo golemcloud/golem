@@ -43,27 +43,27 @@ pub trait WorkerServiceRibInterpreter<Namespace> {
         rib_byte_code: &RibByteCode,
         rib_input: &RibInput,
         namespace: Namespace,
-    ) -> Result<RibResult, EvaluationError>;
+    ) -> Result<RibResult, RibRuntimeError>;
 }
 
 #[derive(Debug, PartialEq)]
-pub struct EvaluationError(pub String);
+pub struct RibRuntimeError(pub String);
 
-impl Display for EvaluationError {
+impl Display for RibRuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl SafeDisplay for EvaluationError {
+impl SafeDisplay for RibRuntimeError {
     fn to_safe_string(&self) -> String {
         self.0.clone()
     }
 }
 
-impl From<String> for EvaluationError {
+impl From<String> for RibRuntimeError {
     fn from(err: String) -> Self {
-        EvaluationError(err)
+        RibRuntimeError(err)
     }
 }
 
@@ -112,7 +112,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
         expr: &RibByteCode,
         rib_input: &RibInput,
         namespace: Namespace,
-    ) -> Result<RibResult, EvaluationError> {
+    ) -> Result<RibResult, RibRuntimeError> {
         let worker_invoke_function = self.rib_invoke(
             worker_name.map(|x| x.to_string()),
             component_id.clone(),
@@ -123,7 +123,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
 
         let result = rib::interpret(expr, rib_input, worker_invoke_function)
             .await
-            .map_err(|err| EvaluationError(err.to_string()))?;
+            .map_err(|err| RibRuntimeError(err.to_string()))?;
         Ok(result)
     }
 }
