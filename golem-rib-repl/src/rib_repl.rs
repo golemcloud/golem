@@ -331,7 +331,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
-    ) -> Result<ValueAndType, String> {
+    ) -> anyhow::Result<ValueAndType> {
         let component_id = self.component_dependency.component_id;
         let component_name = &self.component_dependency.component_name;
 
@@ -344,6 +344,5 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                 args.0,
             )
             .await
-            .map_err(|e| format!("Failed to invoke function: {}", e))
     }
 }

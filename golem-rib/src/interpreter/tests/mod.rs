@@ -2263,7 +2263,7 @@ mod comprehensive_test {
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
-            ) -> Result<ValueAndType, String> {
+            ) -> anyhow::Result<ValueAndType> {
                 let function_name = FunctionName(function_name.0);
                 let value = self
                     .functions_and_result
@@ -2277,7 +2277,6 @@ mod comprehensive_test {
                         tuple(vec![value.typ]),
                     ))
                 } else {
-                    // Representing Unit
                     Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
                 }
             }

@@ -14,10 +14,12 @@
 
 use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
 use crate::CoercedNumericValue;
+use anyhow::anyhow;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 
 // A result of a function can be unit, which is not representable using value_and_type
@@ -56,7 +58,7 @@ impl RibInterpreterStackValue {
         &self,
         right: &RibInterpreterStackValue,
         op: F,
-    ) -> Result<CoercedNumericValue, String>
+    ) -> anyhow::Result<CoercedNumericValue>
     where
         F: Fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
     {
@@ -68,10 +70,14 @@ impl RibInterpreterStackValue {
                 ) {
                     Ok(op(left_lit, right_lit))
                 } else {
-                    Err(internal::unable_to_complete_math_operation(&left, &right))
+                    Err(anyhow!(internal::unable_to_complete_math_operation(
+                        &left, &right
+                    )))
                 }
             }
-            _ => Err("Failed to obtain values to complete the math operation".to_string()),
+            _ => Err(anyhow!(
+                "failed to obtain values to complete the math operation"
+            )),
         }
     }
 
@@ -79,7 +85,7 @@ impl RibInterpreterStackValue {
         &self,
         right: &RibInterpreterStackValue,
         compare: F,
-    ) -> Result<RibInterpreterStackValue, String>
+    ) -> anyhow::Result<RibInterpreterStackValue>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
@@ -91,7 +97,9 @@ impl RibInterpreterStackValue {
                     let result = internal::compare_typed_value(&left, &right, compare)?;
                     Ok(RibInterpreterStackValue::Val(result))
                 }
-                _ => Err("Values are not literals and cannot be compared".to_string()),
+                _ => Err(anyhow!(
+                    "values are not literals and cannot be compared".to_string()
+                )),
             }
         }
     }
@@ -192,19 +200,26 @@ impl RibInterpreterStackValue {
     }
 }
 
-impl fmt::Debug for RibInterpreterStackValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for RibInterpreterStackValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            RibInterpreterStackValue::Unit => write!(f, "Unit"),
-            RibInterpreterStackValue::Val(value) => write!(f, "val:{:?}", value),
-            RibInterpreterStackValue::Iterator(_) => write!(f, "Iterator:(...)"),
+            RibInterpreterStackValue::Unit => write!(f, "unit"),
+            RibInterpreterStackValue::Val(value) => write!(f, "{}", value),
+            RibInterpreterStackValue::Iterator(_) => write!(f, "iterator:(...)"),
             RibInterpreterStackValue::Sink(value, _) => write!(f, "sink:{}", value.len()),
         }
     }
 }
 
+impl fmt::Debug for RibInterpreterStackValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
 mod internal {
     use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
+    use anyhow::anyhow;
     use golem_wasm_ast::analysis::{AnalysedType, TypeVariant};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
@@ -229,7 +244,7 @@ mod internal {
         left: &ValueAndType,
         right: &ValueAndType,
         compare: F,
-    ) -> Result<ValueAndType, String>
+    ) -> anyhow::Result<ValueAndType>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
@@ -288,11 +303,11 @@ mod internal {
         {
             compare_flags(left_bitmap, right_bitmap)
         } else {
-            Err(unsupported_type_error(left, right))
+            Err(anyhow!(unsupported_type_error(left, right)))
         }
     }
 
-    fn compare_flags(left: &[bool], right: &[bool]) -> Result<ValueAndType, String> {
+    fn compare_flags(left: &[bool], right: &[bool]) -> anyhow::Result<ValueAndType> {
         Ok((left == right).into_value_and_type())
     }
 
@@ -304,7 +319,7 @@ mod internal {
         right_case_value: &Option<Box<Value>>,
         right_type: &TypeVariant,
         compare: F,
-    ) -> Result<ValueAndType, String>
+    ) -> anyhow::Result<ValueAndType>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
@@ -314,15 +329,13 @@ mod internal {
                     let left_typ = left_type
                         .cases
                         .get(left_case_idx as usize)
-                        .ok_or("Left case index is out of bounds for the type variant".to_string())?
+                        .ok_or(anyhow!("unknown variant index"))?
                         .typ
                         .clone();
                     let right_typ = right_type
                         .cases
                         .get(right_case_idx as usize)
-                        .ok_or(
-                            "Right case index is out of bounds for the type variant".to_string(),
-                        )?
+                        .ok_or(anyhow!("unknown variant index"))?
                         .typ
                         .clone();
                     match (left_typ, right_typ) {
@@ -341,7 +354,7 @@ mod internal {
         }
     }
 
-    fn compare_enums(left_idx: u32, right_idx: u32) -> Result<ValueAndType, String> {
+    fn compare_enums(left_idx: u32, right_idx: u32) -> anyhow::Result<ValueAndType> {
         Ok((left_idx == right_idx).into_value_and_type())
     }
 

@@ -71,21 +71,20 @@ pub fn compile_with_restricted_global_variables(
 
     let output_type_info = RibOutputTypeInfo::from_expr(&inferred_expr)?;
 
-    if let Some(allowed_global_variables) = &allowed_global_variables {
-        let mut un_allowed_variables = vec![];
+    if let Some(supported_global_inputs) = &allowed_global_variables {
+        let mut unsupoorted_global_inputs = vec![];
 
         for (name, _) in global_input_type_info.types.iter() {
-            if !allowed_global_variables.contains(name) {
-                un_allowed_variables.push(name.clone());
+            if !supported_global_inputs.contains(name) {
+                unsupoorted_global_inputs.push(name.clone());
             }
         }
 
-        if !un_allowed_variables.is_empty() {
-            return Err(RibError::InvalidRibScript(format!(
-                "unexpected global variables: {}. make sure only these variables are used as global input: {}",
-                un_allowed_variables.join(", "),
-                allowed_global_variables.join(", ")
-            )));
+        if !unsupoorted_global_inputs.is_empty() {
+            return Err(RibError::UnsupportedGlobalInput {
+                found: unsupoorted_global_inputs,
+                expected: supported_global_inputs.clone(),
+            });
         }
     }
 
@@ -106,9 +105,19 @@ pub fn compile_with_restricted_global_variables(
 
 #[derive(Debug, Clone)]
 pub enum RibError {
+    // Failed to compile due internal logical errors
+    // example: successfully inferred rib script, but failed to convert it to byte code
     InternalError(String),
+    // invalid rib resulting in compilation error
     RibCompilationError(RibCompilationError),
-    InvalidRibScript(String),
+    // invalid rib syntax
+    RibParseError(String),
+    // usage of global inputs that's not supported. example: using `env` in rib script
+    // that's part of api definition
+    UnsupportedGlobalInput {
+        found: Vec<String>,
+        expected: Vec<String>,
+    },
 }
 
 impl From<RibCompilationError> for RibError {
@@ -120,9 +129,17 @@ impl From<RibCompilationError> for RibError {
 impl Display for RibError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RibError::InternalError(msg) => write!(f, "rib internal error: {}", msg),
+            RibError::InternalError(msg) => write!(f, "rib compilation internal error: {}", msg),
             RibError::RibCompilationError(err) => write!(f, "{}", err),
-            RibError::InvalidRibScript(msg) => write!(f, "invalid rib script: {}", msg),
+            RibError::RibParseError(msg) => write!(f, "invalid rib syntax: {}", msg),
+            RibError::UnsupportedGlobalInput { found, expected } => {
+                write!(
+                    f,
+                    "unsupported global input variables: {}. expected: {}",
+                    found.join(", "),
+                    expected.join(", ")
+                )
+            }
         }
     }
 }

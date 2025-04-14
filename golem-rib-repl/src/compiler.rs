@@ -22,14 +22,13 @@ pub fn compile_rib_script(
     rib_script: &str,
     repl_state: &mut ReplState,
 ) -> Result<CompilerOutput, RibError> {
-    let expr =
-        Expr::from_text(rib_script).map_err(|e| RibError::InvalidRibScript(e.to_string()))?;
+    let expr = Expr::from_text(rib_script).map_err(|e| RibError::RibParseError(e.to_string()))?;
 
     let function_registry =
         FunctionTypeRegistry::from_export_metadata(&repl_state.dependency().metadata);
 
     let inferred_expr = InferredExpr::from_expr(expr, &function_registry, &vec![])
-        .map_err(|e| RibError::InvalidRibScript(e.to_string()))?;
+        .map_err(|e| RibError::RibCompilationError(e))?;
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 

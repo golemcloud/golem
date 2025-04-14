@@ -14,6 +14,7 @@
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::GetLiteralValue;
+use anyhow::anyhow;
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
@@ -50,9 +51,10 @@ impl InterpreterStack {
         self.stack.pop()
     }
 
-    pub fn try_pop(&mut self) -> Result<RibInterpreterStackValue, String> {
-        self.pop()
-            .ok_or("internal error: failed to pop value from the interpreter stack".to_string())
+    pub fn try_pop(&mut self) -> anyhow::Result<RibInterpreterStackValue> {
+        self.pop().ok_or(anyhow!(
+            "internal error: failed to pop value from the interpreter stack"
+        ))
     }
 
     pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
@@ -72,25 +74,25 @@ impl InterpreterStack {
         Some(results)
     }
 
-    pub fn try_pop_n(&mut self, n: usize) -> Result<Vec<RibInterpreterStackValue>, String> {
-        self.pop_n(n).ok_or(format!(
+    pub fn try_pop_n(&mut self, n: usize) -> anyhow::Result<Vec<RibInterpreterStackValue>> {
+        self.pop_n(n).ok_or(anyhow!(
             "internal error: failed to pop {} values from the interpreter stack",
             n
         ))
     }
 
-    pub fn try_pop_n_val(&mut self, n: usize) -> Result<Vec<ValueAndType>, String> {
+    pub fn try_pop_n_val(&mut self, n: usize) -> anyhow::Result<Vec<ValueAndType>> {
         let stack_values = self.try_pop_n(n)?;
 
         stack_values
             .iter()
             .map(|interpreter_result| {
-                interpreter_result.get_val().ok_or(format!(
+                interpreter_result.get_val().ok_or(anyhow!(
                     "internal error: failed to convert last {} in the stack to ValueAndType",
                     n
                 ))
             })
-            .collect::<Result<Vec<ValueAndType>, String>>()
+            .collect::<anyhow::Result<Vec<ValueAndType>>>()
     }
 
     pub fn pop_str(&mut self) -> Option<String> {
@@ -107,15 +109,15 @@ impl InterpreterStack {
         self.stack.pop().and_then(|v| v.get_val())
     }
 
-    pub fn try_pop_val(&mut self) -> Result<ValueAndType, String> {
+    pub fn try_pop_val(&mut self) -> anyhow::Result<ValueAndType> {
         self.try_pop().and_then(|x| {
-            x.get_val().ok_or(
-                "internal error: failed to pop ValueAndType from the interpreter stack".to_string(),
-            )
+            x.get_val().ok_or(anyhow!(
+                "internal error: failed to pop ValueAndType from the interpreter stack"
+            ))
         })
     }
 
-    pub fn try_pop_record(&mut self) -> Result<(Vec<Value>, TypeRecord), String> {
+    pub fn try_pop_record(&mut self) -> anyhow::Result<(Vec<Value>, TypeRecord)> {
         let value = self.try_pop_val()?;
 
         match value {
@@ -123,15 +125,17 @@ impl InterpreterStack {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             } => Ok((field_values, typ)),
-            _ => Err("internal error: failed to pop a record from the interpreter".to_string()),
+            _ => Err(anyhow!(
+                "internal error: failed to pop a record from the interpreter"
+            )),
         }
     }
 
-    pub fn try_pop_bool(&mut self) -> Result<bool, String> {
+    pub fn try_pop_bool(&mut self) -> anyhow::Result<bool> {
         self.try_pop_val().and_then(|val| {
-            val.get_literal().and_then(|x| x.get_bool()).ok_or(
-                "internal error: failed to pop boolean from the interpreter stack".to_string(),
-            )
+            val.get_literal().and_then(|x| x.get_bool()).ok_or(anyhow!(
+                "internal error: failed to pop boolean from the interpreter stack"
+            ))
         })
     }
 
@@ -150,15 +154,17 @@ impl InterpreterStack {
         self.stack.push(RibInterpreterStackValue::val(element));
     }
 
-    pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> Result<(), String> {
+    pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> anyhow::Result<()> {
         let sink = self.pop();
         // sink always followed by an iterator
-        let possible_iterator = self
-            .pop()
-            .ok_or("Failed to get the iterator before pushing to the sink")?;
+        let possible_iterator = self.pop().ok_or(anyhow!(
+            "internal error: failed to get the iterator before pushing to the sink"
+        ))?;
 
         if !possible_iterator.is_iterator() {
-            return Err("Expecting an the iterator before pushing to the sink".to_string());
+            return Err(anyhow!(
+                "internal error: expected an the iterator before pushing to the sink"
+            ));
         }
 
         match sink {
@@ -169,9 +175,9 @@ impl InterpreterStack {
                 Ok(())
             }
 
-            a => Err(format!(
+            non_sink_value => Err(anyhow!(
                 "internal error: failed to push values to sink {:?}",
-                a
+                non_sink_value
             )),
         }
     }
@@ -181,11 +187,11 @@ impl InterpreterStack {
         variant_name: String,
         optional_variant_value: Option<Value>,
         cases: Vec<NameOptionTypePair>,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         let case_idx = cases
             .iter()
             .position(|case| case.name == variant_name)
-            .ok_or(format!(
+            .ok_or(anyhow!(
                 "internal Error: Failed to find the variant {} in the cases",
                 variant_name
             ))? as u32;
@@ -202,9 +208,9 @@ impl InterpreterStack {
         Ok(())
     }
 
-    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> Result<(), String> {
+    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> anyhow::Result<()> {
         let idx = cases.iter().position(|x| x == &enum_name).ok_or_else(|| {
-            format!(
+            anyhow!(
                 "internal error: failed to find the enum {} in the cases",
                 enum_name
             )

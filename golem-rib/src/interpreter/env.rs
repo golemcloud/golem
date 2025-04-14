@@ -49,7 +49,7 @@ impl InterpreterEnv {
         worker_name: Option<String>,
         function_name: String,
         args: Vec<ValueAndType>,
-    ) -> Result<ValueAndType, String> {
+    ) -> anyhow::Result<ValueAndType> {
         self.call_worker_function_async
             .invoke(
                 worker_name.map(EvaluatedWorkerName),
@@ -129,7 +129,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
-        ) -> Result<ValueAndType, String> {
+        ) -> anyhow::Result<ValueAndType> {
             Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
         }
     }

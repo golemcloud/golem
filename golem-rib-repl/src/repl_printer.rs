@@ -36,6 +36,20 @@ impl ReplPrinter for DefaultReplResultPrinter {
             RibError::InternalError(msg) => {
                 println!("{} {}", "[internal rib error]".red(), msg.red());
             }
+            RibError::UnsupportedGlobalInput { found, expected } => {
+                println!(
+                    "{} {} {}",
+                    "[unsupported input]".red(),
+                    "found:".yellow(),
+                    found.join(", ").white()
+                );
+                println!(
+                    "{} {} {}",
+                    "[supported inputs]".green(),
+                    "expected:".yellow(),
+                    expected.join(", ").white()
+                );
+            }
             RibError::RibCompilationError(compilation_error) => {
                 let cause = &compilation_error.cause;
                 let position = compilation_error.expr.source_span().start_column();
@@ -56,7 +70,7 @@ impl ReplPrinter for DefaultReplResultPrinter {
                     }
                 }
             }
-            RibError::InvalidRibScript(script) => {
+            RibError::RibParseError(script) => {
                 println!("{} {}", "[invalid script]".red(), script.white());
             }
         }

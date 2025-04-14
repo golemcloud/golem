@@ -123,7 +123,7 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
                 RibError::InternalError(e) => ApiDefinitionError::RibInternal(e),
-                RibError::InvalidRibScript(e) => ApiDefinitionError::InvalidRibScript(e),
+                RibError::RibParseError(e) => ApiDefinitionError::InvalidRibScript(e),
             },
             RouteCompilationErrors::MetadataNotFoundError(e) => {
                 ApiDefinitionError::RibCompilationErrors(format!(
