@@ -773,6 +773,16 @@ impl CompiledRoute {
         metadata_dictionary: &ComponentMetadataDictionary,
     ) -> Result<CompiledRoute, RouteCompilationErrors> {
         let query_params = &route.path.query_params;
+        let path_params = &route
+            .path
+            .path_patterns
+            .iter()
+            .filter_map(|pattern| match pattern {
+                PathPattern::Var(var) => Some(&var.key_name),
+                PathPattern::CatchAllVar(var) => Some(&var.key_name),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         match &route.binding {
             GatewayBinding::Default(worker_binding) => {
@@ -789,6 +799,7 @@ impl CompiledRoute {
 
                 Self::validate_rib_scripts(
                     query_params,
+                    path_params.as_ref(),
                     binding.worker_name_compiled.as_ref(),
                     binding.invocation_context_compiled.as_ref(),
                     binding.idempotency_key_compiled.as_ref(),
@@ -817,6 +828,7 @@ impl CompiledRoute {
 
                 Self::validate_rib_scripts(
                     query_params,
+                    path_params.as_ref(),
                     binding.worker_name_compiled.as_ref(),
                     binding.invocation_context_compiled.as_ref(),
                     binding.idempotency_key_compiled.as_ref(),
@@ -847,6 +859,7 @@ impl CompiledRoute {
 
                 Self::validate_rib_scripts(
                     query_params,
+                    path_params.as_ref(),
                     binding.worker_name_compiled.as_ref(),
                     None,
                     binding.idempotency_key_compiled.as_ref(),
@@ -870,8 +883,12 @@ impl CompiledRoute {
         }
     }
 
+    // Validate the Rib script that can exist
+    // in worker name, invocation context, idempotency key and response mapping
+    // to check if the query and path params lookups is in the API route
     fn validate_rib_scripts(
         api_query_params: &[QueryInfo],
+        path_params: &[&str],
         worker_name_compiled: Option<&WorkerNameCompiled>,
         invocation_context_compiled: Option<&InvocationContextCompiled>,
         idempotency_key_compiled: Option<&IdempotencyKeyCompiled>,
@@ -891,6 +908,18 @@ impl CompiledRoute {
                     )
                 );
             }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following path lookups in worker name rib script is not present in API route: {:?}",
+                        invalid_path_params
+                    )
+                );
+            }
         }
 
         if let Some(invocation_context_compiled) = invocation_context_compiled {
@@ -903,6 +932,18 @@ impl CompiledRoute {
                     format!(
                         "Following query lookups in invocation context rib script is not present in API route: {:?}",
                         invalid_query_params
+                    )
+                );
+            }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following path lookups in invocation context rib script is not present in API route: {:?}",
+                        invalid_path_params
                     )
                 );
             }
@@ -936,6 +977,18 @@ impl CompiledRoute {
                     )
                 );
             }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following path lookups in response mapping rib script is not present in API route: {:?}",
+                        invalid_path_params
+                    )
+                );
+            }
         }
 
         if !validation_errors.is_empty() {
@@ -963,6 +1016,19 @@ impl CompiledRoute {
         rib_query_keys
             .iter()
             .filter(|&x| !api_query_keys.contains(x))
+            .collect()
+    }
+
+    fn find_invalid_path_keys_in_rib(
+        path_params: &[&str],
+        rib_input_type_info: &RibInputTypeInfo,
+    ) -> Vec<String> {
+        let rib_path_keys = Self::get_request_lookups_in_rib(rib_input_type_info, "path");
+
+        // find request.path lookups in Rib that are not in actual API
+        rib_path_keys
+            .iter()
+            .filter(|&x| !path_params.contains(x.as_ref()))
             .collect()
     }
 
