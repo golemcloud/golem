@@ -772,8 +772,8 @@ impl CompiledRoute {
         route: &Route,
         metadata_dictionary: &ComponentMetadataDictionary,
     ) -> Result<CompiledRoute, RouteCompilationErrors> {
-        let query_params = &route.path.query_params;
-        let path_params = &route
+        let query_params = route.path.query_params.as_ref();
+        let path_params = route
             .path
             .path_patterns
             .iter()
@@ -799,7 +799,7 @@ impl CompiledRoute {
 
                 Self::validate_rib_scripts(
                     query_params,
-                    path_params,
+                    &path_params,
                     binding.worker_name_compiled.as_ref(),
                     binding.invocation_context_compiled.as_ref(),
                     binding.idempotency_key_compiled.as_ref(),
@@ -828,7 +828,7 @@ impl CompiledRoute {
 
                 Self::validate_rib_scripts(
                     query_params,
-                    path_params,
+                    &path_params,
                     binding.worker_name_compiled.as_ref(),
                     binding.invocation_context_compiled.as_ref(),
                     binding.idempotency_key_compiled.as_ref(),
@@ -859,7 +859,7 @@ impl CompiledRoute {
 
                 Self::validate_rib_scripts(
                     query_params,
-                    path_params,
+                    &path_params,
                     binding.worker_name_compiled.as_ref(),
                     None,
                     binding.idempotency_key_compiled.as_ref(),
@@ -885,7 +885,7 @@ impl CompiledRoute {
 
     // Validate the Rib script that can exist
     // in worker name, invocation context, idempotency key and response mapping
-    // to check if the query and path params lookups is in the API route
+    // to check if the query and path params lookups are actually in the API route
     fn validate_rib_scripts(
         api_query_params: &[QueryInfo],
         path_params: &[&str],
