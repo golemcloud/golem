@@ -26,6 +26,10 @@ pub struct RibInputTypeInfo {
     pub types: HashMap<String, AnalysedType>,
 }
 impl RibInputTypeInfo {
+    pub fn get(&self, key: &str) -> Option<&AnalysedType> {
+        self.types.get(key)
+    }
+
     pub fn empty() -> Self {
         RibInputTypeInfo {
             types: HashMap::new(),
