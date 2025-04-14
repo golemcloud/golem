@@ -28,7 +28,7 @@ pub fn compile_rib_script(
         FunctionTypeRegistry::from_export_metadata(&repl_state.dependency().metadata);
 
     let inferred_expr = InferredExpr::from_expr(expr, &function_registry, &vec![])
-        .map_err(|e| RibError::RibCompilationError(e))?;
+        .map_err(RibError::RibCompilationError)?;
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 
