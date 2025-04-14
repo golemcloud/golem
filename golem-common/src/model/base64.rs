@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
 
 /// Represents a binary data encoded with base64.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct Base64(pub Vec<u8>);
 
 impl Deref for Base64 {
