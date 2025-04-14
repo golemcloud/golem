@@ -158,8 +158,6 @@ The grammar is mainly to give a high level overview of the syntax of Rib.
 
 The following sections show some examples of each construct.
 
-## Examples
-
 Rib scripts can be multiline, and it should be separated by `;`.
 
 ### Return type of a Rib script
@@ -168,6 +166,8 @@ The last expression in the Rib script is the return value of the script. The las
 shouldn't end with a `;`, as this is a syntax error.
 
 Let's see how we can write Rib corresponding to the types supported by the [WebAssembly Component Model](https://component-model.bytecodealliance.org/design/wit.html)
+
+## Core Language Elements
 
 ### Identifier
 
@@ -562,6 +562,8 @@ specify component name when defining API definition.
 This is of a flag type.
 
 
+## Expressions and Syntax Features
+
 ### Assign to a variable
 
 This can be done using `let` binding which we have already seen in the above examples
@@ -641,24 +643,98 @@ x + y
 
 `+`, `-`, `/` and `*` are supported.
 
-### Conditional Statement
+
+## Collections and Control Structures
+
+### List Comprehension
 
 ```rib copy
- let id: u32 = 10;
- if id > 3 then "higher" else "lower"
+ let x = ["foo", "bar"];
+
+ for p in x {
+   yield p;
+ }
 ```
 
-The structure of the conditional statement is `if <condition> then <then-rib-expr> else <else-rib-expr>`,
-where `condition-expr` is an expr that should get evaluated to boolean.
-The `then-rib-expr` or `else-rib-expr` can be an any valid rib code, which could be another `if else` itself
+### List Aggregation
 
 ```rib copy
- let id: u32 = request.user.id;
- if id > 3 then "higher" else if id == 3 then "equal" else "lower"
+ let ages: list<u16> = [1, 2, 3];
+
+ reduce z, a in ages from 0 {
+   yield z + a;
+ }
 ```
 
-You must ensure that the branches (then branch and else branch) resolve to the same type. Otherwise, Rib
-will fail to compile.
+### Ranges
+
+Ranges can be right exclusive or right inclusive. The right exclusive range is denoted by `..` and right inclusive range is denoted by `..=`.
+
+
+```rib copy
+1..10;
+```
+
+```rib copy
+let initial: u32 = 1;
+let final: u32 = 10;
+
+let x = initial..final;
+
+for i in x {
+  yield i
+}
+```
+
+Similarly, you can use `..=` to include the last number in the range.
+
+
+
+```rib copy
+1..=10;
+```
+
+
+```rib copy
+let initial: u32 = 1;
+let final: u32 = 10;
+
+let x = initial..=final;
+
+for i in x {
+  yield i
+}
+```
+
+Please note that, you may need to help Rib compiler with type annotations for the numbers involved in the range.
+This depends on the context. We will improve these aspects as we go.
+
+You can also create infinite range, where you skip the right side of `..`
+
+```rib copy
+1..;
+```
+
+However, note that as of now Rib interpreter (runtime) will spot any infinite loop and will throw an error.
+Example: The following will throw an error.
+
+```rib copy
+let x = 1:u8..;
+
+for i in x {
+  yield i
+}
+```
+
+However, you can use infinite ranges to select a segment of the list without worrying about the end index.
+
+```rib copy
+let x: list<u32> = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+for i in x[1..] {
+  yield i
+}
+```
 
 ### Pattern Matching
 
@@ -772,167 +848,134 @@ In some of the above examples, the binding variables are unused. We can use `_` 
   }
 ```
 
-
-### List Comprehension
-
-```rib copy
- let x = ["foo", "bar"];
-
- for p in x {
-   yield p;
- }
-```
-
-### List Aggregation
+### Conditional Statement
 
 ```rib copy
- let ages: list<u16> = [1, 2, 3];
-
- reduce z, a in ages from 0 {
-   yield z + a;
- }
+ let id: u32 = 10;
+ if id > 3 then "higher" else "lower"
 ```
 
-### Ranges
-
-Ranges can be right exclusive or right inclusive. The right exclusive range is denoted by `..` and right inclusive range is denoted by `..=`.
-
+The structure of the conditional statement is `if <condition> then <then-rib-expr> else <else-rib-expr>`,
+where `condition-expr` is an expr that should get evaluated to boolean.
+The `then-rib-expr` or `else-rib-expr` can be an any valid rib code, which could be another `if else` itself
 
 ```rib copy
-1..10;
+ let id: u32 = request.user.id;
+ if id > 3 then "higher" else if id == 3 then "equal" else "lower"
 ```
 
-```rib copy
-let initial: u32 = 1;
-let final: u32 = 10;
-
-let x = initial..final;
-
-for i in x {
-  yield i
-}
-```
-
-Similarly, you can use `..=` to include the last number in the range.
+You must ensure that the branches (then branch and else branch) resolve to the same type. Otherwise, Rib
+will fail to compile.
 
 
+## External Interactions
 
-```rib copy
-1..=10;
-```
+### Http Request Input and Field Selection
 
-
-```rib copy
-let initial: u32 = 1;
-let final: u32 = 10;
-
-let x = initial..=final;
-
-for i in x {
-  yield i
-}
-```
-
-Please note that, you may need to help Rib compiler with type annotations for the numbers involved in the range.
-This depends on the context. We will improve these aspects as we go.
-
-You can also create infinite range, where you skip the right side of `..`
-
-```rib copy
-1..;
-```
-
-However, note that as of now Rib interpreter (runtime) will spot any infinite loop and will throw an error.
-Example: The following will throw an error.
-
-```rib copy
-let x = 1:u8..;
-
-for i in x {
-  yield i
-}
-```
-
-However, you can use infinite ranges to select a segment of the list without worrying about the end index.
-
-```rib copy
-let x: list<u32> = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-
-for i in x[1..] {
-  yield i
-}
-```
-
-
-## Http Request Input and Field Selection
-
-If you are using [worker-gateway](/invoke/making-custom-apis) to write through http APIs,
-you can use the variable `request` in your Rib script, and that will be considered as a global input.
+Rib is currently mainly used in worker-gateway which will allow us to expose Http APIs on top of worker functions.
+If you are using Rib in the context of [worker-gateway](/invoke/making-custom-apis) then
+you can use the variable `request` in your Rib script, which allows you to access various parameters of input Http request.
+In other words, `request` is a global input to the Rib script when used in API definitions, and
 `worker-gateway` will ensure to pass the value of `request` to the rib evaluator internally.
 
-Please refer to worker-gateway documents for more details.
+Please refer to [worker-gateway](/invoke/making-custom-apis) documents for more details.
 
-```rib copy
-request
-```
+`request` will hold all the details of an input Http request in gateway,
+such as headers, path, query parameters and body.
 
+#### Request Body Parameters
 To select the body field in request,
 
 ```rib copy
-request.body
+request.body.user
 ```
+
+#### Request Header Parameters
 
 To select a header from the request
 
 ```rib copy
-request.headers
+request.headers.user
 ```
 
-To select the value of a path or query variable in your http request.
+#### Request Path Parameters
+
+To select the value of a path variable in your http request `/v4/{user-id}/get-cart-contents`
 
 ```rib copy
-request.path.user
+request.path.user-id
+```
+
+#### Request Query Parameters
+
+To select the value of a query variable in your http request `/v4/{user-id}/get-cart-contents?{country}`
+
+```rib copy
+request.query.country
 ```
 
 The `request.path.*` and `request.headers.*` will be inferred as `string` unless you specify it using type annotation.
 
-Please note that Rib by itself don't support a keyword such as `request`, or `path` or `body` or `headers`.
-However, if you are using Rib through worker-gateway, then these values are available in the context of the Rib evaluator. Currently, in golem,
-worker-gateway is the only way to use Rib. But this will change soon. Example: We may be able to fire up a REPL and write Rib and invoke worker functions.
-
-`request.body` will not be inferred properly, unless you pass it as it is to a worker function, as Rib knows the component metadata,
-and can infer the types automatically.
-
-
-## Type Inference
-
-Rib is mainly used to write script to manipulate the input and call worker functions. In this case, for the most part, most of the types
-will be automatically inferred. Otherwise, there will be a compilation error, asking the developer to annotate the types and help the compiler.
-
-
-```rib copy
-let x: string = request.body;
-x
+Example:
+```rib
+let user-id: u8 = request.path.user-id;
 ```
 
-Say the request body is a `record` in Json, as given below. `Rib` sees it as a `WASM` Record type.
+To select the value of a query variable in your http request `/v4/{user-id}/get-cart-contents?{country}`
 
-```rib copy
-{
-  "user": "Alice",
-  "age": 30u32
-}
+```rib
+let country: string = request.query.country;
 ```
 
-Then we can use Rib language to select the field `user`, as it considers this request's body as a `WASM` Record type.
+#### A typical Rib script in API definition (worker gateway)
 
-```rib copy
-let x: string = request.body.user;
-x
+Here is a full example of a Rib script that look up various elements in a Http Request.
+
+Given the route is `/v4/{user-id}/get-cart-contents?{country}` , which is a POST request,
+which has a body, then the following Rib script can be valid, and has a dependency to a component
+that has a function `my-function` that takes two arguments of type `{foo: string, bar: string}` and `string`
+
+
+```rib
+let user-id: u8 = request.path.user-id;
+let country: string = request.query.country;
+let input = request.body;
+let worker = instance("my-worker-${user-id}");
+let result = worker.my-function(input, country);
+result
 ```
 
+This Rib script will be part of an API definition (please refer to [worker-gateway](/invoke/making-custom-apis) for more details)
+When registering this API definition, it already keeps track of the requirements of the input http request.
+In this case, the input request is a POST request with a body, and the body is of type `{foo: string, bar: string}`,
+and the path variable is `user-id` of type `u8`, and the query parameter is `country` of type `string`.
 
-## Invoke worker functions
+Once the API is deployed and the API is invoked, worker gateway will validate the input request against these requirements,
+and if they don't satisfy, it results in a BadRequest error.
+
+Please note the language Rib by itself don't support a keyword such as `request`, or `path` or `body` or `headers`.
+The above examples are valid only if are using Rib through [worker-gateway](/invoke/making-custom-apis).
+If Rib script is evaluated in the context of a http request, these values are available in the context of the Rib evaluator.
+
+Currently, there are two ways to use `Rib` in golem. One is [worker-gateway](/invoke/making-custom-apis)
+and the other is golem REPL. In the case of REPL, `request` is not available, since we are not executing Rib in the context of an Http request.
+
+Here is an example of an invalid Rib script
+
+```rib
+
+request
+
+```
+
+```rib
+request.body
+```
+
+In the above case, compiler is not able to infer the type of `request` or `request.body`
+as it is not passed as an argument to a worker function.
+
+### Invoke worker functions
 
 Rib is mainly used to write scripts to manipulate the input and call worker functions.
 Refer to the [worker-gateway](/invoke/making-custom-apis) documentation for more on how you use Rib to invoke worker functions.
@@ -940,7 +983,7 @@ This is useful to expose some http APIs on top of these worker functions running
 updating or change the components and expose additional APIs, as you can write a simple Rib script to do the necessary changes to the input
 and pass it to the worker functions. Invoking functions is similar to any other languages.
 
-### Durable worker function invocation
+#### Durable worker function invocation
 
 ```rib copy
 let my_worker = instance("my-worker");
@@ -954,7 +997,7 @@ Rib is evaluated in the context of a particular component (this is taken care by
 In this script, first you create an instance (instance of a component) using `instance` function. `instance` function takes
 worker name as the argument. Once you created the instance, the functions in the component will be available to call.
 
-### Ephemeral Worker function invocation
+#### Ephemeral Worker function invocation
 
 The only difference here is that you don't need to pass an argument to the `instance` function.
 
@@ -974,7 +1017,7 @@ my_worker.get-cart-contents();
 In this case the return value of the script is the last expression in the script, and in this case, it is of the result type of `get-cart-contents`.
 
 
-### Worker function invocation with arguments
+#### Worker function invocation with arguments
 
 Let's say there exists a  function `add-to-cart` which takes a product as the argument, where product is a wasm record
 
@@ -1007,7 +1050,7 @@ let product = {product-id: 1, quantity: 2, name: "mac"};
 my_worker.add-to-cart("foo", {product-id: 1, quantity: 2, name: "mac"});
 ```
 
-### Invoke functions in a Resource
+#### Invoke functions in a Resource
 
 Here is a relatively complex example where Rib is used to invoke functions in a resource `cart`
 Here the first step is to define the worker by calling instance function. Then you create a resource
@@ -1028,7 +1071,7 @@ to call these functions.
   result
 ```
 
-### Handle conflicting function names using type parameters
+#### Handle conflicting function names using type parameters
 
 Let's say a function name `add-to-cart` exists in multiple interfaces (say api1, api2) in the same component.
 In this case, you can specify the interface as a type parameter when invoking method in the instance.
@@ -1054,7 +1097,7 @@ cause: invalid function call `qux`
 function 'add-to-cart' exists in multiple interfaces. specify an interface name as type parameter from: api1, api2
 ```
 
-### Handle conflicting packages using type parameters
+#### Handle conflicting packages using type parameters
 
 Let's say a function name `add-to-cart` exists in multiple packages. In this case, you can specify the package name too
 as a type parameter. Let's say you care only about the package `amazon:shopping-cart`.
@@ -1070,7 +1113,7 @@ let result = my_worker.add-to-cart[amazon:shopping-cart](product);
 result
 ```
 
-### Handle conflicts at instance level
+#### Handle conflicts at instance level
 
 You can also include this type parameter at instance level such that every method invocation will be resolved to that package or interface.
 
@@ -1082,7 +1125,7 @@ let product = {product-id: 1, quantity: 2, name: "mac"};
 let result = my_worker.add-to-cart(product);
 ```
 
-### Conflict resolution using fully qualified type parameter
+#### Conflict resolution using fully qualified type parameter
 
 If there exist a function `add-to-cart` in multiple interfaces within multiple packages, then you can specify
 fully qualified package name and interface as given below. As mentioned above, this can be either at instance level
@@ -1096,7 +1139,7 @@ let product = {product-id: 1, quantity: 2, name: "mac"};
 let result = my_worker.add-to-cart(product);
 ```
 
-### Multiple invocations
+#### Multiple invocations
 
 Rib allows you to invoke a function multiple times, or invoke multiple functions across multiple workers in a single script.
 That said, it is important to note that Rib by itself is not durable and is stateless. The next time you invoke Rib (through worker-gateway for example),
@@ -1123,6 +1166,35 @@ Let's say we want to accumulate the contents of a shopping cart from user-id 1 t
 Currently Rib is not durable. Also it hasn't been tested with complex use-cases such as invoking multiple functions,
 or invoke functions against multiple workers. This is because, Rib's primary use-case in golem platform is for users to write reasonably simple
 scripts in the context of [worker-gateway](/invoke/making-custom-apis) to manipulate the http input and call worker functions.
+
+
+## Type Inference
+
+Rib is mainly used to write script to manipulate the input and call worker functions. In this case, for the most part, most of the types
+will be automatically inferred. Otherwise, there will be a compilation error, asking the developer to annotate the types and help the compiler.
+
+
+```rib copy
+let x: string = request.body;
+x
+```
+
+Say the request body is a `record` in Json, as given below. `Rib` sees it as a `WASM` Record type.
+
+```rib copy
+{
+  "user": "Alice",
+  "age": 30u32
+}
+```
+
+Then we can use Rib language to select the field `user`, as it considers this request's body as a `WASM` Record type.
+
+```rib copy
+let x: string = request.body.user;
+x
+```
+
 
 ## Limitations
 

@@ -82,6 +82,10 @@ let result = worker.get-cart-contents();
 ```
 
 The first line is about extracting the `user-id` from the path and assigning it to the variable `user`.
+Similarly you can extract the query parameters, headers and body from the request object.
+The `request` object is a Rib record that contains all the information about the HTTP request.
+Please find more information about the `request` object in the [Rib reference](/rib#http-request-input-and-field-selection).
+
 The second line is about creating a worker instance with the name `my-worker-${user}`.
 The third line is about calling the function `get-cart-contents`  in the component, and it will be invoked  against the worker `my-worker-${user}`.
 Note that the real fully qualified function name (the one that is listed in component metadata is `golem:it/api.{get-cart-contents}`) however,
@@ -91,4 +95,12 @@ The third line assigns the result of the worker function to the variable `result
 That means, we are not manipulating the result returned by the function, and simply forward it as response body. Status is 200. Sometimes you need to specify the type of such as `200: u64`
 to help out with the compiler
 
-As mentioned above, see the [Rib reference](/rib) to know more about Rib language.
+### Getting Data from an HTTP Request in Rib
+
+The `request` object is a record that contains all the information about the HTTP request.
+This object is automatically passed to the Rib script through gateway when an API is invoked.
+You can find more details about the `request` object in the [Rib documentation](/rib#http-request-input-and-field-selection),
+which covers how to look up the path, query, header and body parameters in a Http Request using Rib.
+
+### Getting Started with Rib
+Please see the [Rib reference](/rib) to know more about Rib language.
