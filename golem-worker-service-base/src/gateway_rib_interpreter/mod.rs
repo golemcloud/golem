@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::fmt::Display;
-use std::sync::Arc;
-
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode, RibFunctionInvoke, RibInput,
     RibResult,
 };
+use std::fmt::Display;
+use std::sync::Arc;
 
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 
@@ -123,7 +123,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
 
         let result = rib::interpret(expr, rib_input, worker_invoke_function)
             .await
-            .map_err(EvaluationError)?;
+            .map_err(|err| EvaluationError(err.to_string()))?;
         Ok(result)
     }
 }
@@ -150,7 +150,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
-    ) -> Result<ValueAndType, String> {
+    ) -> anyhow::Result<ValueAndType> {
         let component_id = self.component_id.clone();
         let worker_name: Option<String> =
             worker_name.map(|x| x.0).or(self.global_worker_name.clone());
@@ -166,7 +166,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
             .into_iter()
             .map(TypeAnnotatedValue::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|errs: Vec<String>| errs.join(", "))?;
+            .map_err(|errs: Vec<String>| anyhow!(errs.join(", ")))?;
 
         let worker_request = GatewayResolvedWorkerRequest {
             component_id,
@@ -178,12 +178,8 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
             namespace,
         };
 
-        let tav = executor
-            .execute(worker_request)
-            .await
-            .map(|v| v.result)
-            .map_err(|e| e.to_string())?;
+        let tav = executor.execute(worker_request).await.map(|v| v.result)?;
 
-        tav.try_into()
+        tav.try_into().map_err(|err: String| anyhow!(err))
     }
 }

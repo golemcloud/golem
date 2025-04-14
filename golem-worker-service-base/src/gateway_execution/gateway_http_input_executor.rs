@@ -210,7 +210,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         let result = rib::interpret_pure(&script.compiled_worker_name, &rib_input)
             .await
-            .map_err(GatewayHttpError::RibInterpretPureError)?
+            .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_literal()
             .ok_or(GatewayHttpError::BadRequest(
                 "Worker name is not a Rib expression that resolves to String".to_string(),
@@ -229,7 +229,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         let value = rib::interpret_pure(&script.compiled_idempotency_key, &rib_input)
             .await
-            .map_err(GatewayHttpError::RibInterpretPureError)?
+            .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_literal()
             .ok_or(GatewayHttpError::BadRequest(
                 "Idempotency key is not a Rib expression that resolves to String".to_string(),
@@ -248,7 +248,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         let value = rib::interpret_pure(&script.compiled_invocation_context, &rib_input)
             .await
-            .map_err(GatewayHttpError::RibInterpretPureError)?
+            .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_record()
             .ok_or(GatewayHttpError::BadRequest(
                 "Invocation context must be a Rib expression that resolves to record".to_string(),

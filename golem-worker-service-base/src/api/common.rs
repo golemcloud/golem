@@ -269,7 +269,8 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
                 ApiDefinitionServiceError::RibInternal(_) => ApiEndpointError::internal(error),
-                ApiDefinitionServiceError::InvalidRibScript(_) => {
+                ApiDefinitionServiceError::RibParseError(_) => ApiEndpointError::bad_request(error),
+                ApiDefinitionServiceError::UnsupportedRibInput(_) => {
                     ApiEndpointError::bad_request(error)
                 }
                 ApiDefinitionServiceError::InvalidOasDefinition(_) => {
@@ -350,7 +351,13 @@ mod conversion {
                     })),
                 },
 
-                ApiDefinitionServiceError::InvalidRibScript(_) => ApiDefinitionError {
+                ApiDefinitionServiceError::RibParseError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
+                    })),
+                },
+
+                ApiDefinitionServiceError::UnsupportedRibInput(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
                         errors: vec![error.to_safe_string()],
                     })),

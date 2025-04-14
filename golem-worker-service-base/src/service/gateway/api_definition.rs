@@ -62,10 +62,12 @@ pub enum ApiDefinitionError {
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
+    #[error("Unsupported input in Rib script: {0}")]
+    UnsupportedRibInput(String),
     #[error("Rib internal error: {0}")]
     RibInternal(String),
-    #[error("Invalid rib script: {0}")]
-    InvalidRibScript(String),
+    #[error("Invalid rib syntax: {0}")]
+    RibParseError(String),
     #[error("Security Scheme Error: {0}")]
     SecuritySchemeError(SecuritySchemeServiceError),
     #[error("Identity Provider Error: {0}")]
@@ -109,7 +111,8 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::Internal(_) => self.to_string(),
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
             ApiDefinitionError::RibInternal(_) => self.to_string(),
-            ApiDefinitionError::InvalidRibScript(_) => self.to_string(),
+            ApiDefinitionError::RibParseError(_) => self.to_string(),
+            ApiDefinitionError::UnsupportedRibInput(_) => self.to_string(),
             ApiDefinitionError::InvalidOasDefinition(_) => self.to_string(),
         }
     }
@@ -123,7 +126,14 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
                 RibError::InternalError(e) => ApiDefinitionError::RibInternal(e),
-                RibError::RibParseError(e) => ApiDefinitionError::InvalidRibScript(e),
+                RibError::RibParseError(e) => ApiDefinitionError::RibParseError(e),
+                RibError::UnsupportedGlobalInput { expected, found } => {
+                    ApiDefinitionError::UnsupportedRibInput(format!(
+                        "Expected: {}, found: {}",
+                        expected.join(", "),
+                        found.join(", ")
+                    ))
+                }
             },
             RouteCompilationErrors::MetadataNotFoundError(e) => {
                 ApiDefinitionError::RibCompilationErrors(format!(
