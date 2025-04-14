@@ -31,7 +31,6 @@ use golem_shard_manager::shard_manager_config::{
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceGrpcConfig, DefaultAdditionalGolemConfig,
 };
-use golem_worker_executor_base::services::golem_config::ShardManagerServiceGrpcConfig;
 use golem_worker_executor_base::services::golem_config::{
     CompiledComponentServiceConfig, IndexedStorageKVStoreSqliteConfig,
 };
@@ -40,6 +39,9 @@ use golem_worker_executor_base::services::golem_config::{
 };
 use golem_worker_executor_base::services::golem_config::{
     GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+};
+use golem_worker_executor_base::services::golem_config::{
+    PluginServiceConfig, PluginServiceGrpcConfig, ShardManagerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
@@ -226,6 +228,11 @@ fn worker_executor_config(
             host: args.router_addr.clone(),
             port: shard_manager_run_details.grpc_port,
             ..ShardManagerServiceGrpcConfig::default()
+        }),
+        plugin_service: PluginServiceConfig::Grpc(PluginServiceGrpcConfig {
+            host: args.router_addr.clone(),
+            port: component_service_run_details.grpc_port,
+            ..Default::default()
         }),
         ..Default::default()
     };
