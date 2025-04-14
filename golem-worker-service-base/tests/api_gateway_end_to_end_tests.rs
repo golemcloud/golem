@@ -28,6 +28,7 @@ use crate::security::TestIdentityProvider;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_worker_service_base::gateway_api_definition::http::RouteCompilationErrors;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
@@ -40,6 +41,7 @@ use golem_worker_service_base::gateway_request::http_request::ApiInputPath;
 use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
+use golem_worker_service_base::service::gateway::api_definition_validator::ValidationErrors;
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::header::{LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
@@ -397,6 +399,97 @@ async fn test_api_def_with_query_and_path_params() {
             Value::String("jon".to_string()),
             Value::String("usa".to_string()),
         ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_api_def_with_invalid_path_lookup() {
+    let response_mapping = r#"
+       let user-id = request.path.user-id;
+       let worker-name = "shopping-cart-${user-id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec!["Following request.path lookups in response mapping rib script is not present in API route: user-id".to_string()],
+        }
+    );
+
+    assert_eq!(result, expected)
+}
+
+#[test]
+async fn test_api_def_with_invalid_query_and_path_lookup() {
+    let response_mapping = r#"
+       let user-id = request.path.user-id;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user-id}-${country}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, country);
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec![
+                "Following request.query lookups in response mapping rib script is not present in API route: country".to_string(),
+                "Following request.path lookups in response mapping rib script is not present in API route: user-id".to_string(),
+            ],
+        }
+    );
+
+    assert_eq!(result, expected)
+}
+
+#[test]
+async fn test_api_def_with_invalid_query_lookup() {
+    let response_mapping = r#"
+       let user-id = request.query.user-id;
+       let worker-name = "shopping-cart-${user-id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{userid}", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec!["Following request.query lookups in response mapping rib script is not present in API route: user-id".to_string()],
+        }
     );
 
     assert_eq!(result, expected);

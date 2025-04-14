@@ -103,7 +103,7 @@ pub fn compile_with_restricted_global_variables(
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RibError {
     // Failed to compile due internal logical errors
     // example: successfully inferred rib script, but failed to convert it to byte code

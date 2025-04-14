@@ -9,7 +9,7 @@ use crate::{
 use std::fmt;
 use std::fmt::{Debug, Display};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct RibCompilationError {
     pub cause: String,
     pub expr: Expr,

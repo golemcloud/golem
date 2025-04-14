@@ -735,7 +735,7 @@ pub struct CompiledAuthCallBackRoute {
     pub http_auth_middleware: HttpAuthenticationMiddleware,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum RouteCompilationErrors {
     MetadataNotFoundError(VersionedComponentId),
     RibError(RibError),
@@ -903,7 +903,7 @@ impl CompiledRoute {
             if !invalid_query_params.is_empty() {
                 validation_errors.push(
                     format!(
-                        "Following query lookups in worker name rib script is not present in API route: {}",
+                        "Following request.query lookups in worker name rib script is not present in API route: {}",
                         invalid_query_params.join(", ")
                     )
                 );
@@ -915,7 +915,7 @@ impl CompiledRoute {
             if !invalid_path_params.is_empty() {
                 validation_errors.push(
                     format!(
-                        "Following path lookups in worker name rib script is not present in API route: {}",
+                        "Following request.path lookups in worker name rib script is not present in API route: {}",
                         invalid_path_params.join(", ")
                     )
                 );
@@ -930,7 +930,7 @@ impl CompiledRoute {
             if !invalid_query_params.is_empty() {
                 validation_errors.push(
                     format!(
-                        "Following query lookups in invocation context rib script is not present in API route: {}",
+                        "Following request.query lookups in invocation context rib script is not present in API route: {}",
                         invalid_query_params.join(", ")
                     )
                 );
@@ -942,7 +942,7 @@ impl CompiledRoute {
             if !invalid_path_params.is_empty() {
                 validation_errors.push(
                     format!(
-                        "Following path lookups in invocation context rib script is not present in API route: {}",
+                        "Following request.path lookups in invocation context rib script is not present in API route: {}",
                         invalid_path_params.join(", ")
                     )
                 );
@@ -957,8 +957,20 @@ impl CompiledRoute {
             if !invalid_query_params.is_empty() {
                 validation_errors.push(
                     format!(
-                        "Following query lookups in idempotency key rib script is not present in API route: {}",
+                        "Following request.query lookups in idempotency key rib script is not present in API route: {}",
                         invalid_query_params.join(", ")
+                    )
+                );
+            }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.path lookups in idempotency key rib script is not present in API route: {}",
+                        invalid_path_params.join(", ")
                     )
                 );
             }
@@ -972,7 +984,7 @@ impl CompiledRoute {
             if !invalid_query_params.is_empty() {
                 validation_errors.push(
                     format!(
-                        "Following query lookups in response mapping rib script is not present in API route: {}",
+                        "Following request.query lookups in response mapping rib script is not present in API route: {}",
                         invalid_query_params.join(", ")
                     )
                 );
@@ -984,7 +996,7 @@ impl CompiledRoute {
             if !invalid_path_params.is_empty() {
                 validation_errors.push(
                     format!(
-                        "Following path lookups in response mapping rib script is not present in API route: {}",
+                        "Following request.path lookups in response mapping rib script is not present in API route: {}",
                         invalid_path_params.join(", ")
                     )
                 );
