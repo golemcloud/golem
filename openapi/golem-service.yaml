@@ -5430,6 +5430,8 @@ components:
           type: string
         plugin_version:
           type: string
+        registered:
+          type: boolean
         parameters:
           type: object
           additionalProperties:
@@ -5438,6 +5440,7 @@ components:
       - installation_id
       - plugin_name
       - plugin_version
+      - registered
       - parameters
     PromiseId:
       type: object
