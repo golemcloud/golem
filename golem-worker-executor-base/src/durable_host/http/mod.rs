@@ -45,7 +45,6 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
             }
         }
 
-        warn!("Finishing outgoing http request span: {:?}", state.span_id);
         ctx.finish_span(&state.span_id).await?;
     } else {
         warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);

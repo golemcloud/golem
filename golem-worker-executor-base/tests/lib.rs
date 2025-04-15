@@ -48,6 +48,7 @@ mod common;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
+pub mod durability;
 pub mod guest_languages1;
 pub mod guest_languages2;
 pub mod guest_languages3;
@@ -81,6 +82,7 @@ tag_suite!(guest_languages1, group2);
 tag_suite!(transactions, group3);
 tag_suite!(wasi, group3);
 tag_suite!(revert, group3);
+tag_suite!(durability, group3);
 
 tag_suite!(scalability, group4);
 tag_suite!(hot_update, group4);

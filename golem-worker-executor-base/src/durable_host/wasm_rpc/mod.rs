@@ -23,7 +23,6 @@ use crate::durable_host::wasm_rpc::serialized::{
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, OplogEntryVersion};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
-use crate::model::PersistenceLevel;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
@@ -33,7 +32,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::exports::function_by_name;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
     WorkerId,
@@ -712,8 +711,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         };
 
         let handle = this.rep();
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
-        {
+        if self.state.is_live() || self.state.snapshotting_mode.is_some() {
             let stack = self
                 .state
                 .invocation_context
@@ -844,7 +842,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            if self.state.persistence_level != PersistenceLevel::PersistNothing {
+            if self.state.snapshotting_mode.is_none() {
                 self.state
                     .oplog
                     .add_imported_function_invoked(
@@ -888,87 +886,94 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 Err(err) => Err(err),
             }
         } else {
-            let (_, oplog_entry) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
-                    .map_err(|golem_err| {
-                        anyhow!(
-                    "failed to get golem::rpc::future-invoke-result::get oplog entry: {golem_err}"
+            if self.state.persistence_level == PersistenceLevel::PersistNothing {
+                Err(GolemError::runtime(
+                    "Trying to replay an RPC call in a PersistNothing block",
                 )
-                    })?;
-
-            let serialized_invoke_result: Result<SerializableInvokeResult, String> = self
-                .state
-                .oplog
-                .get_payload_of_entry::<SerializableInvokeResult>(&oplog_entry)
-                .await
-                .map(|v| v.unwrap());
-
-            if let Ok(serialized_invoke_result) = serialized_invoke_result {
-                if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
-                    match self.state.open_function_table.get(&handle) {
-                        Some(begin_index) => {
-                            self.state
-                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
-                                .await?;
-                            self.state.open_function_table.remove(&handle);
-                        }
-                        None => {
-                            warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
-                        }
-                    }
-
-                    self.finish_span(&span_id).await?;
-                }
-
-                match serialized_invoke_result {
-                    SerializableInvokeResult::Pending => Ok(None),
-                    SerializableInvokeResult::Completed(result) => match result {
-                        Ok(tav) => {
-                            let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
-                            Ok(Some(Ok(wit_value)))
-                        }
-                        Err(error) => Ok(Some(Err(error.into()))),
-                    },
-                    SerializableInvokeResult::Failed(error) => Err(error.into()),
-                }
+                .into())
             } else {
-                let serialized_invoke_result = self
+                let (_, oplog_entry) =
+                    get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
+                        .map_err(|golem_err| {
+                            anyhow!(
+                        "failed to get golem::rpc::future-invoke-result::get oplog entry: {golem_err}"
+                    )
+                        })?;
+
+                let serialized_invoke_result: Result<SerializableInvokeResult, String> = self
                     .state
                     .oplog
-                    .get_payload_of_entry::<SerializableInvokeResultV1>(&oplog_entry)
+                    .get_payload_of_entry::<SerializableInvokeResult>(&oplog_entry)
                     .await
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "failed to deserialize function response: {:?}: {err}",
-                            oplog_entry
-                        )
-                    })
-                    .unwrap();
+                    .map(|v| v.unwrap());
 
-                if !matches!(
-                    serialized_invoke_result,
-                    SerializableInvokeResultV1::Pending
-                ) {
-                    match self.state.open_function_table.get(&handle) {
-                        Some(begin_index) => {
-                            self.state
-                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
-                                .await?;
-                            self.state.open_function_table.remove(&handle);
+                if let Ok(serialized_invoke_result) = serialized_invoke_result {
+                    if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
+                        match self.state.open_function_table.get(&handle) {
+                            Some(begin_index) => {
+                                self.state
+                                    .end_function(&DurableFunctionType::WriteRemote, *begin_index)
+                                    .await?;
+                                self.state.open_function_table.remove(&handle);
+                            }
+                            None => {
+                                warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+                            }
                         }
-                        None => {
-                            warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+
+                        self.finish_span(&span_id).await?;
+                    }
+
+                    match serialized_invoke_result {
+                        SerializableInvokeResult::Pending => Ok(None),
+                        SerializableInvokeResult::Completed(result) => match result {
+                            Ok(tav) => {
+                                let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                                Ok(Some(Ok(wit_value)))
+                            }
+                            Err(error) => Ok(Some(Err(error.into()))),
+                        },
+                        SerializableInvokeResult::Failed(error) => Err(error.into()),
+                    }
+                } else {
+                    let serialized_invoke_result = self
+                        .state
+                        .oplog
+                        .get_payload_of_entry::<SerializableInvokeResultV1>(&oplog_entry)
+                        .await
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "failed to deserialize function response: {:?}: {err}",
+                                oplog_entry
+                            )
+                        })
+                        .unwrap();
+
+                    if !matches!(
+                        serialized_invoke_result,
+                        SerializableInvokeResultV1::Pending
+                    ) {
+                        match self.state.open_function_table.get(&handle) {
+                            Some(begin_index) => {
+                                self.state
+                                    .end_function(&DurableFunctionType::WriteRemote, *begin_index)
+                                    .await?;
+                                self.state.open_function_table.remove(&handle);
+                            }
+                            None => {
+                                warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+                            }
                         }
                     }
-                }
 
-                match serialized_invoke_result {
-                    SerializableInvokeResultV1::Pending => Ok(None),
-                    SerializableInvokeResultV1::Completed(result) => match result {
-                        Ok(wit_value) => Ok(Some(Ok(wit_value))),
-                        Err(error) => Ok(Some(Err(error.into()))),
-                    },
-                    SerializableInvokeResultV1::Failed(error) => Err(error.into()),
+                    match serialized_invoke_result {
+                        SerializableInvokeResultV1::Pending => Ok(None),
+                        SerializableInvokeResultV1::Completed(result) => match result {
+                            Ok(wit_value) => Ok(Some(Ok(wit_value))),
+                            Err(error) => Ok(Some(Err(error.into()))),
+                        },
+                        SerializableInvokeResultV1::Failed(error) => Err(error.into()),
+                    }
                 }
             }
         }

@@ -30,7 +30,7 @@ use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
@@ -406,15 +406,74 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         new_persistence_level: golem_api_1_x::host::PersistenceLevel,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "set_oplog_persistence_level");
-        // commit all pending entries and change persistence level
-        if self.state.is_live() {
-            self.state.oplog.commit(CommitLevel::DurableOnly).await;
+
+        let new_persistence_level = new_persistence_level.into();
+        if self.state.persistence_level != new_persistence_level {
+            // commit all pending entries and change persistence level
+            if self.state.is_live() {
+                self.state
+                    .oplog
+                    .add(OplogEntry::change_persistence_level(new_persistence_level))
+                    .await;
+                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+            } else {
+                let (_, _) = get_oplog_entry!(
+                    self.state.replay_state,
+                    OplogEntry::ChangePersistenceLevel
+                )?;
+
+                // TODO: this has to be done during normal replay similar to skipped region handling, but it should not be actually
+                // TODO: skipped when querying oplog etc. We cannot rely on skipped regions though because we also have to skip
+                // TODO: when the region is not closed and in that case nothing could have updated the skipped region map.
+                if new_persistence_level == PersistenceLevel::PersistNothing {
+                    let begin_index = self.state.current_oplog_index().await;
+                    let end_index = self
+                        .state
+                        .replay_state
+                        .lookup_oplog_entry(begin_index, |entry, _idx| match entry {
+                            OplogEntry::ChangePersistenceLevel { level, .. } => {
+                                level != &PersistenceLevel::PersistNothing
+                            }
+                            OplogEntry::ExportedFunctionCompleted { .. } => true,
+                            _ => false,
+                        })
+                        .await;
+
+                    if let Some(end_index) = end_index {
+                        debug!("Worker's persist-nothing region starting at {} ends at {}, skipping persisted entries in between", begin_index, end_index);
+
+                        self.state.replay_state.skip_forward_to(end_index);
+                    } else {
+                        debug!("Worker's persist-nothing region starting at {} has never finished, ignoring persisted entries", begin_index);
+
+                        // We need to jump to the end of the oplog
+                        self.state.replay_state.switch_to_live();
+
+                        // But this is not enough, because if the retried transactional block succeeds,
+                        // and later we replay it, we need to skip the first attempt and only replay the second.
+                        // Se we add a Jump entry to the oplog that registers a deleted region.
+                        let deleted_region = OplogRegion {
+                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                            end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                        };
+                        self.state
+                            .replay_state
+                            .add_skipped_region(deleted_region.clone())
+                            .await;
+                        self.state
+                            .oplog
+                            .add_and_commit(OplogEntry::jump(deleted_region))
+                            .await;
+                    }
+                }
+            }
+
+            self.state.persistence_level = new_persistence_level;
+            debug!(
+                "Worker's oplog persistence level is set to {:?}",
+                self.state.persistence_level
+            );
         }
-        self.state.persistence_level = new_persistence_level.into();
-        debug!(
-            "Worker's oplog persistence level is set to {:?}",
-            self.state.persistence_level
-        );
         Ok(())
     }
 

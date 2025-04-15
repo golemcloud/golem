@@ -78,6 +78,10 @@ impl ReplayState {
         self.last_replayed_index.set(self.replay_target.get());
     }
 
+    pub fn skip_forward_to(&mut self, target: OplogIndex) {
+        self.last_replayed_index.set(target);
+    }
+
     pub fn last_replayed_index(&self) -> OplogIndex {
         self.last_replayed_index.get()
     }

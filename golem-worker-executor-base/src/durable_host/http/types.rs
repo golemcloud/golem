@@ -32,7 +32,7 @@ use wasmtime_wasi_http::get_fields;
 use wasmtime_wasi_http::types::FieldMap;
 use wasmtime_wasi_http::{HttpError, HttpResult};
 
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 
 use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
@@ -40,8 +40,8 @@ use crate::durable_host::http::serialized::{
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::error::GolemError;
 use crate::get_oplog_entry;
-use crate::model::PersistenceLevel;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 
@@ -617,9 +617,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
         let handle = self_.rep();
         let durable_execution_state = self.durable_execution_state();
-        if durable_execution_state.is_live
-            || durable_execution_state.persistence_level == PersistenceLevel::PersistNothing
-        {
+        if durable_execution_state.is_live || self.state.snapshotting_mode.is_some() {
             let request_state = self.state.open_http_requests.get(&handle).ok_or_else(|| {
                 anyhow!("No matching HTTP request is associated with resource handle")
             })?;
@@ -652,18 +650,18 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 Err(err) => SerializableResponse::InternalError(Some(err.into())),
             };
 
-            if self.state.persistence_level != PersistenceLevel::PersistNothing {
-                self.state
-                    .oplog
-                    .add_imported_function_invoked(
-                        "http::types::future_incoming_response::get".to_string(),
-                        &request,
-                        &serializable_response,
-                        DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                    )
-                    .await
-                    .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+            if self.state.snapshotting_mode.is_none() {
+            self.state
+                .oplog
+                .add_imported_function_invoked(
+                    "http::types::future_incoming_response::get".to_string(),
+                    &request,
+                    &serializable_response,
+                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
+                )
+                .await
+                .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+            self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
 
             if !matches!(serializable_response, SerializableResponse::Pending) {
@@ -680,44 +678,53 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
             response
         } else {
-            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked, OplogEntry::ImportedFunctionInvokedV1).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            if durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
+                Err(GolemError::runtime(
+                    "Trying to replay an http request in a PersistNothing block",
+                )
+                .into())
+            } else {
+                let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked, OplogEntry::ImportedFunctionInvokedV1).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
-            let serialized_response = self
-                .state
-                .oplog
-                .get_payload_of_entry::<SerializableResponse>(&oplog_entry)
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to deserialize function response: {:?}: {err}",
-                        oplog_entry
-                    )
-                })
-                .unwrap();
+                let serialized_response = self
+                    .state
+                    .oplog
+                    .get_payload_of_entry::<SerializableResponse>(&oplog_entry)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to deserialize function response: {:?}: {err}",
+                            oplog_entry
+                        )
+                    })
+                    .unwrap();
 
-            match serialized_response {
-                SerializableResponse::Pending => Ok(None),
-                SerializableResponse::HeadersReceived(serializable_response_headers) => {
-                    let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
-                        serializable_response_headers.try_into()?;
+                match serialized_response {
+                    SerializableResponse::Pending => Ok(None),
+                    SerializableResponse::HeadersReceived(serializable_response_headers) => {
+                        let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
+                            serializable_response_headers.try_into()?;
 
-                    let rep = self.table().push(incoming_response)?;
-                    let incoming_response_handle = rep.rep();
+                        let rep = self.table().push(incoming_response)?;
+                        let incoming_response_handle = rep.rep();
 
-                    continue_http_request(
-                        self,
-                        handle,
-                        incoming_response_handle,
-                        HttpRequestCloseOwner::IncomingResponseDrop,
-                    );
+                        continue_http_request(
+                            self,
+                            handle,
+                            incoming_response_handle,
+                            HttpRequestCloseOwner::IncomingResponseDrop,
+                        );
 
-                    Ok(Some(Ok(Ok(rep))))
+                        Ok(Some(Ok(Ok(rep))))
+                    }
+                    SerializableResponse::InternalError(None) => Ok(Some(Err(()))),
+                    SerializableResponse::InternalError(Some(serializable_error)) => {
+                        Err(serializable_error.into())
+                    }
+                    SerializableResponse::HttpError(error_code) => {
+                        Ok(Some(Ok(Err(error_code.into()))))
+                    }
                 }
-                SerializableResponse::InternalError(None) => Ok(Some(Err(()))),
-                SerializableResponse::InternalError(Some(serializable_error)) => {
-                    Err(serializable_error.into())
-                }
-                SerializableResponse::HttpError(error_code) => Ok(Some(Ok(Err(error_code.into())))),
             }
         }
     }

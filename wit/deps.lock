@@ -1,5 +1,5 @@
 [all]
-url = "https://github.com/golemcloud/golem-wit/archive/v1.2.2-dev.7.tar.gz"
+url = "https://github.com/golemcloud/golem-wit/archive/add-change-persistence-level-entry.tar.gz"
 sha256 = "6ac4f1553003474229bb40a885b48d1eaa4bea2f9d679a115da9afede30b5ad4"
 sha512 = "ced8c18a35dc04123386465d98d2aeba54c486e4e22a30e7efac0548974e176528fcba36c64942d67fa35d9135806ff0fcde259eb4af051c4a29fcb397e9af1c"
 deps = ["blobstore", "cli", "clocks", "filesystem", "golem-1.x", "golem-durability", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
@@ -21,8 +21,8 @@ sha256 = "498c465cfd04587db40f970fff2185daa597d074c20b68a8bcbae558f261499b"
 sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00230d730873361567cc209ec218c41fb4e95bad194268592c49e7964347"
 
 ["golem-1.x"]
-sha256 = "2787c96144b95a334a8abed873b8231e286126691337ff05c37318d71b462972"
-sha512 = "442a5f8cb59fd715520fd7ebdaf2823d9a83b493db4493039237997cd277f8e519a72228322cce352c0d2ce6327bcbda383331c8923d9a6a00e4edce3a12bff6"
+sha256 = "98562a7e1e3eb630a9cbfa18fee73a3d1766854e99c48e30f815f71128f4063f"
+sha512 = "1c75cd7b1b856923d1edd5ed15c4be0d5a27c5117d9c3e8de797ca9d2bc7dc0e919372b89560a2ae1fd9c15325afd2c9bb3f3eb0ecbc78086ccfab5e756762ed"
 
 [golem-durability]
 sha256 = "f50fa917f725de179478ab005663e7fd5273197f2761796a822c734d12c270f0"
