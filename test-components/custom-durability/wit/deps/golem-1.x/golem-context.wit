@@ -1,0 +1,93 @@
+package golem:api@1.1.6;
+
+/// Invocation context support
+interface context {
+    use wasi:clocks/wall-clock@0.2.0.{datetime};
+
+    /// Starts a new `span` with the given name, as a child of the current invocation context
+    start-span: func(name: string) -> span;
+
+    /// Gets the current invocation context
+    ///
+    /// The function call captures the current context; if new spans are started, the returned `invocation-context` instance will not
+    /// reflect that.
+    current-context: func() -> invocation-context;
+
+    /// Allows or disallows forwarding of trace context headers in outgoing HTTP requests
+    ///
+    /// Returns the previous value of the setting
+    allow-forwarding-trace-context-headers: func(allow: bool) -> bool;
+
+    /// Represents a unit of work or operation
+    resource span {
+        /// Gets the starting time of the span
+        started-at: func() -> datetime;
+
+        /// Set an attribute on the span
+        set-attribute: func(name: string, value: attribute-value);
+
+        /// Set multiple attributes on the span
+        set-attributes: func(attributes: list<attribute>);
+
+        /// Early finishes the span; otherwise it will be finished when the resource is dropped
+        finish: func();
+    }
+
+    /// Represents an invocation context wich allows querying the stack of attributes
+    /// created by automatic and user-defined spans.
+    resource invocation-context {
+        /// Gets the current trace id
+        trace-id: func() -> trace-id;
+
+        /// Gets the current span id
+        span-id: func() -> span-id;
+
+        /// Gets the parent context, if any; allows recursive processing of the invocation context.
+        ///
+        /// Alternatively, the attribute query methods can return inherited values without having to
+        /// traverse the stack manually.
+        parent: func() -> option<invocation-context>;
+
+        /// Gets the value of an attribute `key`. If `inherited` is true, the value is searched in the stack of spans,
+        /// otherwise only in the current span.
+        get-attribute: func(key: string, inherited: bool) -> option<attribute-value>;
+
+        /// Gets all attributes of the current invocation context. If `inherited` is true, it returns the merged set of attributes, each
+        /// key associated with the latest value found in the stack of spans.
+        get-attributes: func(inherited: bool) -> list<attribute>;
+
+        /// Gets the chain of attribute values associated with the given `key`. If the key does not exist in any of the
+        /// spans in the invocation context, the list is empty. The chain's first element contains the most recent (innermost) value.
+        get-attribute-chain: func(key: string) -> list<attribute-value>;
+
+        /// Gets all values of all attributes of the current invocation context.
+        get-attribute-chains: func() -> list<attribute-chain>;
+
+        /// Gets the W3C Trace Context headers associated with the current invocation context
+        trace-context-headers: func() -> list<tuple<string, string>>;
+    }
+
+    /// An attribute of a span
+    record attribute {
+        key: string,
+        value: attribute-value
+    }
+
+    /// A chain of attribute values, the first element representing the most recent value
+    record attribute-chain {
+        key: string,
+        values: list<attribute-value>
+    }
+
+    /// Possible span attribute value types
+    variant attribute-value {
+        /// A string value
+        %string(string)
+    }
+
+    /// The trace represented by a 16 bytes hexadecimal string
+    type trace-id = string;
+
+    /// The span represented by a 8 bytes hexadecimal string
+    type span-id = string;
+}
