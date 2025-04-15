@@ -16,11 +16,7 @@ use crate::grpcapi::component::bad_request_error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_plugin_response, delete_plugin_response, get_plugin_response,
-    list_plugins_response, ComponentError, CreatePluginRequest, CreatePluginResponse,
-    DeletePluginRequest, DeletePluginResponse, GetPluginRequest, GetPluginResponse,
-    GetPluginSuccessResponse, ListPluginVersionsRequest, ListPluginsRequest, ListPluginsResponse,
-    ListPluginsSuccessResponse,
+    component_error, create_plugin_response, delete_plugin_response, get_plugin_by_id_response, get_plugin_response, list_plugins_response, ComponentError, CreatePluginRequest, CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginByIdRequest, GetPluginByIdResponse, GetPluginRequest, GetPluginResponse, GetPluginSuccessResponse, ListPluginVersionsRequest, ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse
 };
 use golem_api_grpc::proto::golem::component::PluginDefinition;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
@@ -95,6 +91,28 @@ impl PluginGrpcApi {
         let plugin = self
             .plugin_service
             .get(&DefaultPluginOwner, &request.name, &request.version)
+            .await?;
+
+        match plugin {
+            Some(plugin) => Ok(plugin.into()),
+            None => Err(ComponentError {
+                error: Some(component_error::Error::NotFound(ErrorBody {
+                    error: "Plugin not found".to_string(),
+                })),
+            }),
+        }
+    }
+
+    async fn get_plugin_by_id(
+        &self,
+        request: &GetPluginByIdRequest,
+    ) -> Result<PluginDefinition, ComponentError> {
+        let plugin_id = &request.id.ok_or(bad_request_error("Missing plugin id"))?.try_into().map_err(|err| bad_request_error(&format!("Invalid plugin id: {err}")))?;
+
+
+        let plugin = self
+            .plugin_service
+            .get_by_id(&DefaultPluginOwner, plugin_id)
             .await?;
 
         match plugin {
@@ -220,6 +238,36 @@ impl golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginS
             Err(error) => record.fail(
                 GetPluginResponse {
                     result: Some(get_plugin_response::Result::Error(error.clone())),
+                },
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn get_plugin_by_id(
+        &self,
+        request: Request<GetPluginByIdRequest>,
+    ) -> Result<Response<GetPluginByIdResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("get_plugin",);
+
+        let response = match self
+            .get_plugin_by_id(&request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(plugin) => record.succeed(GetPluginByIdResponse {
+                result: Some(get_plugin_by_id_response::Result::Success(
+                    GetPluginSuccessResponse {
+                        plugin: Some(plugin),
+                    },
+                )),
+            }),
+            Err(error) => record.fail(
+                GetPluginByIdResponse {
+                    result: Some(get_plugin_by_id_response::Result::Error(error.clone())),
                 },
                 &ComponentTraceErrorKind(&error),
             ),

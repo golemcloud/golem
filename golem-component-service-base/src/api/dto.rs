@@ -1,12 +1,16 @@
 use crate::model::plugin as local_plugin_model;
 use crate::model::plugin::PluginWasmFileReference;
-use golem_common::model::plugin as common_plugin_model;
+use golem_common::model::component::VersionedComponentId;
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::{plugin as common_plugin_model, ComponentType, Empty, InitialComponentFile, PluginInstallationId};
 use golem_common::model::plugin::{PluginOwner, PluginScope};
+use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
 use golem_service_base::replayable_stream::ReplayableStream;
 use poem_openapi::types::Binary;
-use poem_openapi::Multipart;
+use poem_openapi::{Multipart, Object};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
@@ -203,4 +207,69 @@ impl<Owner: PluginOwner, Scope: PluginScope>
             owner: value.owner,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredReferencedPlugin {
+    pub plugin_name: String,
+    pub plugin_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum ReferencedPlugin {
+    Registered(RegisteredReferencedPlugin),
+    Unregistered(Empty)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallation {
+    pub id: PluginInstallationId,
+    pub plugin: ReferencedPlugin,
+    pub priority: i32,
+    pub parameters: HashMap<String, String>,
+}
+
+impl PluginInstallation {
+    pub fn from_model<Owner: PluginOwner, Scope: PluginScope>(
+        model: common_plugin_model::PluginInstallation,
+        plugin_definition: common_plugin_model::PluginDefinition<Owner, Scope>
+    ) -> Self {
+        let plugin  = if !plugin_definition.deleted {
+            ReferencedPlugin::Registered(RegisteredReferencedPlugin {
+                plugin_name: plugin_definition.name,
+                plugin_version: plugin_definition.version
+            })
+        } else {
+            ReferencedPlugin::Unregistered(Empty { })
+        };
+
+        Self {
+            id: model.id,
+            plugin,
+            priority: model.priority,
+            parameters: model.parameters,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct Component {
+    pub versioned_component_id: VersionedComponentId,
+    pub component_name: ComponentName,
+    pub component_size: u64,
+    pub metadata: ComponentMetadata,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub component_type: ComponentType,
+    pub files: Vec<InitialComponentFile>,
+    pub installed_plugins: Vec<PluginInstallation>,
 }

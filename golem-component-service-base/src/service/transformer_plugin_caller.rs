@@ -15,11 +15,15 @@
 use crate::config::PluginTransformationsConfig;
 use crate::model::Component;
 use async_trait::async_trait;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::{ComponentType, InitialComponentFile};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
+use golem_service_base::model::ComponentName;
 use http::StatusCode;
 use reqwest::multipart::{Form, Part};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 
@@ -81,7 +85,7 @@ impl<Owner: ComponentOwner> TransformerPluginCaller<Owner> for TransformerPlugin
         url: String,
         parameters: &HashMap<String, String>,
     ) -> Result<Vec<u8>, TransformationFailedReason> {
-        let serializable_component: golem_service_base::model::Component = component.clone().into();
+        let serializable_component: SerializableComponent = component.clone().into();
         let response = with_retries(
             "component_transformer_plugin",
             "transform",
@@ -160,5 +164,31 @@ impl<Owner: ComponentOwner> TransformerPluginCaller<Owner> for TransformerPlugin
         })?;
 
         Ok(body.to_vec())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializableComponent {
+    pub versioned_component_id: VersionedComponentId,
+    pub component_name: ComponentName,
+    pub component_size: u64,
+    pub metadata: ComponentMetadata,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub component_type: ComponentType,
+    pub files: Vec<InitialComponentFile>
+}
+
+impl <Owner: ComponentOwner> From<crate::model::Component<Owner>> for SerializableComponent {
+    fn from(value: crate::model::Component<Owner>) -> Self {
+        Self {
+            versioned_component_id: value.versioned_component_id,
+            component_name: value.component_name,
+            component_size: value.component_size,
+            metadata: value.metadata,
+            created_at: value.created_at,
+            component_type: value.component_type,
+            files: value.files
+        }
     }
 }

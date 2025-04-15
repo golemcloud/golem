@@ -55,6 +55,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             component::ComponentApi::new(
                 services.component_service.clone(),
                 services.plugin_service.clone(),
+                services.api_mapper.clone()
             ),
             healthcheck::HealthcheckApi,
             plugin::PluginApi {
@@ -164,11 +165,6 @@ impl From<ComponentServiceError> for ComponentError {
             }
             ComponentServiceError::InitialComponentFileNotFound { .. } => {
                 ComponentError::NotFound(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::TransformationPluginNotFound { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
                     error: error.to_safe_string(),
                 }))
             }

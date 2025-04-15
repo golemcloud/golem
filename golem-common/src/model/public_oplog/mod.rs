@@ -40,6 +40,8 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
+use super::plugin::{PluginDefinition, PluginOwner, PluginScope};
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct SnapshotBasedUpdateParameters {
@@ -289,7 +291,23 @@ pub struct PluginInstallationDescription {
     pub installation_id: PluginInstallationId,
     pub plugin_name: String,
     pub plugin_version: String,
+    pub registered: bool,
     pub parameters: BTreeMap<String, String>,
+}
+
+impl PluginInstallationDescription {
+    pub fn from_definition_and_installation<Owner: PluginOwner, Scope: PluginScope>(
+        definition: PluginDefinition<Owner, Scope>,
+        installation: PluginInstallation
+    ) -> Self {
+        Self {
+            installation_id: installation.id,
+            plugin_name: definition.name,
+            plugin_version: definition.version,
+            parameters: installation.parameters.into_iter().collect(),
+            registered: !definition.deleted
+        }
+    }
 }
 
 impl IntoValue for PluginInstallationDescription {
@@ -314,17 +332,6 @@ impl IntoValue for PluginInstallationDescription {
             field("version", str()),
             field("parameters", list(tuple(vec![str(), str()]))),
         ])
-    }
-}
-
-impl From<PluginInstallation> for PluginInstallationDescription {
-    fn from(installation: PluginInstallation) -> Self {
-        Self {
-            installation_id: installation.id,
-            plugin_name: installation.name,
-            plugin_version: installation.version,
-            parameters: installation.parameters.into_iter().collect(),
-        }
     }
 }
 

@@ -16,6 +16,7 @@ use crate::config::ComponentServiceConfig;
 use golem_common::config::DbConfig;
 use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_component_service_base::api::mapper::{ApiMapper, DefaultApiMapper};
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
@@ -48,6 +49,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
     pub compilation_service: Arc<dyn ComponentCompilationService>,
     pub plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    pub api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>
 }
 
 impl Services {
@@ -155,10 +157,13 @@ impl Services {
             ))
             .await;
 
+        let api_mapper = Arc::new(DefaultApiMapper::new(plugin_service.clone()));
+
         Ok(Services {
             component_service,
             compilation_service,
             plugin_service,
+            api_mapper
         })
     }
 }

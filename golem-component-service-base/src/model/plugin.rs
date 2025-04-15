@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use golem_common::model::plugin::{
+use golem_common::model::{plugin::{
     ComponentTransformerDefinition, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
     PluginOwner, PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
-};
+}, PluginId};
 use golem_service_base::replayable_stream::BoxReplayableStream;
 
 pub enum PluginWasmFileReference {
@@ -52,10 +52,12 @@ pub struct PluginDefinitionCreation<Scope: PluginScope> {
 impl<Scope: PluginScope> PluginDefinitionCreation<Scope> {
     pub fn into_definition<Owner: PluginOwner>(
         self,
+        id: PluginId,
         owner: Owner,
         specs: PluginTypeSpecificDefinition,
     ) -> PluginDefinition<Owner, Scope> {
         PluginDefinition {
+            id,
             name: self.name,
             version: self.version,
             description: self.description,
@@ -64,17 +66,18 @@ impl<Scope: PluginScope> PluginDefinitionCreation<Scope> {
             scope: self.scope,
             owner,
             specs,
+            deleted: false
         }
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinition>
+impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinitionCreation>
     for PluginDefinitionCreation<DefaultPluginScope>
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::component::PluginDefinition,
+        value: golem_api_grpc::proto::golem::component::PluginDefinitionCreation,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,

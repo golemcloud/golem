@@ -20,7 +20,7 @@ use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
     PluginInstallation, PluginOwner, PluginTypeSpecificDefinition,
 };
-use golem_common::model::{AccountId, ComponentId, ComponentType, Empty, PluginInstallationId};
+use golem_common::model::{AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId};
 use golem_common::repo::component::DefaultComponentOwnerRow;
 use golem_common::repo::plugin::{DefaultPluginOwnerRow, DefaultPluginScopeRow};
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
@@ -42,7 +42,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use tracing::info;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 pub mod constraint_data;
 pub mod postgres;
@@ -452,6 +452,7 @@ async fn test_default_plugin_repo(
         .await?;
 
     let plugin1 = PluginDefinition {
+        id: PluginId(uuid!("76493C6B-16DA-4DC8-86B7-EF58035DDD7C")),
         name: "plugin1".to_string(),
         version: "v1".to_string(),
         description: "the first test plugin".to_string(),
@@ -465,10 +466,12 @@ async fn test_default_plugin_repo(
         }),
         scope: DefaultPluginScope::Global(Empty {}),
         owner: DefaultPluginOwner,
+        deleted: false,
     };
     let plugin1_row = plugin1.clone().into();
 
     let plugin2 = PluginDefinition {
+        id: PluginId(uuid!("3DFBAAF6-D40F-4FC4-8F33-6ED4C25213B1")),
         name: "plugin2".to_string(),
         version: "v1".to_string(),
         description: "the first test plugin".to_string(),
@@ -482,6 +485,7 @@ async fn test_default_plugin_repo(
             component_id: component_id.clone(),
         }),
         owner: DefaultPluginOwner,
+        deleted: false,
     };
     let plugin2_row = plugin2.clone().into();
 
@@ -571,6 +575,7 @@ async fn test_default_component_plugin_installation(
     .unwrap();
 
     let plugin1 = PluginDefinition {
+        id: PluginId(uuid!("F9890D4A-A3FA-4E8C-83D5-EABA0A9E1396")),
         name: "plugin2".to_string(),
         version: "v2".to_string(),
         description: "another test plugin".to_string(),
@@ -584,6 +589,7 @@ async fn test_default_component_plugin_installation(
         }),
         scope: DefaultPluginScope::Global(Empty {}),
         owner: plugin_owner.clone(),
+        deleted: false,
     };
     let plugin1_row = plugin1.clone().into();
 
@@ -604,8 +610,7 @@ async fn test_default_component_plugin_installation(
 
     let installation1 = PluginInstallation {
         id: PluginInstallationId::new_v4(),
-        name: plugin1.name.clone(),
-        version: plugin1.version.clone(),
+        plugin_id: plugin1.id.clone(),
         priority: 1000,
         parameters: HashMap::from_iter(vec![("param1".to_string(), "value1".to_string())]),
     };
@@ -620,8 +625,7 @@ async fn test_default_component_plugin_installation(
 
     let installation2 = PluginInstallation {
         id: PluginInstallationId::new_v4(),
-        name: plugin1.name.clone(),
-        version: plugin1.version.clone(),
+        plugin_id: plugin1.id.clone(),
         priority: 800,
         parameters: HashMap::default(),
     };

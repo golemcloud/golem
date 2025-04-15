@@ -20,15 +20,14 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    get_installed_plugins_response, get_plugin_response, GetInstalledPluginsRequest,
-    GetPluginRequest,
+    get_installed_plugins_response, get_plugin_by_id_response, GetInstalledPluginsRequest, GetPluginByIdRequest
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginInstallation,
 };
-use golem_common::model::RetryConfig;
+use golem_common::model::{PluginId, RetryConfig};
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
 use http::Uri;
 use std::sync::Arc;
@@ -151,7 +150,7 @@ struct CachedPlugins<T: GolemTypes, Inner: Plugins<T>> {
         GolemError,
     >,
     cached_plugin_definitions: Cache<
-        (AccountId, String, String),
+        (AccountId, PluginId),
         (),
         PluginDefinition<T::PluginOwner, T::PluginScope>,
         GolemError,
@@ -256,8 +255,7 @@ impl<T: GolemTypes, Inner: Plugins<T> + Clone + 'static> Plugins<T> for CachedPl
     ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError> {
         let key = (
             account_id.clone(),
-            plugin_installation.name.clone(),
-            plugin_installation.version.clone(),
+            plugin_installation.plugin_id.clone(),
         );
         let inner = self.inner.clone();
         let account_id = account_id.clone();
@@ -405,15 +403,14 @@ impl Plugins<DefaultGolemTypes> for DefaultGrpcPlugins {
     ) -> Result<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>, GolemError> {
         let response = self
             .plugins_client
-            .call("get_plugin", move |client| {
+            .call("get_plugin_by_id", move |client| {
                 let request = authorised_grpc_request(
-                    GetPluginRequest {
-                        name: plugin_installation.name.clone(),
-                        version: plugin_installation.version.clone(),
+                    GetPluginByIdRequest {
+                        id: Some(plugin_installation.plugin_id.clone().into()),
                     },
                     &self.access_token,
                 );
-                Box::pin(client.get_plugin(request))
+                Box::pin(client.get_plugin_by_id(request))
             })
             .await
             .map_err(|err| {
@@ -423,13 +420,13 @@ impl Plugins<DefaultGolemTypes> for DefaultGrpcPlugins {
 
         match response.result {
             None => Err(GolemError::runtime("Empty response"))?,
-            Some(get_plugin_response::Result::Success(response)) => Ok(response
+            Some(get_plugin_by_id_response::Result::Success(response)) => Ok(response
                 .plugin
                 .ok_or("Missing plugin field")
                 .map_err(GolemError::runtime)?
                 .try_into()
                 .map_err(GolemError::runtime)?),
-            Some(get_plugin_response::Result::Error(error)) => {
+            Some(get_plugin_by_id_response::Result::Error(error)) => {
                 Err(GolemError::runtime(format!("{error:?}")))?
             }
         }

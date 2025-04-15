@@ -17,12 +17,13 @@ use futures_util::TryStreamExt;
 use golem_common::model::component::{DefaultComponentOwner, VersionedComponentId};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginInstallation, PluginInstallationCreation,
+    DefaultPluginOwner, DefaultPluginScope, PluginInstallationCreation,
     PluginInstallationUpdate,
 };
 use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
+use golem_component_service_base::api::mapper::ApiMapper;
 use golem_component_service_base::model::{
     DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
@@ -39,10 +40,13 @@ use poem_openapi::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::Instrument;
+use futures_util::{stream, StreamExt};
+use golem_component_service_base::api::dto;
 
 pub struct ComponentApi {
     component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
     plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+    api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
@@ -52,10 +56,12 @@ impl ComponentApi {
         plugin_service: Arc<
             dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
         >,
+        api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>
     ) -> Self {
         Self {
             component_service,
             plugin_service,
+            api_mapper
         }
     }
 
@@ -64,7 +70,7 @@ impl ComponentApi {
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
     /// If the component type is not specified, it will be considered as a `Durable` component.
     #[oai(path = "/", method = "post", operation_id = "create_component")]
-    async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {
+    async fn create_component(&self, payload: UploadPayload) -> Result<Json<dto::Component>> {
         let component_id = ComponentId::new_v4();
         let record = recorded_http_api_request!(
             "create_component",
@@ -82,7 +88,7 @@ impl ComponentApi {
         &self,
         payload: UploadPayload,
         component_id: &ComponentId,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let data = payload.component.into_vec().await?;
         let files_file = payload.files.map(|f| f.into_file());
 
@@ -114,7 +120,7 @@ impl ComponentApi {
             )
             .await?;
 
-        Ok(Json(response.into()))
+        Ok(Json(self.api_mapper.convert_component(response).await?))
     }
 
     /// Update a component
@@ -130,7 +136,7 @@ impl ComponentApi {
         /// Type of the new version of the component - if not specified, the type of the previous version
         /// is used.
         component_type: Query<Option<ComponentType>>,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let record = recorded_http_api_request!(
             "upload_component",
             component_id = component_id.0.to_string()
@@ -148,7 +154,7 @@ impl ComponentApi {
         component_id: ComponentId,
         wasm: Body,
         component_type: Option<ComponentType>,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let data = wasm.into_vec().await?;
         let response = self
             .component_service
@@ -162,7 +168,7 @@ impl ComponentApi {
             )
             .await?;
 
-        Ok(Json(response.into()))
+        Ok(Json(self.api_mapper.convert_component(response).await?))
     }
 
     /// Update a component
@@ -175,7 +181,7 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         payload: UpdatePayload,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let record = recorded_http_api_request!(
             "update_component",
             component_id = component_id.0.to_string()
@@ -191,7 +197,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         payload: UpdatePayload,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let data = payload.component.into_vec().await?;
         let files_file = payload.files.map(|f| f.into_file());
 
@@ -220,7 +226,7 @@ impl ComponentApi {
             )
             .await?;
 
-        Ok(Json(response.into()))
+        Ok(Json(self.api_mapper.convert_component(response).await?))
     }
 
     /// Download a component
@@ -283,7 +289,7 @@ impl ComponentApi {
     async fn get_component_metadata_all_versions(
         &self,
         component_id: Path<ComponentId>,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let record = recorded_http_api_request!(
             "get_component_metadata_all_versions",
             component_id = component_id.0.to_string()
@@ -299,13 +305,15 @@ impl ComponentApi {
     async fn get_component_metadata_all_versions_internal(
         &self,
         component_id: ComponentId,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let response = self
             .component_service
             .get(&component_id, &DefaultComponentOwner)
             .await?;
 
-        Ok(Json(response.into_iter().map(|c| c.into()).collect()))
+        let converted = stream::iter(response).then(|c| self.api_mapper.convert_component(c)).try_collect::<Vec<_>>().await?;
+
+        Ok(Json(converted))
     }
 
     /// Get the version of a given component
@@ -320,7 +328,7 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         version: Path<String>,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let record = recorded_http_api_request!(
             "get_component_metadata",
             component_id = component_id.0.to_string(),
@@ -339,7 +347,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         version: String,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
         let versioned_component_id = VersionedComponentId {
@@ -353,7 +361,7 @@ impl ComponentApi {
             .await?;
 
         match response {
-            Some(component) => Ok(Json(component.into())),
+            Some(component) => Ok(Json(self.api_mapper.convert_component(component).await?)),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
                 error: "Component not found".to_string(),
             }))),
@@ -371,7 +379,7 @@ impl ComponentApi {
     async fn get_latest_component_metadata(
         &self,
         component_id: Path<ComponentId>,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let record = recorded_http_api_request!(
             "get_latest_component_metadata",
             component_id = component_id.0.to_string()
@@ -387,14 +395,14 @@ impl ComponentApi {
     async fn get_latest_component_metadata_internal(
         &self,
         component_id: ComponentId,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let response = self
             .component_service
             .get_latest_version(&component_id, &DefaultComponentOwner)
             .await?;
 
         match response {
-            Some(component) => Ok(Json(component.into())),
+            Some(component) => Ok(Json(self.api_mapper.convert_component(component).await?)),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
                 error: "Component not found".to_string(),
             }))),
@@ -408,7 +416,7 @@ impl ComponentApi {
     async fn get_components(
         &self,
         #[oai(name = "component-name")] component_name: Query<Option<ComponentName>>,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let record = recorded_http_api_request!(
             "get_components",
             component_name = component_name.0.as_ref().map(|n| n.0.clone())
@@ -424,12 +432,15 @@ impl ComponentApi {
     async fn get_components_internal(
         &self,
         component_name: Option<ComponentName>,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let components = self
             .component_service
             .find_by_name(component_name, &DefaultComponentOwner)
             .await?;
-        Ok(Json(components.into_iter().map(|c| c.into()).collect()))
+
+        let converted = stream::iter(components).then(|c| self.api_mapper.convert_component(c)).try_collect::<Vec<_>>().await?;
+
+        Ok(Json(converted))
     }
 
     /// Gets the list of plugins installed for the given component version
@@ -442,7 +453,7 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         version: Path<String>,
-    ) -> Result<Json<Vec<PluginInstallation>>> {
+    ) -> Result<Json<Vec<dto::PluginInstallation>>> {
         let record = recorded_http_api_request!(
             "get_installed_plugins",
             component_id = component_id.0.to_string(),
@@ -460,7 +471,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         version: String,
-    ) -> Result<Json<Vec<PluginInstallation>>> {
+    ) -> Result<Json<Vec<dto::PluginInstallation>>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
         let response = self
@@ -472,7 +483,9 @@ impl ComponentApi {
             )
             .await?;
 
-        Ok(Json(response))
+        let converted = stream::iter(response).then(|pi| self.api_mapper.convert_plugin_installation(&DefaultPluginOwner, pi)).try_collect::<Vec<_>>().await?;
+
+        Ok(Json(converted))
     }
 
     /// Installs a new plugin for this component
@@ -485,7 +498,7 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         plugin: Json<PluginInstallationCreation>,
-    ) -> Result<Json<PluginInstallation>> {
+    ) -> Result<Json<dto::PluginInstallation>> {
         let record = recorded_http_api_request!(
             "install_plugin",
             component_id = component_id.0.to_string(),
@@ -504,7 +517,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         plugin: PluginInstallationCreation,
-    ) -> Result<Json<PluginInstallation>> {
+    ) -> Result<Json<dto::PluginInstallation>> {
         let plugin_definition = self
             .plugin_service
             .get(&DefaultPluginOwner, &plugin.name, &plugin.version)
@@ -521,7 +534,7 @@ impl ComponentApi {
                     )
                     .await?;
 
-                Ok(Json(response))
+                Ok(Json(self.api_mapper.convert_plugin_installation(&DefaultPluginOwner, response).await?))
             } else {
                 Err(PluginError::InvalidScope {
                     plugin_name: plugin.name.clone(),

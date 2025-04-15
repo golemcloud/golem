@@ -7034,6 +7034,8 @@ components:
       - componentName
       - componentSize
       - metadata
+      - createdAt
+      - componentType
       - files
       - installedPlugins
     ComponentFilePathWithPermissions:
@@ -7299,10 +7301,8 @@ components:
         id:
           type: string
           format: uuid
-        name:
-          type: string
-        version:
-          type: string
+        plugin:
+          $ref: '#/components/schemas/ReferencedPlugin'
         priority:
           type: integer
           format: int32
@@ -7312,8 +7312,7 @@ components:
             type: string
       required:
       - id
-      - name
-      - version
+      - plugin
       - priority
       - parameters
     PluginInstallationCreation:
@@ -7466,6 +7465,50 @@ components:
             $ref: '#/components/schemas/ProducerField'
       required:
       - fields
+    ReferencedPlugin:
+      discriminator:
+        propertyName: type
+        mapping:
+          Registered: '#/components/schemas/ReferencedPlugin_RegisteredReferencedPlugin'
+          Unregistered: '#/components/schemas/ReferencedPlugin_Empty'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ReferencedPlugin_RegisteredReferencedPlugin'
+      - $ref: '#/components/schemas/ReferencedPlugin_Empty'
+    ReferencedPlugin_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Unregistered
+            type: string
+            enum:
+            - Unregistered
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    ReferencedPlugin_RegisteredReferencedPlugin:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Registered
+            type: string
+            enum:
+            - Registered
+        required:
+        - type
+      - $ref: '#/components/schemas/RegisteredReferencedPlugin'
+    RegisteredReferencedPlugin:
+      type: object
+      properties:
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+      required:
+      - pluginName
+      - pluginVersion
     VersionedName:
       type: object
       properties:
