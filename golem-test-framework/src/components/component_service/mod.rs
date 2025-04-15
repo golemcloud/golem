@@ -115,7 +115,8 @@ pub trait ComponentServiceInternal: Send + Sync {
                 }
             }
             PluginServiceClient::Http(_client) => {
-                panic!("resolving plugin id via http is not possible")
+                // TODO: do a proper resolution here or split the clients
+                Ok(None)
             }
         }
     }
@@ -152,14 +153,12 @@ pub trait ComponentServiceInternal: Send + Sync {
                         _ => Err(anyhow!("reference to unregistered plugin"))?,
                     };
 
-                    let plugin_id = self
-                        .get_plugin_id(&plugin_name, &plugin_version)
-                        .await?
-                        .ok_or(anyhow!("plugin not found"))?;
+                    // TODO: This should error if this is none, but currently the http api cannot resolve the id, but the types force us to provide something here.
+                    let plugin_id = self.get_plugin_id(&plugin_name, &plugin_version).await?;
 
                     Ok::<PluginInstallation, anyhow::Error>(PluginInstallation {
                         id: Some(PluginInstallationId(install.id).into()),
-                        plugin_id: Some(plugin_id.into()),
+                        plugin_id: plugin_id.map(Into::into),
                         priority: install.priority,
                         parameters: install.parameters,
                     })

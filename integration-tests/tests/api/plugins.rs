@@ -569,7 +569,7 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
 
     let plugin_definition = PluginDefinitionCreation {
-        name: "library-plugin-1".to_string(),
+        name: "library-plugin-2".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
         icon: vec![],
@@ -582,12 +582,12 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     deps.create_plugin(plugin_definition.clone()).await;
 
-    deps.delete_plugin("library-plugin-1", "v1").await;
+    deps.delete_plugin("library-plugin-2", "v1").await;
 
     deps.create_plugin(plugin_definition.clone()).await;
 
     let _installation_id = deps
-        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .install_plugin_to_component(&component_id, "library-plugin-2", "v1", 0, HashMap::new())
         .await;
 
     let worker = deps.start_worker(&component_id, "worker1").await;
@@ -611,7 +611,7 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
     let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
 
     let plugin_definition = PluginDefinitionCreation {
-        name: "library-plugin-1".to_string(),
+        name: "library-plugin-3".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
         icon: vec![],
@@ -625,10 +625,10 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
     deps.create_plugin(plugin_definition.clone()).await;
 
     let _installation_id = deps
-        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 0, HashMap::new())
         .await;
 
-    deps.delete_plugin("library-plugin-1", "v1").await;
+    deps.delete_plugin("library-plugin-3", "v1").await;
 
     let worker = deps.start_worker(&component_id, "worker1").await;
 
