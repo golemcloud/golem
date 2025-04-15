@@ -298,14 +298,14 @@ pub struct PluginInstallationDescription {
 impl PluginInstallationDescription {
     pub fn from_definition_and_installation<Owner: PluginOwner, Scope: PluginScope>(
         definition: PluginDefinition<Owner, Scope>,
-        installation: PluginInstallation
+        installation: PluginInstallation,
     ) -> Self {
         Self {
             installation_id: installation.id,
             plugin_name: definition.name,
             plugin_version: definition.version,
             parameters: installation.parameters.into_iter().collect(),
-            registered: !definition.deleted
+            registered: !definition.deleted,
         }
     }
 }

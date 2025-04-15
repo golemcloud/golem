@@ -359,7 +359,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
             }
         };
 
-        let definition = plugin.into_definition(PluginId::new_v4(), owner.clone(), type_specific_definition);
+        let definition =
+            plugin.into_definition(PluginId::new_v4(), owner.clone(), type_specific_definition);
         self.plugin_repo.create(&definition.clone().into()).await?;
         Ok(definition)
     }

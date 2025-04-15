@@ -49,7 +49,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
     pub compilation_service: Arc<dyn ComponentCompilationService>,
     pub plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
-    pub api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>
+    pub api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>,
 }
 
 impl Services {
@@ -163,7 +163,7 @@ impl Services {
             component_service,
             compilation_service,
             plugin_service,
-            api_mapper
+            api_mapper,
         })
     }
 }

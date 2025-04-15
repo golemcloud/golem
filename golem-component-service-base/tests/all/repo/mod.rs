@@ -20,7 +20,9 @@ use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
     PluginInstallation, PluginOwner, PluginTypeSpecificDefinition,
 };
-use golem_common::model::{AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId};
+use golem_common::model::{
+    AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId,
+};
 use golem_common::repo::component::DefaultComponentOwnerRow;
 use golem_common::repo::plugin::{DefaultPluginOwnerRow, DefaultPluginScopeRow};
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;

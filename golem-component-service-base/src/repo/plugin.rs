@@ -177,7 +177,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
             specs,
             scope: value.scope.try_into()?,
             owner: value.owner.try_into()?,
-            deleted: value.deleted
+            deleted: value.deleted,
         })
     }
 }
@@ -213,7 +213,7 @@ pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + Syn
     async fn get_by_id(
         &self,
         owner: &Owner::Row,
-        id: &Uuid
+        id: &Uuid,
     ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError>;
 
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError>;
@@ -310,12 +310,7 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
     ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
         self.repo
             .get_by_id(owner, id)
-            .instrument(
-                info_span!(
-                    "plugin repository",
-                    plugin_id = id.to_string()
-                )
-            )
+            .instrument(info_span!("plugin repository", plugin_id = id.to_string()))
             .await
     }
 
@@ -590,7 +585,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
     async fn get_by_id(
         &self,
         owner: &Owner::Row,
-        id: &Uuid
+        id: &Uuid,
     ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
         let mut query = QueryBuilder::new("SELECT ");
 

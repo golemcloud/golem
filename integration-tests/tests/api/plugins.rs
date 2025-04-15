@@ -19,9 +19,8 @@ use axum::routing::post;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_common::model::plugin::{
-    AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope,
-    LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
-    PluginTypeSpecificDefinition,
+    AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginScope,
+    LibraryPluginDefinition, OplogProcessorDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{Empty, ScanCursor};
 use golem_test_framework::config::EnvBasedTestDependencies;
@@ -604,10 +603,9 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     assert_eq!(response, Ok(vec![Value::U64(2)]))
 }
 
-
 /// Test that a component can be invoked after a plugin is unregistered that it depends on
 #[test]
-async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.component("app_and_library_app").unique().store().await;
 
     let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;

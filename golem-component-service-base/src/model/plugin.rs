@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use golem_common::model::{plugin::{
-    ComponentTransformerDefinition, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
-    PluginOwner, PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
-}, PluginId};
+use golem_common::model::{
+    plugin::{
+        ComponentTransformerDefinition, DefaultPluginScope, OplogProcessorDefinition,
+        PluginDefinition, PluginOwner, PluginScope, PluginTypeSpecificDefinition,
+        PluginWasmFileKey,
+    },
+    PluginId,
+};
 use golem_service_base::replayable_stream::BoxReplayableStream;
 
 pub enum PluginWasmFileReference {
@@ -66,7 +70,7 @@ impl<Scope: PluginScope> PluginDefinitionCreation<Scope> {
             scope: self.scope,
             owner,
             specs,
-            deleted: false
+            deleted: false,
         }
     }
 }

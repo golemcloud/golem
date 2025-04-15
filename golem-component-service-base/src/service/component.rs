@@ -37,12 +37,12 @@ use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate, PluginScope,
     PluginTypeSpecificDefinition,
 };
-use golem_common::model::{ComponentVersion, PluginId};
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
+use golem_common::model::{ComponentVersion, PluginId};
 use golem_common::SafeDisplay;
 use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -1612,11 +1612,15 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
         let plugin_definition = self
             .plugin_service
-            .get(&Owner::PluginOwner::from(owner.clone()), &installation.name, &installation.version)
+            .get(
+                &Owner::PluginOwner::from(owner.clone()),
+                &installation.name,
+                &installation.version,
+            )
             .await?
             .ok_or(PluginError::PluginNotFound {
                 plugin_name: installation.name.clone(),
-                plugin_version: installation.version.clone()
+                plugin_version: installation.version.clone(),
             })?;
 
         let record = PluginInstallationRecord {
@@ -1636,7 +1640,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
         let new_component_version = self.component_repo.install_plugin(&record).await?;
 
-        let installation = PluginInstallation::try_from(record).map_err(|e| PluginError::conversion_error("plugin record", e))?;
+        let installation = PluginInstallation::try_from(record)
+            .map_err(|e| PluginError::conversion_error("plugin record", e))?;
 
         let new_versioned_component_id = VersionedComponentId {
             component_id: component_id.clone(),

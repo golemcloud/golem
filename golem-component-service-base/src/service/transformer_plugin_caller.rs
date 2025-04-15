@@ -176,10 +176,10 @@ pub struct SerializableComponent {
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>
+    pub files: Vec<InitialComponentFile>,
 }
 
-impl <Owner: ComponentOwner> From<crate::model::Component<Owner>> for SerializableComponent {
+impl<Owner: ComponentOwner> From<crate::model::Component<Owner>> for SerializableComponent {
     fn from(value: crate::model::Component<Owner>) -> Self {
         Self {
             versioned_component_id: value.versioned_component_id,
@@ -188,7 +188,7 @@ impl <Owner: ComponentOwner> From<crate::model::Component<Owner>> for Serializab
             metadata: value.metadata,
             created_at: value.created_at,
             component_type: value.component_type,
-            files: value.files
+            files: value.files,
         }
     }
 }

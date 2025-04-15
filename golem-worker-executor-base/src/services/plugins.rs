@@ -20,15 +20,16 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    get_installed_plugins_response, get_plugin_by_id_response, GetInstalledPluginsRequest, GetPluginByIdRequest
+    get_installed_plugins_response, get_plugin_by_id_response, GetInstalledPluginsRequest,
+    GetPluginByIdRequest,
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginInstallation,
 };
-use golem_common::model::{PluginId, RetryConfig};
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
+use golem_common::model::{PluginId, RetryConfig};
 use http::Uri;
 use std::sync::Arc;
 use std::time::Duration;
@@ -253,10 +254,7 @@ impl<T: GolemTypes, Inner: Plugins<T> + Clone + 'static> Plugins<T> for CachedPl
         component_version: ComponentVersion,
         plugin_installation: &PluginInstallation,
     ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError> {
-        let key = (
-            account_id.clone(),
-            plugin_installation.plugin_id.clone(),
-        );
+        let key = (account_id.clone(), plugin_installation.plugin_id.clone());
         let inner = self.inner.clone();
         let account_id = account_id.clone();
         let component_id = component_id.clone();

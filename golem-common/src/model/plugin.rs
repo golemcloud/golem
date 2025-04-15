@@ -264,7 +264,7 @@ pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
     pub specs: PluginTypeSpecificDefinition,
     pub scope: Scope,
     pub owner: Owner,
-    pub deleted: bool
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -501,7 +501,7 @@ mod protobuf {
                 specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
                 scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
                 owner: DefaultPluginOwner,
-                deleted: value.deleted
+                deleted: value.deleted,
             })
         }
     }

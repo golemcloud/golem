@@ -68,7 +68,7 @@ impl From<PluginInstallationDescription>
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
             parameters: HashMap::from_iter(plugin_installation_description.parameters),
-            registered: plugin_installation_description.registered
+            registered: plugin_installation_description.registered,
         }
     }
 }

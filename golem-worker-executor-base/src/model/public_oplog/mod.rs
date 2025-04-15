@@ -50,7 +50,17 @@ use golem_common::model::invocation_context::TraceId;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters, PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters, TimestampParameter
+    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
+    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
+    DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
+    SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
+    SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
@@ -286,7 +296,10 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         )
                         .await
                         .map_err(|err| err.to_string())?;
-                    let desc = PluginInstallationDescription::from_definition_and_installation(definition, installation);
+                    let desc = PluginInstallationDescription::from_definition_and_installation(
+                        definition,
+                        installation,
+                    );
                     initial_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::Create(CreateParameters {
@@ -660,7 +673,10 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         .await
                         .map_err(|err| err.to_string())?;
 
-                    let desc = PluginInstallationDescription::from_definition_and_installation(definition, installation);
+                    let desc = PluginInstallationDescription::from_definition_and_installation(
+                        definition,
+                        installation,
+                    );
                     new_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::SuccessfulUpdate(
@@ -774,7 +790,10 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let desc = PluginInstallationDescription::from_definition_and_installation(definition, installation);
+                let desc = PluginInstallationDescription::from_definition_and_installation(
+                    definition,
+                    installation,
+                );
                 Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
                     timestamp,
                     plugin: desc,
@@ -790,7 +809,10 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let desc = PluginInstallationDescription::from_definition_and_installation(definition, installation);
+                let desc = PluginInstallationDescription::from_definition_and_installation(
+                    definition,
+                    installation,
+                );
                 Ok(PublicOplogEntry::DeactivatePlugin(
                     DeactivatePluginParameters {
                         timestamp,

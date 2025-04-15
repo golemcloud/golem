@@ -16,7 +16,11 @@ use crate::grpcapi::component::bad_request_error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_plugin_response, delete_plugin_response, get_plugin_by_id_response, get_plugin_response, list_plugins_response, ComponentError, CreatePluginRequest, CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginByIdRequest, GetPluginByIdResponse, GetPluginRequest, GetPluginResponse, GetPluginSuccessResponse, ListPluginVersionsRequest, ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse
+    component_error, create_plugin_response, delete_plugin_response, get_plugin_by_id_response,
+    get_plugin_response, list_plugins_response, ComponentError, CreatePluginRequest,
+    CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginByIdRequest,
+    GetPluginByIdResponse, GetPluginRequest, GetPluginResponse, GetPluginSuccessResponse,
+    ListPluginVersionsRequest, ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::component::PluginDefinition;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
@@ -107,8 +111,11 @@ impl PluginGrpcApi {
         &self,
         request: &GetPluginByIdRequest,
     ) -> Result<PluginDefinition, ComponentError> {
-        let plugin_id = &request.id.ok_or(bad_request_error("Missing plugin id"))?.try_into().map_err(|err| bad_request_error(&format!("Invalid plugin id: {err}")))?;
-
+        let plugin_id = &request
+            .id
+            .ok_or(bad_request_error("Missing plugin id"))?
+            .try_into()
+            .map_err(|err| bad_request_error(&format!("Invalid plugin id: {err}")))?;
 
         let plugin = self
             .plugin_service

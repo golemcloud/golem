@@ -421,16 +421,9 @@ pub trait TestDsl {
         path: &str,
     ) -> crate::Result<Bytes>;
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinitionCreation,
-    ) -> crate::Result<()>;
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()>;
 
-    async fn delete_plugin(
-        &self,
-        name: &str,
-        version: &str
-    ) -> crate::Result<()>;
+    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()>;
 
     async fn install_plugin_to_component(
         &self,
@@ -1412,21 +1405,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await
     }
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinitionCreation,
-    ) -> crate::Result<()> {
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
         self.component_service().create_plugin(definition).await
     }
 
-    async fn delete_plugin(
-        &self,
-        name: &str,
-        version: &str
-    ) -> crate::Result<()> {
+    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
         self.component_service().delete_plugin(name, version).await
     }
-
 
     async fn install_plugin_to_component(
         &self,
@@ -2037,16 +2022,9 @@ pub trait TestDslUnsafe {
         path: &str,
     ) -> Bytes;
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinitionCreation,
-    );
+    async fn create_plugin(&self, definition: PluginDefinitionCreation);
 
-    async fn delete_plugin(
-        &self,
-        name: &str,
-        version: &str
-    );
+    async fn delete_plugin(&self, name: &str, version: &str);
 
     async fn install_plugin_to_component(
         &self,
@@ -2399,20 +2377,13 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to get file contents")
     }
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinitionCreation,
-    ) {
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) {
         <T as TestDsl>::create_plugin(self, definition)
             .await
             .expect("Failed to create plugin")
     }
 
-    async fn delete_plugin(
-        &self,
-        name: &str,
-        version: &str
-    ) {
+    async fn delete_plugin(&self, name: &str, version: &str) {
         <T as TestDsl>::delete_plugin(self, name, version)
             .await
             .expect("Failed to delete plugin")

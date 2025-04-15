@@ -22,7 +22,7 @@ pub struct PluginDefinitionCreation {
     pub icon: Vec<u8>,
     pub homepage: String,
     pub scope: DefaultPluginScope,
-    pub specs: PluginTypeSpecificDefinition
+    pub specs: PluginTypeSpecificDefinition,
 }
 
 impl From<PluginDefinitionCreation>

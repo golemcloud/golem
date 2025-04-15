@@ -14,15 +14,16 @@
 
 use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
+use futures_util::{stream, StreamExt};
 use golem_common::model::component::{DefaultComponentOwner, VersionedComponentId};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginInstallationCreation,
-    PluginInstallationUpdate,
+    DefaultPluginOwner, DefaultPluginScope, PluginInstallationCreation, PluginInstallationUpdate,
 };
 use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
+use golem_component_service_base::api::dto;
 use golem_component_service_base::api::mapper::ApiMapper;
 use golem_component_service_base::model::{
     DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
@@ -40,13 +41,11 @@ use poem_openapi::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::Instrument;
-use futures_util::{stream, StreamExt};
-use golem_component_service_base::api::dto;
 
 pub struct ComponentApi {
     component_service: Arc<dyn ComponentService<DefaultComponentOwner>>,
     plugin_service: Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
-    api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>
+    api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
@@ -56,12 +55,12 @@ impl ComponentApi {
         plugin_service: Arc<
             dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
         >,
-        api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>
+        api_mapper: Arc<dyn ApiMapper<DefaultComponentOwner>>,
     ) -> Self {
         Self {
             component_service,
             plugin_service,
-            api_mapper
+            api_mapper,
         }
     }
 
@@ -311,7 +310,10 @@ impl ComponentApi {
             .get(&component_id, &DefaultComponentOwner)
             .await?;
 
-        let converted = stream::iter(response).then(|c| self.api_mapper.convert_component(c)).try_collect::<Vec<_>>().await?;
+        let converted = stream::iter(response)
+            .then(|c| self.api_mapper.convert_component(c))
+            .try_collect::<Vec<_>>()
+            .await?;
 
         Ok(Json(converted))
     }
@@ -438,7 +440,10 @@ impl ComponentApi {
             .find_by_name(component_name, &DefaultComponentOwner)
             .await?;
 
-        let converted = stream::iter(components).then(|c| self.api_mapper.convert_component(c)).try_collect::<Vec<_>>().await?;
+        let converted = stream::iter(components)
+            .then(|c| self.api_mapper.convert_component(c))
+            .try_collect::<Vec<_>>()
+            .await?;
 
         Ok(Json(converted))
     }
@@ -483,7 +488,13 @@ impl ComponentApi {
             )
             .await?;
 
-        let converted = stream::iter(response).then(|pi| self.api_mapper.convert_plugin_installation(&DefaultPluginOwner, pi)).try_collect::<Vec<_>>().await?;
+        let converted = stream::iter(response)
+            .then(|pi| {
+                self.api_mapper
+                    .convert_plugin_installation(&DefaultPluginOwner, pi)
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
 
         Ok(Json(converted))
     }
@@ -534,7 +545,11 @@ impl ComponentApi {
                     )
                     .await?;
 
-                Ok(Json(self.api_mapper.convert_plugin_installation(&DefaultPluginOwner, response).await?))
+                Ok(Json(
+                    self.api_mapper
+                        .convert_plugin_installation(&DefaultPluginOwner, response)
+                        .await?,
+                ))
             } else {
                 Err(PluginError::InvalidScope {
                     plugin_name: plugin.name.clone(),

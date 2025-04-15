@@ -22,12 +22,19 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use futures_util::{stream, TryStreamExt, StreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    get_plugin_response,
-    component_error, create_component_request, create_component_response, create_plugin_response, delete_plugin_response, download_component_response, get_component_metadata_all_versions_response, get_component_metadata_response, get_components_response, install_plugin_response, update_component_request, update_component_response, CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest, DeletePluginRequest, GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest, GetPluginRequest, UpdateComponentRequest, UpdateComponentRequestChunk, UpdateComponentRequestHeader
+    component_error, create_component_request, create_component_response, create_plugin_response,
+    delete_plugin_response, download_component_response,
+    get_component_metadata_all_versions_response, get_component_metadata_response,
+    get_components_response, get_plugin_response, install_plugin_response,
+    update_component_request, update_component_response, CreateComponentRequest,
+    CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
+    DeletePluginRequest, GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
+    GetPluginRequest, UpdateComponentRequest, UpdateComponentRequestChunk,
+    UpdateComponentRequestHeader,
 };
 use golem_api_grpc::proto::golem::component::{
     Component, PluginInstallation, VersionedComponentId,
@@ -41,7 +48,8 @@ use golem_client::Context;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
-    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, PluginId, PluginInstallationId
+    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
+    InitialComponentFile, PluginId, PluginInstallationId,
 };
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashMap;
@@ -88,31 +96,39 @@ pub trait ComponentServiceInternal: Send + Sync {
     async fn get_plugin_id(&self, name: &str, version: &str) -> crate::Result<Option<PluginId>> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
-                let response = client.get_plugin(GetPluginRequest {
-                    name: name.to_string(),
-                    version: version.to_string()
-                }).await?;
-                let converted = response.into_inner().result.and_then(|r| {
-                    match r  {
-                            get_plugin_response::Result::Success(result) => result.plugin.map(|p| PluginId::try_from(p.id.unwrap()).map_err(|e| anyhow!(e))),
-                            get_plugin_response::Result::Error(error) => Some(Err(anyhow!("{error:?}"))),
-                        }
-                    }
-                );
+                let response = client
+                    .get_plugin(GetPluginRequest {
+                        name: name.to_string(),
+                        version: version.to_string(),
+                    })
+                    .await?;
+                let converted = response.into_inner().result.and_then(|r| match r {
+                    get_plugin_response::Result::Success(result) => result
+                        .plugin
+                        .map(|p| PluginId::try_from(p.id.unwrap()).map_err(|e| anyhow!(e))),
+                    get_plugin_response::Result::Error(error) => Some(Err(anyhow!("{error:?}"))),
+                });
                 match converted {
                     Some(Ok(inner)) => Ok(Some(inner)),
                     Some(Err(e)) => Err(e),
                     None => Ok(None),
                 }
             }
-            PluginServiceClient::Http(_client) => panic!("resolving plugin id via http is not possible"),
+            PluginServiceClient::Http(_client) => {
+                panic!("resolving plugin id via http is not possible")
+            }
         }
     }
 
-    async fn to_grpc_component(&self, component: golem_client::model::Component) -> crate::Result<Component> {
+    async fn to_grpc_component(
+        &self,
+        component: golem_client::model::Component,
+    ) -> crate::Result<Component> {
         let component = Component {
             versioned_component_id: Some(VersionedComponentId {
-                component_id: Some(ComponentId(component.versioned_component_id.component_id).into()),
+                component_id: Some(
+                    ComponentId(component.versioned_component_id.component_id).into(),
+                ),
                 version: component.versioned_component_id.version,
             }),
             component_name: component.component_name,
@@ -130,8 +146,10 @@ pub trait ComponentServiceInternal: Send + Sync {
             installed_plugins: stream::iter(component.installed_plugins)
                 .then(async |install| {
                     let (plugin_name, plugin_version) = match install.plugin {
-                        ReferencedPlugin::Registered(inner) => (inner.plugin_name, inner.plugin_version),
-                        _ => Err(anyhow!("reference to unregistered plugin"))?
+                        ReferencedPlugin::Registered(inner) => {
+                            (inner.plugin_name, inner.plugin_version)
+                        }
+                        _ => Err(anyhow!("reference to unregistered plugin"))?,
                     };
 
                     let plugin_id = self
@@ -147,7 +165,7 @@ pub trait ComponentServiceInternal: Send + Sync {
                     })
                 })
                 .try_collect::<Vec<_>>()
-                .await?
+                .await?,
         };
         Ok(component)
     }
@@ -179,7 +197,12 @@ pub trait ComponentService: ComponentServiceInternal {
                     .get_components(request.component_name.as_deref())
                     .await
                 {
-                    Ok(components) => stream::iter(components).then(|c| self.to_grpc_component(c)).try_collect().await,
+                    Ok(components) => {
+                        stream::iter(components)
+                            .then(|c| self.to_grpc_component(c))
+                            .try_collect()
+                            .await
+                    }
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
             }
@@ -213,7 +236,12 @@ pub trait ComponentService: ComponentServiceInternal {
                 )
                 .await
             {
-                Ok(result) => stream::iter(result).then(|c| self.to_grpc_component(c)).try_collect().await,
+                Ok(result) => {
+                    stream::iter(result)
+                        .then(|c| self.to_grpc_component(c))
+                        .try_collect()
+                        .await
+                }
                 Err(error) => Err(anyhow!("{error:?}")),
             },
         }
@@ -475,7 +503,9 @@ pub trait ComponentService: ComponentServiceInternal {
                 {
                     Ok(component) => {
                         debug!("Created component (HTTP) {:?}", component);
-                        self.to_grpc_component(component).await.map_err(|e| AddComponentError::Other(format!("{e:?}")))
+                        self.to_grpc_component(component)
+                            .await
+                            .map_err(|e| AddComponentError::Other(format!("{e:?}")))
                     }
                     Err(error) => {
                         if let golem_client::Error::Item(
@@ -656,10 +686,7 @@ pub trait ComponentService: ComponentServiceInternal {
         }
     }
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinitionCreation,
-    ) -> crate::Result<()> {
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
                 let response = client
@@ -781,17 +808,13 @@ pub trait ComponentService: ComponentServiceInternal {
         }
     }
 
-    async fn delete_plugin(
-        &self,
-        name: &str,
-        version: &str
-    ) -> crate::Result<()> {
+    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
                 let response = client
                     .delete_plugin(DeletePluginRequest {
                         name: name.to_string(),
-                        version: version.to_string()
+                        version: version.to_string(),
                     })
                     .await?
                     .into_inner();
@@ -817,7 +840,6 @@ pub trait ComponentService: ComponentServiceInternal {
             }
         }
     }
-
 
     async fn install_plugin_to_component(
         &self,
