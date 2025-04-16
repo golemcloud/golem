@@ -651,17 +651,17 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             };
 
             if self.state.snapshotting_mode.is_none() {
-            self.state
-                .oplog
-                .add_imported_function_invoked(
-                    "http::types::future_incoming_response::get".to_string(),
-                    &request,
-                    &serializable_response,
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                )
-                .await
-                .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-            self.state.oplog.commit(CommitLevel::DurableOnly).await;
+                self.state
+                    .oplog
+                    .add_imported_function_invoked(
+                        "http::types::future_incoming_response::get".to_string(),
+                        &request,
+                        &serializable_response,
+                        DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
+                    )
+                    .await
+                    .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+                self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
 
             if !matches!(serializable_response, SerializableResponse::Pending) {
@@ -677,54 +677,50 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             }
 
             response
+        } else if durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
+            Err(
+                GolemError::runtime("Trying to replay an http request in a PersistNothing block")
+                    .into(),
+            )
         } else {
-            if durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
-                Err(GolemError::runtime(
-                    "Trying to replay an http request in a PersistNothing block",
-                )
-                .into())
-            } else {
-                let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked, OplogEntry::ImportedFunctionInvokedV1).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked, OplogEntry::ImportedFunctionInvokedV1).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
-                let serialized_response = self
-                    .state
-                    .oplog
-                    .get_payload_of_entry::<SerializableResponse>(&oplog_entry)
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "failed to deserialize function response: {:?}: {err}",
-                            oplog_entry
-                        )
-                    })
-                    .unwrap();
+            let serialized_response = self
+                .state
+                .oplog
+                .get_payload_of_entry::<SerializableResponse>(&oplog_entry)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to deserialize function response: {:?}: {err}",
+                        oplog_entry
+                    )
+                })
+                .unwrap();
 
-                match serialized_response {
-                    SerializableResponse::Pending => Ok(None),
-                    SerializableResponse::HeadersReceived(serializable_response_headers) => {
-                        let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
-                            serializable_response_headers.try_into()?;
+            match serialized_response {
+                SerializableResponse::Pending => Ok(None),
+                SerializableResponse::HeadersReceived(serializable_response_headers) => {
+                    let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
+                        serializable_response_headers.try_into()?;
 
-                        let rep = self.table().push(incoming_response)?;
-                        let incoming_response_handle = rep.rep();
+                    let rep = self.table().push(incoming_response)?;
+                    let incoming_response_handle = rep.rep();
 
-                        continue_http_request(
-                            self,
-                            handle,
-                            incoming_response_handle,
-                            HttpRequestCloseOwner::IncomingResponseDrop,
-                        );
+                    continue_http_request(
+                        self,
+                        handle,
+                        incoming_response_handle,
+                        HttpRequestCloseOwner::IncomingResponseDrop,
+                    );
 
-                        Ok(Some(Ok(Ok(rep))))
-                    }
-                    SerializableResponse::InternalError(None) => Ok(Some(Err(()))),
-                    SerializableResponse::InternalError(Some(serializable_error)) => {
-                        Err(serializable_error.into())
-                    }
-                    SerializableResponse::HttpError(error_code) => {
-                        Ok(Some(Ok(Err(error_code.into()))))
-                    }
+                    Ok(Some(Ok(Ok(rep))))
                 }
+                SerializableResponse::InternalError(None) => Ok(Some(Err(()))),
+                SerializableResponse::InternalError(Some(serializable_error)) => {
+                    Err(serializable_error.into())
+                }
+                SerializableResponse::HttpError(error_code) => Ok(Some(Ok(Err(error_code.into())))),
             }
         }
     }

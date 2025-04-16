@@ -30,7 +30,7 @@ use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
@@ -417,54 +417,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await;
                 self.state.oplog.commit(CommitLevel::DurableOnly).await;
             } else {
-                let (_, _) = get_oplog_entry!(
-                    self.state.replay_state,
-                    OplogEntry::ChangePersistenceLevel
-                )?;
-
-                // TODO: this has to be done during normal replay similar to skipped region handling, but it should not be actually
-                // TODO: skipped when querying oplog etc. We cannot rely on skipped regions though because we also have to skip
-                // TODO: when the region is not closed and in that case nothing could have updated the skipped region map.
-                if new_persistence_level == PersistenceLevel::PersistNothing {
-                    let begin_index = self.state.current_oplog_index().await;
-                    let end_index = self
-                        .state
+                let oplog_index_before = self.state.current_oplog_index().await;
+                let (_, _) =
+                    get_oplog_entry!(self.state.replay_state, OplogEntry::ChangePersistenceLevel)?;
+                let oplog_index_after = self.state.current_oplog_index().await;
+                if self.state.replay_state.is_live()
+                    && oplog_index_after > oplog_index_before.next()
+                {
+                    // get_oplog_entry jumped to live mode because the persist-nothing zone was not closed.
+                    // If the retried transactional block succeeds, and later we replay it, we need to skip the first
+                    // attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: oplog_index_before.next(), // need to keep the BeginAtomicRegion entry
+                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+                    self.state
                         .replay_state
-                        .lookup_oplog_entry(begin_index, |entry, _idx| match entry {
-                            OplogEntry::ChangePersistenceLevel { level, .. } => {
-                                level != &PersistenceLevel::PersistNothing
-                            }
-                            OplogEntry::ExportedFunctionCompleted { .. } => true,
-                            _ => false,
-                        })
+                        .add_skipped_region(deleted_region.clone())
                         .await;
-
-                    if let Some(end_index) = end_index {
-                        debug!("Worker's persist-nothing region starting at {} ends at {}, skipping persisted entries in between", begin_index, end_index);
-
-                        self.state.replay_state.skip_forward_to(end_index);
-                    } else {
-                        debug!("Worker's persist-nothing region starting at {} has never finished, ignoring persisted entries", begin_index);
-
-                        // We need to jump to the end of the oplog
-                        self.state.replay_state.switch_to_live();
-
-                        // But this is not enough, because if the retried transactional block succeeds,
-                        // and later we replay it, we need to skip the first attempt and only replay the second.
-                        // Se we add a Jump entry to the oplog that registers a deleted region.
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                            end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
-                        };
-                        self.state
-                            .replay_state
-                            .add_skipped_region(deleted_region.clone())
-                            .await;
-                        self.state
-                            .oplog
-                            .add_and_commit(OplogEntry::jump(deleted_region))
-                            .await;
-                    }
+                    self.state
+                        .oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
                 }
             }
 
@@ -507,7 +482,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         //       because the derived key depends on the oplog index.
         let (hi, lo) = if durability.is_live() {
             let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
+            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
             let result: Result<(u64, u64), anyhow::Error> = Ok(uuid.as_u64_pair());
             durability.persist(self, (), result).await
         } else {

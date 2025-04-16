@@ -15,7 +15,19 @@
 use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
 use crate::preview2::golem_api_1_x::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
-use golem_common::model::public_oplog::{ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters, PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData, PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue, SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters};
+use golem_common::model::public_oplog::{
+    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
+    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
+    DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
+    PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
+    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
+};
 use golem_common::model::Timestamp;
 
 impl From<PublicOplogEntry> for oplog::OplogEntry {
@@ -292,10 +304,10 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParameters {
                 timestamp,
                 persistence_level,
-             }) => Self::ChangePersistenceLevel(oplog::ChangePersistenceLevelParameters {
+            }) => Self::ChangePersistenceLevel(oplog::ChangePersistenceLevelParameters {
                 timestamp: timestamp.into(),
                 persistence_level: persistence_level.into(),
-            })
+            }),
         }
     }
 }

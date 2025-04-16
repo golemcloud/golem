@@ -15,11 +15,11 @@
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
-use golem_wasm_rpc::IntoValueAndType;
+use golem_wasm_rpc::{IntoValueAndType, Value};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use serde::Deserialize;
 use test_r::{inherit_test_dep, test};
 use tracing::Instrument;
 
@@ -50,7 +50,7 @@ async fn custom_durability_1(
 
     #[derive(Deserialize)]
     struct QueryParams {
-        payload: String
+        payload: String,
     }
 
     let http_server = tokio::spawn(
@@ -100,7 +100,7 @@ async fn custom_durability_1(
         .invoke_and_await(
             &worker_id,
             "golem:it-exports/golem-it-api.{callback}",
-            vec!["a".into_value_and_type()],
+            vec!["b".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -110,6 +110,6 @@ async fn custom_durability_1(
     drop(executor);
     http_server.abort();
 
-    println!("Result 1: {:?}", result1);
-    println!("Result 2: {:?}", result2);
+    assert_eq!(result1, vec![Value::String("0-a".to_string())]);
+    assert_eq!(result2, vec![Value::String("1-b".to_string())]);
 }

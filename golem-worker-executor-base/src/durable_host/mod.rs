@@ -64,7 +64,10 @@ use futures_util::TryStreamExt;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel, UpdateDescription, WorkerError, WorkerResourceId};
+use golem_common::model::oplog::{
+    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
+    UpdateDescription, WorkerError, WorkerResourceId,
+};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{exports, PluginInstallationId};
 use golem_common::model::{
