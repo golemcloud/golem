@@ -53,6 +53,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
     async fn undeploy(
         &self,
         deployment: &ApiDeploymentRequest<Namespace>,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 
     // Example: A newer version of API definition is in dev site, and older version of the same definition-id is in prod site.
@@ -419,9 +420,11 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
     async fn undeploy(
         &self,
         deployment: &ApiDeploymentRequest<Namespace>,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %deployment.namespace, "Undeploying API definitions");
-        // Existing deployment
+
+        // 1. Get existing deployment records
         let existing_deployment_records = self
             .deployment_repo
             .get_by_site(&deployment.site.to_string())
@@ -429,6 +432,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
 
         let mut remove_deployment_records: Vec<ApiDeploymentRecord> = vec![];
 
+        // 2. Filter records that match the API definition keys to undeploy
         for deployment_record in existing_deployment_records {
             if deployment_record.namespace != deployment.namespace.to_string()
                 || deployment_record.subdomain != deployment.site.subdomain
@@ -457,10 +461,32 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
         }
 
         if !remove_deployment_records.is_empty() {
+            // 3. Get the specific API definitions being undeployed
+            let mut definitions_to_undeploy = Vec::new();
+            for key in &deployment.api_definition_keys {
+                if let Some(definition) = self
+                    .definition_repo
+                    .get(&deployment.namespace.to_string(), &key.id.0, &key.version.0)
+                    .await?
+                {
+                    definitions_to_undeploy.push(
+                        CompiledHttpApiDefinition::try_from(definition).map_err(|e| {
+                            ApiDeploymentError::conversion_error("API definition record", e)
+                        })?,
+                    );
+                }
+            }
+
+            // 4. Remove component constraints
+            self.remove_component_constraints(definitions_to_undeploy, auth_ctx)
+                .await?;
+
+            // 5. Delete deployment records
             self.deployment_repo
                 .delete(remove_deployment_records.clone())
                 .await?;
 
+            // 6. Set undeployed as draft
             self.set_undeployed_as_draft(remove_deployment_records)
                 .await?;
         }

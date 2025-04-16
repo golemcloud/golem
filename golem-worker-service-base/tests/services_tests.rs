@@ -703,7 +703,10 @@ async fn test_deployment(
     ));
 
     let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
-    deployment_service.undeploy(&deployment).await.unwrap();
+    deployment_service
+        .undeploy(&deployment, &EmptyAuthCtx::default())
+        .await
+        .unwrap();
 
     let definitions: Vec<HttpApiDefinition> = deployment_service
         .get_definitions_by_site(

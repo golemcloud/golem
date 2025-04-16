@@ -17,8 +17,9 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::{ApiDeployment, ApiDeploymentRequest};
-use golem_worker_service_base::gateway_api_definition::ApiDefinitionId;
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::gateway_api_deployment;
+use golem_worker_service_base::gateway_api_deployment::ApiSite;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentService;
@@ -181,5 +182,72 @@ impl ApiDeploymentApi {
             .await?;
 
         Ok(Json("API deployment deleted".to_string()))
+    }
+
+    /// Undeploy a single API definition from a site
+    ///
+    /// Removes a specific API definition (by id and version) from a site without deleting the entire deployment.
+    #[oai(
+        path = "/:site/:id/:version",
+        method = "delete",
+        operation_id = "undeploy_api"
+    )]
+    async fn undeploy_api(
+        &self,
+        site: Path<String>,
+        id: Path<String>,
+        version: Path<String>,
+    ) -> Result<Json<String>, ApiEndpointError> {
+        let record = recorded_http_api_request!(
+            "undeploy_api",
+            site = site.0.clone(),
+            id = id.0.clone(),
+            version = version.0.clone()
+        );
+
+        let response = self
+            .undeploy_api_internal(site.0, id.0, version.0, &EmptyAuthCtx::default())
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn undeploy_api_internal(
+        &self,
+        site: String,
+        id: String,
+        version: String,
+        auth_ctx: &EmptyAuthCtx,
+    ) -> Result<Json<String>, ApiEndpointError> {
+        let namespace = DefaultNamespace::default();
+        let api_definition_key = ApiDefinitionIdWithVersion {
+            id: ApiDefinitionId(id),
+            version: ApiVersion(version),
+        };
+
+        // Split the site string into host and subdomain parts
+        let (host, subdomain) = if let Some(idx) = site.find('.') {
+            let (subdomain, host) = site.split_at(idx);
+            (
+                host.trim_start_matches('.').to_string(),
+                Some(subdomain.to_string()),
+            )
+        } else {
+            (site, None)
+        };
+
+        let api_site = ApiSite { host, subdomain };
+
+        let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
+            namespace: namespace.clone(),
+            api_definition_keys: vec![api_definition_key],
+            site: api_site,
+        };
+
+        self.deployment_service
+            .undeploy(&api_deployment, auth_ctx)
+            .await?;
+
+        Ok(Json("API definition undeployed from site".to_string()))
     }
 }
