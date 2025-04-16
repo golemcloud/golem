@@ -20,10 +20,11 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::fmt::log_warn;
-use crate::model::{ComponentName, Format};
+use crate::model::{ComponentName, Format, WorkerName};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_cloud_client::model::Account;
+use golem_common::model::ComponentVersion;
 use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, Select, Text};
 use std::fmt::{Display, Formatter};
@@ -61,6 +62,22 @@ impl InteractiveHandler {
                 "Redeploying will {} then recreate {} worker(s), do you want to continue?",
                 "delete".log_color_warn(),
                 number_of_workers.to_string().log_color_highlight()
+            ),
+        )
+    }
+
+    pub fn confirm_update_to_latest(
+        &self,
+        component_name: &ComponentName,
+        worker_name: &WorkerName,
+        target_version: ComponentVersion,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!("Worker {}/{} will be updated to the latest component version: {}. Do you want to continue?",
+                component_name.0.log_color_highlight(),
+                worker_name.0.log_color_highlight(),
+                target_version.to_string().log_color_highlight()
             ),
         )
     }

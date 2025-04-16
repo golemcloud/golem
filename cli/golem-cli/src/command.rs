@@ -993,10 +993,10 @@ pub mod worker {
         Update {
             #[command(flatten)]
             worker_name: WorkerNameArg,
-            /// Update mode - auto or manual
-            mode: WorkerUpdateMode,
-            /// The new version of the updated worker
-            target_version: u64,
+            /// Update mode - auto or manual (default is auto)
+            mode: Option<WorkerUpdateMode>,
+            /// The new version of the updated worker (default is the latest version)
+            target_version: Option<u64>,
         },
         /// Interrupts a running worker
         Interrupt {

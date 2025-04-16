@@ -49,7 +49,7 @@ use crate::model::{
 };
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::WorkerClient as WorkerClientOss;
+use golem_client::api::{ComponentClient as ComponentClientOss, WorkerClient as WorkerClientOss};
 use golem_client::model::{
     InvokeParameters as InvokeParametersOss, InvokeResult, PublicOplogEntry,
     RevertLastInvocations as RevertLastInvocationsOss, RevertToOplogIndex as RevertToOplogIndexOss,
@@ -57,7 +57,9 @@ use golem_client::model::{
     UpdateWorkerRequest as UpdateWorkerRequestOss,
     WorkerCreationRequest as WorkerCreationRequestOss,
 };
-use golem_cloud_client::api::WorkerClient as WorkerClientCloud;
+use golem_cloud_client::api::{
+    ComponentClient as ComponentClientCloud, WorkerClient as WorkerClientCloud,
+};
 use golem_cloud_client::model::{
     InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
@@ -137,7 +139,14 @@ impl WorkerCommandHandler {
                 worker_name,
                 mode,
                 target_version,
-            } => self.cmd_update(worker_name, mode, target_version).await,
+            } => {
+                self.cmd_update(
+                    worker_name,
+                    mode.unwrap_or(WorkerUpdateMode::Automatic),
+                    target_version,
+                )
+                .await
+            }
             WorkerSubcommand::Resume { worker_name } => self.cmd_resume(worker_name).await,
             WorkerSubcommand::SimulateCrash { worker_name } => {
                 self.cmd_simulate_crash(worker_name).await
@@ -789,13 +798,49 @@ impl WorkerCommandHandler {
         &mut self,
         worker_name: WorkerNameArg,
         mode: WorkerUpdateMode,
-        target_version: u64,
+        target_version: Option<u64>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
+
+        let target_version = match target_version {
+            Some(target_version) => target_version,
+            None => {
+                let latest_version = match self.ctx.golem_clients().await? {
+                    GolemClients::Oss(clients) => {
+                        let latest_component = clients
+                            .component
+                            .get_latest_component_metadata(
+                                &component.versioned_component_id.component_id,
+                            )
+                            .await?;
+                        latest_component.versioned_component_id.version
+                    }
+                    GolemClients::Cloud(clients) => {
+                        let latest_component = clients
+                            .component
+                            .get_latest_component_metadata(
+                                &component.versioned_component_id.component_id,
+                            )
+                            .await?;
+                        latest_component.versioned_component_id.version
+                    }
+                };
+
+                if !self.ctx.interactive_handler().confirm_update_to_latest(
+                    &component.component_name,
+                    &worker_name,
+                    latest_version,
+                )? {
+                    bail!(NonSuccessfulExit)
+                }
+
+                latest_version
+            }
+        };
 
         self.update_worker(
             &component.component_name,
