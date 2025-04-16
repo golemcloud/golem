@@ -54,9 +54,17 @@ impl ApiDeploymentRecord {
 
 #[async_trait]
 pub trait ApiDeploymentRepo {
-    async fn create(&self, namespace: &str, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError>;
+    async fn create(
+        &self,
+        namespace: &str,
+        deployments: Vec<ApiDeploymentRecord>,
+    ) -> Result<(), RepoError>;
 
-    async fn delete(&self, namespace: &str, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError>;
+    async fn delete(
+        &self,
+        namespace: &str,
+        deployments: Vec<ApiDeploymentRecord>,
+    ) -> Result<bool, RepoError>;
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 
@@ -77,7 +85,7 @@ pub trait ApiDeploymentRepo {
     async fn get_by_site(
         &self,
         namespace: &str,
-        site: &str
+        site: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 
     async fn get_definitions_by_site(
@@ -112,11 +120,19 @@ impl<Repo: ApiDeploymentRepo> LoggedDeploymentRepo<Repo> {
 
 #[async_trait]
 impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<Repo> {
-    async fn create(&self, namespace: &str, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
+    async fn create(
+        &self,
+        namespace: &str,
+        deployments: Vec<ApiDeploymentRecord>,
+    ) -> Result<(), RepoError> {
         self.repo.create(namespace, deployments).await
     }
 
-    async fn delete(&self, namespace: &str, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError> {
+    async fn delete(
+        &self,
+        namespace: &str,
+        deployments: Vec<ApiDeploymentRecord>,
+    ) -> Result<bool, RepoError> {
         self.repo.delete(namespace, deployments).await
     }
 
@@ -150,7 +166,11 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
             .await
     }
 
-    async fn get_by_site(&self, namespace: &str, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+    async fn get_by_site(
+        &self,
+        namespace: &str,
+        site: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         self.repo.get_by_site(site, namespace).await
     }
 
@@ -184,7 +204,11 @@ impl<DB: Pool> DbApiDeploymentRepo<DB> {
 )]
 #[async_trait]
 impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres::PostgresPool> {
-    async fn create(&self, namespace: &str, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
+    async fn create(
+        &self,
+        namespace: &str,
+        deployments: Vec<ApiDeploymentRecord>,
+    ) -> Result<(), RepoError> {
         if !deployments.is_empty() {
             let mut transaction = self
                 .db_pool
@@ -219,7 +243,11 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
         Ok(())
     }
 
-    async fn delete(&self, namespace: &str, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError> {
+    async fn delete(
+        &self,
+        namespace: &str,
+        deployments: Vec<ApiDeploymentRecord>,
+    ) -> Result<bool, RepoError> {
         if !deployments.is_empty() {
             let mut transaction = self
                 .db_pool
@@ -402,7 +430,11 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_site)]
-    async fn get_by_site_sqlite(&self, namespace: &str, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+    async fn get_by_site_sqlite(
+        &self,
+        namespace: &str,
+        site: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         let query = sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at

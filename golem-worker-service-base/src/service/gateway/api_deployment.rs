@@ -206,8 +206,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx>
         namespace: &Namespace,
         site: &ApiSite,
     ) -> Result<Vec<ApiDeploymentRecord>, ApiDeploymentError<Namespace>> {
-        let deployments =
-            self.deployment_repo.get_by_site(&namespace.to_string(), &site.to_string()).await?;
+        let deployments = self
+            .deployment_repo
+            .get_by_site(&namespace.to_string(), &site.to_string())
+            .await?;
 
         Ok(deployments)
     }
@@ -331,7 +333,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx>
         }
 
         self.deployment_repo
-            .create(&deployment_plan.namespace.to_string(), deployment_plan.deployment_records())
+            .create(
+                &deployment_plan.namespace.to_string(),
+                deployment_plan.deployment_records(),
+            )
             .await?;
 
         Ok(())
@@ -432,7 +437,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(&deployment.namespace.to_string(), &deployment.site.to_string())
+            .get_by_site(
+                &deployment.namespace.to_string(),
+                &deployment.site.to_string(),
+            )
             .await?;
 
         let mut remove_deployment_records: Vec<ApiDeploymentRecord> = vec![];
@@ -466,7 +474,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
 
         if !remove_deployment_records.is_empty() {
             self.deployment_repo
-                .delete(&deployment.namespace.to_string(), remove_deployment_records.clone())
+                .delete(
+                    &deployment.namespace.to_string(),
+                    remove_deployment_records.clone(),
+                )
                 .await?;
 
             self.set_undeployed_as_draft(remove_deployment_records)
@@ -542,8 +553,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         info!("Get API deployment");
-        let existing_deployment_records =
-            self.deployment_repo.get_by_site(&namespace.to_string(), &site.to_string()).await?;
+        let existing_deployment_records = self
+            .deployment_repo
+            .get_by_site(&namespace.to_string(), &site.to_string())
+            .await?;
 
         let mut api_definition_keys: Vec<ApiDefinitionIdWithVersion> = vec![];
         let mut site: Option<ApiSite> = None;
@@ -637,8 +650,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
 
         // Not sure of the purpose of retrieving records at repo level to delete API deployment
         // https://github.com/golemcloud/golem/issues/1443
-        let existing_deployment_records =
-            self.deployment_repo.get_by_site(&namespace.to_string(), &site.to_string(), ).await?;
+        let existing_deployment_records = self
+            .deployment_repo
+            .get_by_site(&namespace.to_string(), &site.to_string())
+            .await?;
 
         if existing_deployment_records.is_empty() {
             Err(ApiDeploymentError::ApiDeploymentNotFound(
@@ -685,7 +700,10 @@ where
         let mut new_definitions_to_deploy = Vec::new();
 
         let existing_deployed_api_def_keys = deployment_repo
-            .get_by_site(&deployment_request.namespace.to_string(), &deployment_request.site.to_string())
+            .get_by_site(
+                &deployment_request.namespace.to_string(),
+                &deployment_request.site.to_string(),
+            )
             .await?
             .into_iter()
             .map(|record| ApiDefinitionIdWithVersion {
