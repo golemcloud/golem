@@ -4,7 +4,7 @@ use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::{
-    plugin as common_plugin_model, ComponentType, Empty, InitialComponentFile, PluginInstallationId,
+    plugin as common_plugin_model, ComponentType, InitialComponentFile, PluginInstallationId,
 };
 use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
@@ -214,25 +214,12 @@ impl<Owner: PluginOwner, Scope: PluginScope>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
-pub struct RegisteredReferencedPlugin {
-    pub plugin_name: String,
-    pub plugin_version: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-pub enum ReferencedPlugin {
-    Registered(RegisteredReferencedPlugin),
-    Unregistered(Empty),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
 pub struct PluginInstallation {
     pub id: PluginInstallationId,
-    pub plugin: ReferencedPlugin,
+    pub plugin_name: String,
+    pub plugin_version: String,
+    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+    pub plugin_registered: bool,
     pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
@@ -242,18 +229,11 @@ impl PluginInstallation {
         model: common_plugin_model::PluginInstallation,
         plugin_definition: common_plugin_model::PluginDefinition<Owner, Scope>,
     ) -> Self {
-        let plugin = if !plugin_definition.deleted {
-            ReferencedPlugin::Registered(RegisteredReferencedPlugin {
-                plugin_name: plugin_definition.name,
-                plugin_version: plugin_definition.version,
-            })
-        } else {
-            ReferencedPlugin::Unregistered(Empty {})
-        };
-
         Self {
             id: model.id,
-            plugin,
+            plugin_name: plugin_definition.name,
+            plugin_version: plugin_definition.version,
+            plugin_registered: !plugin_definition.deleted,
             priority: model.priority,
             parameters: model.parameters,
         }

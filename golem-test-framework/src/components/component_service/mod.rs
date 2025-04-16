@@ -43,7 +43,6 @@ use golem_client::api::ComponentClient as ComponentServiceHttpClient;
 use golem_client::api::ComponentClientLive as ComponentServiceHttpClientLive;
 use golem_client::api::PluginClient as PluginServiceHttpClient;
 use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
-use golem_client::model::ReferencedPlugin;
 use golem_client::Context;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
@@ -146,15 +145,10 @@ pub trait ComponentServiceInternal: Send + Sync {
                 .collect(),
             installed_plugins: stream::iter(component.installed_plugins)
                 .then(async |install| {
-                    let (plugin_name, plugin_version) = match install.plugin {
-                        ReferencedPlugin::Registered(inner) => {
-                            (inner.plugin_name, inner.plugin_version)
-                        }
-                        _ => Err(anyhow!("reference to unregistered plugin"))?,
-                    };
-
                     // TODO: This should error if this is none, but currently the http api cannot resolve the id, but the types force us to provide something here.
-                    let plugin_id = self.get_plugin_id(&plugin_name, &plugin_version).await?;
+                    let plugin_id = self
+                        .get_plugin_id(&install.plugin_name, &install.plugin_version)
+                        .await?;
 
                     Ok::<PluginInstallation, anyhow::Error>(PluginInstallation {
                         id: Some(PluginInstallationId(install.id).into()),
