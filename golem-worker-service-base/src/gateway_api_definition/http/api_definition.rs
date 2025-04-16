@@ -35,7 +35,7 @@ use golem_common::model::component::VersionedComponentId;
 use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
 use poem_openapi::Enum;
-use rib::{RibError, RibInputTypeInfo};
+use rib::{RibCompileError, RibInputTypeInfo};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -738,7 +738,7 @@ pub struct CompiledAuthCallBackRoute {
 #[derive(Debug, PartialEq)]
 pub enum RouteCompilationErrors {
     MetadataNotFoundError(VersionedComponentId),
-    RibError(RibError),
+    RibError(RibCompileError),
     ValidationError(ValidationErrors),
 }
 

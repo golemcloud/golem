@@ -14,7 +14,7 @@
 
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{
     DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError,
@@ -25,7 +25,8 @@ use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations
 // such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
-pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilationError> {
+// lazy method invocations are converted to actual Expr::Call
+pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -198,7 +199,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                     }
                 }
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
-                // Re-running the same phase will help identify the instance type of `lhs`.
+                // Re-running (fix point) the same phase will help identify the instance type of `lhs`.
                 // Hence, this phase is part of computing the fix-point of compiler type inference.
                 InferredType::Unknown => {}
                 _ => {

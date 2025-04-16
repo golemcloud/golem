@@ -32,7 +32,7 @@ mod type_check_in_function_calls;
 mod type_mismatch;
 mod unresolved_types;
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::invalid_expr::check_invalid_expr;
 use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
@@ -43,7 +43,7 @@ use crate::{Expr, FunctionTypeRegistry};
 pub fn type_check(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
-) -> Result<(), RibCompilationError> {
+) -> Result<(), RibTypeError> {
     check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;

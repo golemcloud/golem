@@ -36,7 +36,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
-use rib::RibError;
+use rib::RibCompileError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -122,18 +122,19 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
     fn from(error: RouteCompilationErrors) -> Self {
         match error {
             RouteCompilationErrors::RibError(e) => match e {
-                RibError::RibCompilationError(e) => {
+                RibCompileError::RibTypeError(e) => {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
-                RibError::InternalError(e) => ApiDefinitionError::RibInternal(e),
-                RibError::RibParseError(e) => ApiDefinitionError::RibParseError(e),
-                RibError::UnsupportedGlobalInput { expected, found } => {
-                    ApiDefinitionError::UnsupportedRibInput(format!(
-                        "Expected: {}, found: {}",
-                        expected.join(", "),
-                        found.join(", ")
-                    ))
-                }
+                RibCompileError::StaticAnalysis(e) => ApiDefinitionError::RibInternal(e),
+                RibCompileError::RibParseError(e) => ApiDefinitionError::RibParseError(e),
+                RibCompileError::UnsupportedGlobalInput {
+                    valid_global_inputs: expected,
+                    invalid_global_inputs: found,
+                } => ApiDefinitionError::UnsupportedRibInput(format!(
+                    "Expected: {}, found: {}",
+                    expected.join(", "),
+                    found.join(", ")
+                )),
             },
             RouteCompilationErrors::ValidationError(e) => ApiDefinitionError::ValidationError(e),
             RouteCompilationErrors::MetadataNotFoundError(e) => {

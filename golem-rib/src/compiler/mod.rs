@@ -21,7 +21,7 @@ use std::fmt::Display;
 pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
 
@@ -35,7 +35,7 @@ mod worker_functions_in_rib;
 pub fn compile(
     expr: Expr,
     export_metadata: &Vec<AnalysedExport>,
-) -> Result<CompilerOutput, RibError> {
+) -> Result<CompilerOutput, RibCompileError> {
     compile_with_restricted_global_variables(expr, export_metadata, None, &vec![])
 }
 
@@ -51,16 +51,7 @@ pub fn compile_with_restricted_global_variables(
     export_metadata: &Vec<AnalysedExport>,
     allowed_global_variables: Option<Vec<String>>,
     global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
-) -> Result<CompilerOutput, RibError> {
-    for info in global_variable_type_spec {
-        if !info.variable_id.is_global() {
-            return Err(RibError::InternalError(format!(
-                "variable {} in the type spec is not a global variable",
-                info.variable_id
-            )));
-        }
-    }
-
+) -> Result<CompilerOutput, RibCompileError> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
 
@@ -81,19 +72,14 @@ pub fn compile_with_restricted_global_variables(
         }
 
         if !unsupoorted_global_inputs.is_empty() {
-            return Err(RibError::UnsupportedGlobalInput {
-                found: unsupoorted_global_inputs,
-                expected: supported_global_inputs.clone(),
+            return Err(RibCompileError::UnsupportedGlobalInput {
+                invalid_global_inputs: unsupoorted_global_inputs,
+                valid_global_inputs: supported_global_inputs.clone(),
             });
         }
     }
 
-    let byte_code = RibByteCode::from_expr(&inferred_expr).map_err(|e| {
-        RibError::InternalError(format!(
-            "failed to convert inferred expression to byte code: {}",
-            e
-        ))
-    })?;
+    let byte_code = RibByteCode::from_expr(&inferred_expr)?;
 
     Ok(CompilerOutput {
         worker_invoke_calls: function_calls_identified,
@@ -104,44 +90,59 @@ pub fn compile_with_restricted_global_variables(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RibError {
-    // Failed to compile due internal logical errors
-    // example: successfully inferred rib script, but failed to convert it to byte code
-    InternalError(String),
-    // invalid rib resulting in compilation error
-    RibCompilationError(RibCompilationError),
-    // invalid rib syntax
+pub enum RibCompileError {
+    // ByteCode generation error hardly occur ideally
+    // and is considered a  programming error that shows some parts of type checking
+    // or inference need to be fixed.
+    ByteCodeGeneration(RibByteCodeGenerationError),
+
+    // RibTypeError is a type error that occurs during type inference.
+    // This is the typical compilation error such as expected u32, found str
+    RibTypeError(RibTypeError),
     RibParseError(String),
-    // usage of global inputs that's not supported. example: using `env` in rib script
-    // that's part of api definition
     UnsupportedGlobalInput {
-        found: Vec<String>,
-        expected: Vec<String>,
+        invalid_global_inputs: Vec<String>,
+        valid_global_inputs: Vec<String>,
     },
+    StaticAnalysis(String),
 }
 
-impl From<RibCompilationError> for RibError {
-    fn from(err: RibCompilationError) -> Self {
-        RibError::RibCompilationError(err)
+impl From<RibByteCodeGenerationError> for RibCompileError {
+    fn from(err: RibByteCodeGenerationError) -> Self {
+        RibCompileError::StaticAnalysis(err.to_string())
     }
 }
 
-impl Display for RibError {
+impl From<RibTypeError> for RibCompileError {
+    fn from(err: RibTypeError) -> Self {
+        RibCompileError::RibTypeError(err)
+    }
+}
+
+impl Display for RibCompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RibError::InternalError(msg) => write!(f, "rib compilation internal error: {}", msg),
-            RibError::RibCompilationError(err) => write!(f, "{}", err),
-            RibError::RibParseError(msg) => write!(f, "invalid rib syntax: {}", msg),
-            RibError::UnsupportedGlobalInput { found, expected } => {
+            RibCompileError::StaticAnalysis(msg) => {
+                write!(f, "rib static analysis error: {}", msg)
+            }
+            RibCompileError::RibTypeError(err) => write!(f, "{}", err),
+            RibCompileError::RibParseError(msg) => write!(f, "invalid rib syntax: {}", msg),
+            RibCompileError::UnsupportedGlobalInput {
+                invalid_global_inputs,
+                valid_global_inputs,
+            } => {
                 write!(
                     f,
                     "unsupported global input variables: {}. expected: {}",
-                    found.join(", "),
-                    expected.join(", ")
+                    invalid_global_inputs.join(", "),
+                    valid_global_inputs.join(", ")
                 )
+            }
+            RibCompileError::ByteCodeGeneration(e) => {
+                write!(f, "rib byte code generation error: {}", e)
             }
         }
     }
 }
 
-impl Error for RibError {}
+impl Error for RibCompileError {}

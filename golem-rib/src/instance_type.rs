@@ -1,5 +1,5 @@
 use crate::parser::{PackageName, TypeParameter};
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::InterfaceName;
 use crate::{
     DynamicParsedFunctionName, Expr, FunctionCallError, FunctionTypeRegistry, InferredType,
@@ -406,7 +406,7 @@ impl InstanceType {
         worker_name: Option<Expr>,
         type_parameter: Option<TypeParameter>,
         expr: Expr,
-    ) -> Result<InstanceType, RibCompilationError> {
+    ) -> Result<InstanceType, RibTypeError> {
         let function_dict = FunctionDictionary::from_function_type_registry(registry, expr)?;
 
         match type_parameter {
@@ -517,7 +517,7 @@ impl FunctionDictionary {
     pub fn from_function_type_registry(
         registry: FunctionTypeRegistry,
         expr: Expr,
-    ) -> Result<FunctionDictionary, RibCompilationError> {
+    ) -> Result<FunctionDictionary, RibTypeError> {
         let mut map = vec![];
 
         for (key, value) in registry.types {

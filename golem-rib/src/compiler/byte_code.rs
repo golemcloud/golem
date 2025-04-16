@@ -12,14 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::{Display, Formatter};
 use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
+use crate::type_inference::type_hint::TypeHint;
 use crate::{Expr, InferredExpr, InstructionId};
 use bincode::{Decode, Encode};
 
 #[derive(Debug, Clone, Default, PartialEq, Encode, Decode)]
 pub struct RibByteCode {
     pub instructions: Vec<RibIR>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RibByteCodeGenerationError {
+    CastError(String),
+    AnalysedTypeConversionError(String),
+    PatternMatchDesugarError,
+    RangeSelectionDesugarError(String),
+    UnexpectedTypeError {
+        expected: TypeHint,
+        actual: TypeHint,
+    },
+}
+
+impl Display for RibByteCodeGenerationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RibByteCodeGenerationError::CastError(msg) => write!(f, "cast error: {}", msg),
+            RibByteCodeGenerationError::AnalysedTypeConversionError(msg) => {
+                write!(f, "{}", msg)
+            }
+            RibByteCodeGenerationError::PatternMatchDesugarError => {
+                write!(f, "Pattern match desugar error")
+            }
+            RibByteCodeGenerationError::RangeSelectionDesugarError(msg) => {
+                write!(f, "Range selection desugar error: {}", msg)
+            }
+            RibByteCodeGenerationError::UnexpectedTypeError { expected, actual } => {
+                write!(
+                    f,
+                    "Expected type: {}, but got: {}",
+                    expected.get_type_hint(),
+                    actual.get_type_hint()
+                )
+            }
+        }
+    }
 }
 
 impl RibByteCode {
@@ -33,7 +72,9 @@ impl RibByteCode {
         diff
     }
     // Convert expression to bytecode instructions
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibByteCode, String> {
+    pub fn from_expr(
+        inferred_expr: &InferredExpr,
+    ) -> Result<RibByteCode, RibByteCodeGenerationError> {
         let expr: &Expr = inferred_expr.get_expr();
         let mut instructions = Vec::new();
         let mut stack: Vec<ExprState> = Vec::new();
@@ -102,12 +143,14 @@ mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, Range, RibIR, VariableId, WorkerNamePresence,
+        InferredType, InstructionId, Range, RibByteCodeGenerationError, RibIR, VariableId,
+        WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
+    use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
     use golem_wasm_ast::analysis::analysed_type::{bool, tuple};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
@@ -117,7 +160,7 @@ mod internal {
         stack: &mut Vec<ExprState>,
         instructions: &mut Vec<RibIR>,
         instruction_id: &mut InstructionId,
-    ) -> Result<(), String> {
+    ) -> Result<(), RibByteCodeGenerationError> {
         match expr {
             Expr::Unwrap { expr, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
@@ -146,10 +189,14 @@ mod internal {
             } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
-                let value_and_type = number.to_val(&analysed_type).ok_or(format!(
-                    "internal error: convert a number to wasm value using {:?}",
-                    analysed_type
-                ))?;
+                let value_and_type =
+                    number
+                        .to_val(&analysed_type)
+                        .ok_or(RibByteCodeGenerationError::CastError(format!(
+                            "internal error: cannot convert {} to a value of type {}",
+                            number.value,
+                            analysed_type.get_type_hint()
+                        )))?;
 
                 instructions.push(RibIR::PushLit(value_and_type));
             }
@@ -293,7 +340,7 @@ mod internal {
             } => {
                 let desugared_pattern_match =
                     desugar_pattern_match(predicate.deref(), match_arms, inferred_type.clone())
-                        .ok_or("internal error: desugar pattern match failed".to_string())?;
+                        .ok_or(RibByteCodeGenerationError::PatternMatchDesugarError)?;
 
                 stack.push(ExprState::from_expr(&desugared_pattern_match));
             }
@@ -314,7 +361,13 @@ mod internal {
 
             Expr::SelectIndex { expr, index, .. } => match index.inferred_type() {
                 InferredType::Range { .. } => {
-                    let list_comprehension = desugar_range_selection(expr, index)?;
+                    let list_comprehension =
+                        desugar_range_selection(expr, index).map_err(|err| {
+                            RibByteCodeGenerationError::RangeSelectionDesugarError(format!(
+                                "Failed to desugar range selection: {}",
+                                err
+                            ))
+                        })?;
                     stack.push(ExprState::from_expr(&list_comprehension));
                 }
                 _ => {
@@ -578,10 +631,10 @@ mod internal {
                     }));
                 }
                 inferred_type => {
-                    return Err(format!(
-                        "Flags should have inferred type Flags {:?}",
-                        inferred_type
-                    ));
+                    return Err(RibByteCodeGenerationError::UnexpectedTypeError {
+                        expected: TypeHint::Flag(Some(flags.clone())),
+                        actual: inferred_type.get_type_hint(),
+                    });
                 }
             },
             Expr::Boolean { value, .. } => {
@@ -647,10 +700,10 @@ mod internal {
                 }
 
                 _ => {
-                    return Err(format!(
-                        "Range should have inferred type Range {:?}",
-                        inferred_type
-                    ));
+                    return Err(RibByteCodeGenerationError::UnexpectedTypeError {
+                        expected: TypeHint::Range,
+                        actual: inferred_type.get_type_hint(),
+                    });
                 }
             },
 
@@ -681,12 +734,14 @@ mod internal {
     pub(crate) fn convert_to_analysed_type(
         expr: &Expr,
         inferred_type: &InferredType,
-    ) -> Result<AnalysedType, String> {
-        AnalysedType::try_from(inferred_type).map_err(|e| {
-            format!(
-                "Invalid Rib {}. Error converting {:?} to AnalysedType: {:?}",
-                expr, inferred_type, e
-            )
+    ) -> Result<AnalysedType, RibByteCodeGenerationError> {
+        AnalysedType::try_from(inferred_type).map_err(|error| {
+            RibByteCodeGenerationError::AnalysedTypeConversionError(format!(
+                "Invalid Rib {}. Error converting {} to AnalysedType: {}",
+                expr,
+                inferred_type.get_type_hint(),
+                error
+            ))
         })
     }
 

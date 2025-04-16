@@ -14,11 +14,11 @@
 
 use crate::rib_repl::ReplBootstrapError;
 use colored::Colorize;
-use rib::{RibError, RibResult};
+use rib::{RibCompileError, RibResult};
 
 pub trait ReplPrinter {
     fn print_rib_result(&self, result: &RibResult);
-    fn print_rib_error(&self, error: &RibError);
+    fn print_rib_error(&self, error: &RibCompileError);
     fn print_bootstrap_error(&self, error: &ReplBootstrapError);
     fn print_runtime_error(&self, error: &str);
 }
@@ -31,12 +31,15 @@ impl ReplPrinter for DefaultReplResultPrinter {
         println!("{}", result.to_string().green());
     }
 
-    fn print_rib_error(&self, error: &RibError) {
+    fn print_rib_error(&self, error: &RibCompileError) {
         match error {
-            RibError::InternalError(msg) => {
+            RibCompileError::StaticAnalysis(msg) => {
                 println!("{} {}", "[internal rib error]".red(), msg.red());
             }
-            RibError::UnsupportedGlobalInput { found, expected } => {
+            RibCompileError::UnsupportedGlobalInput {
+                invalid_global_inputs: found,
+                valid_global_inputs: expected,
+            } => {
                 println!(
                     "{} {} {}",
                     "[unsupported input]".red(),
@@ -50,7 +53,7 @@ impl ReplPrinter for DefaultReplResultPrinter {
                     expected.join(", ").white()
                 );
             }
-            RibError::RibCompilationError(compilation_error) => {
+            RibCompileError::RibTypeError(compilation_error) => {
                 let cause = &compilation_error.cause;
                 let position = compilation_error.expr.source_span().start_column();
 
@@ -70,7 +73,7 @@ impl ReplPrinter for DefaultReplResultPrinter {
                     }
                 }
             }
-            RibError::RibParseError(script) => {
+            RibCompileError::RibParseError(script) => {
                 println!("{} {}", "[invalid script]".red(), script.white());
             }
         }

@@ -21,7 +21,7 @@ pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_common::model::component::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{Expr, RibByteCode, RibError, RibInputTypeInfo};
+use rib::{Expr, RibByteCode, RibCompileError, RibInputTypeInfo};
 pub use static_binding::*;
 
 mod gateway_binding_compiled;
@@ -245,7 +245,7 @@ impl WorkerNameCompiled {
     pub fn from_worker_name(
         worker_name: &Expr,
         exports: &[AnalysedExport],
-    ) -> Result<Self, RibError> {
+    ) -> Result<Self, RibCompileError> {
         let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, exports)?;
 
         Ok(WorkerNameCompiled {
@@ -267,7 +267,7 @@ impl IdempotencyKeyCompiled {
     pub fn from_idempotency_key(
         idempotency_key: &Expr,
         exports: &[AnalysedExport],
-    ) -> Result<Self, RibError> {
+    ) -> Result<Self, RibCompileError> {
         let idempotency_key_compiled =
             DefaultWorkerServiceRibCompiler::compile(idempotency_key, exports)?;
 
@@ -290,7 +290,7 @@ impl InvocationContextCompiled {
     pub fn from_invocation_context(
         invocation_context: &Expr,
         exports: &[AnalysedExport],
-    ) -> Result<Self, RibError> {
+    ) -> Result<Self, RibCompileError> {
         let invocation_context_compiled =
             DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;
 

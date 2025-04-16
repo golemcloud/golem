@@ -21,14 +21,15 @@ use std::fmt::Display;
 pub fn compile_rib_script(
     rib_script: &str,
     repl_state: &mut ReplState,
-) -> Result<CompilerOutput, RibError> {
-    let expr = Expr::from_text(rib_script).map_err(|e| RibError::RibParseError(e.to_string()))?;
+) -> Result<CompilerOutput, RibCompileError> {
+    let expr =
+        Expr::from_text(rib_script).map_err(|e| RibCompileError::RibParseError(e.to_string()))?;
 
     let function_registry =
         FunctionTypeRegistry::from_export_metadata(&repl_state.dependency().metadata);
 
     let inferred_expr = InferredExpr::from_expr(expr, &function_registry, &vec![])
-        .map_err(RibError::RibCompilationError)?;
+        .map_err(RibCompileError::RibTypeError)?;
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 
@@ -38,7 +39,7 @@ pub fn compile_rib_script(
     let enums = function_registry.get_enums();
 
     let new_byte_code = RibByteCode::from_expr(&inferred_expr)
-        .map_err(|e| RibError::InternalError(e.to_string()))?;
+        .map_err(|e| RibCompileError::StaticAnalysis(e.to_string()))?;
 
     let byte_code = new_byte_code.diff(repl_state.byte_code());
 

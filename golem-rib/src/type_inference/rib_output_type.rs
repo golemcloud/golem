@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{InferredExpr, RibError};
+use crate::{InferredExpr, RibCompileError};
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 
@@ -23,10 +23,10 @@ pub struct RibOutputTypeInfo {
 }
 
 impl RibOutputTypeInfo {
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibOutputTypeInfo, RibError> {
+    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibOutputTypeInfo, RibCompileError> {
         let inferred_type = inferred_expr.get_expr().inferred_type();
         let analysed_type = AnalysedType::try_from(&inferred_type).map_err(|e| {
-            RibError::InternalError(format!(
+            RibCompileError::StaticAnalysis(format!(
                 "failed to convert inferred type to analysed type: {}",
                 e
             ))

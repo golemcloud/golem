@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::{Expr, FunctionTypeRegistry};
 
 // Handling the following and making sure the types are inferred fully at this stage.
@@ -25,7 +25,7 @@ use crate::{Expr, FunctionTypeRegistry};
 pub fn identify_instance_creation(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
-) -> Result<(), RibCompilationError> {
+) -> Result<(), RibTypeError> {
     internal::search_for_invalid_instance_declarations(expr)?;
     internal::identify_instance_creation_with_worker(expr, function_type_registry)
 }
@@ -33,7 +33,7 @@ pub fn identify_instance_creation(
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::instance_type::InstanceType;
-    use crate::rib_compilation_error::RibCompilationError;
+    use crate::rib_type_error::RibTypeError;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::{CustomError, Expr, FunctionCallError, InferredType, ParsedFunctionReference};
@@ -41,7 +41,7 @@ mod internal {
 
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let mut queue = VecDeque::new();
         queue.push_front(expr);
         while let Some(expr) = queue.pop_front() {
@@ -88,7 +88,7 @@ mod internal {
     pub(crate) fn identify_instance_creation_with_worker(
         expr: &mut Expr,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let mut queue = VecDeque::new();
         queue.push_back(expr);
 
