@@ -428,8 +428,8 @@ async fn persist_nothing(
     info!("events:\n - {}", events.join("\n - "));
     info!("result: {:?}", result);
 
-    check!(events == vec!["1", "2", "3", "2", "2", "4"]);
-    check!(result.is_ok());
+    check!(events == vec!["1", "2", "3"]);
+    check!(result.is_err());
 }
 
 // golem-rust library tests
@@ -686,8 +686,8 @@ async fn golem_rust_persist_nothing(
     info!("events:\n - {}", events.join("\n - "));
     info!("result: {:?}", result);
 
-    check!(events == vec!["1", "2", "3", "2", "2", "4"]);
-    check!(result.is_ok());
+    check!(events == vec!["1", "2", "3"]);
+    check!(result.is_err());
 }
 
 #[test]

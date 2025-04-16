@@ -23,7 +23,7 @@ use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError,
-    ListDirectoryResult, PersistenceLevel, ReadFileResult, TrapType, WorkerConfig,
+    ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
@@ -65,8 +65,8 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription,
-    WorkerError, WorkerResourceId,
+    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
+    UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{exports, PluginInstallationId};
@@ -449,15 +449,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 if self.state.is_live()
                 // If the worker is still in replay mode we never emit events.
                 {
-                    if self.state.persistence_level == PersistenceLevel::PersistNothing
-                    // If persistence is off, we always emit events
-                    {
-                        // Emit the event and write a special oplog entry
-                        self.public_state
-                            .event_service
-                            .emit_event(event.clone(), true);
-                        self.state.oplog.add(entry).await;
-                    } else if !self
+                    if !self
                         .state
                         .replay_state
                         .seen_log(*level, context, message)
@@ -2165,12 +2157,11 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, GolemError> {
-        if self.persistence_level != PersistenceLevel::PersistNothing
-            && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
-                || matches!(
-                    *function_type,
-                    DurableFunctionType::WriteRemoteBatched(None)
-                ))
+        if (*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
+            || matches!(
+                *function_type,
+                DurableFunctionType::WriteRemoteBatched(None)
+            )
         {
             if self.is_live() {
                 self.oplog
@@ -2242,12 +2233,11 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), GolemError> {
-        if self.persistence_level != PersistenceLevel::PersistNothing
-            && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
-                || matches!(
-                    *function_type,
-                    DurableFunctionType::WriteRemoteBatched(None)
-                ))
+        if (*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
+            || matches!(
+                *function_type,
+                DurableFunctionType::WriteRemoteBatched(None)
+            )
         {
             if self.is_live() {
                 self.oplog
