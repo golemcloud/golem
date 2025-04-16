@@ -46,6 +46,7 @@ message OplogEntry {
     StartSpanParameters StartSpan = 30;
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
+    ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
   }
 }
 
@@ -258,6 +259,11 @@ message SetSpanAttributeParameters {
   AttributeValue value = 4;
 }
 
+message ChangePersistenceLevelParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  PersistenceLevel persistence_level = 3;
+}
+
 enum OplogLogLevel {
   OPLOG_STDOUT = 0;
   OPLOG_STDERR = 1;
@@ -279,4 +285,10 @@ message LogParameters {
 message OplogEntryWithIndex {
   uint64 oplog_index = 1;
   OplogEntry entry = 2;
+}
+
+enum PersistenceLevel {
+    PERSIST_NOTHING = 0;
+    PERSIST_REMOTE_SIDE_EFFECTS = 1;
+    SMART = 2;
 }

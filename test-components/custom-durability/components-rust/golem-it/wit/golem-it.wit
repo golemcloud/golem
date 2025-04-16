@@ -1,0 +1,11 @@
+package golem:it;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface golem-it-api {
+  callback: func(payload: string) -> string;
+}
+
+world golem-it {
+  export golem-it-api;
+}

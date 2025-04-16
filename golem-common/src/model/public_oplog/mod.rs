@@ -20,7 +20,9 @@ mod tests;
 
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
-use crate::model::oplog::{DurableFunctionType, LogLevel, OplogIndex, WorkerResourceId};
+use crate::model::oplog::{
+    DurableFunctionType, LogLevel, OplogIndex, PersistenceLevel, WorkerResourceId,
+};
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::RetryConfig;
@@ -1120,6 +1122,29 @@ impl IntoValue for SetSpanAttributeParameters {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct ChangePersistenceLevelParameters {
+    pub timestamp: Timestamp,
+    pub persistence_level: PersistenceLevel,
+}
+
+impl IntoValue for ChangePersistenceLevelParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.persistence_level.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("persistence-level", PersistenceLevel::get_type()),
+        ])
+    }
+}
+
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -1206,6 +1231,8 @@ pub enum PublicOplogEntry {
     FinishSpan(FinishSpanParameters),
     /// Set an attribute on an open span in the invocation context
     SetSpanAttribute(SetSpanAttributeParameters),
+    /// Change the current persistence level
+    ChangePersistenceLevel(ChangePersistenceLevelParameters),
 }
 
 impl PublicOplogEntry {
@@ -1496,6 +1523,11 @@ impl PublicOplogEntry {
                     || Self::string_match("set-span-attribute", &[], query_path, query)
                     || Self::string_match(&params.key, &[], query_path, query)
                     || Self::span_attribute_match(&attributes, &[], query_path, query)
+            }
+            PublicOplogEntry::ChangePersistenceLevel(_params) => {
+                Self::string_match("changepersistencelevel", &[], query_path, query)
+                    || Self::string_match("change-persistence-level", &[], query_path, query)
+                    || Self::string_match("persistence-level", &[], query_path, query)
             }
         }
     }
@@ -1807,6 +1839,10 @@ impl IntoValue for PublicOplogEntry {
                 case_idx: 31,
                 case_value: Some(Box::new(params.into_value())),
             },
+            PublicOplogEntry::ChangePersistenceLevel(params) => Value::Variant {
+                case_idx: 32,
+                case_value: Some(Box::new(params.into_value())),
+            },
         }
     }
 
@@ -1859,6 +1895,10 @@ impl IntoValue for PublicOplogEntry {
             case("start-span", StartSpanParameters::get_type()),
             case("finish-span", FinishSpanParameters::get_type()),
             case("set-span-attribute", SetSpanAttributeParameters::get_type()),
+            case(
+                "change-persistence-level",
+                ChangePersistenceLevelParameters::get_type(),
+            ),
         ])
     }
 }

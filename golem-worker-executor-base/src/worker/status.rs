@@ -262,6 +262,9 @@ fn calculate_latest_worker_status(
             OplogEntry::SetSpanAttribute { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::ChangePersistenceLevel { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result
