@@ -171,7 +171,7 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
         namespace: &str,
         site: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        self.repo.get_by_site(site, namespace).await
+        self.repo.get_by_site(namespace, site).await
     }
 
     async fn get_definitions_by_site(
