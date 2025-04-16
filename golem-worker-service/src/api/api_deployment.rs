@@ -238,6 +238,37 @@ impl ApiDeploymentApi {
 
         let api_site = ApiSite { host, subdomain };
 
+        // Check if the site exists
+        let site_exists = self
+            .deployment_service
+            .get_by_site(&ApiSiteString::from(&api_site))
+            .await?
+            .is_some();
+
+        if !site_exists {
+            return Err(ApiEndpointError::not_found(safe(
+                "Site not found".to_string(),
+            )));
+        }
+
+        // Check if the API definition exists
+        let api_definition_exists = self
+            .deployment_service
+            .get_by_id(&namespace, Some(api_definition_key.id.clone()))
+            .await?
+            .iter()
+            .any(|deployment| {
+                deployment.api_definition_keys.iter().any(|key| {
+                    key.id == api_definition_key.id && key.version == api_definition_key.version
+                })
+            });
+
+        if !api_definition_exists {
+            return Err(ApiEndpointError::not_found(safe(
+                "API definition not found".to_string(),
+            )));
+        }
+
         let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
             namespace: namespace.clone(),
             api_definition_keys: vec![api_definition_key],
