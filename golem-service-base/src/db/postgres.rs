@@ -381,7 +381,8 @@ pub async fn migrate(
     }
 
     let migrator = sqlx::migrate::Migrator::new(migrations).await?;
-    migrator.run(&mut conn).await?;
+    // See: https://github.com/launchbadge/sqlx/issues/954, Send required for golem-cli
+    futures::executor::block_on(migrator.run(&mut conn))?;
 
     let _ = conn.close().await;
     Ok(())

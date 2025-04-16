@@ -22,7 +22,7 @@ use futures::Stream;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
@@ -305,13 +305,6 @@ impl Display for LastError {
             self.retry_count
         )
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
-pub enum PersistenceLevel {
-    PersistNothing,
-    PersistRemoteSideEffects,
-    Smart,
 }
 
 impl From<crate::preview2::golem_api_1_x::host::PersistenceLevel> for PersistenceLevel {

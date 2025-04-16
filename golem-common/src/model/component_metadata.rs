@@ -38,6 +38,7 @@ pub struct ComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
+    #[serde(default)]
     pub binary_wit: Base64,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
