@@ -334,7 +334,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> FileServerBindingHandler<
             // Ask the worker service to get the file contents. If no worker is running, one will be started.
             let worker_name_opt_validated = worker_name
                 .as_ref()
-                .map(|&w| WorkerId::validate_worker_name(w))
+                .map(|&w| WorkerId::validate_worker_name(w).map(|_| w.to_string()))
                 .transpose()
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!("Invalid worker name: {}", e))

@@ -44,22 +44,22 @@ impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerReques
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = worker_request_params
             .worker_name
-            .map(|w| WorkerId::validate_worker_name(w.as_str()))
+            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w.to_string()))
             .transpose()?;
 
         let component_id = worker_request_params.component_id;
 
         let worker_id = TargetWorkerId {
             component_id: component_id.clone(),
-            worker_name: worker_name_opt_validated.map(|w| w.to_string()),
+            worker_name: worker_name_opt_validated.clone(),
         };
 
         info!(
             "Executing request for component: {}, worker: {}, function: {:?}",
             component_id,
             worker_name_opt_validated
-                .map(|w| w.to_string())
-                .unwrap_or("<NA/ephemeral>".to_string()),
+                .as_deref()
+                .unwrap_or("<NA/ephemeral>"),
             worker_request_params.function_name
         );
 
@@ -73,10 +73,12 @@ impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerReques
 
         // TODO: check if these are already added from span
         info!(
-            component_id = component_id.to_string(),
-            worker_name_opt_validated,
-            function_name = worker_request_params.function_name.to_string(),
-            idempotency_key = idempotency_key_str,
+            component_id = %component_id,
+            worker_name = %worker_name_opt_validated
+                .as_deref()
+                .unwrap_or("<NA/ephemeral>"),
+            function_name = %worker_request_params.function_name,
+            idempotency_key = %idempotency_key_str,
             "Executing request",
         );
 
