@@ -2870,10 +2870,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert_eq!(
-            result,
-            "index 10 is out of bound in the list of length 5".to_string()
-        );
+        assert_eq!(result, "index out of bound: 10 (size: 5)".to_string());
     }
 
     #[test]
@@ -4431,7 +4428,7 @@ mod tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
             EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue,
-            RibFunctionInvoke, RibInput, RibInterpreterResult,
+            RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibInterpreterResult,
         };
         use anyhow::anyhow;
         use async_trait::async_trait;
@@ -4837,7 +4834,7 @@ mod tests {
                 _worker_name: Option<EvaluatedWorkerName>,
                 _fqn: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
-            ) -> RibInterpreterResult<ValueAndType> {
+            ) -> RibFunctionInvokeResult {
                 let value = self.value.clone();
                 Ok(ValueAndType::new(
                     Value::Tuple(vec![value.value]),
@@ -4855,7 +4852,7 @@ mod tests {
                 worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
-            ) -> RibInterpreterResult<ValueAndType> {
+            ) -> RibFunctionInvokeResult {
                 let worker_name = worker_name.map(|x| x.0);
 
                 let function_name = function_name.0.into_value_and_type();
@@ -4976,7 +4973,7 @@ mod tests {
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
-            ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
+            ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
                     "add-u32" => {
                         let args = args.0;

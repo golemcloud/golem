@@ -2246,7 +2246,7 @@ mod comprehensive_test {
             });
 
             Interpreter::new(
-                &RibInput::new(interpreter_env_input),
+                RibInput::new(interpreter_env_input),
                 dynamic_worker_invoke,
                 None,
                 None,

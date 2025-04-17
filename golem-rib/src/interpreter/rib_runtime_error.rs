@@ -1,7 +1,7 @@
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{InstructionId, TypeHint};
 use golem_wasm_rpc::{Value, ValueAndType};
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
 pub enum RibRuntimeError {
@@ -24,7 +24,7 @@ pub enum RibRuntimeError {
     InfiniteComputation {
         message: String,
     },
-    IndexOutOfBounds {
+    IndexOutOfBound {
         index: usize,
         size: usize,
     },
@@ -101,7 +101,7 @@ pub fn function_invoke_fail(
 }
 
 pub fn index_out_of_bound(index: usize, size: usize) -> RibRuntimeError {
-    RibRuntimeError::IndexOutOfBounds { index, size }
+    RibRuntimeError::IndexOutOfBound { index, size }
 }
 
 pub fn infinite_computation(message: &str) -> RibRuntimeError {
@@ -171,4 +171,64 @@ pub enum InvariantViolation {
     InsufficientStackItems(usize),
     CorruptedState(String),
     InstructionJumpError(InstructionId),
+}
+
+impl Display for RibRuntimeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RibRuntimeError::InputNotFound(input_name) => {
+                write!(f, "input not found: {}", input_name)
+            }
+            RibRuntimeError::ExhaustedIterator => write!(f, "no more values in iterator"),
+            RibRuntimeError::FieldNotFound { field } => {
+                write!(f, "field not found: {}", field)
+            }
+            RibRuntimeError::InvariantViolation(violation) => {
+                write!(f, "internal error: {:?}", violation)
+            }
+            RibRuntimeError::ThrownError(message) => write!(f, "Thrown error: {}", message),
+            RibRuntimeError::CastError { from, to } => {
+                write!(f, "cast error from {:?} to {:?}", from, to)
+            }
+            RibRuntimeError::TypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "runtime type mismatch: expected {:?}, found {:?}",
+                    expected, found
+                )
+            }
+            RibRuntimeError::NoResult => write!(f, "No result"),
+            RibRuntimeError::InfiniteComputation { message } => {
+                write!(f, "infinite computation detected: {}", message)
+            }
+            RibRuntimeError::IndexOutOfBound { index, size } => {
+                write!(f, "index out of bound: {} (size: {})", index, size)
+            }
+            RibRuntimeError::InvalidComparison {
+                message,
+                left,
+                right,
+            } => match (left, right) {
+                (Some(left), Some(right)) => {
+                    write!(
+                        f,
+                        "Invalid comparison: {} (left: {}, right: {})",
+                        message, left, right
+                    )
+                }
+                _ => {
+                    write!(f, "Invalid comparison: {} ", message)
+                }
+            },
+            RibRuntimeError::ArithmeticError { message } => {
+                write!(f, "arithmetic error: {}", message)
+            }
+            RibRuntimeError::FunctionInvokeError {
+                function_name,
+                error,
+            } => {
+                write!(f, "failed to invoke function {}: {}", function_name, error)
+            }
+        }
+    }
 }
