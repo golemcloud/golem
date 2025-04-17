@@ -22,8 +22,8 @@ pub fn compile_rib_script(
     rib_script: &str,
     repl_state: &mut ReplState,
 ) -> Result<CompilerOutput, RibCompilationError> {
-    let expr =
-        Expr::from_text(rib_script).map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
+    let expr = Expr::from_text(rib_script)
+        .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
     let function_registry =
         FunctionTypeRegistry::from_export_metadata(&repl_state.dependency().metadata);

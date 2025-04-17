@@ -20,10 +20,9 @@ use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
-use golem_wasm_rpc::ValueAndType;
-use rib::{RibFunctionInvokeResult, RibResult};
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
 use rib::{RibCompilationError, RibFunctionInvoke};
+use rib::{RibFunctionInvokeResult, RibResult, RibRuntimeError};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -148,7 +147,7 @@ impl RibRepl {
     /// This function is exposed for users who want to implement custom REPL loops
     /// or integrate Rib execution into other workflows.
     /// For a built-in REPL loop, see [`Self::run`].
-    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibCompilationError> {
+    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibExecutionError> {
         if !rib.is_empty() {
             let rib = rib.strip_suffix(";").unwrap_or(rib);
 
@@ -175,15 +174,15 @@ impl RibRepl {
                         }
                         Err(err) => {
                             self.remove_rib_text_in_session();
-                            self.printer.print_runtime_error(&err);
-                            Err(RibCompilationError::RibStaticAnalysisError(err))
+                            self.printer.print_rib_runtime_error(&err);
+                            Err(RibExecutionError::RibRuntimeError(err))
                         }
                     }
                 }
                 Err(err) => {
                     self.remove_rib_text_in_session();
-                    self.printer.print_rib_error(&err);
-                    Err(RibCompilationError::RibStaticAnalysisError(err.to_string()))
+                    self.printer.print_rib_compilation_error(&err);
+                    Err(RibExecutionError::RibCompilationError(err))
                 }
             }
         } else {
@@ -233,6 +232,12 @@ impl RibRepl {
     }
 }
 
+#[derive(Debug)]
+pub enum RibExecutionError {
+    RibCompilationError(RibCompilationError),
+    RibRuntimeError(RibRuntimeError),
+}
+
 /// Represents the source of a component in the REPL session.
 ///
 /// The `source_path` must include the full file path,
@@ -245,12 +250,11 @@ pub struct ComponentSource {
     pub source_path: PathBuf,
 }
 
-async fn eval(rib_byte_code: RibByteCode, repl_state: &mut ReplState) -> Result<RibResult, String> {
-    repl_state
-        .interpreter()
-        .run(rib_byte_code)
-        .await
-        .map_err(|e| format!("Runtime error: {}", e))
+async fn eval(
+    rib_byte_code: RibByteCode,
+    repl_state: &mut ReplState,
+) -> Result<RibResult, RibRuntimeError> {
+    repl_state.interpreter().run(rib_byte_code).await
 }
 
 fn get_default_history_file() -> PathBuf {
@@ -343,6 +347,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                 function_name.0.as_str(),
                 args.0,
             )
-            .await.map_err(|e| e.into())
+            .await
+            .map_err(|e| e.into())
     }
 }

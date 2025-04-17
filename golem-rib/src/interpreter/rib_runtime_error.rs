@@ -5,40 +5,40 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
 pub enum RibRuntimeError {
-    InputNotFound(String),
-    ExhaustedIterator,
-    FieldNotFound {
-        field: String,
+    ArithmeticError {
+        message: String,
     },
-    InvariantViolation(InvariantViolation),
-    ThrownError(String),
     CastError {
         from: CastFrom,
         to: TypeHint,
     },
-    TypeMismatch {
-        expected: Vec<TypeHint>,
-        found: InvalidItem,
+    ExhaustedIterator,
+    FieldNotFound {
+        field: String,
     },
-    NoResult,
-    InfiniteComputation {
-        message: String,
+    FunctionInvokeError {
+        function_name: String,
+        error: Box<dyn std::error::Error + Send + Sync>,
     },
     IndexOutOfBound {
         index: usize,
         size: usize,
     },
+    InfiniteComputation {
+        message: String,
+    },
+    InputNotFound(String),
+    InvariantViolation(InvariantViolation),
     InvalidComparison {
         message: String,
         left: Option<ValueAndType>,
         right: Option<ValueAndType>,
     },
-    ArithmeticError {
-        message: String,
-    },
-    FunctionInvokeError {
-        function_name: String,
-        error: Box<dyn std::error::Error + Send + Sync>,
+    NoResult,
+    ThrownError(String),
+    TypeMismatch {
+        expected: Vec<TypeHint>,
+        found: InvalidItem,
     },
 }
 
@@ -169,7 +169,7 @@ pub fn throw_error(message: &str) -> RibRuntimeError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum InvariantViolation {
     InsufficientStackItems(usize),
-    CorruptedState(String),
+    InternalCorruptedState(String),
     InstructionJumpError(InstructionId),
 }
 

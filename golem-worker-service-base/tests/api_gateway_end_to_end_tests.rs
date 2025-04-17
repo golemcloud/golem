@@ -2549,10 +2549,10 @@ mod internal {
 
     struct TestFileServerBindingHandler {}
     #[async_trait]
-    impl<Namespace> FileServerBindingHandler<Namespace> for TestFileServerBindingHandler {
+    impl FileServerBindingHandler<DefaultNamespace> for TestFileServerBindingHandler {
         async fn handle_file_server_binding_result(
             &self,
-            _namespace: &Namespace,
+            _namespace: DefaultNamespace,
             _worker_name: Option<&str>,
             _component_id: &ComponentId,
             _original_result: RibResult,
@@ -2826,8 +2826,8 @@ mod internal {
         ))
     }
 
-    pub fn get_test_file_server_binding_handler<Namespace>(
-    ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
+    pub fn get_test_file_server_binding_handler(
+    ) -> Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send> {
         Arc::new(TestFileServerBindingHandler {})
     }
 
