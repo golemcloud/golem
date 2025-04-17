@@ -34,7 +34,6 @@ golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = 
     "text",
 ] }
 
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }

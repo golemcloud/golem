@@ -3281,7 +3281,6 @@ dependencies = [
 name = "golem-rib"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "bigdecimal",
  "bincode",
@@ -3301,6 +3300,7 @@ dependencies = [
 name = "golem-rib-repl"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "colored",
  "dirs",
