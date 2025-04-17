@@ -13,18 +13,16 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::fmt::Display;
-use std::sync::Arc;
-
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{
-    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode, RibFunctionInvoke, RibInput,
-    RibResult,
+    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode, RibFunctionInvoke,
+    RibFunctionInvokeResult, RibInput, RibResult,
 };
+use std::fmt::Display;
+use std::sync::Arc;
 
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 
@@ -36,34 +34,34 @@ pub trait WorkerServiceRibInterpreter<Namespace> {
     // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
-        worker_name: Option<&str>,
-        component_id: &ComponentId,
-        idempotency_key: &Option<IdempotencyKey>,
+        worker_name: Option<String>,
+        component_id: ComponentId,
+        idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
-        rib_byte_code: &RibByteCode,
-        rib_input: &RibInput,
+        rib_byte_code: RibByteCode,
+        rib_input: RibInput,
         namespace: Namespace,
-    ) -> Result<RibResult, EvaluationError>;
+    ) -> Result<RibResult, RibRuntimeError>;
 }
 
 #[derive(Debug, PartialEq)]
-pub struct EvaluationError(pub String);
+pub struct RibRuntimeError(pub String);
 
-impl Display for EvaluationError {
+impl Display for RibRuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl SafeDisplay for EvaluationError {
+impl SafeDisplay for RibRuntimeError {
     fn to_safe_string(&self) -> String {
         self.0.clone()
     }
 }
 
-impl From<String> for EvaluationError {
+impl From<String> for RibRuntimeError {
     fn from(err: String) -> Self {
-        EvaluationError(err)
+        RibRuntimeError(err)
     }
 }
 
@@ -105,25 +103,25 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
 {
     async fn evaluate(
         &self,
-        worker_name: Option<&str>,
-        component_id: &ComponentId,
-        idempotency_key: &Option<IdempotencyKey>,
+        worker_name: Option<String>,
+        component_id: ComponentId,
+        idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
-        expr: &RibByteCode,
-        rib_input: &RibInput,
+        expr: RibByteCode,
+        rib_input: RibInput,
         namespace: Namespace,
-    ) -> Result<RibResult, EvaluationError> {
+    ) -> Result<RibResult, RibRuntimeError> {
         let worker_invoke_function = self.rib_invoke(
-            worker_name.map(|x| x.to_string()),
-            component_id.clone(),
-            idempotency_key.clone(),
+            worker_name,
+            component_id,
+            idempotency_key,
             invocation_context,
-            namespace.clone(),
+            namespace,
         );
 
         let result = rib::interpret(expr, rib_input, worker_invoke_function)
             .await
-            .map_err(EvaluationError)?;
+            .map_err(|err| RibRuntimeError(err.to_string()))?;
         Ok(result)
     }
 }
@@ -150,7 +148,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
-    ) -> Result<ValueAndType, String> {
+    ) -> RibFunctionInvokeResult {
         let component_id = self.component_id.clone();
         let worker_name: Option<String> =
             worker_name.map(|x| x.0).or(self.global_worker_name.clone());
@@ -178,12 +176,8 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
             namespace,
         };
 
-        let tav = executor
-            .execute(worker_request)
-            .await
-            .map(|v| v.result)
-            .map_err(|e| e.to_string())?;
+        let tav = executor.execute(worker_request).await.map(|v| v.result)?;
 
-        tav.try_into()
+        tav.try_into().map_err(|err: String| err.into())
     }
 }

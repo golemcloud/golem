@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_checker::Path;
 use crate::{Expr, InferredType, VariableId};
 
@@ -23,9 +23,23 @@ use crate::{Expr, InferredType, VariableId};
 // If you specify completely opposite types to be default, you will get a compilation error.
 #[derive(Clone, Debug)]
 pub struct GlobalVariableTypeSpec {
-    pub variable_id: VariableId,
-    pub path: Path,
-    pub inferred_type: InferredType,
+    variable_id: VariableId,
+    path: Path,
+    inferred_type: InferredType,
+}
+
+impl GlobalVariableTypeSpec {
+    pub fn new(
+        variable_name: &str,
+        path: Path,
+        inferred_type: InferredType,
+    ) -> GlobalVariableTypeSpec {
+        GlobalVariableTypeSpec {
+            variable_id: VariableId::global(variable_name.to_string()),
+            path,
+            inferred_type,
+        }
+    }
 }
 
 //
@@ -70,7 +84,7 @@ pub struct GlobalVariableTypeSpec {
 pub fn bind_global_variable_types(
     expr: &Expr,
     type_pecs: &Vec<GlobalVariableTypeSpec>,
-) -> Result<Expr, RibCompilationError> {
+) -> Result<Expr, RibTypeError> {
     let mut result_expr = expr.clone();
 
     for spec in type_pecs {
@@ -84,8 +98,8 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
-    use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
+    use crate::rib_type_error::RibTypeError;
     use crate::type_checker::{Path, PathElem};
     use crate::{
         CustomError, Expr, GlobalVariableTypeSpec, InferredType, MatchArm, Range, TypeName,
@@ -97,7 +111,7 @@ mod internal {
     pub(crate) fn bind_global_variable_types(
         expr: &Expr,
         type_spec: &GlobalVariableTypeSpec,
-    ) -> Result<Expr, RibCompilationError> {
+    ) -> Result<Expr, RibTypeError> {
         let mut path = type_spec.path.clone();
 
         let mut expr_queue = VecDeque::new();
@@ -854,7 +868,7 @@ mod internal {
         type_name: &Option<TypeName>,
         source_span: &SourceSpan,
         type_spec: &GlobalVariableTypeSpec,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let (expr, part_of_path) = temp_stack
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
@@ -921,7 +935,7 @@ mod internal {
         temp_stack: &mut VecDeque<(Expr, bool)>,
         type_name: &Option<TypeName>,
         source_span: &SourceSpan,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let index = temp_stack.pop_front().unwrap_or((index.clone(), false));
 
         let expr = temp_stack
@@ -1328,11 +1342,30 @@ mod internal {
                         }
                     };
 
+                    let new_inferred_type = match inferred_type {
+                        InferredType::Instance { instance_type } => {
+                            instance_type.worker().map(|worker_expr| {
+                                let inferred_worker_expr = temp_stack
+                                    .pop_front()
+                                    .map(|x| x.0)
+                                    .unwrap_or_else(|| worker_expr.clone());
+
+                                let mut new_instance_type = instance_type.clone();
+                                new_instance_type.set_worker_name(inferred_worker_expr);
+
+                                InferredType::Instance {
+                                    instance_type: new_instance_type,
+                                }
+                            })
+                        }
+                        _ => None,
+                    };
+
                     let new_call = Expr::Call {
                         call_type: CallType::InstanceCreation(new_instance_creation.clone()),
                         generic_type_parameter: generic_type_parameter.clone(),
                         args: new_arg_exprs,
-                        inferred_type: inferred_type.clone(),
+                        inferred_type: new_inferred_type.unwrap_or_else(|| inferred_type.clone()),
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     };

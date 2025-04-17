@@ -1,5 +1,5 @@
 use crate::parser::{PackageName, TypeParameter};
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::InterfaceName;
 use crate::{
     DynamicParsedFunctionName, Expr, FunctionCallError, FunctionTypeRegistry, InferredType,
@@ -18,7 +18,7 @@ use golem_api_grpc::proto::golem::rib::{
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display};
 use std::ops::Deref;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
@@ -28,7 +28,7 @@ use std::ops::Deref;
 // Here we will add the resource type as well as the resource creation itself can be be part of this InstanceType
 // allowing lazy loading of resource and invoke the functions in them!
 // The distinction is only to disallow compiler to see only the functions that are part of a location (package/interface/package-interface/resoruce or all)
-#[derive(Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
     // Holds functions across every package and interface in the component
     Global {
@@ -70,11 +70,11 @@ pub enum InstanceType {
     },
 }
 
-impl Debug for InstanceType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "InstanceType")
-    }
-}
+// impl Debug for InstanceType {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+//
+//     }
+// }
 
 impl InstanceType {
     pub fn set_worker_name(&mut self, worker_name: Expr) {
@@ -406,7 +406,7 @@ impl InstanceType {
         worker_name: Option<Expr>,
         type_parameter: Option<TypeParameter>,
         expr: Expr,
-    ) -> Result<InstanceType, RibCompilationError> {
+    ) -> Result<InstanceType, RibTypeError> {
         let function_dict = FunctionDictionary::from_function_type_registry(registry, expr)?;
 
         match type_parameter {
@@ -517,7 +517,7 @@ impl FunctionDictionary {
     pub fn from_function_type_registry(
         registry: FunctionTypeRegistry,
         expr: Expr,
-    ) -> Result<FunctionDictionary, RibCompilationError> {
+    ) -> Result<FunctionDictionary, RibTypeError> {
         let mut map = vec![];
 
         for (key, value) in registry.types {

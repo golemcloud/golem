@@ -1,4 +1,4 @@
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 // This is more of an optional stage to help with a better
@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 // If there is any possible mistake in assigning types, type_checker phase
 // or unification phase will capture it.
 // However, this phase may not be perfectly assigning a reasonable type to all types of literals in the program
-pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibCompilationError> {
+pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibTypeError> {
     infer_number_literals(expr);
 
     match expr {
@@ -29,7 +29,7 @@ pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibCompilationError>
     Ok(())
 }
 
-fn pull_types_up_for_standalone_expr(expr: &mut Expr) -> Result<(), RibCompilationError> {
+fn pull_types_up_for_standalone_expr(expr: &mut Expr) -> Result<(), RibTypeError> {
     match expr {
         Expr::Sequence { .. } => {
             *expr = expr.pull_types_up()?;

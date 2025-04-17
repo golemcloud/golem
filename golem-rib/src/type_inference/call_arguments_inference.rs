@@ -47,7 +47,7 @@ pub fn infer_function_call_types(
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
-    use crate::type_inference::type_hint::GetTypeHint;
+    use crate::type_inference::GetTypeHint;
     use crate::{
         ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
         FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
