@@ -79,13 +79,8 @@ jobs:
         run: cargo make --profile ci unit-tests
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
+      - name: Check openapi is up to date
+        run: cargo make --profile ci check-openapi
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
