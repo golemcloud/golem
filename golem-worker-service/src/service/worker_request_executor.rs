@@ -44,21 +44,21 @@ impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerReques
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = worker_request_params
             .worker_name
-            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w))
+            .map(|w| WorkerId::validate_worker_name(w.as_str()))
             .transpose()?;
 
         let component_id = worker_request_params.component_id;
 
         let worker_id = TargetWorkerId {
             component_id: component_id.clone(),
-            worker_name: worker_name_opt_validated.clone(),
+            worker_name: worker_name_opt_validated.map(|w| w.to_string()),
         };
 
         info!(
             "Executing request for component: {}, worker: {}, function: {:?}",
             component_id,
             worker_name_opt_validated
-                .clone()
+                .map(|w| w.to_string())
                 .unwrap_or("<NA/ephemeral>".to_string()),
             worker_request_params.function_name
         );

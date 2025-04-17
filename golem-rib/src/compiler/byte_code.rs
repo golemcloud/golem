@@ -14,7 +14,7 @@
 
 use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
-use crate::type_inference::type_hint::TypeHint;
+use crate::type_inference::TypeHint;
 use crate::{Expr, InferredExpr, InstructionId};
 use bincode::{Decode, Encode};
 use std::fmt::{Display, Formatter};
@@ -150,7 +150,7 @@ mod internal {
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
-    use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
+    use crate::type_inference::{GetTypeHint, TypeHint};
     use golem_wasm_ast::analysis::analysed_type::{bool, tuple};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;

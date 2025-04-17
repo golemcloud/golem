@@ -40,7 +40,7 @@ impl Default for Interpreter {
 
 impl Interpreter {
     pub fn new(
-        input: &RibInput,
+        input: RibInput,
         invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
         custom_stack: Option<InterpreterStack>,
         custom_env: Option<InterpreterEnv>,
@@ -56,12 +56,12 @@ impl Interpreter {
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
     pub fn pure(
-        input: &RibInput,
+        input: RibInput,
         custom_stack: Option<InterpreterStack>,
         custom_env: Option<InterpreterEnv>,
     ) -> Self {
         Interpreter {
-            input: input.clone(),
+            input,
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
             custom_stack,
             custom_env,
@@ -315,7 +315,7 @@ mod internal {
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
-    use crate::type_inference::type_hint::GetTypeHint;
+    use crate::type_inference::GetTypeHint;
     use anyhow::{anyhow, bail};
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::{tuple, u64};

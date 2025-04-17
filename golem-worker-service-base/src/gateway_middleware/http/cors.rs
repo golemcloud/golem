@@ -265,7 +265,7 @@ impl HttpCors {
             .map_err(|err| format!("Rib compilation for cors-preflight response. {}", err))?;
 
         let rib_input = RibInput::default();
-        let evaluate_rib = rib::interpret_pure(&compiled_expr.byte_code, &rib_input);
+        let evaluate_rib = rib::interpret_pure(compiled_expr.byte_code, rib_input);
 
         let result = futures::executor::block_on(evaluate_rib).map_err(|err| {
             format!(

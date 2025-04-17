@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use crate::interpreter::env::*;
-pub use crate::interpreter::rib_interpreter::*;
-pub use crate::interpreter::stack::*;
+pub use env::*;
 pub use interpreter_input::*;
 pub use interpreter_result::*;
 pub use literal::*;
 pub use rib_function_invoke::*;
-
-use crate::RibByteCode;
-use std::sync::Arc;
+pub use rib_interpreter::*;
+pub use stack::*;
 
 mod env;
 mod instruction_cursor;
@@ -34,19 +31,22 @@ mod rib_interpreter;
 mod stack;
 mod tests;
 
+use crate::RibByteCode;
+use std::sync::Arc;
+
 pub async fn interpret(
-    rib: &RibByteCode,
-    rib_input: &RibInput,
+    rib: RibByteCode,
+    rib_input: RibInput,
     function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
 ) -> anyhow::Result<RibResult> {
     let mut interpreter = Interpreter::new(rib_input, function_invoke, None, None);
-    interpreter.run(rib.clone()).await
+    interpreter.run(rib).await
 }
 
 // This function can be used for those the Rib Scripts
 // where there are no side effecting function calls.
 // It is recommended to use `interpret` over `interpret_pure` if you are unsure.
-pub async fn interpret_pure(rib: &RibByteCode, rib_input: &RibInput) -> anyhow::Result<RibResult> {
+pub async fn interpret_pure(rib: RibByteCode, rib_input: RibInput) -> anyhow::Result<RibResult> {
     let mut interpreter = Interpreter::pure(rib_input, None, None);
     interpreter.run(rib.clone()).await
 }

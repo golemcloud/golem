@@ -16,7 +16,7 @@ pub(crate) use flatten::*;
 mod flatten;
 mod unification;
 use crate::instance_type::InstanceType;
-use crate::type_inference::type_hint::GetTypeHint;
+use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;

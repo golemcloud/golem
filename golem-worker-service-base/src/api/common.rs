@@ -276,6 +276,12 @@ mod conversion {
                 ApiDefinitionServiceError::InvalidOasDefinition(_) => {
                     ApiEndpointError::bad_request(error)
                 }
+                ApiDefinitionServiceError::RibStaticAnalysisError(_) => {
+                    ApiEndpointError::internal(error)
+                }
+                ApiDefinitionServiceError::RibByteCodeGenerationError(_) => {
+                    ApiEndpointError::internal(error)
+                }
             }
         }
     }
@@ -341,6 +347,18 @@ mod conversion {
                 },
                 ApiDefinitionServiceError::RibCompilationErrors(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+
+                ApiDefinitionServiceError::RibStaticAnalysisError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+
+                ApiDefinitionServiceError::RibByteCodeGenerationError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
                     })),
                 },

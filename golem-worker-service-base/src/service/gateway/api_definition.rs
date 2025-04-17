@@ -66,6 +66,10 @@ pub enum ApiDefinitionError {
     UnsupportedRibInput(String),
     #[error("Rib internal error: {0}")]
     RibInternal(String),
+    #[error("Rib static analysis error: {0}")]
+    RibStaticAnalysisError(String),
+    #[error("Rib byte code generation error: {0}")]
+    RibByteCodeGenerationError(String),
     #[error("Invalid rib syntax: {0}")]
     RibParseError(String),
     #[error("Security Scheme Error: {0}")]
@@ -112,6 +116,8 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
             ApiDefinitionError::RibInternal(_) => self.to_string(),
             ApiDefinitionError::RibParseError(_) => self.to_string(),
+            ApiDefinitionError::RibStaticAnalysisError(_) => self.to_string(),
+            ApiDefinitionError::RibByteCodeGenerationError(_) => self.to_string(),
             ApiDefinitionError::UnsupportedRibInput(_) => self.to_string(),
             ApiDefinitionError::InvalidOasDefinition(_) => self.to_string(),
         }
@@ -125,7 +131,9 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
                 RibCompileError::RibTypeError(e) => {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
-                RibCompileError::RibStaticAnalysisError(e) => ApiDefinitionError::RibInternal(e),
+                RibCompileError::RibStaticAnalysisError(e) => {
+                    ApiDefinitionError::RibStaticAnalysisError(e)
+                }
                 RibCompileError::InvalidSyntax(e) => ApiDefinitionError::RibParseError(e),
                 RibCompileError::UnsupportedGlobalInput {
                     valid_global_inputs: expected,
@@ -135,6 +143,9 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
                     expected.join(", "),
                     found.join(", ")
                 )),
+                RibCompileError::ByteCodeGenerationFail(error) => {
+                    ApiDefinitionError::RibByteCodeGenerationError(error.to_string())
+                }
             },
             RouteCompilationErrors::ValidationError(e) => ApiDefinitionError::ValidationError(e),
             RouteCompilationErrors::MetadataNotFoundError(e) => {

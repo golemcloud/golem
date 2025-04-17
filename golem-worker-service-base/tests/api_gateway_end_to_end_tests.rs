@@ -2553,7 +2553,8 @@ mod internal {
         async fn handle_file_server_binding_result(
             &self,
             _namespace: &Namespace,
-            _worker_detail: &WorkerDetails,
+            _worker_name: Option<&str>,
+            _component_id: &ComponentId,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
             unimplemented!()

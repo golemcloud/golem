@@ -124,7 +124,7 @@ impl WorkerId {
         }
     }
 
-    pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
+    pub fn validate_worker_name<'a>(name: &'a str) -> Result<&'a str, &'static str> {
         let length = name.len();
         if !(1..=512).contains(&length) {
             Err("Worker name must be between 1 and 512 characters")
@@ -135,7 +135,7 @@ impl WorkerId {
         } else if name.starts_with('-') {
             Err("Worker name must not start with '-'")
         } else {
-            Ok(())
+            Ok(name)
         }
     }
 }

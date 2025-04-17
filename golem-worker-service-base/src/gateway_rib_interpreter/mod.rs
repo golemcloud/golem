@@ -36,12 +36,12 @@ pub trait WorkerServiceRibInterpreter<Namespace> {
     // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
-        worker_name: Option<&str>,
-        component_id: &ComponentId,
-        idempotency_key: &Option<IdempotencyKey>,
+        worker_name: Option<String>,
+        component_id: ComponentId,
+        idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
-        rib_byte_code: &RibByteCode,
-        rib_input: &RibInput,
+        rib_byte_code: RibByteCode,
+        rib_input: RibInput,
         namespace: Namespace,
     ) -> Result<RibResult, RibRuntimeError>;
 }
@@ -105,20 +105,20 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
 {
     async fn evaluate(
         &self,
-        worker_name: Option<&str>,
-        component_id: &ComponentId,
-        idempotency_key: &Option<IdempotencyKey>,
+        worker_name: Option<String>,
+        component_id: ComponentId,
+        idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
-        expr: &RibByteCode,
-        rib_input: &RibInput,
+        expr: RibByteCode,
+        rib_input: RibInput,
         namespace: Namespace,
     ) -> Result<RibResult, RibRuntimeError> {
         let worker_invoke_function = self.rib_invoke(
-            worker_name.map(|x| x.to_string()),
-            component_id.clone(),
-            idempotency_key.clone(),
+            worker_name,
+            component_id,
+            idempotency_key,
             invocation_context,
-            namespace.clone(),
+            namespace,
         );
 
         let result = rib::interpret(expr, rib_input, worker_invoke_function)

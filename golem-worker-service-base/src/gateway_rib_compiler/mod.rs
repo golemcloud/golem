@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{
-    CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibCompileError, VariableId,
-};
+use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibCompileError};
 
 // A wrapper service over original Rib Compiler concerning
 // the details of the worker bridge.

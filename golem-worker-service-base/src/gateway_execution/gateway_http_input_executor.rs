@@ -97,42 +97,52 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_worker_binding(
         &self,
-        namespace: &Namespace,
+        namespace: Namespace,
         request: &mut RichRequest,
-        binding: &WorkerBindingCompiled,
+        binding: WorkerBindingCompiled,
     ) -> GatewayHttpResult<RibResult> {
+        let WorkerBindingCompiled {
+            response_compiled,
+            component_id,
+            worker_name_compiled,
+            idempotency_key_compiled,
+            invocation_context_compiled,
+        } = binding;
+
         let worker_detail = self
             .get_worker_details(
                 request,
-                &binding.worker_name_compiled,
-                &binding.idempotency_key_compiled,
-                &binding.component_id,
-                &binding.invocation_context_compiled,
+                worker_name_compiled,
+                idempotency_key_compiled,
+                component_id,
+                invocation_context_compiled,
             )
             .await?;
 
-        self.get_response_script_result(
-            namespace,
-            &binding.response_compiled,
-            request,
-            &worker_detail,
-        )
-        .await
+        self.get_response_script_result(namespace, response_compiled, request, worker_detail)
+            .await
     }
 
     async fn handle_http_handler_binding(
         &self,
         namespace: &Namespace,
         request: &mut RichRequest,
-        binding: &HttpHandlerBindingCompiled,
+        binding: HttpHandlerBindingCompiled,
     ) -> GatewayHttpResult<HttpHandlerBindingResult> {
+        let HttpHandlerBindingCompiled {
+            component_id,
+            worker_name_compiled,
+            idempotency_key_compiled,
+            ..
+        } = binding;
+
         let worker_detail = self
             .get_worker_details(
                 request,
-                &binding.worker_name_compiled,
-                &binding.idempotency_key_compiled,
-                &binding.component_id,
-                &None,
+                worker_name_compiled,
+                idempotency_key_compiled,
+                component_id,
+                None,
             )
             .await?;
 
@@ -156,31 +166,49 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_file_server_binding(
         &self,
-        namespace: &Namespace,
+        namespace: Namespace,
         request: &mut RichRequest,
-        binding: &WorkerBindingCompiled, // TODO make separate type
+        binding: WorkerBindingCompiled, // TODO make separate type
     ) -> GatewayHttpResult<FileServerBindingSuccess> {
+        let WorkerBindingCompiled {
+            component_id: version_component_id,
+            worker_name_compiled,
+            idempotency_key_compiled,
+            response_compiled,
+            ..
+        } = binding;
+
+        let component_id = version_component_id.component_id.clone();
+
         let worker_detail = self
             .get_worker_details(
                 request,
-                &binding.worker_name_compiled,
-                &binding.idempotency_key_compiled,
-                &binding.component_id,
-                &None,
+                worker_name_compiled,
+                idempotency_key_compiled,
+                version_component_id,
+                None,
             )
             .await?;
 
+        let worker_name = worker_detail.worker_name.clone();
+        let worker_name = worker_name.as_deref();
+
         let response_script_result = self
             .get_response_script_result(
-                namespace,
-                &binding.response_compiled,
+                namespace.clone(),
+                response_compiled,
                 request,
-                &worker_detail,
+                worker_detail,
             )
             .await?;
 
         self.file_server_binding_handler
-            .handle_file_server_binding_result(namespace, &worker_detail, response_script_result)
+            .handle_file_server_binding_result(
+                namespace,
+                worker_name,
+                &component_id,
+                response_script_result,
+            )
             .await
             .map_err(GatewayHttpError::FileServerBindingError)
     }
@@ -203,12 +231,18 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn evaluate_worker_name_rib_script(
         &self,
-        script: &WorkerNameCompiled,
+        script: WorkerNameCompiled,
         request: &mut RichRequest,
     ) -> GatewayHttpResult<String> {
-        let rib_input: RibInput = resolve_rib_input(request, &script.rib_input_type_info).await?;
+        let WorkerNameCompiled {
+            compiled_worker_name,
+            rib_input_type_info,
+            ..
+        } = script;
 
-        let result = rib::interpret_pure(&script.compiled_worker_name, &rib_input)
+        let rib_input: RibInput = resolve_rib_input(request, &rib_input_type_info).await?;
+
+        let result = rib::interpret_pure(compiled_worker_name, rib_input)
             .await
             .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_literal()
@@ -222,12 +256,18 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn evaluate_idempotency_key_rib_script(
         &self,
-        script: &IdempotencyKeyCompiled,
+        script: IdempotencyKeyCompiled,
         request: &mut RichRequest,
     ) -> GatewayHttpResult<IdempotencyKey> {
-        let rib_input: RibInput = resolve_rib_input(request, &script.rib_input).await?;
+        let IdempotencyKeyCompiled {
+            compiled_idempotency_key,
+            rib_input,
+            ..
+        } = script;
 
-        let value = rib::interpret_pure(&script.compiled_idempotency_key, &rib_input)
+        let rib_input: RibInput = resolve_rib_input(request, &rib_input).await?;
+
+        let value = rib::interpret_pure(compiled_idempotency_key, rib_input)
             .await
             .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_literal()
@@ -241,12 +281,18 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn evaluate_invocation_context_rib_script(
         &self,
-        script: &InvocationContextCompiled,
+        script: InvocationContextCompiled,
         request: &mut RichRequest,
     ) -> GatewayHttpResult<(Option<TraceId>, HashMap<String, ValueAndType>)> {
-        let rib_input: RibInput = resolve_rib_input(request, &script.rib_input).await?;
+        let InvocationContextCompiled {
+            compiled_invocation_context,
+            rib_input,
+            ..
+        } = script;
 
-        let value = rib::interpret_pure(&script.compiled_invocation_context, &rib_input)
+        let rib_input: RibInput = resolve_rib_input(request, &rib_input).await?;
+
+        let value = rib::interpret_pure(compiled_invocation_context, rib_input)
             .await
             .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_record()
@@ -299,10 +345,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn get_worker_details(
         &self,
         request: &mut RichRequest,
-        worker_name_compiled: &Option<WorkerNameCompiled>,
-        idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
-        component_id: &VersionedComponentId,
-        invocation_context_compiled: &Option<InvocationContextCompiled>,
+        worker_name_compiled: Option<WorkerNameCompiled>,
+        idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
+        component_id: VersionedComponentId,
+        invocation_context_compiled: Option<InvocationContextCompiled>,
     ) -> GatewayHttpResult<WorkerDetails> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
             let result = self
@@ -385,7 +431,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         };
 
         Ok(WorkerDetails {
-            component_id: component_id.component_id.clone(),
+            component_id: component_id.component_id,
             worker_name,
             idempotency_key,
             invocation_context,
@@ -394,22 +440,35 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn get_response_script_result(
         &self,
-        namespace: &Namespace,
-        compiled_response_mapping: &ResponseMappingCompiled,
+        namespace: Namespace,
+        compiled_response_mapping: ResponseMappingCompiled,
         request: &mut RichRequest,
-        worker_detail: &WorkerDetails,
+        worker_detail: WorkerDetails,
     ) -> GatewayHttpResult<RibResult> {
-        let rib_input = resolve_rib_input(request, &compiled_response_mapping.rib_input).await?;
+        let WorkerDetails {
+            invocation_context,
+            component_id,
+            worker_name,
+            idempotency_key,
+        } = worker_detail;
+
+        let ResponseMappingCompiled {
+            response_mapping_compiled,
+            rib_input,
+            ..
+        } = compiled_response_mapping;
+
+        let rib_input = resolve_rib_input(request, &rib_input).await?;
 
         self.evaluator
             .evaluate(
-                worker_detail.worker_name.as_deref(),
-                &worker_detail.component_id,
-                &worker_detail.idempotency_key,
-                worker_detail.invocation_context.clone(),
-                &compiled_response_mapping.response_mapping_compiled,
-                &rib_input,
-                namespace.clone(),
+                worker_name,
+                component_id,
+                idempotency_key,
+                invocation_context,
+                response_mapping_compiled,
+                rib_input,
+                namespace,
             )
             .await
             .map_err(GatewayHttpError::EvaluationError)
@@ -556,7 +615,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 
             GatewayBindingCompiled::Worker(resolved_worker_binding) => {
                 let result = self
-                    .handle_worker_binding(&namespace, &mut rich_request, &resolved_worker_binding)
+                    .handle_worker_binding(namespace, &mut rich_request, resolved_worker_binding)
                     .await;
 
                 let response = result
@@ -571,7 +630,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     .handle_http_handler_binding(
                         &namespace,
                         &mut rich_request,
-                        &http_handler_binding,
+                        http_handler_binding,
                     )
                     .await;
 
@@ -585,9 +644,9 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             GatewayBindingCompiled::FileServer(resolved_file_server_binding) => {
                 let result = self
                     .handle_file_server_binding(
-                        &namespace,
+                        namespace,
                         &mut rich_request,
-                        &resolved_file_server_binding,
+                        resolved_file_server_binding,
                     )
                     .await;
 

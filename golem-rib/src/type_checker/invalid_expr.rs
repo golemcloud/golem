@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_inference::type_hint::TypeHint;
+use crate::type_inference::TypeHint;
 use crate::{Expr, ExprVisitor, InferredType};
 
 // Check all exprs that cannot be the type it is tagged against
