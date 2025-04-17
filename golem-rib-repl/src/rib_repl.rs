@@ -238,6 +238,15 @@ pub enum RibExecutionError {
     RibRuntimeError(RibRuntimeError),
 }
 
+impl Display for RibExecutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RibExecutionError::RibCompilationError(err) => write!(f, "{}", err),
+            RibExecutionError::RibRuntimeError(err) => write!(f, "{}", err),
+        }
+    }
+}
+
 /// Represents the source of a component in the REPL session.
 ///
 /// The `source_path` must include the full file path,

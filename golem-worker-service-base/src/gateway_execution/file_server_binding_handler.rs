@@ -267,12 +267,12 @@ impl<Namespace: GolemNamespace, AuthCtx> DefaultFileServerBindingHandler<Namespa
 
         let component_metadata = if let Some(component_version) = component_version {
             self.component_service
-                .get_by_version(&component_id, component_version, &self.auth_ctx)
+                .get_by_version(component_id, component_version, &self.auth_ctx)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         } else {
             self.component_service
-                .get_latest(&component_id, &self.auth_ctx)
+                .get_latest(component_id, &self.auth_ctx)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         };

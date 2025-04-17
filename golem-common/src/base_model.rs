@@ -124,7 +124,7 @@ impl WorkerId {
         }
     }
 
-    pub fn validate_worker_name<'a>(name: &'a str) -> Result<&'a str, &'static str> {
+    pub fn validate_worker_name(name: &str) -> Result<&str, &'static str> {
         let length = name.len();
         if !(1..=512).contains(&length) {
             Err("Worker name must be between 1 and 512 characters")

@@ -310,7 +310,7 @@ impl Interpreter {
             .unwrap_or_else(|| RibInterpreterStackValue::Unit);
 
         let rib_result =
-            RibResult::from_rib_interpreter_stack_value(&stack_value).ok_or_else(|| no_result())?;
+            RibResult::from_rib_interpreter_stack_value(&stack_value).ok_or_else(no_result)?;
 
         Ok(rib_result)
     }
@@ -363,7 +363,7 @@ mod internal {
     pub(crate) fn run_is_empty_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let rib_result = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
+        let rib_result = interpreter_stack.pop().ok_or_else(empty_stack)?;
 
         let bool_opt = match rib_result {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -424,9 +424,9 @@ mod internal {
     pub(crate) fn run_to_iterator(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let popped_up = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
+        let popped_up = interpreter_stack.pop().ok_or_else(empty_stack)?;
 
-        let value_and_type = popped_up.get_val().ok_or_else(|| empty_stack())?;
+        let value_and_type = popped_up.get_val().ok_or_else(empty_stack)?;
 
         match (value_and_type.value, value_and_type.typ) {
             (Value::List(items), AnalysedType::List(item_type)) => {
@@ -634,7 +634,7 @@ mod internal {
     pub(crate) fn run_length_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let rib_result = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
+        let rib_result = interpreter_stack.pop().ok_or_else(empty_stack)?;
 
         let length = match rib_result {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -654,7 +654,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
     ) -> RibInterpreterResult<()> {
-        let value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
+        let value = interpreter_stack.pop().ok_or_else(empty_stack)?;
         let env_key = EnvironmentKey::from(variable_id);
 
         interpreter_env.insert(env_key, value);
@@ -887,7 +887,7 @@ mod internal {
     pub(crate) fn run_select_index_v1_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let stack_list_value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
+        let stack_list_value = interpreter_stack.pop().ok_or_else(empty_stack)?;
 
         let index_value = interpreter_stack.pop().ok_or(empty_stack())?;
 
@@ -946,7 +946,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         index: usize,
     ) -> RibInterpreterResult<()> {
-        let stack_value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
+        let stack_value = interpreter_stack.pop().ok_or_else(empty_stack)?;
 
         match stack_value {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -4428,9 +4428,8 @@ mod tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
             EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue,
-            RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibInterpreterResult,
+            RibFunctionInvoke, RibFunctionInvokeResult, RibInput,
         };
-        use anyhow::anyhow;
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, option, r#enum, record, result, str, tuple, u32, u64,
