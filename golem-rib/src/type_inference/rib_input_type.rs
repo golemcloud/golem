@@ -36,7 +36,9 @@ impl RibInputTypeInfo {
         }
     }
 
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibInputTypeInfo, RibCompilationError> {
+    pub fn from_expr(
+        inferred_expr: &InferredExpr,
+    ) -> Result<RibInputTypeInfo, RibCompilationError> {
         let mut expr = inferred_expr.get_expr().clone();
         let mut queue = ExprVisitor::bottom_up(&mut expr);
 

@@ -49,7 +49,7 @@ impl InterpreterEnv {
         worker_name: Option<String>,
         function_name: String,
         args: Vec<ValueAndType>,
-    ) -> anyhow::Result<ValueAndType> {
+    ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
         self.call_worker_function_async
             .invoke(
                 worker_name.map(EvaluatedWorkerName),

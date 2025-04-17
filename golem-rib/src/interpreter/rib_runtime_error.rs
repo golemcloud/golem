@@ -1,9 +1,9 @@
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::Value;
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::{InstructionId, TypeHint};
+use crate::{CoercedNumericValue, InstructionId, TypeHint};
+use golem_wasm_rpc::{Value, ValueAndType};
+use std::fmt::Display;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum RibRuntimeError {
     InputNotFound(String),
     ExhaustedIterator,
@@ -14,21 +14,42 @@ pub enum RibRuntimeError {
     InvariantViolation(InvariantViolation),
     ThrownError(String),
     CastError {
-        from: Value,
+        from: CastFrom,
         to: TypeHint,
     },
     InvalidType {
         expected: Vec<TypeHint>,
-        found: InvalidItem
+        found: InvalidItem,
     },
     NoResult,
     InfiniteComputation {
-        message: String
+        message: String,
     },
     IndexOutOfBounds {
         index: usize,
         size: usize,
     },
+    InvalidComparison {
+        message: String,
+        left: Option<ValueAndType>,
+        right: Option<ValueAndType>,
+    },
+    ArithmeticError {
+        message: String,
+        left: Option<CoercedNumericValue>,
+        right: Option<CoercedNumericValue>,
+    },
+    FunctionInvokeError {
+        function_name: String,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum CastFrom {
+    FromValue(Value),
+    FromType(TypeHint),
+    FromCustom(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,52 +59,69 @@ enum InvalidItem {
     Custom(String),
 }
 
-pub fn throw_error(message: &str) -> RibRuntimeError {
-    RibRuntimeError::ThrownError(message.to_string())
+pub fn arithmetic_error(
+    message: &str,
+    left: Option<&CoercedNumericValue>,
+    right: Option<&CoercedNumericValue>,
+) -> RibRuntimeError {
+    RibRuntimeError::ArithmeticError {
+        message: message.to_string(),
+        left: left.cloned(),
+        right: right.cloned(),
+    }
 }
 
 pub fn cast_error(from: Value, to: TypeHint) -> RibRuntimeError {
     RibRuntimeError::CastError {
-        from,
-        to
+        from: CastFrom::FromValue(from),
+        to,
     }
 }
 
-pub fn no_result() -> RibRuntimeError {
-    RibRuntimeError::NoResult
+pub fn cast_error_custom<T: Display>(from: T, to: TypeHint) -> RibRuntimeError {
+    RibRuntimeError::CastError {
+        from: CastFrom::FromCustom(from.to_string()),
+        to,
+    }
+}
+
+pub fn empty_stack() -> RibRuntimeError {
+    RibRuntimeError::InvariantViolation(InvariantViolation::InsufficientStackItems(1))
 }
 
 pub fn exhausted_iterator() -> RibRuntimeError {
     RibRuntimeError::ExhaustedIterator
 }
 
-pub fn input_not_found(input_name: &str) -> RibRuntimeError {
-    RibRuntimeError::InputNotFound(input_name.to_string())
-}
-
-pub fn field_not_found(input: RibInterpreterStackValue, field_name: &str) -> RibRuntimeError {
+pub fn field_not_found(input: String, field_name: &str) -> RibRuntimeError {
     RibRuntimeError::FieldNotFound {
-        input: input.to_string(),
+        input,
         field: field_name.to_string(),
     }
 }
 
-pub fn invalid_type(expected: Vec<TypeHint>, found: Value) -> RibRuntimeError {
-    RibRuntimeError::InvalidType {
-        expected,
-        found: InvalidItem::RuntimeValue(found),
-    }
-}
-pub fn invalid_type_custom(expected: Vec<TypeHint>, found: RibInterpreterStackValue) -> RibRuntimeError {
-    RibRuntimeError::InvalidType {
-        expected,
-        found: InvalidItem::Custom(found.to_string()),
+pub fn function_invoke_fail(
+    function_name: &str,
+    error: Box<dyn std::error::Error + Send + Sync>,
+) -> RibRuntimeError {
+    RibRuntimeError::FunctionInvokeError {
+        function_name: function_name.to_string(),
+        error,
     }
 }
 
+pub fn index_out_of_bound(index: usize, size: usize) -> RibRuntimeError {
+    RibRuntimeError::IndexOutOfBounds { index, size }
+}
 
-pub fn empty_stack() -> RibRuntimeError {
-    RibRuntimeError::InvariantViolation(InvariantViolation::InsufficientStackItems(1))
+pub fn infinite_computation(message: &str) -> RibRuntimeError {
+    RibRuntimeError::InfiniteComputation {
+        message: message.to_string(),
+    }
+}
+
+pub fn input_not_found(input_name: &str) -> RibRuntimeError {
+    RibRuntimeError::InputNotFound(input_name.to_string())
 }
 
 pub fn instruction_jump_error(instruction_id: InstructionId) -> RibRuntimeError {
@@ -94,17 +132,48 @@ pub fn insufficient_stack_items(size: usize) -> RibRuntimeError {
     RibRuntimeError::InvariantViolation(InvariantViolation::InsufficientStackItems(1))
 }
 
-pub fn infinite_computation(message: &str) -> RibRuntimeError {
-    RibRuntimeError::InfiniteComputation {
-        message: message.to_string()
+pub fn invalid_comparison(
+    message: &str,
+    left: Option<ValueAndType>,
+    right: Option<ValueAndType>,
+) -> RibRuntimeError {
+    RibRuntimeError::InvalidComparison {
+        message: message.to_string(),
+        left,
+        right,
     }
 }
 
-pub fn index_out_of_bounds(index: usize, size: usize) -> RibRuntimeError {
-    RibRuntimeError::IndexOutOfBounds {
-        index,
-        size
+pub fn invalid_type_with_stack_value(
+    expected: Vec<TypeHint>,
+    found: RibInterpreterStackValue,
+) -> RibRuntimeError {
+    RibRuntimeError::InvalidType {
+        expected,
+        found: InvalidItem::Custom(found.to_string()),
     }
+}
+
+pub fn invalid_type_with_value(expected: Vec<TypeHint>, found: Value) -> RibRuntimeError {
+    RibRuntimeError::InvalidType {
+        expected,
+        found: InvalidItem::RuntimeValue(found),
+    }
+}
+
+pub fn invalid_value_with_type_hint(expected: Vec<TypeHint>, found: TypeHint) -> RibRuntimeError {
+    RibRuntimeError::InvalidType {
+        expected,
+        found: InvalidItem::Type(found),
+    }
+}
+
+pub fn no_result() -> RibRuntimeError {
+    RibRuntimeError::NoResult
+}
+
+pub fn throw_error(message: &str) -> RibRuntimeError {
+    RibRuntimeError::ThrownError(message.to_string())
 }
 
 #[macro_export]
@@ -139,5 +208,5 @@ macro_rules! bail_corrupted_state {
 pub enum InvariantViolation {
     InsufficientStackItems(usize),
     CorruptedState(String),
-    InstructionJumpError(InstructionId)
+    InstructionJumpError(InstructionId),
 }

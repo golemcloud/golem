@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
+use crate::interpreter::rib_runtime_error::{
+    empty_stack, insufficient_stack_items, invalid_type_with_value,
+};
 use crate::{corrupted_state, GetLiteralValue, RibInterpreterResult, TypeHint};
 use anyhow::anyhow;
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
@@ -20,7 +23,6 @@ use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
 };
 use golem_wasm_rpc::{Value, ValueAndType};
-use crate::interpreter::rib_runtime_error::{empty_stack, insufficient_stack_items, invalid_type};
 
 #[derive(Debug)]
 pub struct InterpreterStack {
@@ -121,8 +123,8 @@ impl InterpreterStack {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             } => Ok((field_values, typ)),
-            _ => Err(invalid_type(
-                TypeHint::Record(None),
+            _ => Err(invalid_type_with_value(
+                vec![TypeHint::Record(None)],
                 value.value.clone(),
             )),
         }
@@ -130,12 +132,12 @@ impl InterpreterStack {
 
     pub fn try_pop_bool(&mut self) -> RibInterpreterResult<bool> {
         self.try_pop_val().and_then(|val| {
-            val.get_literal().and_then(|x| x.get_bool()).ok_or(
-                invalid_type(
-                    TypeHint::Boolean,
+            val.get_literal()
+                .and_then(|x| x.get_bool())
+                .ok_or(invalid_type_with_value(
+                    vec![TypeHint::Boolean],
                     val.value.clone(),
-                )
-            )
+                ))
         })
     }
 
@@ -185,12 +187,12 @@ impl InterpreterStack {
         variant_name: String,
         optional_variant_value: Option<Value>,
         cases: Vec<NameOptionTypePair>,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let case_idx = cases
             .iter()
             .position(|case| case.name == variant_name)
-            .ok_or(anyhow!(
-                "internal Error: Failed to find the variant {} in the cases",
+            .ok_or(corrupted_state!(
+                "failed to find the variant {}",
                 variant_name
             ))? as u32;
 
@@ -206,13 +208,11 @@ impl InterpreterStack {
         Ok(())
     }
 
-    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> anyhow::Result<()> {
-        let idx = cases.iter().position(|x| x == &enum_name).ok_or_else(|| {
-            anyhow!(
-                "internal error: failed to find the enum {} in the cases",
-                enum_name
-            )
-        })? as u32;
+    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> RibInterpreterResult<()> {
+        let idx =
+            cases.iter().position(|x| x == &enum_name).ok_or_else(|| {
+                corrupted_state!("failed to find the enum {} in the cases", enum_name)
+            })? as u32;
         self.push_val(ValueAndType::new(
             Value::Enum(idx),
             AnalysedType::Enum(TypeEnum {

@@ -15,10 +15,12 @@
 use super::interpreter_stack_value::RibInterpreterStackValue;
 use crate::interpreter::env::InterpreterEnv;
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
+use crate::interpreter::rib_runtime_error::{
+    arithmetic_error, no_result, throw_error, RibRuntimeError,
+};
 use crate::interpreter::stack::InterpreterStack;
 use crate::{corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
 use std::sync::Arc;
-use crate::interpreter::rib_runtime_error::{no_result, throw_error, RibRuntimeError};
 
 pub struct Interpreter {
     pub input: RibInput,
@@ -130,28 +132,55 @@ impl Interpreter {
                 RibIR::Plus(analysed_type) => {
                     internal::run_math_instruction(
                         stack,
-                        |left, right| left + right,
+                        |left, right| {
+                            let result = left + right;
+                            result.map_err(|err| {
+                                arithmetic_error(err.as_str(), Some(&left), Some(&right))
+                            })
+                        },
                         &analysed_type,
                     )?;
                 }
                 RibIR::Minus(analysed_type) => {
                     internal::run_math_instruction(
                         stack,
-                        |left, right| left - right,
+                        |left, right| {
+                            let result = left - right;
+                            result.map_err(|err| {
+                                arithmetic_error(err.as_str(), Some(&left), Some(&right))
+                            })
+                        },
                         &analysed_type,
                     )?;
                 }
                 RibIR::Divide(analysed_type) => {
                     internal::run_math_instruction(
                         stack,
-                        |left, right| left / right,
+                        |left, right| {
+                            if right.is_zero() {
+                                Err(arithmetic_error(
+                                    "division by zero",
+                                    Some(&left),
+                                    Some(&right),
+                                ))
+                            } else {
+                                (left / right).map_err(|err| {
+                                    arithmetic_error(err.as_str(), Some(&left), Some(&right))
+                                })
+                            }
+                        },
                         &analysed_type,
                     )?;
                 }
                 RibIR::Multiply(analysed_type) => {
                     internal::run_math_instruction(
                         stack,
-                        |left, right| left * right,
+                        |left, right| {
+                            let result = left * right;
+                            result.map_err(|err| {
+                                arithmetic_error(err.as_str(), Some(&left), Some(&right))
+                            })
+                        },
                         &analysed_type,
                     )?;
                 }
@@ -289,8 +318,8 @@ impl Interpreter {
             .pop()
             .unwrap_or_else(|| RibInterpreterStackValue::Unit);
 
-        let rib_result = RibResult::from_rib_interpreter_stack_value(&stack_value)
-            .ok_or_else(|| no_result())?;
+        let rib_result =
+            RibResult::from_rib_interpreter_stack_value(&stack_value).ok_or_else(|| no_result())?;
 
         Ok(rib_result)
     }
@@ -301,18 +330,27 @@ mod internal {
     use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
-    use crate::{bail_corrupted_state, corrupted_state, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence};
+    use crate::{
+        bail_corrupted_state, corrupted_state, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn,
+        EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName,
+        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibInterpreterResult,
+        TypeHint, VariableId, WorkerNamePresence,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
-    use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
+    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
+    use crate::interpreter::rib_runtime_error::{
+        cast_error, cast_error_custom, empty_stack, exhausted_iterator, field_not_found,
+        function_invoke_fail, index_out_of_bound, infinite_computation, input_not_found,
+        instruction_jump_error, insufficient_stack_items, invalid_type_with_stack_value,
+        invalid_type_with_value, invalid_value_with_type_hint, RibRuntimeError,
+    };
     use crate::type_inference::GetTypeHint;
-    use anyhow::{anyhow, bail};
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
     use std::ops::Deref;
-    use crate::interpreter::rib_runtime_error::{cast_error, empty_stack, exhausted_iterator, field_not_found, index_out_of_bounds, infinite_computation, input_not_found, instruction_jump_error, invalid_type, invalid_type_custom};
 
     pub(crate) struct NoopRibFunctionInvoke;
 
@@ -334,9 +372,7 @@ mod internal {
     pub(crate) fn run_is_empty_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let rib_result = interpreter_stack.pop().ok_or_else(|| {
-            empty_stack()
-        })?;
+        let rib_result = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
 
         let bool_opt = match rib_result {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -386,24 +422,20 @@ mod internal {
 
         // Jump if predicate is false
         if !predicate {
-            instruction_stack.move_to(&instruction_id).ok_or_else(|| {
-                instruction_jump_error(
-                    instruction_id
-                )
-            })?;
+            instruction_stack
+                .move_to(&instruction_id)
+                .ok_or_else(|| instruction_jump_error(instruction_id))?;
         }
 
         Ok(())
     }
 
-    pub(crate) fn run_to_iterator(interpreter_stack: &mut InterpreterStack) -> RibInterpreterResult<()> {
-        let popped_up = interpreter_stack
-            .pop()
-            .ok_or_else(|| empty_stack())?;
+    pub(crate) fn run_to_iterator(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> RibInterpreterResult<()> {
+        let popped_up = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
 
-        let value_and_type = popped_up
-            .get_val()
-            .ok_or_else(|| empty_stack())?;
+        let value_and_type = popped_up.get_val().ok_or_else(|| empty_stack())?;
 
         match (value_and_type.value, value_and_type.typ) {
             (Value::List(items), AnalysedType::List(item_type)) => {
@@ -428,30 +460,26 @@ mod internal {
                 for (value, name_and_type) in value_and_names {
                     match name_and_type.name.as_str() {
                         "from" => {
-                            from =
-                                Some(to_num(&value).ok_or_else(|| {
-                                    cast_error(
-                                        value,
-                                        TypeHint::Number
-                                    )
-                                })?)
+                            from = Some(
+                                to_num(&value)
+                                    .ok_or_else(|| cast_error(value, TypeHint::Number))?,
+                            )
                         }
                         "to" => {
-                            to =
-                                Some(to_num(&value).ok_or_else(|| {
-                                    cast_error(
-                                        value,
-                                        TypeHint::Number
-                                    )
-                                })?)
+                            to = Some(
+                                to_num(&value)
+                                    .ok_or_else(|| cast_error(value, TypeHint::Number))?,
+                            )
                         }
                         "inclusive" => {
                             inclusive = match value {
                                 Value::Bool(b) => b,
-                                _ => return Err(invalid_type(
-                                    TypeHint::Boolean,
-                                    value
-                                )),
+                                _ => {
+                                    return Err(invalid_type_with_value(
+                                        vec![TypeHint::Boolean],
+                                        value,
+                                    ))
+                                }
                             }
                         }
                         _ => bail_corrupted_state!("Invalid field name {}", name_and_type.name),
@@ -533,7 +561,7 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let analysed_type = match analysed_type {
             AnalysedType::List(type_list) => type_list.clone().inner,
-            _ => corrupted_state!("expecting a list type to create sink"),
+            _ => bail_corrupted_state!("expecting a list type to create sink"),
         };
         interpreter_stack.create_sink(analysed_type.deref());
         Ok(())
@@ -600,9 +628,9 @@ mod internal {
     pub(crate) fn run_sink_to_list_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let (result, analysed_type) = interpreter_stack.pop_sink().ok_or(corrupted_state!(
-            "failed to retrieve items from sink"
-        ))?;
+        let (result, analysed_type) = interpreter_stack
+            .pop_sink()
+            .ok_or(corrupted_state!("failed to retrieve items from sink"))?;
 
         interpreter_stack.push_list(
             result.into_iter().map(|vnt| vnt.value).collect(),
@@ -635,9 +663,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
     ) -> RibInterpreterResult<()> {
-        let value = interpreter_stack.pop().ok_or_else(|| {
-            empty_stack()
-        })?;
+        let value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
         let env_key = EnvironmentKey::from(variable_id);
 
         interpreter_env.insert(env_key, value);
@@ -650,11 +676,9 @@ mod internal {
         interpreter_env: &mut InterpreterEnv,
     ) -> RibInterpreterResult<()> {
         let env_key = EnvironmentKey::from(variable_id.clone());
-        let value = interpreter_env.lookup(&env_key).ok_or_else(|| {
-            input_not_found(
-                variable_id.name().as_str(),
-            )
-        })?;
+        let value = interpreter_env
+            .lookup(&env_key)
+            .ok_or_else(|| input_not_found(variable_id.name().as_str()))?;
 
         match value {
             RibInterpreterStackValue::Unit => {
@@ -679,7 +703,7 @@ mod internal {
         let name_type_pair = match analysed_type {
             AnalysedType::Record(type_record) => type_record.fields,
             _ => {
-                corrupted_state!(
+                bail_corrupted_state!(
                     "expected a record type to create a record, but obtained {}",
                     analysed_type.get_type_hint()
                 )
@@ -730,16 +754,20 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         match analysed_type {
             AnalysedType::List(inner_type) => {
-                let items =
-                    interpreter_stack.try_pop_n_val(list_size)?;
+                let items = interpreter_stack.try_pop_n_val(list_size)?;
 
-
-                interpreter_stack.push_list(items.into_iter().map(|vnt| vnt.value).collect(), inner_type.inner.deref());
+                interpreter_stack.push_list(
+                    items.into_iter().map(|vnt| vnt.value).collect(),
+                    inner_type.inner.deref(),
+                );
 
                 Ok(())
             }
 
-            _ => Err(corrupted_state!("failed to create list due to mismatch in types. expected: list, actual: {}", analysed_type.get_type_hint())),
+            _ => Err(corrupted_state!(
+                "failed to create list due to mismatch in types. expected: list, actual: {}",
+                analysed_type.get_type_hint()
+            )),
         }
     }
 
@@ -750,13 +778,15 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         match analysed_type {
             AnalysedType::Tuple(_inner_type) => {
-                let items =
-                    interpreter_stack.try_pop_n_val(list_size)?;
+                let items = interpreter_stack.try_pop_n_val(list_size)?;
                 interpreter_stack.push_tuple(items);
                 Ok(())
             }
 
-            _ => Err(corrupted_state!("failed to create tuple due to mismatch in types. expected: tuple, actual: {}", analysed_type.get_type_hint())),
+            _ => Err(corrupted_state!(
+                "failed to create tuple due to mismatch in types. expected: tuple, actual: {}",
+                analysed_type.get_type_hint()
+            )),
         }
     }
 
@@ -804,20 +834,19 @@ mod internal {
 
     pub(crate) fn run_math_instruction(
         interpreter_stack: &mut InterpreterStack,
-        compare_fn: fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
+        compare_fn: fn(
+            CoercedNumericValue,
+            CoercedNumericValue,
+        ) -> Result<CoercedNumericValue, RibRuntimeError>,
         target_numerical_type: &AnalysedType,
     ) -> RibInterpreterResult<()> {
         let left = interpreter_stack.try_pop()?;
         let right = interpreter_stack.try_pop()?;
 
         let result = left.evaluate_math_op(&right, compare_fn)?;
-        let numerical_type = result.cast_to(target_numerical_type).ok_or_else(|| {
-            anyhow!(
-                "failed to cast number {} to {}",
-                result,
-                target_numerical_type.get_type_hint()
-            )
-        })?;
+        let numerical_type = result
+            .cast_to(target_numerical_type)
+            .ok_or_else(|| cast_error_custom(result, target_numerical_type.get_type_hint()))?;
 
         interpreter_stack.push_val(numerical_type);
 
@@ -846,7 +875,7 @@ mod internal {
         let record = interpreter_stack.try_pop()?;
 
         match record {
-            RibInterpreterStackValue::Val(ValueAndType {
+            ref stack_value @ RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             }) => {
@@ -854,77 +883,68 @@ mod internal {
                     .into_iter()
                     .zip(typ.fields)
                     .find(|(_value, field)| field.name == field_name)
-                    .ok_or_else(|| anyhow!("Field {} not found in the record", field_name))?;
+                    .ok_or_else(|| field_not_found(stack_value.to_string(), field_name.as_str()))?;
 
                 let value = field.0;
                 interpreter_stack.push_val(ValueAndType::new(value, field.1.typ));
                 Ok(())
             }
-            result => {
-                Err(field_not_found(result, field_name.as_str()))
-            }
+            result => Err(field_not_found(result.to_string(), field_name.as_str())),
         }
     }
 
     pub(crate) fn run_select_index_v1_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let stack_list_value = interpreter_stack
-            .pop()
-            .ok_or_else(|| empty_stack())?;
+        let stack_list_value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
 
         let index_value = interpreter_stack.pop().ok_or(empty_stack())?;
 
         match stack_list_value {
             RibInterpreterStackValue::Val(ValueAndType {
-                                              value: Value::List(items),
-                                              typ: AnalysedType::List(typ),
-                                          }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                value: Value::List(items),
+                typ: AnalysedType::List(typ),
+            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
                 Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
                         .get(index as usize)
-                        .ok_or_else(|| index_out_of_bounds(
-                            index as usize,
-                            items.len()
-                        ))?
+                        .ok_or_else(|| index_out_of_bound(index as usize, items.len()))?
                         .clone();
 
                     interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
                     Ok(())
                 }
-                _ => Err(corrupted_state!("range selection not supported at byte code level. missing desugar phase")),
+                _ => Err(corrupted_state!(
+                    "range selection not supported at byte code level. missing desugar phase"
+                )),
             },
             RibInterpreterStackValue::Val(ValueAndType {
-                                              value: Value::Tuple(items),
-                                              typ: AnalysedType::Tuple(typ),
-                                          }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                value: Value::Tuple(items),
+                typ: AnalysedType::Tuple(typ),
+            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
                 Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
                         .get(index as usize)
-                        .ok_or_else(|| index_out_of_bounds(
-                            index as usize,
-                            items.len()
-                        ))?
+                        .ok_or_else(|| index_out_of_bound(index as usize, items.len()))?
                         .clone();
 
                     let item_type = typ
                         .items
                         .get(index as usize)
-                        .ok_or_else(|| corrupted_state!(
-                            "type not found in the tuple at index {}",
-                            index
-                        ))?
+                        .ok_or_else(|| {
+                            corrupted_state!("type not found in the tuple at index {}", index)
+                        })?
                         .clone();
 
                     interpreter_stack.push_val(ValueAndType::new(value, item_type));
                     Ok(())
                 }
-                _ => Err(invalid_type_custom(
+                _ => Err(invalid_type_with_stack_value(
                     vec![TypeHint::Number],
                     index_value,
                 )),
             },
-            result => Err(invalid_type_custom(
+            result => Err(invalid_type_with_stack_value(
                 vec![TypeHint::List(None), TypeHint::Tuple(None)],
                 result,
             )),
@@ -935,9 +955,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         index: usize,
     ) -> RibInterpreterResult<()> {
-        let stack_value = interpreter_stack
-            .pop()
-            .ok_or_else(|| empty_stack())?;
+        let stack_value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
 
         match stack_value {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -946,12 +964,7 @@ mod internal {
             }) => {
                 let value = items
                     .get(index)
-                    .ok_or_else(|| {
-                        index_out_of_bounds(
-                            index,
-                            items.len()
-                        )
-                    })?
+                    .ok_or_else(|| index_out_of_bound(index, items.len()))?
                     .clone();
 
                 interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
@@ -963,21 +976,21 @@ mod internal {
             }) => {
                 let value = items
                     .get(index)
-                    .ok_or_else(|| anyhow!("Index {} not found in the tuple", index))?
+                    .ok_or_else(|| index_out_of_bound(index, items.len()))?
                     .clone();
 
                 let item_type = typ
                     .items
                     .get(index)
-                    .ok_or_else(|| anyhow!("Index {} not found in the tuple type", index))?
+                    .ok_or_else(|| index_out_of_bound(index, items.len()))?
                     .clone();
 
                 interpreter_stack.push_val(ValueAndType::new(value, item_type));
                 Ok(())
             }
-            result => Err(anyhow!(
-                "expected a sequence value or tuple to select an index. But obtained {}",
-                result
+            result => Err(invalid_type_with_stack_value(
+                vec![TypeHint::List(None), TypeHint::Tuple(None)],
+                result,
             )),
         }
     }
@@ -992,10 +1005,9 @@ mod internal {
                 interpreter_stack.push_enum(enum_name, typed_enum.cases)?;
                 Ok(())
             }
-            _ => Err(anyhow!(
-                "expected a enum type for {}, but obtained {}",
-                enum_name,
-                analysed_type.get_type_hint()
+            _ => Err(invalid_value_with_type_hint(
+                vec![TypeHint::Enum(None)],
+                analysed_type.get_type_hint(),
             )),
         }
     }
@@ -1011,7 +1023,7 @@ mod internal {
                     .cases
                     .iter()
                     .find(|name| name.name == variant_name)
-                    .ok_or_else(|| anyhow!("internal error: variant {} not found", variant_name))?;
+                    .ok_or_else(|| corrupted_state!("variant {} not found", variant_name))?;
 
                 let variant_arg_typ = variant.typ.clone();
 
@@ -1027,10 +1039,9 @@ mod internal {
                 )
             }
 
-            _ => Err(anyhow!(
-                "internal error: expected a variant type for {}, but obtained {:?}",
-                variant_name,
-                analysed_type
+            _ => Err(invalid_value_with_type_hint(
+                vec![TypeHint::Variant(None)],
+                analysed_type.get_type_hint(),
             )),
         }
     }
@@ -1083,16 +1094,16 @@ mod internal {
                 interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => {
-                let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or_else(|| {
-                    anyhow!("internal error: failed to get arguments for resource construction")
-                })?;
+                let last_n_elements = interpreter_stack
+                    .pop_n(arg_size)
+                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
 
                 let parameter_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or_else(|| anyhow!("internal error: failed to construct resource"))
+                            .ok_or_else(|| corrupted_state!("failed to construct resource"))
                     })
                     .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
@@ -1114,15 +1125,15 @@ mod internal {
                 arg_size,
                 method,
             } => {
-                let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or_else(|| {
-                    anyhow!("failed to get arguments for resource method {}", method)
-                })?;
+                let last_n_elements = interpreter_stack
+                    .pop_n(arg_size)
+                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
 
                 let param_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or_else(|| {
-                            anyhow!(
+                            corrupted_state!(
                                 "internal error: failed to call indexed resource method {}",
                                 method
                             )
@@ -1136,8 +1147,8 @@ mod internal {
                         resource,
                         resource_params: param_values
                             .iter()
-                            .map(|x| print_value_and_type(x).map_err(|e| anyhow!(e)))
-                            .collect::<RibInterpreterResult<Vec<String>>>()?,
+                            .map(|x| x.to_string())
+                            .collect::<Vec<String>>(),
                         method,
                     },
                 };
@@ -1149,21 +1160,15 @@ mod internal {
                 arg_size,
                 method,
             } => {
-                let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or_else(|| {
-                    anyhow!(
-                        "internal error: Failed to get arguments for static resource method {}",
-                        method
-                    )
-                })?;
+                let last_n_elements = interpreter_stack
+                    .pop_n(arg_size)
+                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
 
                 let param_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or_else(|| {
-                            anyhow!(
-                                "internal error: Failed to call static resource method {}",
-                                method
-                            )
+                            corrupted_state!("failed to call static resource method {}", method)
                         })
                     })
                     .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
@@ -1183,16 +1188,16 @@ mod internal {
                 interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
-                let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or_else(|| {
-                    anyhow!("internal error: failed to get resource parameters for indexed resource drop")
-                })?;
+                let last_n_elements = interpreter_stack
+                    .pop_n(arg_size)
+                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
 
                 let param_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            anyhow!("internal error: failed to call indexed resource drop")
-                        })
+                        interpreter_result
+                            .get_val()
+                            .ok_or_else(|| corrupted_state!("failed to call indexed resource drop"))
                     })
                     .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
@@ -1222,35 +1227,36 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let function_name = interpreter_stack
             .pop_str()
-            .ok_or_else(|| anyhow!("internal error: failed to get a function name"))?;
+            .ok_or_else(|| corrupted_state!("failed to get a function name"))?;
 
         let worker_name = match worker_type {
             WorkerNamePresence::Present => {
-                let worker_name = interpreter_stack
-                    .pop_str()
-                    .ok_or_else(|| anyhow!("internal error: failed to get the worker name"))?;
+                let worker_name = interpreter_stack.pop_str().ok_or_else(|| {
+                    corrupted_state!("internal error: failed to get the worker name")
+                })?;
 
                 Some(worker_name.clone())
             }
             WorkerNamePresence::Absent => None,
         };
 
-        let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or_else(|| {
-            anyhow!("internal error: failed to get arguments for the function call")
-        })?;
+        let last_n_elements = interpreter_stack
+            .pop_n(arg_size)
+            .ok_or_else(|| insufficient_stack_items(arg_size))?;
 
         let parameter_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
-                interpreter_result.get_val().ok_or_else(|| {
-                    anyhow!("internal error: failed to call function {}", function_name)
-                })
+                interpreter_result
+                    .get_val()
+                    .ok_or_else(|| corrupted_state!("failed to call function {}", function_name))
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
         let result = interpreter_env
             .invoke_worker_function_async(worker_name, function_name, parameter_values)
-            .await?;
+            .await
+            .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
 
         let interpreter_result = match result {
             ValueAndType {
@@ -1268,7 +1274,10 @@ mod internal {
                     inner_type,
                 )))
             }
-            _ => Err(anyhow!("named multiple results are not supported yet")),
+            _ => Err(function_invoke_fail(
+                function_name.as_str(),
+                "named multiple results are not supported yet".into(),
+            )),
         };
 
         interpreter_stack.push(interpreter_result?);
@@ -1280,11 +1289,11 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let value = interpreter_stack
             .pop()
-            .ok_or_else(|| anyhow!("internal error: no value to unwrap"))?;
+            .ok_or_else(|| corrupted_state!("no value to unwrap"))?;
 
         let unwrapped_value = value
             .unwrap()
-            .ok_or_else(|| anyhow!("internal error: failed to unwrap the value {}", value))?;
+            .ok_or_else(|| corrupted_state!("failed to unwrap the value {}", value))?;
 
         interpreter_stack.push_val(unwrapped_value);
         Ok(())
@@ -1295,7 +1304,7 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let value = interpreter_stack
             .pop_val()
-            .ok_or_else(|| anyhow!("internal error: failed to get a tag value"))?;
+            .ok_or_else(|| corrupted_state!("failed to get a tag value"))?;
 
         let tag = match value {
             ValueAndType {
@@ -1338,9 +1347,11 @@ mod internal {
                 interpreter_stack.push_some(value.value, analysed_type.inner.deref());
                 Ok(())
             }
-            _ => Err(anyhow!(
-                "internal error: expected option type to create `some` value. But obtained {:?}",
+            _ => Err(invalid_value_with_type_hint(
+                vec![TypeHint::Option(None)],
                 analysed_type
+                    .get_type_hint()
+                    .unwrap_or_else(|| TypeHint::Unknown),
             )),
         }
     }
@@ -1354,9 +1365,12 @@ mod internal {
                 interpreter_stack.push_none(analysed_type);
                 Ok(())
             }
-            _ => Err(anyhow!(
-                "internal error: expected option type to create `none` value. But obtained {:?}",
+            _ => Err(invalid_value_with_type_hint(
+                vec![TypeHint::Option(None)],
                 analysed_type
+                    .as_ref()
+                    .map(|t| t.get_type_hint())
+                    .unwrap_or_else(|| TypeHint::Unknown),
             )),
         }
     }
@@ -1372,9 +1386,12 @@ mod internal {
                 interpreter_stack.push_ok(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
-            _ => Err(anyhow!(
-                "internal error: expected result type to create `ok` value. But obtained {:?}",
-                analysed_type
+            _ => Err(invalid_value_with_type_hint(
+                vec![TypeHint::Result {
+                    ok: None,
+                    err: None,
+                }],
+                analysed_type.get_type_hint(),
             )),
         }
     }
@@ -1390,9 +1407,12 @@ mod internal {
                 interpreter_stack.push_err(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
-            _ => Err(anyhow!(
-                "internal error: expected result type to create `err` value. But obtained {:?}",
-                analysed_type
+            _ => Err(invalid_value_with_type_hint(
+                vec![TypeHint::Result {
+                    ok: None,
+                    err: None,
+                }],
+                analysed_type.get_type_hint(),
             )),
         }
     }
@@ -4418,7 +4438,10 @@ mod tests {
 
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, RibFunctionInvoke, RibInput, RibInterpreterResult};
+        use crate::{
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue,
+            RibFunctionInvoke, RibInput, RibInterpreterResult,
+        };
         use anyhow::anyhow;
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
@@ -4968,7 +4991,7 @@ mod tests {
                         let args = args.0;
                         let arg1 = args[0].get_literal().and_then(|x| x.get_number()).unwrap();
                         let arg2 = args[1].get_literal().and_then(|x| x.get_number()).unwrap();
-                        let result = arg1 + arg2;
+                        let result = (arg1 + arg2).unwrap();
                         let u32 = result.cast_to(&u32()).unwrap();
 
                         Ok(ValueAndType::new(
@@ -4980,7 +5003,7 @@ mod tests {
                         let args = args.0;
                         let arg1 = args[0].get_literal().and_then(|x| x.get_number()).unwrap();
                         let arg2 = args[1].get_literal().and_then(|x| x.get_number()).unwrap();
-                        let result = arg1 + arg2;
+                        let result = (arg1 + arg2).unwrap();
                         let u64 = result.cast_to(&u64()).unwrap();
                         Ok(ValueAndType::new(
                             Value::Tuple(vec![u64.value]),

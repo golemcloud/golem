@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
-use crate::CoercedNumericValue;
+use crate::interpreter::rib_runtime_error::{
+    arithmetic_error, invalid_comparison, invalid_type_with_value,
+};
+use crate::{corrupted_state, CoercedNumericValue, RibInterpreterResult};
 use anyhow::anyhow;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -56,7 +59,7 @@ impl RibInterpreterStackValue {
         &self,
         right: &RibInterpreterStackValue,
         op: F,
-    ) -> anyhow::Result<CoercedNumericValue>
+    ) -> RibInterpreterResult<CoercedNumericValue>
     where
         F: Fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
     {
@@ -68,12 +71,14 @@ impl RibInterpreterStackValue {
                 ) {
                     Ok(op(left_lit, right_lit))
                 } else {
-                    Err(anyhow!(internal::unable_to_complete_math_operation(
-                        &left, &right
-                    )))
+                    Err(arithmetic_error(
+                        "values are not numeric and cannot be used in math operation",
+                        None,
+                        None,
+                    ))
                 }
             }
-            _ => Err(anyhow!(
+            _ => Err(corrupted_state!(
                 "failed to obtain values to complete the math operation"
             )),
         }
@@ -83,7 +88,7 @@ impl RibInterpreterStackValue {
         &self,
         right: &RibInterpreterStackValue,
         compare: F,
-    ) -> anyhow::Result<RibInterpreterStackValue>
+    ) -> RibInterpreterResult<RibInterpreterStackValue>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
@@ -95,8 +100,10 @@ impl RibInterpreterStackValue {
                     let result = internal::compare_typed_value(&left, &right, compare)?;
                     Ok(RibInterpreterStackValue::Val(result))
                 }
-                _ => Err(anyhow!(
-                    "values are not literals and cannot be compared".to_string()
+                _ => Err(invalid_comparison(
+                    "values are not literals and cannot be compared,",
+                    None,
+                    None,
                 )),
             }
         }
@@ -217,24 +224,16 @@ impl fmt::Debug for RibInterpreterStackValue {
 
 mod internal {
     use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
+    use crate::{corrupted_state, RibInterpreterResult};
     use anyhow::anyhow;
     use golem_wasm_ast::analysis::{AnalysedType, TypeVariant};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
-    #[cfg(not(feature = "json_in_errors"))]
-    pub fn unable_to_complete_math_operation(left: &ValueAndType, right: &ValueAndType) -> String {
-        format!(
-            "Unable to complete math operation for {:?}, {:?}",
-            left, right
-        )
-    }
-
-    #[cfg(feature = "json_in_errors")]
     pub fn unable_to_complete_math_operation(left: &ValueAndType, right: &ValueAndType) -> String {
         format!(
             "Unable to complete math operation for operands {}, {}",
-            serde_json::to_string(left).unwrap_or_default(),
-            serde_json::to_string(right).unwrap_or_default()
+            left.to_string(),
+            right.to_string()
         )
     }
 
@@ -242,7 +241,7 @@ mod internal {
         left: &ValueAndType,
         right: &ValueAndType,
         compare: F,
-    ) -> anyhow::Result<ValueAndType>
+    ) -> RibInterpreterResult<ValueAndType>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
@@ -287,7 +286,7 @@ mod internal {
             },
         ) = (left, right)
         {
-            compare_enums(*left_idx, *right_idx)
+            Ok((left_idx == right_idx).into_value_and_type())
         } else if let (
             ValueAndType {
                 value: Value::Flags(left_bitmap),
@@ -299,14 +298,14 @@ mod internal {
             },
         ) = (left, right)
         {
-            compare_flags(left_bitmap, right_bitmap)
+            Ok((left == right).into_value_and_type())
         } else {
             Err(anyhow!(unsupported_type_error(left, right)))
         }
     }
 
-    fn compare_flags(left: &[bool], right: &[bool]) -> anyhow::Result<ValueAndType> {
-        Ok((left == right).into_value_and_type())
+    fn compare_flags(left: &[bool], right: &[bool]) -> ValueAndType {
+        (left == right).into_value_and_type()
     }
 
     fn compare_variants<F>(
@@ -317,7 +316,7 @@ mod internal {
         right_case_value: &Option<Box<Value>>,
         right_type: &TypeVariant,
         compare: F,
-    ) -> anyhow::Result<ValueAndType>
+    ) -> RibInterpreterResult<ValueAndType>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
@@ -327,13 +326,13 @@ mod internal {
                     let left_typ = left_type
                         .cases
                         .get(left_case_idx as usize)
-                        .ok_or(anyhow!("unknown variant index"))?
+                        .ok_or(corrupted_state!("unknown variant index"))?
                         .typ
                         .clone();
                     let right_typ = right_type
                         .cases
                         .get(right_case_idx as usize)
-                        .ok_or(anyhow!("unknown variant index"))?
+                        .ok_or(corrupted_state!("unknown variant index"))?
                         .typ
                         .clone();
                     match (left_typ, right_typ) {
@@ -352,8 +351,8 @@ mod internal {
         }
     }
 
-    fn compare_enums(left_idx: u32, right_idx: u32) -> anyhow::Result<ValueAndType> {
-        Ok((left_idx == right_idx).into_value_and_type())
+    fn compare_enums(left_idx: u32, right_idx: u32) -> ValueAndType {
+        (left_idx == right_idx).into_value_and_type()
     }
 
     fn unsupported_type_error(left: &ValueAndType, right: &ValueAndType) -> String {

@@ -28,9 +28,9 @@ mod interpreter_stack_value;
 mod literal;
 mod rib_function_invoke;
 mod rib_interpreter;
+mod rib_runtime_error;
 mod stack;
 mod tests;
-mod rib_runtime_error;
 
 use crate::RibByteCode;
 use std::sync::Arc;

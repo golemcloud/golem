@@ -23,7 +23,9 @@ pub struct RibOutputTypeInfo {
 }
 
 impl RibOutputTypeInfo {
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibOutputTypeInfo, RibCompilationError> {
+    pub fn from_expr(
+        inferred_expr: &InferredExpr,
+    ) -> Result<RibOutputTypeInfo, RibCompilationError> {
         let inferred_type = inferred_expr.get_expr().inferred_type();
         let analysed_type = AnalysedType::try_from(&inferred_type).map_err(|e| {
             RibCompilationError::RibStaticAnalysisError(format!(

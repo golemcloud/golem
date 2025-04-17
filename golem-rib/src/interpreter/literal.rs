@@ -124,6 +124,14 @@ pub enum CoercedNumericValue {
 }
 
 impl CoercedNumericValue {
+    pub fn is_zero(&self) -> bool {
+        match self {
+            CoercedNumericValue::PosInt(val) => *val == 0,
+            CoercedNumericValue::NegInt(val) => *val == 0,
+            CoercedNumericValue::Float(val) => *val == 0.0,
+        }
+    }
+
     pub fn cast_to(&self, analysed_type: &AnalysedType) -> Option<ValueAndType> {
         match (self, analysed_type) {
             (CoercedNumericValue::PosInt(val), AnalysedType::U8(_)) if *val <= u8::MAX as u64 => {
@@ -173,49 +181,44 @@ impl CoercedNumericValue {
 }
 
 macro_rules! impl_ops {
-    ($trait:ident, $method:ident) => {
-        impl $trait for CoercedNumericValue {
-            type Output = Self;
+    ($trait:ident, $method:ident, $checked_method:ident) => {
+        impl std::ops::$trait for CoercedNumericValue {
+            type Output = Result<Self, String>;
 
             fn $method(self, rhs: Self) -> Self::Output {
-                match (self, rhs) {
-                    (CoercedNumericValue::Float(a), CoercedNumericValue::Float(b)) => {
-                        CoercedNumericValue::Float(a.$method(b))
-                    }
-                    (CoercedNumericValue::Float(a), CoercedNumericValue::PosInt(b)) => {
-                        CoercedNumericValue::Float(a.$method(b as f64))
-                    }
-                    (CoercedNumericValue::Float(a), CoercedNumericValue::NegInt(b)) => {
-                        CoercedNumericValue::Float(a.$method(b as f64))
-                    }
-                    (CoercedNumericValue::PosInt(a), CoercedNumericValue::Float(b)) => {
-                        CoercedNumericValue::Float((a as f64).$method(b))
-                    }
-                    (CoercedNumericValue::NegInt(a), CoercedNumericValue::Float(b)) => {
-                        CoercedNumericValue::Float((a as f64).$method(b))
-                    }
-                    (CoercedNumericValue::PosInt(a), CoercedNumericValue::PosInt(b)) => {
-                        CoercedNumericValue::PosInt(a.$method(b))
-                    }
-                    (CoercedNumericValue::NegInt(a), CoercedNumericValue::NegInt(b)) => {
-                        CoercedNumericValue::NegInt(a.$method(b))
-                    }
-                    (CoercedNumericValue::PosInt(a), CoercedNumericValue::NegInt(b)) => {
-                        CoercedNumericValue::NegInt((a as i64).$method(b))
-                    }
-                    (CoercedNumericValue::NegInt(a), CoercedNumericValue::PosInt(b)) => {
-                        CoercedNumericValue::NegInt(a.$method(b as i64))
-                    }
-                }
+                use CoercedNumericValue::*;
+                Ok(match (self, rhs) {
+                    (Float(a), Float(b)) => Float(a.$method(b)),
+                    (Float(a), PosInt(b)) => Float(a.$method(b as f64)),
+                    (Float(a), NegInt(b)) => Float(a.$method(b as f64)),
+                    (PosInt(a), Float(b)) => Float((a as f64).$method(b)),
+                    (NegInt(a), Float(b)) => Float((a as f64).$method(b)),
+                    (PosInt(a), PosInt(b)) => a
+                        .$checked_method(b)
+                        .map(PosInt)
+                        .ok_or("overflow in unsigned operation")?,
+                    (NegInt(a), NegInt(b)) => a
+                        .$checked_method(b)
+                        .map(NegInt)
+                        .ok_or("overflow in signed operation")?,
+                    (PosInt(a), NegInt(b)) => (a as i64)
+                        .$checked_method(b)
+                        .map(NegInt)
+                        .ok_or("overflow in signed operation")?,
+                    (NegInt(a), PosInt(b)) => a
+                        .$checked_method(b as i64)
+                        .map(NegInt)
+                        .ok_or("overflow in signed operation")?,
+                })
             }
         }
     };
 }
 
-impl_ops!(Add, add);
-impl_ops!(Sub, sub);
-impl_ops!(Mul, mul);
-impl_ops!(Div, div);
+impl_ops!(Add, add, checked_add);
+impl_ops!(Sub, sub, checked_sub);
+impl_ops!(Mul, mul, checked_mul);
+impl_ops!(Div, div, checked_div);
 
 // Auto-derived PartialOrd fails if types don't match
 // and therefore custom impl.

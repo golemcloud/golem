@@ -8,7 +8,7 @@ pub trait RibFunctionInvoke {
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
-    ) -> anyhow::Result<ValueAndType>;
+    ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 #[derive(Debug)]
