@@ -2045,7 +2045,8 @@ mod comprehensive_test {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
         use crate::{
-            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke, RibInput,
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke,
+            RibFunctionInvokeResult, RibInput,
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::tuple;
@@ -2263,7 +2264,7 @@ mod comprehensive_test {
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
-            ) -> anyhow::Result<ValueAndType> {
+            ) -> RibFunctionInvokeResult {
                 let function_name = FunctionName(function_name.0);
                 let value = self
                     .functions_and_result

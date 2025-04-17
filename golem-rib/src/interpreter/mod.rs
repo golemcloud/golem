@@ -32,6 +32,7 @@ mod rib_runtime_error;
 mod stack;
 mod tests;
 
+use crate::interpreter::rib_runtime_error::RibRuntimeError;
 use crate::RibByteCode;
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ pub async fn interpret(
     rib: RibByteCode,
     rib_input: RibInput,
     function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
-) -> anyhow::Result<RibResult> {
+) -> Result<RibResult, RibRuntimeError> {
     let mut interpreter = Interpreter::new(rib_input, function_invoke, None, None);
     interpreter.run(rib).await
 }
@@ -47,7 +48,38 @@ pub async fn interpret(
 // This function can be used for those the Rib Scripts
 // where there are no side effecting function calls.
 // It is recommended to use `interpret` over `interpret_pure` if you are unsure.
-pub async fn interpret_pure(rib: RibByteCode, rib_input: RibInput) -> anyhow::Result<RibResult> {
+pub async fn interpret_pure(
+    rib: RibByteCode,
+    rib_input: RibInput,
+) -> Result<RibResult, RibRuntimeError> {
     let mut interpreter = Interpreter::pure(rib_input, None, None);
     interpreter.run(rib.clone()).await
+}
+
+#[macro_export]
+macro_rules! corrupted_state {
+    // This handles the case where no arguments are passed after the format string
+    ($fmt:expr) => {{
+        // Just return the error with the provided string
+        crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation(crate::interpreter::rib_runtime_error::InvariantViolation::CorruptedState($fmt.to_string()))
+    }};
+
+    // This handles the case where arguments are passed
+    ($fmt:expr, $($arg:tt)*) => {{
+        // Create the error variant with the formatted message
+        crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation(crate::interpreter::rib_runtime_error::InvariantViolation::CorruptedState(format!($fmt, $($arg)*)))
+    }};
+}
+
+#[macro_export]
+macro_rules! bail_corrupted_state {
+    // This handles the case where no arguments are passed after the format string
+    ($fmt:expr) => {{
+        return Err(crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation(crate::interpreter::rib_runtime_error::InvariantViolation::CorruptedState($fmt.to_string())));
+    }};
+
+    // This handles the case where there are additional arguments
+    ($fmt:expr, $($arg:tt)*) => {{
+        return Err(crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation(crate::interpreter::rib_runtime_error::InvariantViolation::CorruptedState(format!($fmt, $($arg)*))));
+    }};
 }

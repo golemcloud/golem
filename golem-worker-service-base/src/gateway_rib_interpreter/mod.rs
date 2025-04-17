@@ -150,7 +150,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
-    ) -> anyhow::Result<ValueAndType> {
+    ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
         let component_id = self.component_id.clone();
         let worker_name: Option<String> =
             worker_name.map(|x| x.0).or(self.global_worker_name.clone());
@@ -180,6 +180,6 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
 
         let tav = executor.execute(worker_request).await.map(|v| v.result)?;
 
-        tav.try_into().map_err(|err: String| anyhow!(err))
+        tav.try_into().map_err(|err: String| err.into())
     }
 }

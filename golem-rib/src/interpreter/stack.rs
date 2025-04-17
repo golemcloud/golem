@@ -14,10 +14,9 @@
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::interpreter::rib_runtime_error::{
-    empty_stack, insufficient_stack_items, invalid_type_with_value,
+    empty_stack, insufficient_stack_items, type_mismatch_with_value,
 };
 use crate::{corrupted_state, GetLiteralValue, RibInterpreterResult, TypeHint};
-use anyhow::anyhow;
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
@@ -123,7 +122,7 @@ impl InterpreterStack {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             } => Ok((field_values, typ)),
-            _ => Err(invalid_type_with_value(
+            _ => Err(type_mismatch_with_value(
                 vec![TypeHint::Record(None)],
                 value.value.clone(),
             )),
@@ -134,7 +133,7 @@ impl InterpreterStack {
         self.try_pop_val().and_then(|val| {
             val.get_literal()
                 .and_then(|x| x.get_bool())
-                .ok_or(invalid_type_with_value(
+                .ok_or(type_mismatch_with_value(
                     vec![TypeHint::Boolean],
                     val.value.clone(),
                 ))

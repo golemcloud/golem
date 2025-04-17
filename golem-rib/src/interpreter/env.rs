@@ -129,7 +129,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
-        ) -> anyhow::Result<ValueAndType> {
+        ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
             Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
         }
     }

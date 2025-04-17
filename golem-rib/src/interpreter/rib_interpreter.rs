@@ -134,9 +134,7 @@ impl Interpreter {
                         stack,
                         |left, right| {
                             let result = left + right;
-                            result.map_err(|err| {
-                                arithmetic_error(err.as_str(), Some(&left), Some(&right))
-                            })
+                            result.map_err(|err| arithmetic_error(err.as_str()))
                         },
                         &analysed_type,
                     )?;
@@ -146,9 +144,7 @@ impl Interpreter {
                         stack,
                         |left, right| {
                             let result = left - right;
-                            result.map_err(|err| {
-                                arithmetic_error(err.as_str(), Some(&left), Some(&right))
-                            })
+                            result.map_err(|err| arithmetic_error(err.as_str()))
                         },
                         &analysed_type,
                     )?;
@@ -159,14 +155,11 @@ impl Interpreter {
                         |left, right| {
                             if right.is_zero() {
                                 Err(arithmetic_error(
-                                    "division by zero",
-                                    Some(&left),
-                                    Some(&right),
+                                    format!("division by zero. left: {}, right: {}", left, right)
+                                        .as_str(),
                                 ))
                             } else {
-                                (left / right).map_err(|err| {
-                                    arithmetic_error(err.as_str(), Some(&left), Some(&right))
-                                })
+                                (left / right).map_err(|err| arithmetic_error(err.as_str()))
                             }
                         },
                         &analysed_type,
@@ -177,9 +170,7 @@ impl Interpreter {
                         stack,
                         |left, right| {
                             let result = left * right;
-                            result.map_err(|err| {
-                                arithmetic_error(err.as_str(), Some(&left), Some(&right))
-                            })
+                            result.map_err(|err| arithmetic_error(err.as_str()))
                         },
                         &analysed_type,
                     )?;
@@ -333,8 +324,8 @@ mod internal {
     use crate::{
         bail_corrupted_state, corrupted_state, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn,
         EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName,
-        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibInterpreterResult,
-        TypeHint, VariableId, WorkerNamePresence,
+        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibFunctionInvokeResult,
+        RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -345,7 +336,7 @@ mod internal {
         cast_error, cast_error_custom, empty_stack, exhausted_iterator, field_not_found,
         function_invoke_fail, index_out_of_bound, infinite_computation, input_not_found,
         instruction_jump_error, insufficient_stack_items, invalid_type_with_stack_value,
-        invalid_type_with_value, invalid_value_with_type_hint, RibRuntimeError,
+        type_mismatch_with_type_hint, type_mismatch_with_value, RibRuntimeError,
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
@@ -361,7 +352,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
-        ) -> RibInterpreterResult<ValueAndType> {
+        ) -> RibFunctionInvokeResult {
             Ok(ValueAndType {
                 value: Value::Tuple(vec![]),
                 typ: tuple(vec![]),
@@ -475,7 +466,7 @@ mod internal {
                             inclusive = match value {
                                 Value::Bool(b) => b,
                                 _ => {
-                                    return Err(invalid_type_with_value(
+                                    return Err(type_mismatch_with_value(
                                         vec![TypeHint::Boolean],
                                         value,
                                     ))
@@ -875,7 +866,7 @@ mod internal {
         let record = interpreter_stack.try_pop()?;
 
         match record {
-            ref stack_value @ RibInterpreterStackValue::Val(ValueAndType {
+            RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             }) => {
@@ -883,13 +874,13 @@ mod internal {
                     .into_iter()
                     .zip(typ.fields)
                     .find(|(_value, field)| field.name == field_name)
-                    .ok_or_else(|| field_not_found(stack_value.to_string(), field_name.as_str()))?;
+                    .ok_or_else(|| field_not_found(field_name.as_str()))?;
 
                 let value = field.0;
                 interpreter_stack.push_val(ValueAndType::new(value, field.1.typ));
                 Ok(())
             }
-            result => Err(field_not_found(result.to_string(), field_name.as_str())),
+            _ => Err(field_not_found(field_name.as_str())),
         }
     }
 
@@ -1005,7 +996,7 @@ mod internal {
                 interpreter_stack.push_enum(enum_name, typed_enum.cases)?;
                 Ok(())
             }
-            _ => Err(invalid_value_with_type_hint(
+            _ => Err(type_mismatch_with_type_hint(
                 vec![TypeHint::Enum(None)],
                 analysed_type.get_type_hint(),
             )),
@@ -1039,7 +1030,7 @@ mod internal {
                 )
             }
 
-            _ => Err(invalid_value_with_type_hint(
+            _ => Err(type_mismatch_with_type_hint(
                 vec![TypeHint::Variant(None)],
                 analysed_type.get_type_hint(),
             )),
@@ -1229,6 +1220,8 @@ mod internal {
             .pop_str()
             .ok_or_else(|| corrupted_state!("failed to get a function name"))?;
 
+        let function_name_cloned = function_name.clone();
+
         let worker_name = match worker_type {
             WorkerNamePresence::Present => {
                 let worker_name = interpreter_stack.pop_str().ok_or_else(|| {
@@ -1254,7 +1247,7 @@ mod internal {
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
         let result = interpreter_env
-            .invoke_worker_function_async(worker_name, function_name, parameter_values)
+            .invoke_worker_function_async(worker_name, function_name_cloned, parameter_values)
             .await
             .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
 
@@ -1347,11 +1340,9 @@ mod internal {
                 interpreter_stack.push_some(value.value, analysed_type.inner.deref());
                 Ok(())
             }
-            _ => Err(invalid_value_with_type_hint(
+            _ => Err(type_mismatch_with_type_hint(
                 vec![TypeHint::Option(None)],
-                analysed_type
-                    .get_type_hint()
-                    .unwrap_or_else(|| TypeHint::Unknown),
+                analysed_type.get_type_hint(),
             )),
         }
     }
@@ -1365,7 +1356,7 @@ mod internal {
                 interpreter_stack.push_none(analysed_type);
                 Ok(())
             }
-            _ => Err(invalid_value_with_type_hint(
+            _ => Err(type_mismatch_with_type_hint(
                 vec![TypeHint::Option(None)],
                 analysed_type
                     .as_ref()
@@ -1386,7 +1377,7 @@ mod internal {
                 interpreter_stack.push_ok(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
-            _ => Err(invalid_value_with_type_hint(
+            _ => Err(type_mismatch_with_type_hint(
                 vec![TypeHint::Result {
                     ok: None,
                     err: None,
@@ -1407,7 +1398,7 @@ mod internal {
                 interpreter_stack.push_err(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
-            _ => Err(invalid_value_with_type_hint(
+            _ => Err(type_mismatch_with_type_hint(
                 vec![TypeHint::Result {
                     ok: None,
                     err: None,
@@ -4985,7 +4976,7 @@ mod tests {
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
-            ) -> RibInterpreterResult<ValueAndType> {
+            ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
                 match function_name.0.as_str() {
                     "add-u32" => {
                         let args = args.0;
@@ -5024,14 +5015,14 @@ mod tests {
                                         tuple(vec![result.typ]),
                                     ))
                                 } else {
-                                    Err(anyhow!("Enums are not equal: {} and {}", x, y))
+                                    Err(format!("Enums are not equal: {} and {}", x, y).into())
                                 }
                             }
-                            (v1, v2) => Err(anyhow!(
+                            (v1, v2) => Err(format!(
                                 "Invalid arguments for add-enum: {:?} and {:?}",
-                                v1,
-                                v2
-                            )),
+                                v1, v2
+                            )
+                            .into()),
                         }
                     }
                     "add-variant" => {
@@ -5062,21 +5053,21 @@ mod tests {
                                         tuple(vec![result.typ]),
                                     ))
                                 } else {
-                                    Err(anyhow!(
+                                    Err(format!(
                                         "Variants are not equal: {} and {}",
-                                        case_idx1,
-                                        case_idx2
-                                    ))
+                                        case_idx1, case_idx2
+                                    )
+                                    .into())
                                 }
                             }
-                            (v1, v2) => Err(anyhow!(
+                            (v1, v2) => Err(format!(
                                 "Invalid arguments for add-variant: {:?} and {:?}",
-                                v1,
-                                v2
-                            )),
+                                v1, v2
+                            )
+                            .into()),
                         }
                     }
-                    fun => Err(anyhow!("unknown function {}", fun)),
+                    fun => Err(format!("unknown function {}", fun).into()),
                 }
             }
         }

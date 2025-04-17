@@ -21,7 +21,7 @@ use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
 use golem_wasm_rpc::ValueAndType;
-use rib::RibResult;
+use rib::{RibFunctionInvokeResult, RibResult};
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
 use rib::{RibCompilationError, RibFunctionInvoke};
 use rustyline::error::ReadlineError;
@@ -331,7 +331,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
-    ) -> anyhow::Result<ValueAndType> {
+    ) -> RibFunctionInvokeResult {
         let component_id = self.component_dependency.component_id;
         let component_name = &self.component_dependency.component_name;
 
@@ -343,6 +343,6 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                 function_name.0.as_str(),
                 args.0,
             )
-            .await
+            .await.map_err(|e| e.into())
     }
 }

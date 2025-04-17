@@ -14,12 +14,10 @@
 
 use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
 use crate::interpreter::rib_runtime_error::{
-    arithmetic_error, invalid_comparison, invalid_type_with_value,
+    arithmetic_error, invalid_comparison, RibRuntimeError,
 };
 use crate::{corrupted_state, CoercedNumericValue, RibInterpreterResult};
-use anyhow::anyhow;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -61,7 +59,10 @@ impl RibInterpreterStackValue {
         op: F,
     ) -> RibInterpreterResult<CoercedNumericValue>
     where
-        F: Fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
+        F: Fn(
+            CoercedNumericValue,
+            CoercedNumericValue,
+        ) -> Result<CoercedNumericValue, RibRuntimeError>,
     {
         match (self.get_val(), right.get_val()) {
             (Some(left), Some(right)) => {
@@ -69,12 +70,10 @@ impl RibInterpreterStackValue {
                     left.get_literal().and_then(|x| x.get_number()),
                     right.get_literal().and_then(|x| x.get_number()),
                 ) {
-                    Ok(op(left_lit, right_lit))
+                    op(left_lit, right_lit)
                 } else {
                     Err(arithmetic_error(
                         "values are not numeric and cannot be used in math operation",
-                        None,
-                        None,
                     ))
                 }
             }
@@ -224,18 +223,10 @@ impl fmt::Debug for RibInterpreterStackValue {
 
 mod internal {
     use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
+    use crate::interpreter::rib_runtime_error::invalid_comparison;
     use crate::{corrupted_state, RibInterpreterResult};
-    use anyhow::anyhow;
     use golem_wasm_ast::analysis::{AnalysedType, TypeVariant};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
-
-    pub fn unable_to_complete_math_operation(left: &ValueAndType, right: &ValueAndType) -> String {
-        format!(
-            "Unable to complete math operation for operands {}, {}",
-            left.to_string(),
-            right.to_string()
-        )
-    }
 
     pub(crate) fn compare_typed_value<F>(
         left: &ValueAndType,
@@ -298,14 +289,14 @@ mod internal {
             },
         ) = (left, right)
         {
-            Ok((left == right).into_value_and_type())
+            Ok((left_bitmap == right_bitmap).into_value_and_type())
         } else {
-            Err(anyhow!(unsupported_type_error(left, right)))
+            Err(invalid_comparison(
+                "failed to compared values",
+                Some(left.clone()),
+                Some(right.clone()),
+            ))
         }
-    }
-
-    fn compare_flags(left: &[bool], right: &[bool]) -> ValueAndType {
-        (left == right).into_value_and_type()
     }
 
     fn compare_variants<F>(
@@ -349,13 +340,5 @@ mod internal {
         } else {
             Ok(false.into_value_and_type())
         }
-    }
-
-    fn compare_enums(left_idx: u32, right_idx: u32) -> ValueAndType {
-        (left_idx == right_idx).into_value_and_type()
-    }
-
-    fn unsupported_type_error(left: &ValueAndType, right: &ValueAndType) -> String {
-        format!("Unsupported op {:?}, {:?}", left.typ, right.typ)
     }
 }

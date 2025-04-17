@@ -1,14 +1,13 @@
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::{CoercedNumericValue, InstructionId, TypeHint};
+use crate::{InstructionId, TypeHint};
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::fmt::Display;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug)]
 pub enum RibRuntimeError {
     InputNotFound(String),
     ExhaustedIterator,
     FieldNotFound {
-        input: String, // string representing the stack value
         field: String,
     },
     InvariantViolation(InvariantViolation),
@@ -17,7 +16,7 @@ pub enum RibRuntimeError {
         from: CastFrom,
         to: TypeHint,
     },
-    InvalidType {
+    TypeMismatch {
         expected: Vec<TypeHint>,
         found: InvalidItem,
     },
@@ -36,8 +35,6 @@ pub enum RibRuntimeError {
     },
     ArithmeticError {
         message: String,
-        left: Option<CoercedNumericValue>,
-        right: Option<CoercedNumericValue>,
     },
     FunctionInvokeError {
         function_name: String,
@@ -46,28 +43,22 @@ pub enum RibRuntimeError {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum CastFrom {
+pub enum CastFrom {
     FromValue(Value),
     FromType(TypeHint),
     FromCustom(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum InvalidItem {
+pub enum InvalidItem {
     RuntimeValue(Value),
     Type(TypeHint),
     Custom(String),
 }
 
-pub fn arithmetic_error(
-    message: &str,
-    left: Option<&CoercedNumericValue>,
-    right: Option<&CoercedNumericValue>,
-) -> RibRuntimeError {
+pub fn arithmetic_error(message: &str) -> RibRuntimeError {
     RibRuntimeError::ArithmeticError {
         message: message.to_string(),
-        left: left.cloned(),
-        right: right.cloned(),
     }
 }
 
@@ -93,9 +84,8 @@ pub fn exhausted_iterator() -> RibRuntimeError {
     RibRuntimeError::ExhaustedIterator
 }
 
-pub fn field_not_found(input: String, field_name: &str) -> RibRuntimeError {
+pub fn field_not_found(field_name: &str) -> RibRuntimeError {
     RibRuntimeError::FieldNotFound {
-        input,
         field: field_name.to_string(),
     }
 }
@@ -129,7 +119,7 @@ pub fn instruction_jump_error(instruction_id: InstructionId) -> RibRuntimeError 
 }
 
 pub fn insufficient_stack_items(size: usize) -> RibRuntimeError {
-    RibRuntimeError::InvariantViolation(InvariantViolation::InsufficientStackItems(1))
+    RibRuntimeError::InvariantViolation(InvariantViolation::InsufficientStackItems(size))
 }
 
 pub fn invalid_comparison(
@@ -148,21 +138,21 @@ pub fn invalid_type_with_stack_value(
     expected: Vec<TypeHint>,
     found: RibInterpreterStackValue,
 ) -> RibRuntimeError {
-    RibRuntimeError::InvalidType {
+    RibRuntimeError::TypeMismatch {
         expected,
         found: InvalidItem::Custom(found.to_string()),
     }
 }
 
-pub fn invalid_type_with_value(expected: Vec<TypeHint>, found: Value) -> RibRuntimeError {
-    RibRuntimeError::InvalidType {
+pub fn type_mismatch_with_value(expected: Vec<TypeHint>, found: Value) -> RibRuntimeError {
+    RibRuntimeError::TypeMismatch {
         expected,
         found: InvalidItem::RuntimeValue(found),
     }
 }
 
-pub fn invalid_value_with_type_hint(expected: Vec<TypeHint>, found: TypeHint) -> RibRuntimeError {
-    RibRuntimeError::InvalidType {
+pub fn type_mismatch_with_type_hint(expected: Vec<TypeHint>, found: TypeHint) -> RibRuntimeError {
+    RibRuntimeError::TypeMismatch {
         expected,
         found: InvalidItem::Type(found),
     }
@@ -174,34 +164,6 @@ pub fn no_result() -> RibRuntimeError {
 
 pub fn throw_error(message: &str) -> RibRuntimeError {
     RibRuntimeError::ThrownError(message.to_string())
-}
-
-#[macro_export]
-macro_rules! corrupted_state {
-    // This handles the case where no arguments are passed after the format string
-    ($fmt:expr) => {{
-        // Just return the error with the provided string
-        RibRuntimeError::InvariantViolation(InvariantViolation::CorruptedState($fmt.to_string()))
-    }};
-
-    // This handles the case where arguments are passed
-    ($fmt:expr, $($arg:tt)*) => {{
-        // Create the error variant with the formatted message
-        RibRuntimeError::InvariantViolation(InvariantViolation::CorruptedState(format!($fmt, $($arg)*)))
-    }};
-}
-
-#[macro_export]
-macro_rules! bail_corrupted_state {
-    // This handles the case where no arguments are passed after the format string
-    ($fmt:expr) => {{
-        return Err(RibRuntimeError::InvariantViolation(InvariantViolation::CorruptedState($fmt.to_string())));
-    }};
-
-    // This handles the case where there are additional arguments
-    ($fmt:expr, $($arg:tt)*) => {{
-        return Err(RibRuntimeError::InvariantViolation(InvariantViolation::CorruptedState(format!($fmt, $($arg)*))));
-    }};
 }
 
 #[derive(Debug, Clone, PartialEq)]

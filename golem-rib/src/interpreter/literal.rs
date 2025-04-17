@@ -16,7 +16,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::cmp::Ordering;
 use std::fmt::Display;
-use std::ops::{Add, Div, Mul, Sub};
 
 pub trait GetLiteralValue {
     fn get_literal(&self) -> Option<LiteralValue>;
@@ -193,22 +192,20 @@ macro_rules! impl_ops {
                     (Float(a), NegInt(b)) => Float(a.$method(b as f64)),
                     (PosInt(a), Float(b)) => Float((a as f64).$method(b)),
                     (NegInt(a), Float(b)) => Float((a as f64).$method(b)),
-                    (PosInt(a), PosInt(b)) => a
-                        .$checked_method(b)
-                        .map(PosInt)
-                        .ok_or("overflow in unsigned operation")?,
-                    (NegInt(a), NegInt(b)) => a
-                        .$checked_method(b)
-                        .map(NegInt)
-                        .ok_or("overflow in signed operation")?,
-                    (PosInt(a), NegInt(b)) => (a as i64)
-                        .$checked_method(b)
-                        .map(NegInt)
-                        .ok_or("overflow in signed operation")?,
-                    (NegInt(a), PosInt(b)) => a
-                        .$checked_method(b as i64)
-                        .map(NegInt)
-                        .ok_or("overflow in signed operation")?,
+                    (PosInt(a), PosInt(b)) => a.$checked_method(b).map(PosInt).ok_or(format!(
+                        "overflow in unsigned operation between {} and {}",
+                        a, b
+                    ))?,
+                    (NegInt(a), NegInt(b)) => a.$checked_method(b).map(NegInt).ok_or(format!(
+                        "overflow in signed operation between {} and {}",
+                        a, b
+                    ))?,
+                    (PosInt(a), NegInt(b)) => (a as i64).$checked_method(b).map(NegInt).ok_or(
+                        format!("overflow in signed operation between {} and {}", a, b),
+                    )?,
+                    (NegInt(a), PosInt(b)) => a.$checked_method(b as i64).map(NegInt).ok_or(
+                        format!("overflow in signed operation between {} and {}", a, b),
+                    )?,
                 })
             }
         }
