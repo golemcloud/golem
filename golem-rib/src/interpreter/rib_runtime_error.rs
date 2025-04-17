@@ -42,6 +42,8 @@ pub enum RibRuntimeError {
     },
 }
 
+impl std::error::Error for RibRuntimeError {}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CastFrom {
     FromValue(Value),

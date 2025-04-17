@@ -238,6 +238,8 @@ pub enum RibExecutionError {
     RibRuntimeError(RibRuntimeError),
 }
 
+impl std::error::Error for RibExecutionError {}
+
 impl Display for RibExecutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

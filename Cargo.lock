@@ -3645,7 +3645,6 @@ dependencies = [
 name = "golem-worker-service-base"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "assert2",
  "async-trait",
  "bigdecimal",
