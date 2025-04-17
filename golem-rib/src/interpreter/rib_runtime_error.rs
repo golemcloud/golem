@@ -1,4 +1,5 @@
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::Value;
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{InstructionId, TypeHint};
 
@@ -13,24 +14,38 @@ pub enum RibRuntimeError {
     InvariantViolation(InvariantViolation),
     ThrownError(String),
     CastError {
-        from: String,
-        to: String,
+        from: Value,
+        to: TypeHint,
     },
     InvalidType {
-        expected: TypeHint,
-        found: String, // string representing the stack value which can be a complex type
+        expected: Vec<TypeHint>,
+        found: InvalidItem
     },
-    NoResult
+    NoResult,
+    InfiniteComputation {
+        message: String
+    },
+    IndexOutOfBounds {
+        index: usize,
+        size: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum InvalidItem {
+    RuntimeValue(Value),
+    Type(TypeHint),
+    Custom(String),
 }
 
 pub fn throw_error(message: &str) -> RibRuntimeError {
     RibRuntimeError::ThrownError(message.to_string())
 }
 
-pub fn cast_error(from: &str, to: &str) -> RibRuntimeError {
+pub fn cast_error(from: Value, to: TypeHint) -> RibRuntimeError {
     RibRuntimeError::CastError {
-        from: from.to_string(),
-        to: to.to_string(),
+        from,
+        to
     }
 }
 
@@ -53,12 +68,43 @@ pub fn field_not_found(input: RibInterpreterStackValue, field_name: &str) -> Rib
     }
 }
 
+pub fn invalid_type(expected: Vec<TypeHint>, found: Value) -> RibRuntimeError {
+    RibRuntimeError::InvalidType {
+        expected,
+        found: InvalidItem::RuntimeValue(found),
+    }
+}
+pub fn invalid_type_custom(expected: Vec<TypeHint>, found: RibInterpreterStackValue) -> RibRuntimeError {
+    RibRuntimeError::InvalidType {
+        expected,
+        found: InvalidItem::Custom(found.to_string()),
+    }
+}
+
+
 pub fn empty_stack() -> RibRuntimeError {
     RibRuntimeError::InvariantViolation(InvariantViolation::InsufficientStackItems(1))
 }
 
+pub fn instruction_jump_error(instruction_id: InstructionId) -> RibRuntimeError {
+    RibRuntimeError::InvariantViolation(InvariantViolation::InstructionJumpError(instruction_id))
+}
+
 pub fn insufficient_stack_items(size: usize) -> RibRuntimeError {
     RibRuntimeError::InvariantViolation(InvariantViolation::InsufficientStackItems(1))
+}
+
+pub fn infinite_computation(message: &str) -> RibRuntimeError {
+    RibRuntimeError::InfiniteComputation {
+        message: message.to_string()
+    }
+}
+
+pub fn index_out_of_bounds(index: usize, size: usize) -> RibRuntimeError {
+    RibRuntimeError::IndexOutOfBounds {
+        index,
+        size
+    }
 }
 
 #[macro_export]

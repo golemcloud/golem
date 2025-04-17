@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::{corrupted_state, GetLiteralValue, RibInterpreterResult};
+use crate::{corrupted_state, GetLiteralValue, RibInterpreterResult, TypeHint};
 use anyhow::anyhow;
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
 };
 use golem_wasm_rpc::{Value, ValueAndType};
-use crate::interpreter::rib_runtime_error::{empty_stack};
+use crate::interpreter::rib_runtime_error::{empty_stack, insufficient_stack_items, invalid_type};
 
 #[derive(Debug)]
 pub struct InterpreterStack {
@@ -73,25 +73,22 @@ impl InterpreterStack {
         Some(results)
     }
 
-    pub fn try_pop_n(&mut self, n: usize) -> anyhow::Result<Vec<RibInterpreterStackValue>> {
-        self.pop_n(n).ok_or(anyhow!(
-            "internal error: failed to pop {} values from the interpreter stack",
-            n
-        ))
+    pub fn try_pop_n(&mut self, n: usize) -> RibInterpreterResult<Vec<RibInterpreterStackValue>> {
+        self.pop_n(n).ok_or(insufficient_stack_items(n))
     }
 
-    pub fn try_pop_n_val(&mut self, n: usize) -> anyhow::Result<Vec<ValueAndType>> {
+    pub fn try_pop_n_val(&mut self, n: usize) -> RibInterpreterResult<Vec<ValueAndType>> {
         let stack_values = self.try_pop_n(n)?;
 
         stack_values
             .iter()
             .map(|interpreter_result| {
-                interpreter_result.get_val().ok_or(anyhow!(
-                    "internal error: failed to convert last {} in the stack to ValueAndType",
+                interpreter_result.get_val().ok_or(corrupted_state!(
+                    "failed to convert last {} in the stack to ValueAndType",
                     n
                 ))
             })
-            .collect::<anyhow::Result<Vec<ValueAndType>>>()
+            .collect::<RibInterpreterResult<Vec<ValueAndType>>>()
     }
 
     pub fn pop_str(&mut self) -> Option<String> {
@@ -116,7 +113,7 @@ impl InterpreterStack {
         })
     }
 
-    pub fn try_pop_record(&mut self) -> anyhow::Result<(Vec<Value>, TypeRecord)> {
+    pub fn try_pop_record(&mut self) -> RibInterpreterResult<(Vec<Value>, TypeRecord)> {
         let value = self.try_pop_val()?;
 
         match value {
@@ -124,17 +121,21 @@ impl InterpreterStack {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             } => Ok((field_values, typ)),
-            _ => Err(anyhow!(
-                "internal error: failed to pop a record from the interpreter"
+            _ => Err(invalid_type(
+                TypeHint::Record(None),
+                value.value.clone(),
             )),
         }
     }
 
     pub fn try_pop_bool(&mut self) -> RibInterpreterResult<bool> {
         self.try_pop_val().and_then(|val| {
-            val.get_literal().and_then(|x| x.get_bool()).ok_or(anyhow!(
-                "internal error: failed to pop boolean from the interpreter stack"
-            ))
+            val.get_literal().and_then(|x| x.get_bool()).ok_or(
+                invalid_type(
+                    TypeHint::Boolean,
+                    val.value.clone(),
+                )
+            )
         })
     }
 
@@ -159,7 +160,7 @@ impl InterpreterStack {
         let possible_iterator = self.pop().ok_or(empty_stack())?;
 
         if !possible_iterator.is_iterator() {
-            return Err(corrupted_state(
+            return Err(corrupted_state!(
                 "failed to obtain an iterator from the stack",
             ));
         }

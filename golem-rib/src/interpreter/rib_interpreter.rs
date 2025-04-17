@@ -17,7 +17,6 @@ use crate::interpreter::env::InterpreterEnv;
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
 use crate::interpreter::stack::InterpreterStack;
 use crate::{corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
-use anyhow::{anyhow, bail};
 use std::sync::Arc;
 use crate::interpreter::rib_runtime_error::{no_result, throw_error, RibRuntimeError};
 
@@ -71,12 +70,6 @@ impl Interpreter {
         }
     }
 
-    // Override rib input helps with incremental interpretation
-    // where a rib script is now trying to access a specific input
-    // such that the compiler already knows the required global variable and its types,
-    // to later override the interpreter with this input. The previous inputs will be completely
-    // discard as they are either loaded in as variables, or if they are accessed again, the inputs
-    // will be or can be overriden back
     pub fn override_rib_input(&mut self, rib_input: RibInput) {
         self.input = rib_input;
     }
@@ -308,7 +301,7 @@ mod internal {
     use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
-    use crate::{bail_corrupted_state, corrupted_state, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibInterpreterResult, VariableId, WorkerNamePresence};
+    use crate::{bail_corrupted_state, corrupted_state, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
@@ -319,7 +312,7 @@ mod internal {
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
     use std::ops::Deref;
-    use crate::interpreter::rib_runtime_error::{empty_stack, exhausted_iterator, field_not_found, input_not_found};
+    use crate::interpreter::rib_runtime_error::{cast_error, empty_stack, exhausted_iterator, field_not_found, index_out_of_bounds, infinite_computation, input_not_found, instruction_jump_error, invalid_type, invalid_type_custom};
 
     pub(crate) struct NoopRibFunctionInvoke;
 
@@ -379,7 +372,7 @@ mod internal {
             RibInterpreterStackValue::Unit => None,
         };
 
-        let bool = bool_opt.ok_or(anyhow!("internal error: failed to execute is_empty"))?;
+        let bool = bool_opt.ok_or(corrupted_state!("failed to execute is_empty"))?;
         interpreter_stack.push_val(bool.into_value_and_type());
         Ok(())
     }
@@ -394,9 +387,8 @@ mod internal {
         // Jump if predicate is false
         if !predicate {
             instruction_stack.move_to(&instruction_id).ok_or_else(|| {
-                anyhow!(
-                    "internal error: Failed to move to the instruction at {}",
-                    instruction_id.index
+                instruction_jump_error(
+                    instruction_id
                 )
             })?;
         }
@@ -438,22 +430,31 @@ mod internal {
                         "from" => {
                             from =
                                 Some(to_num(&value).ok_or_else(|| {
-                                    anyhow!("cannot cast {:?} to a number", value)
+                                    cast_error(
+                                        value,
+                                        TypeHint::Number
+                                    )
                                 })?)
                         }
                         "to" => {
                             to =
                                 Some(to_num(&value).ok_or_else(|| {
-                                    anyhow!("cannot cast {:?} to a number", value)
+                                    cast_error(
+                                        value,
+                                        TypeHint::Number
+                                    )
                                 })?)
                         }
                         "inclusive" => {
                             inclusive = match value {
                                 Value::Bool(b) => b,
-                                _ => bail!("inclusive field should be a boolean"),
+                                _ => return Err(invalid_type(
+                                    TypeHint::Boolean,
+                                    value
+                                )),
                             }
                         }
-                        _ => bail!("Invalid field name {}", name_and_type.name),
+                        _ => bail_corrupted_state!("Invalid field name {}", name_and_type.name),
                     }
                 }
 
@@ -487,7 +488,9 @@ mod internal {
                     //   yield i
                     // }
                     (Some(_), None) => {
-                        bail!("an infinite range is being iterated. make sure range is finite to avoid infinite computation")
+                        return Err(infinite_computation(
+                            "an infinite range is being iterated. make sure range is finite to avoid infinite computation",
+                        ))
                     }
 
                     (None, None) => {
@@ -503,7 +506,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(anyhow!("internal error: failed to convert to an iterator")),
+            _ => Err(corrupted_state!("failed to convert to an iterator")),
         }
     }
 
@@ -530,7 +533,7 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let analysed_type = match analysed_type {
             AnalysedType::List(type_list) => type_list.clone().inner,
-            _ => bail!("Expecting a list type to create sink"),
+            _ => corrupted_state!("expecting a list type to create sink"),
         };
         interpreter_stack.create_sink(analysed_type.deref());
         Ok(())
@@ -541,13 +544,13 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let mut rib_result = interpreter_stack
             .pop()
-            .ok_or_else(|| anyhow!("internal error: failed to advance the iterator"))?;
+            .ok_or_else(|| corrupted_state!("failed to advance the iterator"))?;
 
         match &mut rib_result {
             RibInterpreterStackValue::Sink(_, _) => {
                 let mut existing_iterator = interpreter_stack
                     .pop()
-                    .ok_or(anyhow!("internal error: failed to get an iterator"))?;
+                    .ok_or(corrupted_state!("failed to get an iterator"))?;
 
                 match &mut existing_iterator {
                     RibInterpreterStackValue::Iterator(iter) => {
@@ -562,7 +565,7 @@ mod internal {
                     }
 
                     _ => Err(corrupted_state!(
-                        " ink cannot exist without a corresponding iterator"
+                        "sink cannot exist without a corresponding iterator"
                     )),
                 }
             }
@@ -698,7 +701,7 @@ mod internal {
             .iter()
             .position(|pair| pair.name == field_name)
             .ok_or_else(|| {
-                anyhow!(
+                corrupted_state!(
                     "Invalid field name {field_name}, should be one of {}",
                     record_type
                         .fields
@@ -736,7 +739,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(anyhow!("internal error: failed to create tuple due to mismatch in types. expected: list, actual: {}", analysed_type.get_type_hint())),
+            _ => Err(corrupted_state!("failed to create list due to mismatch in types. expected: list, actual: {}", analysed_type.get_type_hint())),
         }
     }
 
@@ -753,7 +756,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(anyhow!("internal error: failed to create tuple due to mismatch in types. expected: tuple, actual: {}", analysed_type.get_type_hint())),
+            _ => Err(corrupted_state!("failed to create tuple due to mismatch in types. expected: tuple, actual: {}", analysed_type.get_type_hint())),
         }
     }
 
@@ -868,11 +871,9 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let stack_list_value = interpreter_stack
             .pop()
-            .ok_or_else(|| anyhow!("internal error: failed to get value from the stack"))?;
+            .ok_or_else(|| empty_stack())?;
 
-        let index_value = interpreter_stack.pop().ok_or(anyhow!(
-            "internal error: failed to get the index expression from the stack"
-        ))?;
+        let index_value = interpreter_stack.pop().ok_or(empty_stack())?;
 
         match stack_list_value {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -882,9 +883,8 @@ mod internal {
                 Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
                         .get(index as usize)
-                        .ok_or_else(|| anyhow!(
-                            "index {} is out of bound in the list of length {}",
-                            index,
+                        .ok_or_else(|| index_out_of_bounds(
+                            index as usize,
                             items.len()
                         ))?
                         .clone();
@@ -892,7 +892,7 @@ mod internal {
                     interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
                     Ok(())
                 }
-                _ => Err(anyhow!("internal error: range selection not supported at byte code level. missing desugar phase")),
+                _ => Err(corrupted_state!("range selection not supported at byte code level. missing desugar phase")),
             },
             RibInterpreterStackValue::Val(ValueAndType {
                                               value: Value::Tuple(items),
@@ -901,9 +901,8 @@ mod internal {
                 Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
                         .get(index as usize)
-                        .ok_or_else(|| anyhow!(
-                            "index {} is out of bound in a tuple of length {}",
-                            index,
+                        .ok_or_else(|| index_out_of_bounds(
+                            index as usize,
                             items.len()
                         ))?
                         .clone();
@@ -911,8 +910,8 @@ mod internal {
                     let item_type = typ
                         .items
                         .get(index as usize)
-                        .ok_or_else(|| anyhow!(
-                            "internal error: type not found in the tuple at index {}",
+                        .ok_or_else(|| corrupted_state!(
+                            "type not found in the tuple at index {}",
                             index
                         ))?
                         .clone();
@@ -920,11 +919,14 @@ mod internal {
                     interpreter_stack.push_val(ValueAndType::new(value, item_type));
                     Ok(())
                 }
-                _ => Err(anyhow!("expected a number to select an index from tuple")),
+                _ => Err(invalid_type_custom(
+                    vec![TypeHint::Number],
+                    index_value,
+                )),
             },
-            result => Err(anyhow!(
-                "expected a sequence value or tuple to select an index. But obtained {}",
-                result
+            result => Err(invalid_type_custom(
+                vec![TypeHint::List(None), TypeHint::Tuple(None)],
+                result,
             )),
         }
     }
@@ -935,7 +937,7 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let stack_value = interpreter_stack
             .pop()
-            .ok_or_else(|| anyhow!("internal error: failed to get value from the stack"))?;
+            .ok_or_else(|| empty_stack())?;
 
         match stack_value {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -945,8 +947,7 @@ mod internal {
                 let value = items
                     .get(index)
                     .ok_or_else(|| {
-                        anyhow!(
-                            "index {} is out of bound. list size: {}",
+                        index_out_of_bounds(
                             index,
                             items.len()
                         )
