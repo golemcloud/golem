@@ -499,12 +499,7 @@ async fn test_api_def_with_invalid_query_lookup() {
 async fn test_api_def_with_request_path_0() {
     let empty_headers = HeaderMap::new();
 
-    let api_request = get_gateway_request(
-        "/foo/foo_value/1",
-        None,
-        &empty_headers,
-        Value::Null
-    );
+    let api_request = get_gateway_request("/foo/foo_value/1", None, &empty_headers, Value::Null);
 
     let response_mapping = r#"
          let bar-value: u32 = request.path.bar;
@@ -524,7 +519,7 @@ async fn test_api_def_with_request_path_0() {
         &session_store,
         &TestIdentityProvider::default(),
     )
-        .await;
+    .await;
 
     let test_response = internal::get_details_from_response(response).await;
 
@@ -733,7 +728,7 @@ async fn test_api_def_with_request_body_0() {
         &session_store,
         &TestIdentityProvider::default(),
     )
-        .await;
+    .await;
 
     let test_response = internal::get_details_from_response(response).await;
 
