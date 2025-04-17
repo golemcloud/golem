@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{ArmPattern, Expr, UnResolvedTypesError};
+use crate::{ArmPattern, Expr, InferredType, InstanceCreationType, UnResolvedTypesError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
     let mut queue = vec![];
@@ -298,8 +298,45 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 queue.extend(args.iter_mut());
 
                 match call_type {
-                    // We don't care about anything inside instance creation
-                    CallType::InstanceCreation(_) => {}
+                    CallType::InstanceCreation(instance_creation) => {
+                        match instance_creation {
+                            InstanceCreationType::Worker { worker_name } => {
+                                if let Some(worker_name) = worker_name {
+                                    queue.push(worker_name);
+                                }
+                            }
+                            InstanceCreationType::Resource { worker_name, .. } => {
+                                if let Some(worker_name) = worker_name {
+                                    queue.push(worker_name);
+                                }
+                            }
+                        }
+
+                        match inferred_type {
+                            InferredType::Instance { instance_type, .. } => {
+                                let worker_name = instance_type.worker_mut();
+
+                                if let Some(worker_name) = worker_name {
+                                    queue.push(worker_name);
+                                }
+                            }
+
+                            inferred_type => {
+                                let unified_inferred_type = inferred_type.unify();
+
+                                match unified_inferred_type {
+                                    Ok(unified_type) => *inferred_type = unified_type,
+                                    Err(e) => {
+                                        return Err(UnResolvedTypesError::from(&expr_copied, None)
+                                            .with_additional_error_detail(format!(
+                                                "cannot determine the type of instance creation {}",
+                                                e
+                                            )));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Make sure worker expression in function
                     CallType::Function {
                         worker,
@@ -345,6 +382,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 ..
             } => {
                 queue.push(expr);
+
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {

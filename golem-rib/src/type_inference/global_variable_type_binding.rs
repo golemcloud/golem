@@ -1342,11 +1342,30 @@ mod internal {
                         }
                     };
 
+                    let new_inferred_type = match inferred_type {
+                        InferredType::Instance { instance_type } => {
+                            instance_type.worker().map(|worker_expr| {
+                                let inferred_worker_expr = temp_stack
+                                    .pop_front()
+                                    .map(|x| x.0)
+                                    .unwrap_or_else(|| worker_expr.clone());
+
+                                let mut new_instance_type = instance_type.clone();
+                                new_instance_type.set_worker_name(inferred_worker_expr);
+
+                                InferredType::Instance {
+                                    instance_type: new_instance_type,
+                                }
+                            })
+                        }
+                        _ => None,
+                    };
+
                     let new_call = Expr::Call {
                         call_type: CallType::InstanceCreation(new_instance_creation.clone()),
                         generic_type_parameter: generic_type_parameter.clone(),
                         args: new_arg_exprs,
-                        inferred_type: inferred_type.clone(),
+                        inferred_type: new_inferred_type.unwrap_or_else(|| inferred_type.clone()),
                         source_span: source_span.clone(),
                         type_annotation: type_annotation.clone(),
                     };

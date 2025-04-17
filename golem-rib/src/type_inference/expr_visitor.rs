@@ -720,6 +720,12 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             }
 
             if let CallType::InstanceCreation(instance_creation) = call_type {
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    if let Some(worker_expr) = instance_type.worker() {
+                        queue.push_back(worker_expr);
+                    }
+                }
+
                 match instance_creation {
                     InstanceCreationType::Worker { worker_name, .. } => {
                         if let Some(worker_name) = worker_name {

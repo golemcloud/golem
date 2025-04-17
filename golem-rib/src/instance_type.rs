@@ -18,7 +18,7 @@ use golem_api_grpc::proto::golem::rib::{
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display};
 use std::ops::Deref;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
@@ -28,7 +28,7 @@ use std::ops::Deref;
 // Here we will add the resource type as well as the resource creation itself can be be part of this InstanceType
 // allowing lazy loading of resource and invoke the functions in them!
 // The distinction is only to disallow compiler to see only the functions that are part of a location (package/interface/package-interface/resoruce or all)
-#[derive(Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
     // Holds functions across every package and interface in the component
     Global {
@@ -70,11 +70,11 @@ pub enum InstanceType {
     },
 }
 
-impl Debug for InstanceType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "InstanceType")
-    }
-}
+// impl Debug for InstanceType {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+//
+//     }
+// }
 
 impl InstanceType {
     pub fn set_worker_name(&mut self, worker_name: Expr) {

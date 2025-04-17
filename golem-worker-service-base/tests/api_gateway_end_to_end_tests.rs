@@ -495,9 +495,60 @@ async fn test_api_def_with_invalid_query_lookup() {
     assert_eq!(result, expected);
 }
 
+#[test]
+async fn test_api_def_with_request_path_0() {
+    let empty_headers = HeaderMap::new();
+
+    let api_request = get_gateway_request(
+        "/foo/foo_value/1",
+        None,
+        &empty_headers,
+        Value::Null
+    );
+
+    let response_mapping = r#"
+         let bar-value: u32 = request.path.bar;
+         let worker = instance(request.path.foo);
+         let response = worker.add-item(bar-value, "bar");
+         response
+        "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{foo}/{bar}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+        .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "foo_value".to_string(),
+        "golem:it/api.{add-item}".to_string(),
+        Value::Array(vec![
+            Value::Number(1.into()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
 // A test where the input path is a number, and the rib script refers to request.path.* as a u64
 #[test]
-async fn test_api_def_with_path_only_1() {
+async fn test_api_def_with_request_path_only_1() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
@@ -538,7 +589,7 @@ async fn test_api_def_with_path_only_1() {
 
 // A test where the input path is a number, but the rib script refers to request.path.* as a string (which is by default)
 #[test]
-async fn test_api_def_with_path_only_2() {
+async fn test_api_def_with_request_path_only_2() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     // Anything under request.path is a string
@@ -643,6 +694,65 @@ async fn test_api_def_with_invalid_input_1() {
     .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+async fn test_api_def_with_request_body_0() {
+    let empty_headers = HeaderMap::new();
+
+    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+
+    request_body.insert("foo_key".to_string(), Value::Number(Number::from(1)));
+
+    request_body.insert(
+        "bar_key".to_string(),
+        Value::String("bar_value".to_string()),
+    );
+
+    let api_request = get_gateway_request(
+        "/foo/john",
+        None,
+        &empty_headers,
+        Value::Object(request_body),
+    );
+
+    let response_mapping = r#"
+         let worker = instance(request.body.bar_key);
+         let response = worker.add-item(request.body.foo_key, "bar");
+         response
+        "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+        .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "bar_value".to_string(),
+        "golem:it/api.{add-item}".to_string(),
+        Value::Array(vec![
+            Value::Number(1.into()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
 }
 
 #[test]
