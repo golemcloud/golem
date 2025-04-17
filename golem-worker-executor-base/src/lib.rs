@@ -100,7 +100,7 @@ const VERSION: &str = golem_version!();
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
-    pub epoch_thread: std::thread::JoinHandle<()>,
+    pub epoch_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -270,7 +270,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Ok(RunDetails {
             http_port,
             grpc_port,
-            epoch_thread,
+            epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
         })
     }
 }
