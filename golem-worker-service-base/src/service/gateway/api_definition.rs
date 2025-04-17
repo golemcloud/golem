@@ -125,8 +125,8 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
                 RibCompileError::RibTypeError(e) => {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
-                RibCompileError::StaticAnalysis(e) => ApiDefinitionError::RibInternal(e),
-                RibCompileError::RibParseError(e) => ApiDefinitionError::RibParseError(e),
+                RibCompileError::RibStaticAnalysisError(e) => ApiDefinitionError::RibInternal(e),
+                RibCompileError::InvalidSyntax(e) => ApiDefinitionError::RibParseError(e),
                 RibCompileError::UnsupportedGlobalInput {
                     valid_global_inputs: expected,
                     invalid_global_inputs: found,

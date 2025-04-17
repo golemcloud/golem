@@ -91,25 +91,40 @@ pub fn compile_with_restricted_global_variables(
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RibCompileError {
-    // ByteCode generation error hardly occur ideally
-    // and is considered a  programming error that shows some parts of type checking
-    // or inference need to be fixed.
-    ByteCodeGeneration(RibByteCodeGenerationError),
+    // Bytecode generation errors should ideally never occur.
+    // They are considered programming errors that indicate some part of type checking
+    // or inference needs to be fixed.
+    ByteCodeGenerationFail(RibByteCodeGenerationError),
 
     // RibTypeError is a type error that occurs during type inference.
-    // This is the typical compilation error such as expected u32, found str
+    // This is a typical compilation error, such as: expected u32, found str.
     RibTypeError(RibTypeError),
-    RibParseError(String),
+
+    // This captures only the syntax parse errors in a Rib script.
+    InvalidSyntax(String),
+
+    // This occurs when the Rib script includes global inputs that cannot be
+    // fulfilled. For example, if Rib is used from a REPL, the only valid global input will be `env`.
+    // If it is used from the Golem API gateway, it is  `request`.
+    // If the user specifies a global input such as `foo`
+    // (e.g., the compiler will treat `foo` as a global input in a Rib script like `my-worker-function(foo)`),
+    // it will fail compilation with this error.
+    // Note: the type inference phase will still be happy with this Rib script;
+    // we perform this validation as an extra step at the end to allow clients of `golem-rib`
+    // to decide what global inputs are valid.
     UnsupportedGlobalInput {
         invalid_global_inputs: Vec<String>,
         valid_global_inputs: Vec<String>,
     },
-    StaticAnalysis(String),
+
+    // A typical use of static analysis in Rib is to identify all the valid worker functions.
+    // If this analysis phase fails, it typically indicates a bug in the Rib compiler.
+    RibStaticAnalysisError(String),
 }
 
 impl From<RibByteCodeGenerationError> for RibCompileError {
     fn from(err: RibByteCodeGenerationError) -> Self {
-        RibCompileError::StaticAnalysis(err.to_string())
+        RibCompileError::RibStaticAnalysisError(err.to_string())
     }
 }
 
@@ -122,11 +137,11 @@ impl From<RibTypeError> for RibCompileError {
 impl Display for RibCompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RibCompileError::StaticAnalysis(msg) => {
+            RibCompileError::RibStaticAnalysisError(msg) => {
                 write!(f, "rib static analysis error: {}", msg)
             }
             RibCompileError::RibTypeError(err) => write!(f, "{}", err),
-            RibCompileError::RibParseError(msg) => write!(f, "invalid rib syntax: {}", msg),
+            RibCompileError::InvalidSyntax(msg) => write!(f, "invalid rib syntax: {}", msg),
             RibCompileError::UnsupportedGlobalInput {
                 invalid_global_inputs,
                 valid_global_inputs,
@@ -138,7 +153,7 @@ impl Display for RibCompileError {
                     valid_global_inputs.join(", ")
                 )
             }
-            RibCompileError::ByteCodeGeneration(e) => {
+            RibCompileError::ByteCodeGenerationFail(e) => {
                 write!(f, "rib byte code generation error: {}", e)
             }
         }

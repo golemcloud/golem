@@ -42,7 +42,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
                     "request",
                     Path::from_elems(vec!["path"]),
                     InferredType::Str,
-               ),
+                ),
                 GlobalVariableTypeSpec::new(
                     "request",
                     Path::from_elems(vec!["query"]),

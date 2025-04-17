@@ -26,7 +26,7 @@ impl RibOutputTypeInfo {
     pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibOutputTypeInfo, RibCompileError> {
         let inferred_type = inferred_expr.get_expr().inferred_type();
         let analysed_type = AnalysedType::try_from(&inferred_type).map_err(|e| {
-            RibCompileError::StaticAnalysis(format!(
+            RibCompileError::RibStaticAnalysisError(format!(
                 "failed to convert inferred type to analysed type: {}",
                 e
             ))

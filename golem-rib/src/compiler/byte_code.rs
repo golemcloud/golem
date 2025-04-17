@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Display, Formatter};
 use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
 use crate::type_inference::type_hint::TypeHint;
 use crate::{Expr, InferredExpr, InstructionId};
 use bincode::{Decode, Encode};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Default, PartialEq, Encode, Decode)]
 pub struct RibByteCode {
@@ -53,8 +53,8 @@ impl Display for RibByteCodeGenerationError {
                 write!(
                     f,
                     "Expected type: {}, but got: {}",
-                    expected.get_type_hint(),
-                    actual.get_type_hint()
+                    expected.get_type_kind(),
+                    actual.get_type_kind()
                 )
             }
         }

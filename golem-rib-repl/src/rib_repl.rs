@@ -176,14 +176,14 @@ impl RibRepl {
                         Err(err) => {
                             self.remove_rib_text_in_session();
                             self.printer.print_runtime_error(&err);
-                            Err(RibCompileError::StaticAnalysis(err))
+                            Err(RibCompileError::RibStaticAnalysisError(err))
                         }
                     }
                 }
                 Err(err) => {
                     self.remove_rib_text_in_session();
                     self.printer.print_rib_error(&err);
-                    Err(RibCompileError::StaticAnalysis(err.to_string()))
+                    Err(RibCompileError::RibStaticAnalysisError(err.to_string()))
                 }
             }
         } else {

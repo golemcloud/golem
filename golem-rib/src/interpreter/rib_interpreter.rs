@@ -889,9 +889,9 @@ mod internal {
 
         match stack_list_value {
             RibInterpreterStackValue::Val(ValueAndType {
-                value: Value::List(items),
-                typ: AnalysedType::List(typ),
-            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                                              value: Value::List(items),
+                                              typ: AnalysedType::List(typ),
+                                          }) => match index_value.get_literal().and_then(|v| v.get_number()) {
                 Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
                         .get(index as usize)
@@ -908,9 +908,9 @@ mod internal {
                 _ => Err(anyhow!("internal error: range selection not supported at byte code level. missing desugar phase")),
             },
             RibInterpreterStackValue::Val(ValueAndType {
-                value: Value::Tuple(items),
-                typ: AnalysedType::Tuple(typ),
-            }) => match index_value.get_literal().and_then(|v| v.get_number()) {
+                                              value: Value::Tuple(items),
+                                              typ: AnalysedType::Tuple(typ),
+                                          }) => match index_value.get_literal().and_then(|v| v.get_number()) {
                 Some(CoercedNumericValue::PosInt(index)) => {
                     let value = items
                         .get(index as usize)
@@ -1816,16 +1816,16 @@ mod tests {
             "#;
 
         let type_spec = vec![
-            GlobalVariableTypeSpec {
-                variable_id: VariableId::global("request".to_string()),
-                path: Path::from_elems(vec!["path"]),
-                inferred_type: InferredType::Str,
-            },
-            GlobalVariableTypeSpec {
-                variable_id: VariableId::global("request".to_string()),
-                path: Path::from_elems(vec!["headers"]),
-                inferred_type: InferredType::Str,
-            },
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["path"]),
+                InferredType::Str,
+            ),
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["headers"]),
+                InferredType::Str,
+            ),
         ];
 
         let mut rib_input = HashMap::new();
@@ -1883,16 +1883,16 @@ mod tests {
         // however the rib script (above) explicitly specify the type of request.path.user-id
         // and request.header.age to be u32. In this case, the Rib compiler infer them as u32 and interpreter works with u32.
         let type_spec = vec![
-            GlobalVariableTypeSpec {
-                variable_id: VariableId::global("request".to_string()),
-                path: Path::from_elems(vec!["path"]),
-                inferred_type: InferredType::Str,
-            },
-            GlobalVariableTypeSpec {
-                variable_id: VariableId::global("request".to_string()),
-                path: Path::from_elems(vec!["headers"]),
-                inferred_type: InferredType::Str,
-            },
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["path"]),
+                InferredType::Str,
+            ),
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["headers"]),
+                InferredType::Str,
+            ),
         ];
 
         let mut rib_input = HashMap::new();

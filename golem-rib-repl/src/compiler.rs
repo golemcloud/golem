@@ -23,7 +23,7 @@ pub fn compile_rib_script(
     repl_state: &mut ReplState,
 ) -> Result<CompilerOutput, RibCompileError> {
     let expr =
-        Expr::from_text(rib_script).map_err(|e| RibCompileError::RibParseError(e.to_string()))?;
+        Expr::from_text(rib_script).map_err(|e| RibCompileError::InvalidSyntax(e.to_string()))?;
 
     let function_registry =
         FunctionTypeRegistry::from_export_metadata(&repl_state.dependency().metadata);
@@ -39,7 +39,7 @@ pub fn compile_rib_script(
     let enums = function_registry.get_enums();
 
     let new_byte_code = RibByteCode::from_expr(&inferred_expr)
-        .map_err(|e| RibCompileError::StaticAnalysis(e.to_string()))?;
+        .map_err(|e| RibCompileError::RibStaticAnalysisError(e.to_string()))?;
 
     let byte_code = new_byte_code.diff(repl_state.byte_code());
 

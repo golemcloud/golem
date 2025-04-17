@@ -50,7 +50,7 @@ impl WorkerFunctionsInRib {
                 };
                 function_calls.push(function_call_in_rib)
             } else {
-                return Err(RibCompileError::StaticAnalysis(
+                return Err(RibCompileError::RibStaticAnalysisError(
                     "unable to inspect the worker function calls in rib. functional calls should have parameter types and return types".to_string(),
                 ));
             }

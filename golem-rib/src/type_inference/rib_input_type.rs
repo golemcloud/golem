@@ -51,7 +51,7 @@ impl RibInputTypeInfo {
             {
                 if variable_id.is_global() {
                     let analysed_type = AnalysedType::try_from(inferred_type).map_err(|e| {
-                        RibCompileError::StaticAnalysis(format!(
+                        RibCompileError::RibStaticAnalysisError(format!(
                             "failed to convert inferred type to analysed type: {}",
                             e
                         ))

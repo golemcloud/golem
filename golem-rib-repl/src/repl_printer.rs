@@ -33,7 +33,7 @@ impl ReplPrinter for DefaultReplResultPrinter {
 
     fn print_rib_error(&self, error: &RibCompileError) {
         match error {
-            RibCompileError::StaticAnalysis(msg) => {
+            RibCompileError::RibStaticAnalysisError(msg) => {
                 println!("{} {}", "[internal rib error]".red(), msg.red());
             }
             RibCompileError::UnsupportedGlobalInput {
@@ -73,7 +73,7 @@ impl ReplPrinter for DefaultReplResultPrinter {
                     }
                 }
             }
-            RibCompileError::RibParseError(script) => {
+            RibCompileError::InvalidSyntax(script) => {
                 println!("{} {}", "[invalid script]".red(), script.white());
             }
         }
