@@ -4216,6 +4216,17 @@ components:
           type: boolean
       required:
       - canceled
+    ChangePersistenceLevelParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        persistence_level:
+          $ref: '#/components/schemas/PersistenceLevel'
+      required:
+      - timestamp
+      - persistence_level
     ChangeRetryPolicyParameters:
       type: object
       properties:
@@ -5420,6 +5431,12 @@ components:
       required:
       - timestamp
       - invocation
+    PersistenceLevel:
+      type: string
+      enum:
+      - PersistNothing
+      - PersistRemoteSideEffects
+      - Smart
     PluginInstallationDescription:
       type: object
       properties:
@@ -5593,6 +5610,7 @@ components:
           StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
           FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
           SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5627,6 +5645,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5662,6 +5681,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/CancelInvocationParameters'
+    PublicOplogEntry_ChangePersistenceLevelParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ChangePersistenceLevel
+            type: string
+            enum:
+            - ChangePersistenceLevel
+        required:
+        - type
+      - $ref: '#/components/schemas/ChangePersistenceLevelParameters'
     PublicOplogEntry_ChangeRetryPolicyParameters:
       allOf:
       - type: object
