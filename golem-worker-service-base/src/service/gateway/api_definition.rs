@@ -36,7 +36,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
-use rib::RibCompileError;
+use rib::RibCompilationError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -128,14 +128,14 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
     fn from(error: RouteCompilationErrors) -> Self {
         match error {
             RouteCompilationErrors::RibError(e) => match e {
-                RibCompileError::RibTypeError(e) => {
+                RibCompilationError::RibTypeError(e) => {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
-                RibCompileError::RibStaticAnalysisError(e) => {
+                RibCompilationError::RibStaticAnalysisError(e) => {
                     ApiDefinitionError::RibStaticAnalysisError(e)
                 }
-                RibCompileError::InvalidSyntax(e) => ApiDefinitionError::RibParseError(e),
-                RibCompileError::UnsupportedGlobalInput {
+                RibCompilationError::InvalidSyntax(e) => ApiDefinitionError::RibParseError(e),
+                RibCompilationError::UnsupportedGlobalInput {
                     valid_global_inputs: expected,
                     invalid_global_inputs: found,
                 } => ApiDefinitionError::UnsupportedRibInput(format!(
@@ -143,7 +143,7 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
                     expected.join(", "),
                     found.join(", ")
                 )),
-                RibCompileError::ByteCodeGenerationFail(error) => {
+                RibCompilationError::ByteCodeGenerationFail(error) => {
                     ApiDefinitionError::RibByteCodeGenerationError(error.to_string())
                 }
             },

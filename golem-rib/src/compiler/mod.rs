@@ -35,7 +35,7 @@ mod worker_functions_in_rib;
 pub fn compile(
     expr: Expr,
     export_metadata: &Vec<AnalysedExport>,
-) -> Result<CompilerOutput, RibCompileError> {
+) -> Result<CompilerOutput, RibCompilationError> {
     compile_with_restricted_global_variables(expr, export_metadata, None, &vec![])
 }
 
@@ -51,7 +51,7 @@ pub fn compile_with_restricted_global_variables(
     export_metadata: &Vec<AnalysedExport>,
     allowed_global_variables: Option<Vec<String>>,
     global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
-) -> Result<CompilerOutput, RibCompileError> {
+) -> Result<CompilerOutput, RibCompilationError> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
 
@@ -72,7 +72,7 @@ pub fn compile_with_restricted_global_variables(
         }
 
         if !unsupoorted_global_inputs.is_empty() {
-            return Err(RibCompileError::UnsupportedGlobalInput {
+            return Err(RibCompilationError::UnsupportedGlobalInput {
                 invalid_global_inputs: unsupoorted_global_inputs,
                 valid_global_inputs: supported_global_inputs.clone(),
             });
@@ -90,7 +90,7 @@ pub fn compile_with_restricted_global_variables(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RibCompileError {
+pub enum RibCompilationError {
     // Bytecode generation errors should ideally never occur.
     // They are considered programming errors that indicate some part of type checking
     // or inference needs to be fixed.
@@ -122,27 +122,27 @@ pub enum RibCompileError {
     RibStaticAnalysisError(String),
 }
 
-impl From<RibByteCodeGenerationError> for RibCompileError {
+impl From<RibByteCodeGenerationError> for RibCompilationError {
     fn from(err: RibByteCodeGenerationError) -> Self {
-        RibCompileError::RibStaticAnalysisError(err.to_string())
+        RibCompilationError::RibStaticAnalysisError(err.to_string())
     }
 }
 
-impl From<RibTypeError> for RibCompileError {
+impl From<RibTypeError> for RibCompilationError {
     fn from(err: RibTypeError) -> Self {
-        RibCompileError::RibTypeError(err)
+        RibCompilationError::RibTypeError(err)
     }
 }
 
-impl Display for RibCompileError {
+impl Display for RibCompilationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RibCompileError::RibStaticAnalysisError(msg) => {
+            RibCompilationError::RibStaticAnalysisError(msg) => {
                 write!(f, "rib static analysis error: {}", msg)
             }
-            RibCompileError::RibTypeError(err) => write!(f, "{}", err),
-            RibCompileError::InvalidSyntax(msg) => write!(f, "invalid rib syntax: {}", msg),
-            RibCompileError::UnsupportedGlobalInput {
+            RibCompilationError::RibTypeError(err) => write!(f, "{}", err),
+            RibCompilationError::InvalidSyntax(msg) => write!(f, "invalid rib syntax: {}", msg),
+            RibCompilationError::UnsupportedGlobalInput {
                 invalid_global_inputs,
                 valid_global_inputs,
             } => {
@@ -153,11 +153,11 @@ impl Display for RibCompileError {
                     valid_global_inputs.join(", ")
                 )
             }
-            RibCompileError::ByteCodeGenerationFail(e) => {
+            RibCompilationError::ByteCodeGenerationFail(e) => {
                 write!(f, "rib byte code generation error: {}", e)
             }
         }
     }
 }
 
-impl Error for RibCompileError {}
+impl Error for RibCompilationError {}

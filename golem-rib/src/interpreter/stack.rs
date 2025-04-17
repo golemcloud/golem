@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::GetLiteralValue;
+use crate::{corrupted_state, GetLiteralValue, RibInterpreterResult};
 use anyhow::anyhow;
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
 };
 use golem_wasm_rpc::{Value, ValueAndType};
+use crate::interpreter::rib_runtime_error::{empty_stack};
 
 #[derive(Debug)]
 pub struct InterpreterStack {
@@ -51,10 +52,8 @@ impl InterpreterStack {
         self.stack.pop()
     }
 
-    pub fn try_pop(&mut self) -> anyhow::Result<RibInterpreterStackValue> {
-        self.pop().ok_or(anyhow!(
-            "internal error: failed to pop value from the interpreter stack"
-        ))
+    pub fn try_pop(&mut self) -> RibInterpreterResult<RibInterpreterStackValue> {
+        self.pop().ok_or(empty_stack())
     }
 
     pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
@@ -109,10 +108,10 @@ impl InterpreterStack {
         self.stack.pop().and_then(|v| v.get_val())
     }
 
-    pub fn try_pop_val(&mut self) -> anyhow::Result<ValueAndType> {
+    pub fn try_pop_val(&mut self) -> RibInterpreterResult<ValueAndType> {
         self.try_pop().and_then(|x| {
-            x.get_val().ok_or(anyhow!(
-                "internal error: failed to pop ValueAndType from the interpreter stack"
+            x.get_val().ok_or(corrupted_state!(
+                "failed to pop ValueAndType from the interpreter stack"
             ))
         })
     }
@@ -131,7 +130,7 @@ impl InterpreterStack {
         }
     }
 
-    pub fn try_pop_bool(&mut self) -> anyhow::Result<bool> {
+    pub fn try_pop_bool(&mut self) -> RibInterpreterResult<bool> {
         self.try_pop_val().and_then(|val| {
             val.get_literal().and_then(|x| x.get_bool()).ok_or(anyhow!(
                 "internal error: failed to pop boolean from the interpreter stack"
@@ -154,16 +153,14 @@ impl InterpreterStack {
         self.stack.push(RibInterpreterStackValue::val(element));
     }
 
-    pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> anyhow::Result<()> {
+    pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> RibInterpreterResult<()> {
         let sink = self.pop();
         // sink always followed by an iterator
-        let possible_iterator = self.pop().ok_or(anyhow!(
-            "internal error: failed to get the iterator before pushing to the sink"
-        ))?;
+        let possible_iterator = self.pop().ok_or(empty_stack())?;
 
         if !possible_iterator.is_iterator() {
-            return Err(anyhow!(
-                "internal error: expected an the iterator before pushing to the sink"
+            return Err(corrupted_state(
+                "failed to obtain an iterator from the stack",
             ));
         }
 
@@ -175,8 +172,8 @@ impl InterpreterStack {
                 Ok(())
             }
 
-            non_sink_value => Err(anyhow!(
-                "internal error: failed to push values to sink {:?}",
+            non_sink_value => Err(corrupted_state!(
+                "failed to push values to sink {:?}",
                 non_sink_value
             )),
         }

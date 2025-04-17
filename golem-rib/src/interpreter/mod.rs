@@ -30,6 +30,7 @@ mod rib_function_invoke;
 mod rib_interpreter;
 mod stack;
 mod tests;
+mod rib_runtime_error;
 
 use crate::RibByteCode;
 use std::sync::Arc;

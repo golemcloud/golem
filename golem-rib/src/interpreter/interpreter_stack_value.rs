@@ -37,9 +37,7 @@ impl TryFrom<RibInterpreterStackValue> for String {
     type Error = String;
     fn try_from(value: RibInterpreterStackValue) -> Result<Self, Self::Error> {
         match value {
-            RibInterpreterStackValue::Val(val) => golem_wasm_rpc::print_type_annotated_value(
-                &TypeAnnotatedValue::try_from(val).map_err(|e| e.join(", "))?,
-            ),
+            RibInterpreterStackValue::Val(val) => Ok(val.to_string()),
             RibInterpreterStackValue::Unit => Ok("unit".to_string()),
             _ => Ok("unknown".to_string()),
         }

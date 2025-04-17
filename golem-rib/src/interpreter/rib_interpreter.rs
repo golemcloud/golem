@@ -16,9 +16,10 @@ use super::interpreter_stack_value::RibInterpreterStackValue;
 use crate::interpreter::env::InterpreterEnv;
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
 use crate::interpreter::stack::InterpreterStack;
-use crate::{RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
+use crate::{corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
 use anyhow::{anyhow, bail};
 use std::sync::Arc;
+use crate::interpreter::rib_runtime_error::{no_result, throw_error, RibRuntimeError};
 
 pub struct Interpreter {
     pub input: RibInput,
@@ -37,6 +38,8 @@ impl Default for Interpreter {
         }
     }
 }
+
+pub type RibInterpreterResult<T> = Result<T, RibRuntimeError>;
 
 impl Interpreter {
     pub fn new(
@@ -78,7 +81,7 @@ impl Interpreter {
         self.input = rib_input;
     }
 
-    pub async fn run(&mut self, instructions0: RibByteCode) -> anyhow::Result<RibResult> {
+    pub async fn run(&mut self, instructions0: RibByteCode) -> Result<RibResult, RibRuntimeError> {
         let mut byte_code_cursor = RibByteCodeCursor::from_rib_byte_code(instructions0);
         let stack = match &mut self.custom_stack {
             Some(custom) => custom,
@@ -215,7 +218,7 @@ impl Interpreter {
                 }
 
                 RibIR::Throw(message) => {
-                    bail!("error: {}", message);
+                    return Err(throw_error(message.as_str()));
                 }
 
                 RibIR::GetTag => {
@@ -228,7 +231,7 @@ impl Interpreter {
 
                 RibIR::Jump(instruction_id) => {
                     byte_code_cursor.move_to(&instruction_id).ok_or_else(|| {
-                        anyhow!(
+                        corrupted_state!(
                             "internal error. Failed to move to label {}",
                             instruction_id.index
                         )
@@ -294,7 +297,7 @@ impl Interpreter {
             .unwrap_or_else(|| RibInterpreterStackValue::Unit);
 
         let rib_result = RibResult::from_rib_interpreter_stack_value(&stack_value)
-            .ok_or_else(|| anyhow!("failed to obtain a valid result from rib execution"))?;
+            .ok_or_else(|| no_result())?;
 
         Ok(rib_result)
     }
@@ -305,11 +308,7 @@ mod internal {
     use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
-    use crate::{
-        CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
-        FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
-        ParsedFunctionSite, RibFunctionInvoke, VariableId, WorkerNamePresence,
-    };
+    use crate::{bail_corrupted_state, corrupted_state, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibInterpreterResult, VariableId, WorkerNamePresence};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
@@ -320,6 +319,7 @@ mod internal {
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
     use std::ops::Deref;
+    use crate::interpreter::rib_runtime_error::{empty_stack, exhausted_iterator, field_not_found, input_not_found};
 
     pub(crate) struct NoopRibFunctionInvoke;
 
@@ -330,7 +330,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
-        ) -> anyhow::Result<ValueAndType> {
+        ) -> RibInterpreterResult<ValueAndType> {
             Ok(ValueAndType {
                 value: Value::Tuple(vec![]),
                 typ: tuple(vec![]),
@@ -340,9 +340,9 @@ mod internal {
 
     pub(crate) fn run_is_empty_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let rib_result = interpreter_stack.pop().ok_or_else(|| {
-            anyhow!("internal Error: failed to get a value from the stack to do check is_empty")
+            empty_stack()
         })?;
 
         let bool_opt = match rib_result {
@@ -358,7 +358,7 @@ mod internal {
             }
             RibInterpreterStackValue::Sink(values, analysed_type) => {
                 let possible_iterator = interpreter_stack.pop().ok_or_else(|| {
-                    anyhow!("internal error: Expecting an iterator to check is empty")
+                    corrupted_state!("internal error: Expecting an iterator to check is empty")
                 })?;
 
                 match possible_iterator {
@@ -388,7 +388,7 @@ mod internal {
         instruction_id: InstructionId,
         instruction_stack: &mut RibByteCodeCursor,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let predicate = interpreter_stack.try_pop_bool()?;
 
         // Jump if predicate is false
@@ -404,14 +404,14 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn run_to_iterator(interpreter_stack: &mut InterpreterStack) -> anyhow::Result<()> {
+    pub(crate) fn run_to_iterator(interpreter_stack: &mut InterpreterStack) -> RibInterpreterResult<()> {
         let popped_up = interpreter_stack
             .pop()
-            .ok_or_else(|| anyhow!("internal error: failed to get a value from the stack"))?;
+            .ok_or_else(|| empty_stack())?;
 
         let value_and_type = popped_up
             .get_val()
-            .ok_or_else(|| anyhow!("internal error: failed to get a value from the stack"))?;
+            .ok_or_else(|| empty_stack())?;
 
         match (value_and_type.value, value_and_type.typ) {
             (Value::List(items), AnalysedType::List(item_type)) => {
@@ -527,7 +527,7 @@ mod internal {
     pub(crate) fn run_create_sink_instruction(
         interpreter_stack: &mut InterpreterStack,
         analysed_type: &AnalysedType,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let analysed_type = match analysed_type {
             AnalysedType::List(type_list) => type_list.clone().inner,
             _ => bail!("Expecting a list type to create sink"),
@@ -538,7 +538,7 @@ mod internal {
 
     pub(crate) fn run_advance_iterator_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let mut rib_result = interpreter_stack
             .pop()
             .ok_or_else(|| anyhow!("internal error: failed to advance the iterator"))?;
@@ -557,12 +557,12 @@ mod internal {
                             interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                             Ok(())
                         } else {
-                            Err(anyhow!("no more items found in the iterator"))
+                            Err(exhausted_iterator())
                         }
                     }
 
-                    _ => Err(anyhow!(
-                        "internal error: a sink cannot exist without a corresponding iterator"
+                    _ => Err(corrupted_state!(
+                        " ink cannot exist without a corresponding iterator"
                     )),
                 }
             }
@@ -573,16 +573,16 @@ mod internal {
                     interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                     Ok(())
                 } else {
-                    Err(anyhow!("no more items found in the iterator"))
+                    Err(exhausted_iterator())
                 }
             }
-            _ => Err(anyhow!("internal Error: expected an iterator")),
+            _ => Err(exhausted_iterator()),
         }
     }
 
     pub(crate) fn run_push_to_sink_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let last_value = interpreter_stack.pop_val();
         match last_value {
             Some(val) => {
@@ -590,15 +590,15 @@ mod internal {
 
                 Ok(())
             }
-            _ => Err(anyhow!("Failed to push values to sink")),
+            _ => Err(corrupted_state!("Failed to push values to sink")),
         }
     }
 
     pub(crate) fn run_sink_to_list_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
-        let (result, analysed_type) = interpreter_stack.pop_sink().ok_or(anyhow!(
-            "internal error: failed to retrieve items from sink"
+    ) -> RibInterpreterResult<()> {
+        let (result, analysed_type) = interpreter_stack.pop_sink().ok_or(corrupted_state!(
+            "failed to retrieve items from sink"
         ))?;
 
         interpreter_stack.push_list(
@@ -611,10 +611,8 @@ mod internal {
 
     pub(crate) fn run_length_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
-        let rib_result = interpreter_stack.pop().ok_or(anyhow!(
-            "internal error: failed to get a value from the stack"
-        ))?;
+    ) -> RibInterpreterResult<()> {
+        let rib_result = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
 
         let length = match rib_result {
             RibInterpreterStackValue::Val(ValueAndType {
@@ -622,7 +620,7 @@ mod internal {
                 ..
             }) => items.len(),
             RibInterpreterStackValue::Iterator(iter) => iter.count(),
-            _ => bail!("internal error: failed to get the length of the value"),
+            _ => bail_corrupted_state!("failed to get the length of the value"),
         };
 
         interpreter_stack.push_val(ValueAndType::new(Value::U64(length as u64), u64()));
@@ -633,9 +631,9 @@ mod internal {
         variable_id: VariableId,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let value = interpreter_stack.pop().ok_or_else(|| {
-            anyhow!("internal error: expected a value on the stack before assigning a variable")
+            empty_stack()
         })?;
         let env_key = EnvironmentKey::from(variable_id);
 
@@ -647,12 +645,11 @@ mod internal {
         variable_id: VariableId,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let env_key = EnvironmentKey::from(variable_id.clone());
         let value = interpreter_env.lookup(&env_key).ok_or_else(|| {
-            anyhow!(
-                "`{}` not found. If this is a global input, pass it to rib",
-                variable_id
+            input_not_found(
+                variable_id.name().as_str(),
             )
         })?;
 
@@ -662,10 +659,10 @@ mod internal {
             }
             RibInterpreterStackValue::Val(val) => interpreter_stack.push_val(val.clone()),
             RibInterpreterStackValue::Iterator(_) => {
-                bail!("internal error: unable to assign an iterator to a variable")
+                bail_corrupted_state!("internal error: unable to assign an iterator to a variable")
             }
             RibInterpreterStackValue::Sink(_, _) => {
-                bail!("internal error: unable to assign a sink to a variable")
+                bail_corrupted_state!("internal error: unable to assign a sink to a variable")
             }
         }
 
@@ -675,12 +672,12 @@ mod internal {
     pub(crate) fn run_create_record_instruction(
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let name_type_pair = match analysed_type {
             AnalysedType::Record(type_record) => type_record.fields,
             _ => {
-                bail!(
-                    "internal error: expected a record type to create a record, but obtained {}",
+                corrupted_state!(
+                    "expected a record type to create a record, but obtained {}",
                     analysed_type.get_type_hint()
                 )
             }
@@ -693,7 +690,7 @@ mod internal {
     pub(crate) fn run_update_record_instruction(
         field_name: String,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let (current_record_fields, record_type) = interpreter_stack.try_pop_record()?;
 
         let idx = record_type
@@ -727,7 +724,7 @@ mod internal {
         list_size: usize,
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         match analysed_type {
             AnalysedType::List(inner_type) => {
                 let items =
@@ -747,7 +744,7 @@ mod internal {
         list_size: usize,
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         match analysed_type {
             AnalysedType::Tuple(_inner_type) => {
                 let items =
@@ -762,7 +759,7 @@ mod internal {
 
     pub(crate) fn run_negate_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let bool = interpreter_stack.try_pop_bool()?;
         let negated = !bool;
 
@@ -772,7 +769,7 @@ mod internal {
 
     pub(crate) fn run_and_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let left = interpreter_stack.try_pop()?;
         let right = interpreter_stack.try_pop()?;
 
@@ -788,7 +785,7 @@ mod internal {
 
     pub(crate) fn run_or_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let left = interpreter_stack.try_pop()?;
         let right = interpreter_stack.try_pop()?;
 
@@ -806,7 +803,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         compare_fn: fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
         target_numerical_type: &AnalysedType,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let left = interpreter_stack.try_pop()?;
         let right = interpreter_stack.try_pop()?;
 
@@ -827,7 +824,7 @@ mod internal {
     pub(crate) fn run_compare_instruction(
         interpreter_stack: &mut InterpreterStack,
         compare_fn: fn(LiteralValue, LiteralValue) -> bool,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let left = interpreter_stack.try_pop()?;
         let right = interpreter_stack.try_pop()?;
 
@@ -842,7 +839,7 @@ mod internal {
     pub(crate) fn run_select_field_instruction(
         field_name: String,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let record = interpreter_stack.try_pop()?;
 
         match record {
@@ -861,24 +858,14 @@ mod internal {
                 Ok(())
             }
             result => {
-                let stack_value_as_string = String::try_from(result).map_err(|error| {
-                    anyhow!(
-                        "internal error: failed to convert stack value to string, {}",
-                        error
-                    )
-                })?;
-
-                Err(anyhow!(
-                    "internal error: unable to select field `{}` as the input `{}` is not a `record` type",
-                    field_name, stack_value_as_string
-                ))
+                Err(field_not_found(result, field_name.as_str()))
             }
         }
     }
 
     pub(crate) fn run_select_index_v1_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let stack_list_value = interpreter_stack
             .pop()
             .ok_or_else(|| anyhow!("internal error: failed to get value from the stack"))?;
@@ -945,7 +932,7 @@ mod internal {
     pub(crate) fn run_select_index_instruction(
         interpreter_stack: &mut InterpreterStack,
         index: usize,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let stack_value = interpreter_stack
             .pop()
             .ok_or_else(|| anyhow!("internal error: failed to get value from the stack"))?;
@@ -998,7 +985,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         enum_name: String,
         analysed_type: AnalysedType,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         match analysed_type {
             AnalysedType::Enum(typed_enum) => {
                 interpreter_stack.push_enum(enum_name, typed_enum.cases)?;
@@ -1016,7 +1003,7 @@ mod internal {
         variant_name: String,
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         match analysed_type {
             AnalysedType::Variant(variants) => {
                 let variant = variants
@@ -1051,7 +1038,7 @@ mod internal {
         site: ParsedFunctionSite,
         function_type: FunctionReferenceType,
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         match function_type {
             FunctionReferenceType::Function { function } => {
                 let parsed_function_name = ParsedFunctionName {
@@ -1106,7 +1093,7 @@ mod internal {
                             .get_val()
                             .ok_or_else(|| anyhow!("internal error: failed to construct resource"))
                     })
-                    .collect::<anyhow::Result<Vec<ValueAndType>>>()?;
+                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
@@ -1140,7 +1127,7 @@ mod internal {
                             )
                         })
                     })
-                    .collect::<anyhow::Result<Vec<ValueAndType>>>()?;
+                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
@@ -1149,7 +1136,7 @@ mod internal {
                         resource_params: param_values
                             .iter()
                             .map(|x| print_value_and_type(x).map_err(|e| anyhow!(e)))
-                            .collect::<anyhow::Result<Vec<String>>>()?,
+                            .collect::<RibInterpreterResult<Vec<String>>>()?,
                         method,
                     },
                 };
@@ -1178,7 +1165,7 @@ mod internal {
                             )
                         })
                     })
-                    .collect::<anyhow::Result<Vec<ValueAndType>>>()?;
+                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
@@ -1206,7 +1193,7 @@ mod internal {
                             anyhow!("internal error: failed to call indexed resource drop")
                         })
                     })
-                    .collect::<anyhow::Result<Vec<ValueAndType>>>()?;
+                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
@@ -1231,7 +1218,7 @@ mod internal {
         worker_type: WorkerNamePresence,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let function_name = interpreter_stack
             .pop_str()
             .ok_or_else(|| anyhow!("internal error: failed to get a function name"))?;
@@ -1258,7 +1245,7 @@ mod internal {
                     anyhow!("internal error: failed to call function {}", function_name)
                 })
             })
-            .collect::<anyhow::Result<Vec<ValueAndType>>>()?;
+            .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
         let result = interpreter_env
             .invoke_worker_function_async(worker_name, function_name, parameter_values)
@@ -1289,7 +1276,7 @@ mod internal {
     }
     pub(crate) fn run_deconstruct_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let value = interpreter_stack
             .pop()
             .ok_or_else(|| anyhow!("internal error: no value to unwrap"))?;
@@ -1304,7 +1291,7 @@ mod internal {
 
     pub(crate) fn run_get_tag_instruction(
         interpreter_stack: &mut InterpreterStack,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let value = interpreter_stack
             .pop_val()
             .ok_or_else(|| anyhow!("internal error: failed to get a tag value"))?;
@@ -1342,7 +1329,7 @@ mod internal {
     pub(crate) fn run_create_some_instruction(
         interpreter_stack: &mut InterpreterStack,
         analysed_type: AnalysedType,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let value = interpreter_stack.try_pop_val()?;
 
         match analysed_type {
@@ -1360,7 +1347,7 @@ mod internal {
     pub(crate) fn run_create_none_instruction(
         interpreter_stack: &mut InterpreterStack,
         analysed_type: Option<AnalysedType>,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         match analysed_type {
             Some(AnalysedType::Option(_)) | None => {
                 interpreter_stack.push_none(analysed_type);
@@ -1376,7 +1363,7 @@ mod internal {
     pub(crate) fn run_create_ok_instruction(
         interpreter_stack: &mut InterpreterStack,
         analysed_type: AnalysedType,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let value = interpreter_stack.try_pop_val()?;
 
         match analysed_type {
@@ -1394,7 +1381,7 @@ mod internal {
     pub(crate) fn run_create_err_instruction(
         interpreter_stack: &mut InterpreterStack,
         analysed_type: AnalysedType,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let value = interpreter_stack.try_pop_val()?;
 
         match analysed_type {
@@ -1412,7 +1399,7 @@ mod internal {
     pub(crate) fn run_concat_instruction(
         interpreter_stack: &mut InterpreterStack,
         arg_size: usize,
-    ) -> anyhow::Result<()> {
+    ) -> RibInterpreterResult<()> {
         let value_and_types = interpreter_stack.try_pop_n_val(arg_size)?;
 
         let mut result = String::new();
@@ -4430,10 +4417,7 @@ mod tests {
 
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{
-            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue,
-            RibFunctionInvoke, RibInput,
-        };
+        use crate::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, RibFunctionInvoke, RibInput, RibInterpreterResult};
         use anyhow::anyhow;
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
@@ -4838,7 +4822,7 @@ mod tests {
                 _worker_name: Option<EvaluatedWorkerName>,
                 _fqn: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
-            ) -> anyhow::Result<ValueAndType> {
+            ) -> RibInterpreterResult<ValueAndType> {
                 let value = self.value.clone();
                 Ok(ValueAndType::new(
                     Value::Tuple(vec![value.value]),
@@ -4856,7 +4840,7 @@ mod tests {
                 worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
-            ) -> anyhow::Result<ValueAndType> {
+            ) -> RibInterpreterResult<ValueAndType> {
                 let worker_name = worker_name.map(|x| x.0);
 
                 let function_name = function_name.0.into_value_and_type();
@@ -4977,7 +4961,7 @@ mod tests {
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
-            ) -> anyhow::Result<ValueAndType> {
+            ) -> RibInterpreterResult<ValueAndType> {
                 match function_name.0.as_str() {
                     "add-u32" => {
                         let args = args.0;

@@ -23,7 +23,7 @@ use colored::Colorize;
 use golem_wasm_rpc::ValueAndType;
 use rib::RibResult;
 use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
-use rib::{RibCompileError, RibFunctionInvoke};
+use rib::{RibCompilationError, RibFunctionInvoke};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -148,7 +148,7 @@ impl RibRepl {
     /// This function is exposed for users who want to implement custom REPL loops
     /// or integrate Rib execution into other workflows.
     /// For a built-in REPL loop, see [`Self::run`].
-    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibCompileError> {
+    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibCompilationError> {
         if !rib.is_empty() {
             let rib = rib.strip_suffix(";").unwrap_or(rib);
 
@@ -176,14 +176,14 @@ impl RibRepl {
                         Err(err) => {
                             self.remove_rib_text_in_session();
                             self.printer.print_runtime_error(&err);
-                            Err(RibCompileError::RibStaticAnalysisError(err))
+                            Err(RibCompilationError::RibStaticAnalysisError(err))
                         }
                     }
                 }
                 Err(err) => {
                     self.remove_rib_text_in_session();
                     self.printer.print_rib_error(&err);
-                    Err(RibCompileError::RibStaticAnalysisError(err.to_string()))
+                    Err(RibCompilationError::RibStaticAnalysisError(err.to_string()))
                 }
             }
         } else {
