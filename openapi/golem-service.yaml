@@ -4544,19 +4544,6 @@ components:
           type: string
         invocationContext:
           type: string
-        allowOrigin:
-          type: string
-        allowMethods:
-          type: string
-        allowHeaders:
-          type: string
-        exposeHeaders:
-          type: string
-        maxAge:
-          type: integer
-          format: uint64
-        allowCredentials:
-          type: boolean
     GatewayBindingResponseData:
       type: object
       properties:
@@ -6187,8 +6174,6 @@ components:
           type: string
         binding:
           $ref: '#/components/schemas/GatewayBindingData'
-        cors:
-          $ref: '#/components/schemas/HttpCors'
         security:
           type: string
       required:
@@ -7102,7 +7087,6 @@ components:
       - producers
       - memories
       - binaryWit
-      - rootPackageName
       - dynamicLinking
     ComponentPluginScope:
       type: object
