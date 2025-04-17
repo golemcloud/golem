@@ -16,7 +16,7 @@ use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::interpreter::rib_runtime_error::{
     empty_stack, insufficient_stack_items, type_mismatch_with_value,
 };
-use crate::{corrupted_state, GetLiteralValue, RibInterpreterResult, TypeHint};
+use crate::{internal_corrupted_state, GetLiteralValue, RibInterpreterResult, TypeHint};
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
@@ -84,10 +84,12 @@ impl InterpreterStack {
         stack_values
             .iter()
             .map(|interpreter_result| {
-                interpreter_result.get_val().ok_or(corrupted_state!(
-                    "failed to convert last {} in the stack to ValueAndType",
-                    n
-                ))
+                interpreter_result
+                    .get_val()
+                    .ok_or(internal_corrupted_state!(
+                        "failed to convert last {} in the stack to ValueAndType",
+                        n
+                    ))
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()
     }
@@ -108,7 +110,7 @@ impl InterpreterStack {
 
     pub fn try_pop_val(&mut self) -> RibInterpreterResult<ValueAndType> {
         self.try_pop().and_then(|x| {
-            x.get_val().ok_or(corrupted_state!(
+            x.get_val().ok_or(internal_corrupted_state!(
                 "failed to pop ValueAndType from the interpreter stack"
             ))
         })
@@ -161,7 +163,7 @@ impl InterpreterStack {
         let possible_iterator = self.pop().ok_or(empty_stack())?;
 
         if !possible_iterator.is_iterator() {
-            return Err(corrupted_state!(
+            return Err(internal_corrupted_state!(
                 "failed to obtain an iterator from the stack",
             ));
         }
@@ -174,7 +176,7 @@ impl InterpreterStack {
                 Ok(())
             }
 
-            non_sink_value => Err(corrupted_state!(
+            non_sink_value => Err(internal_corrupted_state!(
                 "failed to push values to sink {:?}",
                 non_sink_value
             )),
@@ -190,7 +192,7 @@ impl InterpreterStack {
         let case_idx = cases
             .iter()
             .position(|case| case.name == variant_name)
-            .ok_or(corrupted_state!(
+            .ok_or(internal_corrupted_state!(
                 "failed to find the variant {}",
                 variant_name
             ))? as u32;
@@ -208,10 +210,9 @@ impl InterpreterStack {
     }
 
     pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> RibInterpreterResult<()> {
-        let idx =
-            cases.iter().position(|x| x == &enum_name).ok_or_else(|| {
-                corrupted_state!("failed to find the enum {} in the cases", enum_name)
-            })? as u32;
+        let idx = cases.iter().position(|x| x == &enum_name).ok_or_else(|| {
+            internal_corrupted_state!("failed to find the enum {} in the cases", enum_name)
+        })? as u32;
         self.push_val(ValueAndType::new(
             Value::Enum(idx),
             AnalysedType::Enum(TypeEnum {

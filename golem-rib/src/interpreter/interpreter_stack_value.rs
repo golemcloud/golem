@@ -16,7 +16,7 @@ use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
 use crate::interpreter::rib_runtime_error::{
     arithmetic_error, invalid_comparison, RibRuntimeError,
 };
-use crate::{corrupted_state, CoercedNumericValue, RibInterpreterResult};
+use crate::{internal_corrupted_state, CoercedNumericValue, RibInterpreterResult};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
@@ -77,7 +77,7 @@ impl RibInterpreterStackValue {
                     ))
                 }
             }
-            _ => Err(corrupted_state!(
+            _ => Err(internal_corrupted_state!(
                 "failed to obtain values to complete the math operation"
             )),
         }
@@ -224,7 +224,7 @@ impl fmt::Debug for RibInterpreterStackValue {
 mod internal {
     use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
     use crate::interpreter::rib_runtime_error::invalid_comparison;
-    use crate::{corrupted_state, RibInterpreterResult};
+    use crate::{internal_corrupted_state, RibInterpreterResult};
     use golem_wasm_ast::analysis::{AnalysedType, TypeVariant};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
@@ -317,13 +317,13 @@ mod internal {
                     let left_typ = left_type
                         .cases
                         .get(left_case_idx as usize)
-                        .ok_or(corrupted_state!("unknown variant index"))?
+                        .ok_or(internal_corrupted_state!("unknown variant index"))?
                         .typ
                         .clone();
                     let right_typ = right_type
                         .cases
                         .get(right_case_idx as usize)
-                        .ok_or(corrupted_state!("unknown variant index"))?
+                        .ok_or(internal_corrupted_state!("unknown variant index"))?
                         .typ
                         .clone();
                     match (left_typ, right_typ) {

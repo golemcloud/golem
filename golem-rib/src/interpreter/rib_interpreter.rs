@@ -19,7 +19,7 @@ use crate::interpreter::rib_runtime_error::{
     arithmetic_error, no_result, throw_error, RibRuntimeError,
 };
 use crate::interpreter::stack::InterpreterStack;
-use crate::{corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
+use crate::{internal_corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
 use std::sync::Arc;
 
 pub struct Interpreter {
@@ -244,7 +244,7 @@ impl Interpreter {
 
                 RibIR::Jump(instruction_id) => {
                     byte_code_cursor.move_to(&instruction_id).ok_or_else(|| {
-                        corrupted_state!(
+                        internal_corrupted_state!(
                             "internal error. Failed to move to label {}",
                             instruction_id.index
                         )
@@ -322,10 +322,10 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        bail_corrupted_state, corrupted_state, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn,
-        EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName,
-        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibFunctionInvokeResult,
-        RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
+        bail_corrupted_state, internal_corrupted_state, CoercedNumericValue, EvaluatedFnArgs,
+        EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId,
+        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke,
+        RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -378,7 +378,9 @@ mod internal {
             }
             RibInterpreterStackValue::Sink(values, analysed_type) => {
                 let possible_iterator = interpreter_stack.pop().ok_or_else(|| {
-                    corrupted_state!("internal error: Expecting an iterator to check is empty")
+                    internal_corrupted_state!(
+                        "internal error: Expecting an iterator to check is empty"
+                    )
                 })?;
 
                 match possible_iterator {
@@ -399,7 +401,7 @@ mod internal {
             RibInterpreterStackValue::Unit => None,
         };
 
-        let bool = bool_opt.ok_or(corrupted_state!("failed to execute is_empty"))?;
+        let bool = bool_opt.ok_or(internal_corrupted_state!("failed to execute is_empty"))?;
         interpreter_stack.push_val(bool.into_value_and_type());
         Ok(())
     }
@@ -525,7 +527,9 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(corrupted_state!("failed to convert to an iterator")),
+            _ => Err(internal_corrupted_state!(
+                "failed to convert to an iterator"
+            )),
         }
     }
 
@@ -563,13 +567,13 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let mut rib_result = interpreter_stack
             .pop()
-            .ok_or_else(|| corrupted_state!("failed to advance the iterator"))?;
+            .ok_or_else(|| internal_corrupted_state!("failed to advance the iterator"))?;
 
         match &mut rib_result {
             RibInterpreterStackValue::Sink(_, _) => {
                 let mut existing_iterator = interpreter_stack
                     .pop()
-                    .ok_or(corrupted_state!("failed to get an iterator"))?;
+                    .ok_or(internal_corrupted_state!("failed to get an iterator"))?;
 
                 match &mut existing_iterator {
                     RibInterpreterStackValue::Iterator(iter) => {
@@ -583,7 +587,7 @@ mod internal {
                         }
                     }
 
-                    _ => Err(corrupted_state!(
+                    _ => Err(internal_corrupted_state!(
                         "sink cannot exist without a corresponding iterator"
                     )),
                 }
@@ -612,16 +616,19 @@ mod internal {
 
                 Ok(())
             }
-            _ => Err(corrupted_state!("Failed to push values to sink")),
+            _ => Err(internal_corrupted_state!("Failed to push values to sink")),
         }
     }
 
     pub(crate) fn run_sink_to_list_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let (result, analysed_type) = interpreter_stack
-            .pop_sink()
-            .ok_or(corrupted_state!("failed to retrieve items from sink"))?;
+        let (result, analysed_type) =
+            interpreter_stack
+                .pop_sink()
+                .ok_or(internal_corrupted_state!(
+                    "failed to retrieve items from sink"
+                ))?;
 
         interpreter_stack.push_list(
             result.into_iter().map(|vnt| vnt.value).collect(),
@@ -716,7 +723,7 @@ mod internal {
             .iter()
             .position(|pair| pair.name == field_name)
             .ok_or_else(|| {
-                corrupted_state!(
+                internal_corrupted_state!(
                     "Invalid field name {field_name}, should be one of {}",
                     record_type
                         .fields
@@ -755,7 +762,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(corrupted_state!(
+            _ => Err(internal_corrupted_state!(
                 "failed to create list due to mismatch in types. expected: list, actual: {}",
                 analysed_type.get_type_hint()
             )),
@@ -774,7 +781,7 @@ mod internal {
                 Ok(())
             }
 
-            _ => Err(corrupted_state!(
+            _ => Err(internal_corrupted_state!(
                 "failed to create tuple due to mismatch in types. expected: tuple, actual: {}",
                 analysed_type.get_type_hint()
             )),
@@ -905,7 +912,7 @@ mod internal {
                     interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
                     Ok(())
                 }
-                _ => Err(corrupted_state!(
+                _ => Err(internal_corrupted_state!(
                     "range selection not supported at byte code level. missing desugar phase"
                 )),
             },
@@ -923,7 +930,10 @@ mod internal {
                         .items
                         .get(index as usize)
                         .ok_or_else(|| {
-                            corrupted_state!("type not found in the tuple at index {}", index)
+                            internal_corrupted_state!(
+                                "type not found in the tuple at index {}",
+                                index
+                            )
                         })?
                         .clone();
 
@@ -1014,7 +1024,9 @@ mod internal {
                     .cases
                     .iter()
                     .find(|name| name.name == variant_name)
-                    .ok_or_else(|| corrupted_state!("variant {} not found", variant_name))?;
+                    .ok_or_else(|| {
+                        internal_corrupted_state!("variant {} not found", variant_name)
+                    })?;
 
                 let variant_arg_typ = variant.typ.clone();
 
@@ -1092,9 +1104,9 @@ mod internal {
                 let parameter_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
-                        interpreter_result
-                            .get_val()
-                            .ok_or_else(|| corrupted_state!("failed to construct resource"))
+                        interpreter_result.get_val().ok_or_else(|| {
+                            internal_corrupted_state!("failed to construct resource")
+                        })
                     })
                     .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
@@ -1124,7 +1136,7 @@ mod internal {
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or_else(|| {
-                            corrupted_state!(
+                            internal_corrupted_state!(
                                 "internal error: failed to call indexed resource method {}",
                                 method
                             )
@@ -1159,7 +1171,10 @@ mod internal {
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or_else(|| {
-                            corrupted_state!("failed to call static resource method {}", method)
+                            internal_corrupted_state!(
+                                "failed to call static resource method {}",
+                                method
+                            )
                         })
                     })
                     .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
@@ -1186,9 +1201,9 @@ mod internal {
                 let param_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
-                        interpreter_result
-                            .get_val()
-                            .ok_or_else(|| corrupted_state!("failed to call indexed resource drop"))
+                        interpreter_result.get_val().ok_or_else(|| {
+                            internal_corrupted_state!("failed to call indexed resource drop")
+                        })
                     })
                     .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
@@ -1218,14 +1233,14 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let function_name = interpreter_stack
             .pop_str()
-            .ok_or_else(|| corrupted_state!("failed to get a function name"))?;
+            .ok_or_else(|| internal_corrupted_state!("failed to get a function name"))?;
 
         let function_name_cloned = function_name.clone();
 
         let worker_name = match worker_type {
             WorkerNamePresence::Present => {
                 let worker_name = interpreter_stack.pop_str().ok_or_else(|| {
-                    corrupted_state!("internal error: failed to get the worker name")
+                    internal_corrupted_state!("internal error: failed to get the worker name")
                 })?;
 
                 Some(worker_name.clone())
@@ -1240,9 +1255,9 @@ mod internal {
         let parameter_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
-                interpreter_result
-                    .get_val()
-                    .ok_or_else(|| corrupted_state!("failed to call function {}", function_name))
+                interpreter_result.get_val().ok_or_else(|| {
+                    internal_corrupted_state!("failed to call function {}", function_name)
+                })
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
@@ -1282,11 +1297,11 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let value = interpreter_stack
             .pop()
-            .ok_or_else(|| corrupted_state!("no value to unwrap"))?;
+            .ok_or_else(|| internal_corrupted_state!("no value to unwrap"))?;
 
         let unwrapped_value = value
             .unwrap()
-            .ok_or_else(|| corrupted_state!("failed to unwrap the value {}", value))?;
+            .ok_or_else(|| internal_corrupted_state!("failed to unwrap the value {}", value))?;
 
         interpreter_stack.push_val(unwrapped_value);
         Ok(())
@@ -1297,7 +1312,7 @@ mod internal {
     ) -> RibInterpreterResult<()> {
         let value = interpreter_stack
             .pop_val()
-            .ok_or_else(|| corrupted_state!("failed to get a tag value"))?;
+            .ok_or_else(|| internal_corrupted_state!("failed to get a tag value"))?;
 
         let tag = match value {
             ValueAndType {

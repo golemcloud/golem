@@ -57,7 +57,7 @@ pub async fn interpret_pure(
 }
 
 #[macro_export]
-macro_rules! corrupted_state {
+macro_rules! internal_corrupted_state {
     // This handles the case where no arguments are passed after the format string
     ($fmt:expr) => {{
         // Just return the error with the provided string
