@@ -19,7 +19,6 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = 
     "bincode",
 ] }
 
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 colored = { workspace = true }
 dirs = { workspace = true }
