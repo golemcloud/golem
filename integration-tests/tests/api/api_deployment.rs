@@ -746,7 +746,7 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
             ],
             site: ApiSite {
                 host: "localhost".to_string(),
-                subdomain: Some("subdomain".to_string()),
+                subdomain: Some("undeploy-test".to_string()),
             },
         })
         .await
@@ -754,33 +754,33 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
 
     // List deployments and check both are present
     let deployments = deps.worker_service().list_api_deployments(None).await.unwrap();
-    assert!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+    check!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
         id: api_definition_1.id.as_ref().unwrap().value.clone(),
         version: api_definition_1.version.clone(),
     })));
-    assert!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+    check!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
         id: api_definition_2.id.as_ref().unwrap().value.clone(),
         version: api_definition_2.version.clone(),
     })));
 
     // Undeploy API 1
     deps.worker_service()
-        .undeploy_api("subdomain.localhost", &api_definition_1.id.as_ref().unwrap().value, &api_definition_1.version)
+        .undeploy_api("undeploy-test.localhost", &api_definition_1.id.as_ref().unwrap().value, &api_definition_1.version)
         .await
         .unwrap();
 
     // Verify that API 1 is no longer in the deployments
     let deployments = deps.worker_service().list_api_deployments(None).await.unwrap();
-    assert!(!deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+    check!(!deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
         id: api_definition_1.id.as_ref().unwrap().value.clone(),
         version: api_definition_1.version.clone(),
-    })), "API 1 should not be in the deployments after undeployment");
+    })));
 
     // Verify that API 2 is still in the deployments
-    assert!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+    check!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
         id: api_definition_2.id.as_ref().unwrap().value.clone(),
         version: api_definition_2.version.clone(),
-    })), "API 2 should still be in the deployments");
+    })));
 
     // Test undeploying from a non-existent API
     let result = deps.worker_service()
