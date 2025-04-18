@@ -37,6 +37,8 @@ pub struct ApiDeployment<Namespace> {
 }
 
 #[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct ApiSite {
     pub host: String,
     pub subdomain: Option<String>,
