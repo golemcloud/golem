@@ -753,44 +753,70 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
         .unwrap();
 
     // List deployments and check both are present
-    let deployments = deps.worker_service().list_api_deployments(None).await.unwrap();
-    check!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-        id: api_definition_1.id.as_ref().unwrap().value.clone(),
-        version: api_definition_1.version.clone(),
-    })));
-    check!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-        id: api_definition_2.id.as_ref().unwrap().value.clone(),
-        version: api_definition_2.version.clone(),
-    })));
+    let deployments = deps
+        .worker_service()
+        .list_api_deployments(None)
+        .await
+        .unwrap();
+    check!(deployments
+        .iter()
+        .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            version: api_definition_1.version.clone(),
+        })));
+    check!(deployments
+        .iter()
+        .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+            id: api_definition_2.id.as_ref().unwrap().value.clone(),
+            version: api_definition_2.version.clone(),
+        })));
 
     // Undeploy API 1
     deps.worker_service()
-        .undeploy_api("undeploy-test.localhost", &api_definition_1.id.as_ref().unwrap().value, &api_definition_1.version)
+        .undeploy_api(
+            "undeploy-test.localhost",
+            &api_definition_1.id.as_ref().unwrap().value,
+            &api_definition_1.version,
+        )
         .await
         .unwrap();
 
     // Verify that API 1 is no longer in the deployments
-    let deployments = deps.worker_service().list_api_deployments(None).await.unwrap();
-    check!(!deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-        id: api_definition_1.id.as_ref().unwrap().value.clone(),
-        version: api_definition_1.version.clone(),
-    })));
+    let deployments = deps
+        .worker_service()
+        .list_api_deployments(None)
+        .await
+        .unwrap();
+    check!(!deployments
+        .iter()
+        .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            version: api_definition_1.version.clone(),
+        })));
 
     // Verify that API 2 is still in the deployments
-    check!(deployments.iter().any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-        id: api_definition_2.id.as_ref().unwrap().value.clone(),
-        version: api_definition_2.version.clone(),
-    })));
+    check!(deployments
+        .iter()
+        .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
+            id: api_definition_2.id.as_ref().unwrap().value.clone(),
+            version: api_definition_2.version.clone(),
+        })));
 
     // Test undeploying from a non-existent API
-    let result = deps.worker_service()
+    let result = deps
+        .worker_service()
         .undeploy_api("subdomain.localhost", "non-existent-id", "1")
         .await;
     assert!(result.is_err());
 
     // Test undeploying from a non-existent site
-    let result = deps.worker_service()
-        .undeploy_api("non-existent.localhost", &api_definition_2.id.as_ref().unwrap().value, &api_definition_2.version)
+    let result = deps
+        .worker_service()
+        .undeploy_api(
+            "non-existent.localhost",
+            &api_definition_2.id.as_ref().unwrap().value,
+            &api_definition_2.version,
+        )
         .await;
     assert!(result.is_err());
 }
