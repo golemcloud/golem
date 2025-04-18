@@ -776,6 +776,17 @@ impl TextView for PublicOplogEntry {
                     }
                 ));
             }
+            PublicOplogEntry::ChangePersistenceLevel(params) => {
+                logln(format_message_highlight("CHANGE PERSISTENCE LEVEL"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}level:             {}",
+                    format_id(&format!("{:?}", &params.persistence_level))
+                ));
+            }
         }
     }
 }
