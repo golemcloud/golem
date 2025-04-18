@@ -1677,17 +1677,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
             Ok(RetryDecision::None)
         } else {
-            // Handle the case when recovery immediately starts in a deleted region
-            // (for example due to a manual update)
-            store
-                .as_context_mut()
-                .data_mut()
-                .durable_ctx_mut()
-                .state
-                .replay_state
-                .get_out_of_skipped_region()
-                .await;
-
             let result = Self::resume_replay(store, instance).await;
 
             record_resume_worker(start.elapsed());
