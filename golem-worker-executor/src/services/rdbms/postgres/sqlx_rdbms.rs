@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConfig};
 use crate::services::rdbms::postgres::types::{
     Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, Enumeration,
     EnumerationType, Interval, NamedType, Range, RangeType, TimeTz, ValuesRange,
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream, SqlxRdbms,
+    create_db_result, DbTransactionStatus, DbTransactionSupport, PoolCreator, QueryExecutor,
+    QueryParamsBinder, SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms,
 };
-use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
+use crate::services::rdbms::{
+    DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey,
+    RdbmsTransactionIdentifier,
+};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -30,9 +34,12 @@ use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
-use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
+use sqlx::{
+    Column, ConnectOptions, Database, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef,
+};
 use std::fmt::Display;
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::sync::Arc;
 use try_match::try_match;
 use uuid::Uuid;
@@ -58,6 +65,69 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
             .connect_with(options)
             .await
             .map_err(Error::connection_failure)
+    }
+}
+
+pub(crate) struct PostgresDbTransactionSupport {
+    query_config: RdbmsQueryConfig,
+}
+
+#[async_trait]
+impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactionSupport {
+    async fn begin(
+        &self,
+        key: &RdbmsPoolKey,
+        pool: Arc<Pool<sqlx::Postgres>>,
+    ) -> Result<Arc<dyn DbTransaction<PostgresType> + Send + Sync>, Error> {
+        let mut connection = pool
+            .deref()
+            .acquire()
+            .await
+            .map_err(Error::connection_failure)?;
+
+        <sqlx::Postgres as sqlx::Database>::TransactionManager::begin(&mut connection)
+            .await
+            .map_err(Error::query_execution_failure)?;
+
+        let identifier = RdbmsTransactionIdentifier::generate();
+
+        let db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync> = Arc::new(
+            SqlxDbTransaction::new(identifier, key.clone(), connection, self.query_config),
+        );
+
+        Ok(db_transaction)
+    }
+
+    async fn pre_commit(
+        &self,
+        pool: Arc<Pool<sqlx::Postgres>>,
+        db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn pre_rollback(
+        &self,
+        pool: Arc<Pool<sqlx::Postgres>>,
+        db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn get_status(
+        &self,
+        pool: Arc<Pool<sqlx::Postgres>>,
+        identifier: RdbmsTransactionIdentifier,
+    ) -> Result<DbTransactionStatus, Error> {
+        todo!()
+    }
+
+    async fn cleanup(
+        &self,
+        pool: Arc<Pool<sqlx::Postgres>>,
+        identifier: RdbmsTransactionIdentifier,
+    ) -> Result<(), Error> {
+        Ok(())
     }
 }
 

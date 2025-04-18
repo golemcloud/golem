@@ -75,6 +75,8 @@ impl Display for RdbmsStatus {
 
 #[async_trait]
 pub trait DbTransaction<T: RdbmsType> {
+    fn identifier(&self) -> RdbmsTransactionIdentifier;
+
     async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
@@ -646,4 +648,19 @@ fn get_bound_analysed_type(base_type: AnalysedType) -> AnalysedType {
         analysed_type::case("excluded", base_type.clone()),
         analysed_type::unit_case("unbounded"),
     ])
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct RdbmsTransactionIdentifier {
+    pub id: String,
+}
+
+impl RdbmsTransactionIdentifier {
+    pub fn new<Id: Display>(id: Id) -> Self {
+        Self { id: id.to_string() }
+    }
+
+    pub fn generate() -> Self {
+        Self::new(uuid::Uuid::new_v4())
+    }
 }
