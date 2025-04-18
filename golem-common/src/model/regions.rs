@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct OplogRegion {
     pub start: OplogIndex,
     pub end: OplogIndex,

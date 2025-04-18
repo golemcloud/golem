@@ -22,6 +22,8 @@ use std::collections::HashMap;
 // with its type information. Example: `request` variable which should be of the type `Record`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct RibInputTypeInfo {
     pub types: HashMap<String, AnalysedType>,
 }

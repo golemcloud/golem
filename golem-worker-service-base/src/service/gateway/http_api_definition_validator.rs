@@ -28,6 +28,8 @@ use std::fmt::{Display, Formatter};
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RouteValidationError {
     pub method: MethodPattern,
     pub path: String,
