@@ -42,6 +42,11 @@ mod hooks {
         fn override_verbosity(verbosity: Verbosity) -> Verbosity {
             verbosity
         }
+
+        #[cfg(feature = "server-commands")]
+        fn override_pretty_mode() -> bool {
+            false
+        }
     }
 }
 

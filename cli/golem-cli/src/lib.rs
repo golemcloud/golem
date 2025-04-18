@@ -55,15 +55,27 @@ pub fn version() -> &'static str {
     }
 }
 
-pub fn init_tracing(verbosity: Verbosity) {
+pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
     if let Some(level) = verbosity.tracing_level() {
-        let subscriber = FmtSubscriber::builder()
-            .with_max_level(level)
-            .with_writer(std::io::stderr)
-            .finish();
+        let subscriber = FmtSubscriber::builder();
+        if pretty_mode {
+            let subscriber = subscriber
+                .pretty()
+                .with_max_level(level)
+                .with_writer(std::io::stderr)
+                .finish();
 
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("setting default subscriber failed");
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("setting default subscriber failed");
+        } else {
+            let subscriber = subscriber
+                .with_max_level(level)
+                .with_writer(std::io::stderr)
+                .finish();
+
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("setting default subscriber failed");
+        };
     }
 }
 

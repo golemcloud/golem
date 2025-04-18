@@ -66,6 +66,10 @@ impl CommandHandlerHooks for ServerCommandHandler {
             Verbosity::new(2, 0)
         }
     }
+
+    fn override_pretty_mode() -> bool {
+        true
+    }
 }
 
 fn default_data_dir() -> anyhow::Result<PathBuf> {
