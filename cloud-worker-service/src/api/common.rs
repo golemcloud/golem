@@ -210,8 +210,15 @@ impl From<BaseApiDefinitionError> for ApiEndpointError {
             BaseApiDefinitionError::SecuritySchemeError(error) => ApiEndpointError::from(error),
             BaseApiDefinitionError::IdentityProviderError(error) => ApiEndpointError::from(error),
             BaseApiDefinitionError::RibInternal(_) => ApiEndpointError::internal(value),
-            BaseApiDefinitionError::InvalidRibScript(_) => ApiEndpointError::bad_request(value),
             BaseApiDefinitionError::InvalidOasDefinition(_) => ApiEndpointError::bad_request(value),
+            BaseApiDefinitionError::UnsupportedRibInput(_) => ApiEndpointError::bad_request(value),
+            BaseApiDefinitionError::RibStaticAnalysisError(_) => {
+                ApiEndpointError::bad_request(value)
+            }
+            BaseApiDefinitionError::RibByteCodeGenerationError(_) => {
+                ApiEndpointError::internal(value)
+            }
+            BaseApiDefinitionError::RibParseError(_) => ApiEndpointError::bad_request(value),
         }
     }
 }

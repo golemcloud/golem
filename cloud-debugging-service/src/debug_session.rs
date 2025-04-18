@@ -496,6 +496,12 @@ fn get_oplog_entry_from_public_oplog_entry(
                 value: set_span_attribute.value.into(),
             })
         }
+        PublicOplogEntry::ChangePersistenceLevel(change_persistence_level) => {
+            Ok(OplogEntry::ChangePersistenceLevel {
+                timestamp: change_persistence_level.timestamp,
+                level: change_persistence_level.persistence_level,
+            })
+        }
     }
 }
 
