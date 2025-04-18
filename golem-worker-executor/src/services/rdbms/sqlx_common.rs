@@ -878,9 +878,11 @@ where
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum DbTransactionStatus {
+    InProgress,
     Committed,
-    Rollbacked,
+    RolledBack,
     NotFound,
 }
 

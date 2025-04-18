@@ -37,7 +37,8 @@ use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{
     Column, ConnectOptions, Database, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef,
 };
-use std::fmt::Display;
+use sqlx_core::executor::Executor;
+use std::fmt::{format, Display};
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -72,6 +73,14 @@ pub(crate) struct PostgresDbTransactionSupport {
     query_config: RdbmsQueryConfig,
 }
 
+impl PostgresDbTransactionSupport {
+    fn new(query_config: RdbmsQueryConfig) -> Self {
+        Self {
+            query_config
+        }
+    }
+}
+
 #[async_trait]
 impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactionSupport {
     async fn begin(
@@ -89,7 +98,13 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
             .await
             .map_err(Error::query_execution_failure)?;
 
-        let identifier = RdbmsTransactionIdentifier::generate();
+        let query = sqlx::query("SELECT txid_current()");
+        let row = connection
+            .fetch_one(query)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
+        let identifier = RdbmsTransactionIdentifier::new(id);
 
         let db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync> = Arc::new(
             SqlxDbTransaction::new(identifier, key.clone(), connection, self.query_config),
@@ -100,16 +115,16 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
 
     async fn pre_commit(
         &self,
-        pool: Arc<Pool<sqlx::Postgres>>,
-        db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
+        _pool: Arc<Pool<sqlx::Postgres>>,
+        _db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
     ) -> Result<(), Error> {
         Ok(())
     }
 
     async fn pre_rollback(
         &self,
-        pool: Arc<Pool<sqlx::Postgres>>,
-        db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
+        _pool: Arc<Pool<sqlx::Postgres>>,
+        _db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
     ) -> Result<(), Error> {
         Ok(())
     }
@@ -119,13 +134,31 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
         pool: Arc<Pool<sqlx::Postgres>>,
         identifier: RdbmsTransactionIdentifier,
     ) -> Result<DbTransactionStatus, Error> {
-        todo!()
+        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(identifier.id);
+        let row = pool
+            .fetch_optional(query)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        if let Some(row) = row {
+            let status: &str = row.try_get(0).map_err(Error::query_response_failure)?;
+            match status {
+                "in progress" => Ok(DbTransactionStatus::InProgress),
+                "committed" => Ok(DbTransactionStatus::Committed),
+                "aborted" => Ok(DbTransactionStatus::RolledBack),
+                _ => Err(Error::query_response_failure(format!(
+                    "Unknown transaction status: {}",
+                    status
+                ))),
+            }
+        } else {
+            Ok(DbTransactionStatus::NotFound)
+        }
     }
 
     async fn cleanup(
         &self,
-        pool: Arc<Pool<sqlx::Postgres>>,
-        identifier: RdbmsTransactionIdentifier,
+        _pool: Arc<Pool<sqlx::Postgres>>,
+        _identifier: RdbmsTransactionIdentifier,
     ) -> Result<(), Error> {
         Ok(())
     }
