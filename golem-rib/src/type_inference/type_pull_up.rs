@@ -13,66 +13,25 @@
 // limitations under the License.
 
 use crate::rib_type_error::RibTypeError;
-use crate::{CustomError, Expr, InferredType};
+use crate::{CustomError, Expr, ExprVisitor, InferredType};
 use std::collections::VecDeque;
 
-// Initialize a queue with all expr in the tree, with the root node first:
-// Example queue:
-// [select_field(select_field(a, b), c), select_field(a, b), identifier(a)]
-//
-// The goal is to assign inferred types to each expression
-// in the queue by working with a stack.
-//
-// Process:
-//
-// 1. Pop from the back of the queue and push to the front of
-//    an inferred type stack, assigning inferred types along the way.
-//
-// Example Walkthrough:
-//
-// 1. Pop the back element in the queue to get `identifier(a)`.
-//    - Check the `inferred_expr_stack` by popping from the front.
-//    - If it's `None`, push `identifier(a)`'s inferred type to the stack:
-//      - `Record(b -> Record(c -> u64))`.
-//
-// 2. Pop the back element in the queue again to get `select_field(a, b)`.
-//    - Check the `inferred_expr_stack`, which now has
-//      `Record(b -> Record(c -> u64))` at the front.
-//    - Retrieve the type for `b` from `Record(b -> Record(c -> u64))`
-//      and push it to the front of the stack.
-//
-// 3. Pop the final element from the queue: `select_field(select_field(a, b), c)`.
-//    - Check the `inferred_expr_stack`, which has `Record(c -> u64)` at the front.
-//    - Retrieve the type for `c` from `Record(c -> u64)`
-//      and push it to the stack as `u64`.
-//
-// At the end of this process, each expression has an assigned
-// inferred type, created by traversing in a queue and stack order.
+pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibTypeError> {
-    let mut expr_queue = VecDeque::new();
-    internal::make_expr_nodes_queue(expr, &mut expr_queue);
-
-    let mut inferred_expr_stack = VecDeque::new();
-
-    while let Some(expr) = expr_queue.pop_back() {
+    while let Some(expr) = visitor.pop_front() {
         match expr {
             Expr::Tuple {
                 exprs,
                 inferred_type,
-                source_span,
                 ..
             } => {
-                internal::handle_tuple(exprs, inferred_type, &mut inferred_expr_stack, source_span);
+                internal::handle_tuple(exprs, inferred_type);
             }
 
-            expr @ Expr::Identifier { .. } => {
-                inferred_expr_stack.push_front(expr.clone());
-            }
+            Expr::Identifier { .. } => {}
 
-            expr @ Expr::Flags { .. } => {
-                inferred_expr_stack.push_front(expr.clone());
-            }
+            Expr::Flags { .. } => {}
 
             Expr::InvokeMethodLazy { lhs, method, .. } => {
                 let lhs = lhs.to_string();
@@ -87,15 +46,12 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibTypeError> {
                 expr,
                 field,
                 inferred_type,
-                source_span,
                 ..
             } => {
                 internal::handle_select_field(
                     expr,
                     field,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 )?;
             }
 
@@ -110,119 +66,82 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibTypeError> {
                     expr,
                     index,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 )?;
             }
 
             Expr::Result {
                 expr: Ok(_),
                 inferred_type,
-                source_span,
                 ..
             } => {
                 internal::handle_result_ok(
                     expr,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 );
             }
 
             Expr::Result {
                 expr: Err(_),
                 inferred_type,
-                source_span,
                 ..
             } => {
                 internal::handle_result_error(
                     expr,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 );
             }
 
             Expr::Option {
                 expr: Some(expr),
                 inferred_type,
-                source_span,
                 ..
             } => {
                 internal::handle_option_some(
                     expr,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 );
             }
 
             Expr::Option {
-                type_annotation,
-                inferred_type,
-                source_span,
                 ..
-            } => {
-                inferred_expr_stack.push_front(Expr::Option {
-                    expr: None,
-                    type_annotation: type_annotation.clone(),
-                    inferred_type: inferred_type.clone(),
-                    source_span: source_span.clone(),
-                });
-            }
+            } => {}
 
             Expr::Cond {
-                cond,
                 lhs,
                 rhs,
                 inferred_type,
-                source_span,
                 ..
             } => {
                 internal::handle_if_else(
-                    cond,
                     lhs,
                     rhs,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 );
             }
 
-            //
             Expr::PatternMatch {
-                predicate,
                 match_arms,
                 inferred_type,
-                source_span,
                 ..
             } => {
                 internal::handle_pattern_match(
-                    predicate,
                     match_arms,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 );
             }
 
             Expr::Concat {
-                exprs, source_span, ..
-            } => {
-                internal::handle_concat(exprs, &mut inferred_expr_stack, source_span);
-            }
+               ..
+            } => {}
 
             Expr::ExprBlock {
                 exprs,
                 inferred_type,
-                source_span,
                 ..
             } => {
                 internal::handle_multiple(
                     exprs,
                     inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
                 );
             }
 
@@ -660,10 +579,7 @@ mod internal {
     use crate::type_inference::type_hint::TypeHint;
     use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
-    use crate::{
-        ActualType, ExpectedType, Expr, InferredType, MatchArm, Range, TypeMismatchError, TypeName,
-        VariableId,
-    };
+    use crate::{ActualType, ExpectedType, Expr, GetTypeHint, InferredType, MatchArm, Path, Range, TypeMismatchError, TypeName, VariableId};
 
     use std::collections::VecDeque;
     use std::ops::Deref;
@@ -746,328 +662,135 @@ mod internal {
 
     pub(crate) fn handle_tuple(
         tuple_elems: &[Expr],
-        current_tuple_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_position: &SourceSpan,
+        current_tuple_type: &mut InferredType,
     ) {
-        let mut new_tuple_elems = vec![];
+        let mut new_inferred_type = vec![];
 
         for current_tuple_elem in tuple_elems.iter().rev() {
-            let pulled_up_type = inferred_expr_stack.pop_front();
-            let new_tuple_elem = pulled_up_type.unwrap_or(current_tuple_elem.clone());
-            new_tuple_elems.push(new_tuple_elem);
+            new_inferred_type.push(current_tuple_elem.inferred_type());
         }
 
-        new_tuple_elems.reverse();
-
         let new_tuple_type =
-            InferredType::Tuple(new_tuple_elems.iter().map(|x| x.inferred_type()).collect());
+            InferredType::Tuple(new_inferred_type);
 
-        let merged_tuple_type = current_tuple_type.merge(new_tuple_type);
-        let new_tuple = Expr::tuple(new_tuple_elems)
-            .with_inferred_type(merged_tuple_type)
-            .with_source_span(source_position.clone());
-        inferred_expr_stack.push_front(new_tuple);
+        *current_tuple_type = current_tuple_type.merge(new_tuple_type);
     }
 
     pub(crate) fn handle_select_field(
-        original_selection_expr: &Expr,
+        select_from: &Expr,
         field: &str,
-        current_field_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        current_field_type: &mut InferredType,
     ) -> Result<(), RibTypeError> {
-        let expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_selection_expr.clone());
-        let select_from_expr_type = expr.inferred_type();
         let selection_field_type = get_inferred_type_of_selected_field(
-            original_selection_expr,
+            select_from,
             field,
-            &select_from_expr_type,
         )?;
 
-        let new_select_field = Expr::select_field(expr.clone(), field, None)
-            .with_inferred_type(current_field_type.merge(selection_field_type))
-            .with_source_span(source_span.clone());
-
-        inferred_expr_stack.push_front(new_select_field);
+        *current_field_type = current_field_type.merge(selection_field_type);
 
         Ok(())
     }
 
     pub(crate) fn handle_select_index(
-        original_selection_expr: &Expr,
-        original_index_expr: &Expr,
-        curren_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        select_from: &Expr,
+        index: &Expr,
+        current_select_index_type: &mut InferredType,
     ) -> Result<(), RibTypeError> {
-        let new_index_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_index_expr.clone());
+        let selection_expr_inferred_type = select_from.inferred_type();
 
-        let inferred_type_of_index_expr = new_index_expr.inferred_type();
+        // if select_from is not yet gone through any phase, we cannot guarantee
+        // it is a list type, otherwise continue with the assumption that it is a record
+        if !selection_expr_inferred_type.is_unknown() {
+            let index_type =
+                get_inferred_type_of_selection_dynamic(
+                    select_from,
+                    index,
+                )?;
 
-        let new_selection_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_selection_expr.clone());
-
-        let inferred_type_of_selection_expr = new_selection_expr.inferred_type();
-
-        // If selection expression is not yet known in this stage
-        if !inferred_type_of_selection_expr.is_unknown() {
-            let (index_type, expression_type) = get_inferred_type_of_selection_dynamic(
-                original_selection_expr,
-                original_index_expr,
-                &inferred_type_of_selection_expr,
-                &inferred_type_of_index_expr,
-            )?;
-
-            let new_select_index = match index_type {
-                SelectionIndexType::Index(index_type) => Expr::select_index(
-                    new_selection_expr.clone(),
-                    original_index_expr.clone().with_inferred_type(index_type),
-                )
-                .with_inferred_type(curren_type.merge(expression_type))
-                .with_source_span(source_span.clone()),
-
-                SelectionIndexType::Range(range_index_type) => Expr::select_index(
-                    new_selection_expr.clone(),
-                    original_index_expr
-                        .clone()
-                        .with_inferred_type(range_index_type),
-                )
-                .with_inferred_type(curren_type.merge(expression_type))
-                .with_source_span(source_span.clone()),
-            };
-
-            inferred_expr_stack.push_front(new_select_index);
-
-            Ok(())
-        } else {
-            let new_select_index =
-                Expr::select_index(new_selection_expr.clone(), original_index_expr.clone())
-                    .with_source_span(source_span.clone());
-
-            inferred_expr_stack.push_front(new_select_index);
-
-            Ok(())
+            *current_select_index_type = current_select_index_type.merge(index_type);
         }
+
+        Ok(())
     }
 
     pub(crate) fn handle_result_ok(
-        original_ok_expr: &Expr,
-        current_ok_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        ok_expr: &Expr,
+        current_inferred_type: &mut InferredType,
     ) {
-        let ok_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_ok_expr.clone());
+
         let inferred_type_of_ok_expr = ok_expr.inferred_type();
         let result_type = InferredType::Result {
             ok: Some(Box::new(inferred_type_of_ok_expr)),
             error: None,
         };
-        let new_result = Expr::Result {
-            expr: Ok(Box::new(ok_expr.clone())),
-            type_annotation: None,
-            inferred_type: current_ok_type.merge(result_type),
-            source_span: source_span.clone(),
-        };
-        inferred_expr_stack.push_front(new_result);
+       *current_inferred_type = current_inferred_type.merge(result_type);
     }
 
     pub(crate) fn handle_result_error(
-        original_error_expr: &Expr,
-        current_error_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        error_expr: &Expr,
+        current_inferred_type: &mut InferredType,
     ) {
-        let expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_error_expr.clone());
-        let inferred_type_of_error_expr = expr.inferred_type();
+        let inferred_type_of_error_expr = error_expr.inferred_type();
         let result_type = InferredType::Result {
             ok: None,
             error: Some(Box::new(inferred_type_of_error_expr)),
         };
-        let new_result = Expr::Result {
-            expr: Err(Box::new(expr.clone())),
-            type_annotation: None,
-            inferred_type: current_error_type.merge(result_type),
-            source_span: source_span.clone(),
-        };
-        inferred_expr_stack.push_front(new_result);
+
+        *current_inferred_type = current_inferred_type.merge(result_type);
     }
 
     pub(crate) fn handle_option_some(
-        original_some_expr: &Expr,
-        current_some_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        some_expr: &Expr,
+        inferred_type: &mut InferredType,
     ) {
-        let expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_some_expr.clone());
-        let inferred_type_of_some_expr = expr.inferred_type();
+        let inferred_type_of_some_expr = some_expr.inferred_type();
         let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
-        let new_option = Expr::option(Some(expr.clone()))
-            .with_inferred_type(current_some_type.merge(option_type))
-            .with_source_span(source_span.clone());
-        inferred_expr_stack.push_front(new_option);
+
+        *inferred_type = inferred_type.merge(option_type);
     }
 
     pub(crate) fn handle_if_else(
-        original_predicate: &Expr,
-        original_then_expr: &Expr,
-        original_else_expr: &Expr,
-        current_inferred_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        then_expr: &Expr,
+        else_expr: &Expr,
+        inferred_type: &mut InferredType,
     ) {
-        let else_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_else_expr.clone());
-        let then_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_then_expr.clone());
-        let cond_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_predicate.clone());
         let inferred_type_of_then_expr = then_expr.inferred_type();
         let inferred_type_of_else_expr = else_expr.inferred_type();
 
-        let new_type = current_inferred_type
+        *inferred_type = inferred_type
             .merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
-
-        let new_expr = Expr::cond(cond_expr, then_expr.clone(), else_expr.clone())
-            .with_inferred_type(new_type)
-            .with_source_span(source_span.clone());
-
-        inferred_expr_stack.push_front(new_expr);
     }
 
     pub fn handle_pattern_match(
-        predicate: &Expr,
         current_match_arms: &[MatchArm],
-        current_inferred_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        inferred_type: &mut InferredType,
     ) {
-        let mut new_resolutions = vec![];
-        let mut new_arm_patterns = vec![];
-        for un_inferred_match_arm in current_match_arms.iter().rev() {
-            let arm_resolution = inferred_expr_stack
-                .pop_front()
-                .unwrap_or(un_inferred_match_arm.arm_resolution_expr.deref().clone());
 
-            let mut arm_pattern = un_inferred_match_arm.arm_pattern.clone();
-            let mut current_arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
+        let mut arm_resolution_inferred_types = vec![];
 
-            let mut new_arm_pattern_exprs = vec![];
-
-            for _ in &current_arm_pattern_exprs {
-                let arm_expr = inferred_expr_stack.pop_front();
-                new_arm_pattern_exprs.push(arm_expr)
-            }
-            new_arm_pattern_exprs.reverse();
-
-            current_arm_pattern_exprs
-                .iter_mut()
-                .zip(new_arm_pattern_exprs.iter())
-                .for_each(|(arm_expr, new_expr_opt)| {
-                    if let Some(new_expr) = new_expr_opt {
-                        **arm_expr = Box::new(new_expr.clone());
-                    }
-                });
-
-            new_resolutions.push(arm_resolution);
-            new_arm_patterns.push(arm_pattern);
+        for arm  in current_match_arms {
+            let arm_inferred_type = arm.arm_resolution_expr.inferred_type();
+            arm_resolution_inferred_types.push(arm_inferred_type);
         }
 
-        let inferred_types = new_resolutions
-            .iter()
-            .map(|expr| expr.inferred_type())
-            .collect::<Vec<_>>();
+        let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);
 
-        let new_inferred_type = InferredType::all_of(inferred_types);
-
-        let mut new_match_arms = new_arm_patterns
-            .iter()
-            .zip(new_resolutions.iter())
-            .map(|(arm_pattern, arm_resolution)| crate::MatchArm {
-                arm_pattern: arm_pattern.clone(),
-                arm_resolution_expr: Box::new(arm_resolution.clone()),
-            })
-            .collect::<Vec<_>>();
-
-        new_match_arms.reverse();
-
-        let new_type = if let Some(new_inferred_type) = new_inferred_type {
-            current_inferred_type.merge(new_inferred_type)
-        } else {
-            current_inferred_type.clone()
-        };
-
-        let pred = inferred_expr_stack.pop_front().unwrap_or(predicate.clone());
-
-        let new_expr = Expr::pattern_match(pred.clone(), new_match_arms)
-            .with_inferred_type(new_type)
-            .with_source_span(source_span.clone());
-
-        inferred_expr_stack.push_front(new_expr);
-    }
-
-    pub(crate) fn handle_concat(
-        exprs: &Vec<Expr>,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
-    ) {
-        let mut new_exprs = vec![];
-        for expr in exprs {
-            let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
-            new_exprs.push(expr);
+        if let Some(new_inferred_type) = new_inferred_type {
+           *inferred_type = inferred_type.merge(new_inferred_type)
         }
-
-        new_exprs.reverse();
-
-        let new_concat = Expr::concat(new_exprs)
-            .with_inferred_type(InferredType::Str)
-            .with_source_span(source_span.clone());
-        inferred_expr_stack.push_front(new_concat);
     }
-
+    
     pub(crate) fn handle_multiple(
-        current_expr_list: &Vec<Expr>,
-        current_inferred_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        expr_block: &Vec<Expr>,
+        inferred_type: &mut InferredType,
     ) {
-        let mut new_exprs = vec![];
-        for _ in current_expr_list {
-            let expr = inferred_expr_stack.pop_front();
-            if let Some(expr) = expr {
-                new_exprs.push(expr);
-            } else {
-                break;
-            }
+
+        let new_inferred_type =
+            expr_block.last().map(|x| x.inferred_type());
+
+        if let Some(new_inferred_type) = new_inferred_type {
+            *inferred_type = inferred_type.merge(new_inferred_type);
         }
-
-        new_exprs.reverse();
-
-        let new_inferred_type = if let Some(last_expr) = new_exprs.last() {
-            last_expr.inferred_type()
-        } else {
-            InferredType::Unknown
-        };
-
-        let new_multiple = Expr::expr_block(new_exprs)
-            .with_inferred_type(current_inferred_type.merge(new_inferred_type))
-            .with_source_span(source_span.clone());
-
-        inferred_expr_stack.push_front(new_multiple);
     }
 
     pub(crate) fn handle_not(
@@ -1561,88 +1284,69 @@ mod internal {
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
-        original_selection_expr: &Expr,
-        select_field: &str,
-        select_from_type: &InferredType,
+        select_from: &Expr,
+        field: &str,
     ) -> Result<InferredType, RibTypeError> {
-        let refined_record = RecordType::refine(select_from_type).ok_or({
+        let select_from_inferred_type = select_from.inferred_type();
+        let refined_record = RecordType::refine(&select_from_inferred_type).ok_or({
             TypeMismatchError {
-                expr_with_wrong_type: original_selection_expr.clone(),
+                expr_with_wrong_type: select_from.clone(),
                 parent_expr: None,
                 expected_type: ExpectedType::Hint(TypeHint::Record(None)),
-                actual_type: ActualType::Inferred(select_from_type.clone()),
-                field_path: Default::default(),
+                actual_type: ActualType::Inferred(select_from_inferred_type.clone()),
+                field_path: Path::default(),
                 additional_error_detail: vec![format!(
-                    "Cannot select {} since it is not a record type. Found: {:?}",
-                    select_field, select_from_type
+                    "cannot select {} from {} since it is not a record type. Found: {}",
+                    field, select_from, select_from_inferred_type.get_type_hint()
                 )],
             }
         })?;
 
-        Ok(refined_record.inner_type_by_name(select_field))
-    }
-
-    #[derive(Debug, Clone)]
-    pub(crate) enum SelectionIndexType {
-        Range(InferredType), // Range type
-        Index(InferredType), // This should be a number type
+        Ok(refined_record.inner_type_by_name(field))
     }
 
     fn get_inferred_type_of_selection_dynamic(
-        original_selection_expr: &Expr,
-        selected_index: &Expr,
-        select_from_type: &InferredType,
-        select_index_type: &InferredType,
-    ) -> Result<(SelectionIndexType, InferredType), RibTypeError> {
-        let refined_list = ListType::refine(select_from_type).ok_or({
+        select_from: &Expr,
+        index: &Expr,
+    ) -> Result<InferredType, RibTypeError> {
+
+        let select_from_type = select_from.inferred_type();
+        let select_index_type = index.inferred_type();
+
+        let refined_list = ListType::refine(&select_from_type).ok_or({
             TypeMismatchError {
-                expr_with_wrong_type: original_selection_expr.clone(),
+                expr_with_wrong_type: select_from.clone(),
                 parent_expr: None,
                 expected_type: ExpectedType::Hint(TypeHint::List(None)),
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
-                    "cannot get index {} since it is not a list type. Found: {:?}",
-                    selected_index, select_from_type
+                    "cannot get index {} from {} since it is not a list type. Found: {}",
+                    index, select_from, select_from_type.get_type_hint()
                 )],
             }
         })?;
 
         let list_type = refined_list.inner_type();
 
-        let is_number = select_index_type.contains_only_number();
-
-        if is_number {
-            Ok((
-                SelectionIndexType::Index(select_index_type.clone()),
-                list_type,
-            ))
+        if select_index_type.contains_only_number() {
+            Ok(list_type)
         } else {
-            let range = RangeType::refine(select_index_type).ok_or({
+            let range = RangeType::refine(&select_index_type).ok_or({
                 TypeMismatchError {
-                    expr_with_wrong_type: original_selection_expr.clone(),
+                    expr_with_wrong_type: select_from.clone(),
                     parent_expr: None,
                     expected_type: ExpectedType::Hint(TypeHint::Number),
                     actual_type: ActualType::Inferred(select_index_type.clone()),
                     field_path: Default::default(),
                     additional_error_detail: vec![format!(
-                        "Cannot get index {} since it is neither a number type (or a range type). Found: {:?}",
-                        selected_index, select_index_type
+                        "cannot get index {} from {} since it is neither a number type or a range type. found: {}",
+                        index, select_from, select_index_type.get_type_hint()
                     )],
                 }
             })?;
 
-            // Selecting a range results in a list type
-            let range = range.inner_types().0;
-            let range_type = InferredType::Range {
-                from: Box::new(range[0].clone()),
-                to: range.last().map(|x| Box::new(x.clone())),
-            };
-
-            Ok((
-                SelectionIndexType::Range(range_type),
-                InferredType::List(Box::new(list_type)),
-            ))
+            Ok(InferredType::List(Box::new(list_type)),)
         }
     }
 }
@@ -1656,7 +1360,7 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -2093,6 +1797,84 @@ mod type_pull_up_tests {
         let new_expr = expr.pull_types_up().unwrap();
         let expected = internal::expected_pattern_match();
         assert_eq!(new_expr, expected);
+    }
+
+    fn pull_up(expr: &mut Expr) {
+        let mut expr = ExprVisitor::bottom_up(expr);
+        while let Some(expr) = expr.pop_front() {
+            match expr {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    source_span,
+                    ..
+                } => {
+                    *inferred_type = InferredType::U32;
+                }
+
+                Expr::Sequence {
+                    exprs,
+                    inferred_type,
+                    source_span,
+                    type_annotation,
+                    ..
+                } => {
+                    let mut new_inferred_type = vec![];
+                    for expr in exprs.iter() {
+                        let inferred_type =  expr.inferred_type();
+                        new_inferred_type.push(inferred_type);
+                    }
+
+                    *inferred_type = InferredType::List(Box::new(new_inferred_type[0].clone()));
+                }
+
+                Expr::Tuple {
+                    exprs,
+                    inferred_type,
+                    source_span,
+                    ..
+                } => {
+                    let mut new_inferred_type = vec![];
+                    for expr in exprs.iter() {
+                        let inferred_type =  expr.inferred_type();
+                        new_inferred_type.push(inferred_type);
+                    }
+
+                    *inferred_type = InferredType::Tuple(new_inferred_type);
+                }
+
+                Expr::ExprBlock {
+                    exprs,
+                    inferred_type,
+                    source_span,
+                    ..
+                } => {
+                    let new_inferred_type =
+                        exprs.last().map_or(InferredType::Unknown, |last_expr| last_expr.inferred_type());
+
+                    *inferred_type = new_inferred_type
+                }
+
+                _ => {}
+            }
+
+
+        }
+    }
+
+    #[test]
+    fn test_tuple_pull_up() {
+        let expr = Expr::sequence(vec![
+            Expr::identifier_global("foo", None),
+            Expr::identifier_global("bar", None)], None
+        );
+
+        let mut block = Expr::expr_block(vec![expr.clone(), expr.clone()]);
+
+        pull_up(&mut block);
+
+        dbg!(block);
+        assert!(false)
     }
 
     mod internal {
