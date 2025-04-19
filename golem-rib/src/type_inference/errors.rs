@@ -115,7 +115,6 @@ pub struct TypeMismatchError {
     pub additional_error_detail: Vec<String>,
 }
 
-
 #[derive(Clone, Debug)]
 pub enum ExpectedType {
     AnalysedType(AnalysedType),

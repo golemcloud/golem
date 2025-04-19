@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
 use crate::rib_type_error::RibTypeError;
 use crate::{CustomError, Expr, ExprVisitor, InferredType};
+use std::ops::Deref;
 
 pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
@@ -33,7 +33,14 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
 
             Expr::Flags { .. } => {}
 
-            Expr::InvokeMethodLazy { lhs, generic_type_parameter, method, args, .. } => {
+            Expr::InvokeMethodLazy {
+                lhs,
+                generic_type_parameter,
+                method,
+                args,
+                source_span,
+                ..
+            } => {
                 let lhs_str = lhs.to_string();
                 return Err(CustomError {
                     expr: Expr::invoke_worker_function(
@@ -41,7 +48,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                         method.clone(),
                         generic_type_parameter.clone(),
                         args.clone(),
-                    ),
+                    ).with_source_span(source_span.clone()),
                     help_message: vec![],
                     message: format!("invalid method invocation `{}.{}`. make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs),
                 }.into());
@@ -132,9 +139,8 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type).map_err(
-                    |e| e.with_parent_expr(expr)
-                )?;
+                internal::handle_math_op(lhs, rhs, inferred_type)
+                    .map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Minus {
@@ -143,9 +149,8 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type).map_err(
-                    |e| e.with_parent_expr(expr)
-                )?;
+                internal::handle_math_op(lhs, rhs, inferred_type)
+                    .map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Multiply {
@@ -154,9 +159,8 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type).map_err(
-                    |e| e.with_parent_expr(expr)
-                )?;
+                internal::handle_math_op(lhs, rhs, inferred_type)
+                    .map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Divide {
@@ -165,9 +169,8 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type).map_err(
-                    |e| e.with_parent_expr(expr)
-                )?;
+                internal::handle_math_op(lhs, rhs, inferred_type)
+                    .map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Let { .. } => {}
@@ -192,7 +195,11 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
             Expr::And { .. } => {}
             Expr::Or { .. } => {}
             Expr::Call { .. } => {}
-            Expr::Unwrap { expr, inferred_type, .. } => {
+            Expr::Unwrap {
+                expr,
+                inferred_type,
+                ..
+            } => {
                 *inferred_type = inferred_type.merge(expr.inferred_type());
             }
             Expr::Length { .. } => {}
@@ -205,7 +212,11 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 internal::handle_list_comprehension(yield_expr, inferred_type);
             }
 
-            Expr::GetTag { expr, inferred_type, .. } => {
+            Expr::GetTag {
+                expr,
+                inferred_type,
+                ..
+            } => {
                 *inferred_type = inferred_type.merge(expr.inferred_type());
             }
 
@@ -217,7 +228,13 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 *inferred_type = inferred_type.merge(init_value_expr.inferred_type());
             }
 
-            Expr::Range { .. } => {}
+            Expr::Range {
+                range,
+                inferred_type,
+                ..
+            } => {
+                internal::handle_range(range, inferred_type);
+            }
         }
     }
 
@@ -448,6 +465,45 @@ mod internal {
             field_and_types.push((field.clone(), expr.inferred_type()));
         }
         *record_type = record_type.merge(InferredType::Record(field_and_types));
+    }
+
+    pub(crate) fn handle_range(range: &Range, inferred_type: &mut InferredType) {
+        match range {
+            Range::Range { from, to } => {
+                let rhs = to.inferred_type();
+
+                let lhs = from.inferred_type();
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(lhs),
+                    to: Some(Box::new(rhs)),
+                };
+
+                *inferred_type = new_inferred_type;
+            }
+            Range::RangeInclusive { from, to } => {
+                let rhs = to.inferred_type();
+
+                let lhs = from.inferred_type();
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(lhs),
+                    to: Some(Box::new(rhs)),
+                };
+
+                *inferred_type = new_inferred_type;
+            }
+            Range::RangeFrom { from } => {
+                let lhs = from.inferred_type();
+
+                let new_inferred_type = InferredType::Range {
+                    from: Box::new(lhs),
+                    to: None,
+                };
+
+                *inferred_type = new_inferred_type;
+            }
+        }
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
