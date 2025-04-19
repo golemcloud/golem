@@ -13,8 +13,14 @@
 // limitations under the License.
 
 use crate::rib_type_error::RibTypeError;
-use crate::{CustomError, Expr, ExprVisitor, InferredType};
-use std::ops::Deref;
+use crate::type_inference::type_hint::TypeHint;
+use crate::type_refinement::precise_types::{ListType, RecordType};
+use crate::type_refinement::TypeRefinement;
+use crate::{
+    ActualType, ExpectedType, GetTypeHint, InferredNumber, InferredType, MatchArm, Path, Range,
+    TypeMismatchError,
+};
+use crate::{CustomError, Expr, ExprVisitor};
 
 pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
@@ -26,7 +32,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_tuple(exprs, inferred_type);
+                handle_tuple(exprs, inferred_type);
             }
 
             Expr::Identifier { .. } => {}
@@ -41,7 +47,6 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 source_span,
                 ..
             } => {
-                let lhs_str = lhs.to_string();
                 return Err(CustomError {
                     expr: Expr::invoke_worker_function(
                         lhs.as_ref().clone(),
@@ -60,17 +65,16 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_select_field(expr, field, inferred_type)?;
+                handle_select_field(expr, field, inferred_type)?;
             }
 
             Expr::SelectIndex {
                 expr,
                 index,
                 inferred_type,
-                source_span,
                 ..
             } => {
-                internal::handle_select_index(expr, index, inferred_type)?;
+                handle_select_index(expr, index, inferred_type)?;
             }
 
             Expr::Result {
@@ -78,7 +82,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_result_ok(expr, inferred_type);
+                handle_result_ok(expr, inferred_type);
             }
 
             Expr::Result {
@@ -86,7 +90,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_result_error(expr, inferred_type);
+                handle_result_error(expr, inferred_type);
             }
 
             Expr::Option {
@@ -94,7 +98,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_option_some(expr, inferred_type);
+                handle_option_some(expr, inferred_type);
             }
 
             Expr::Option { .. } => {}
@@ -105,7 +109,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_if_else(lhs, rhs, inferred_type);
+                handle_if_else(lhs, rhs, inferred_type);
             }
 
             Expr::PatternMatch {
@@ -113,7 +117,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_pattern_match(match_arms, inferred_type);
+                handle_pattern_match(match_arms, inferred_type);
             }
 
             Expr::Concat { .. } => {}
@@ -123,7 +127,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_multiple(exprs, inferred_type);
+                handle_multiple(exprs, inferred_type);
             }
 
             Expr::Not { .. } => {}
@@ -139,8 +143,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type)
-                    .map_err(|e| e.with_parent_expr(expr))?;
+                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Minus {
@@ -149,8 +152,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type)
-                    .map_err(|e| e.with_parent_expr(expr))?;
+                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Multiply {
@@ -159,8 +161,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type)
-                    .map_err(|e| e.with_parent_expr(expr))?;
+                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Divide {
@@ -169,8 +170,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_math_op(lhs, rhs, inferred_type)
-                    .map_err(|e| e.with_parent_expr(expr))?;
+                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
             }
 
             Expr::Let { .. } => {}
@@ -180,14 +180,14 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_sequence(exprs, inferred_type);
+                handle_sequence(exprs, inferred_type);
             }
 
             Expr::Record {
                 exprs,
                 inferred_type,
                 ..
-            } => internal::handle_record(exprs, inferred_type),
+            } => handle_record(exprs, inferred_type),
 
             Expr::Literal { .. } => {}
             Expr::Number { .. } => {}
@@ -209,7 +209,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_list_comprehension(yield_expr, inferred_type);
+                handle_list_comprehension(yield_expr, inferred_type);
             }
 
             Expr::GetTag {
@@ -233,7 +233,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_range(range, inferred_type);
+                handle_range(range, inferred_type);
             }
         }
     }
@@ -241,339 +241,275 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
     Ok(())
 }
 
-mod internal {
-    use crate::rib_source_span::SourceSpan;
-    use crate::rib_type_error::RibTypeError;
-    use crate::type_inference::type_hint::TypeHint;
-    use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
-    use crate::type_refinement::TypeRefinement;
-    use crate::{
-        ActualType, ExpectedType, Expr, GetTypeHint, InferredNumber, InferredType, MatchArm, Path,
-        Range, TypeMismatchError, TypeName, VariableId,
+fn handle_list_comprehension(
+    current_yield_expr: &Expr,
+    current_comprehension_type: &mut InferredType,
+) {
+    let list_expr = InferredType::List(Box::new(current_yield_expr.inferred_type()));
+    *current_comprehension_type = current_comprehension_type.merge(list_expr);
+}
+
+fn handle_tuple(tuple_elems: &[Expr], current_tuple_type: &mut InferredType) {
+    let mut new_inferred_type = vec![];
+
+    for current_tuple_elem in tuple_elems.iter() {
+        new_inferred_type.push(current_tuple_elem.inferred_type());
+    }
+
+    let new_tuple_type = InferredType::Tuple(new_inferred_type);
+
+    *current_tuple_type = current_tuple_type.merge(new_tuple_type);
+}
+
+fn handle_select_field(
+    select_from: &Expr,
+    field: &str,
+    current_field_type: &mut InferredType,
+) -> Result<(), RibTypeError> {
+    let selection_field_type = get_inferred_type_of_selected_field(select_from, field)?;
+
+    *current_field_type = current_field_type.merge(selection_field_type);
+
+    Ok(())
+}
+
+fn handle_select_index(
+    select_from: &Expr,
+    index: &Expr,
+    current_select_index_type: &mut InferredType,
+) -> Result<(), RibTypeError> {
+    let selection_expr_inferred_type = select_from.inferred_type();
+
+    // if select_from is not yet gone through any phase, we cannot guarantee
+    // it is a list type, otherwise continue with the assumption that it is a record
+    if !selection_expr_inferred_type.is_unknown() {
+        let index_type = get_inferred_type_of_selection_dynamic(select_from, index)?;
+
+        *current_select_index_type = current_select_index_type.merge(index_type);
+    }
+
+    Ok(())
+}
+
+fn handle_result_ok(ok_expr: &mut Expr, current_inferred_type: &mut InferredType) {
+    let inferred_type_of_ok_expr = ok_expr.inferred_type();
+    let result_type = InferredType::Result {
+        ok: Some(Box::new(inferred_type_of_ok_expr)),
+        error: None,
+    };
+    *current_inferred_type = current_inferred_type.merge(result_type);
+}
+
+fn handle_result_error(error_expr: &Expr, current_inferred_type: &mut InferredType) {
+    let inferred_type_of_error_expr = error_expr.inferred_type();
+    let result_type = InferredType::Result {
+        ok: None,
+        error: Some(Box::new(inferred_type_of_error_expr)),
     };
 
-    use std::collections::VecDeque;
-    use std::ops::Deref;
+    *current_inferred_type = current_inferred_type.merge(result_type);
+}
 
-    pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
-        let mut stack = VecDeque::new();
+fn handle_option_some(some_expr: &Expr, inferred_type: &mut InferredType) {
+    let inferred_type_of_some_expr = some_expr.inferred_type();
+    let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
 
-        stack.push_back(expr);
+    *inferred_type = inferred_type.merge(option_type);
+}
 
-        while let Some(current_expr) = stack.pop_back() {
-            expr_queue.push_back(current_expr);
+fn handle_if_else(then_expr: &Expr, else_expr: &Expr, inferred_type: &mut InferredType) {
+    let inferred_type_of_then_expr = then_expr.inferred_type();
+    let inferred_type_of_else_expr = else_expr.inferred_type();
 
-            current_expr.visit_children_bottom_up(&mut stack)
-        }
+    *inferred_type =
+        inferred_type.merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
+}
+
+pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut InferredType) {
+    let mut arm_resolution_inferred_types = vec![];
+
+    for arm in current_match_arms {
+        let arm_inferred_type = arm.arm_resolution_expr.inferred_type();
+        arm_resolution_inferred_types.push(arm_inferred_type);
     }
 
-    pub(crate) fn handle_list_comprehension(
-        current_yield_expr: &Expr,
-        current_comprehension_type: &mut InferredType,
-    ) {
-        let list_expr = InferredType::List(Box::new(current_yield_expr.inferred_type()));
-        *current_comprehension_type = current_comprehension_type.merge(list_expr);
+    let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);
+
+    if let Some(new_inferred_type) = new_inferred_type {
+        *inferred_type = inferred_type.merge(new_inferred_type)
     }
+}
 
-    pub(crate) fn handle_list_reduce(
-        reduce_variable: &VariableId,
-        iterated_variable: &VariableId,
-        iterable_expr: &Expr,
-        initial_value_expr: &Expr,
-        yield_expr: &Expr,
-        reduce_type: &mut InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
-    ) {
-        *reduce_type = reduce_type.merge(initial_value_expr.inferred_type());
+fn handle_multiple(expr_block: &[Expr], inferred_type: &mut InferredType) {
+    let new_inferred_type = expr_block.last().map(|x| x.inferred_type());
+
+    if let Some(new_inferred_type) = new_inferred_type {
+        *inferred_type = inferred_type.merge(new_inferred_type);
     }
+}
 
-    pub(crate) fn handle_tuple(tuple_elems: &[Expr], current_tuple_type: &mut InferredType) {
-        let mut new_inferred_type = vec![];
+fn handle_math_op(
+    lhs: &Expr,
+    rhs: &Expr,
+    result_type: &mut InferredType,
+) -> Result<(), TypeMismatchError> {
+    // If final result  is not resolved, while both lhs and rhs are resolved
+    // then we expect the
+    if result_type.un_resolved()
+        && !rhs.inferred_type().un_resolved()
+        && !lhs.inferred_type().un_resolved()
+    {
+        let right_number_type = get_number(rhs)?;
+        let left_number_type = get_number(lhs)?;
 
-        for current_tuple_elem in tuple_elems.iter() {
-            new_inferred_type.push(current_tuple_elem.inferred_type());
-        }
-
-        let new_tuple_type = InferredType::Tuple(new_inferred_type);
-
-        *current_tuple_type = current_tuple_type.merge(new_tuple_type);
-    }
-
-    pub(crate) fn handle_select_field(
-        select_from: &Expr,
-        field: &str,
-        current_field_type: &mut InferredType,
-    ) -> Result<(), RibTypeError> {
-        let selection_field_type = get_inferred_type_of_selected_field(select_from, field)?;
-
-        *current_field_type = current_field_type.merge(selection_field_type);
-
-        Ok(())
-    }
-
-    pub(crate) fn handle_select_index(
-        select_from: &Expr,
-        index: &Expr,
-        current_select_index_type: &mut InferredType,
-    ) -> Result<(), RibTypeError> {
-        let selection_expr_inferred_type = select_from.inferred_type();
-
-        // if select_from is not yet gone through any phase, we cannot guarantee
-        // it is a list type, otherwise continue with the assumption that it is a record
-        if !selection_expr_inferred_type.is_unknown() {
-            let index_type = get_inferred_type_of_selection_dynamic(select_from, index)?;
-
-            *current_select_index_type = current_select_index_type.merge(index_type);
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn handle_result_ok(ok_expr: &mut Expr, current_inferred_type: &mut InferredType) {
-        let inferred_type_of_ok_expr = ok_expr.inferred_type();
-        let result_type = InferredType::Result {
-            ok: Some(Box::new(inferred_type_of_ok_expr)),
-            error: None,
-        };
-        *current_inferred_type = current_inferred_type.merge(result_type);
-    }
-
-    pub(crate) fn handle_result_error(error_expr: &Expr, current_inferred_type: &mut InferredType) {
-        let inferred_type_of_error_expr = error_expr.inferred_type();
-        let result_type = InferredType::Result {
-            ok: None,
-            error: Some(Box::new(inferred_type_of_error_expr)),
-        };
-
-        *current_inferred_type = current_inferred_type.merge(result_type);
-    }
-
-    pub(crate) fn handle_option_some(some_expr: &Expr, inferred_type: &mut InferredType) {
-        let inferred_type_of_some_expr = some_expr.inferred_type();
-        let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
-
-        *inferred_type = inferred_type.merge(option_type);
-    }
-
-    pub(crate) fn handle_if_else(
-        then_expr: &Expr,
-        else_expr: &Expr,
-        inferred_type: &mut InferredType,
-    ) {
-        let inferred_type_of_then_expr = then_expr.inferred_type();
-        let inferred_type_of_else_expr = else_expr.inferred_type();
-
-        *inferred_type =
-            inferred_type.merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
-    }
-
-    pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut InferredType) {
-        let mut arm_resolution_inferred_types = vec![];
-
-        for arm in current_match_arms {
-            let arm_inferred_type = arm.arm_resolution_expr.inferred_type();
-            arm_resolution_inferred_types.push(arm_inferred_type);
-        }
-
-        let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);
-
-        if let Some(new_inferred_type) = new_inferred_type {
-            *inferred_type = inferred_type.merge(new_inferred_type)
-        }
-    }
-
-    pub(crate) fn handle_multiple(expr_block: &Vec<Expr>, inferred_type: &mut InferredType) {
-        let new_inferred_type = expr_block.last().map(|x| x.inferred_type());
-
-        if let Some(new_inferred_type) = new_inferred_type {
-            *inferred_type = inferred_type.merge(new_inferred_type);
-        }
-    }
-
-    pub(crate) fn handle_math_op(
-        lhs: &Expr,
-        rhs: &Expr,
-        result_type: &mut InferredType,
-    ) -> Result<(), TypeMismatchError> {
-        // If final result  is not resolved, while both lhs and rhs are resolved
-        // then we expect the
-        if result_type.un_resolved()
-            && !rhs.inferred_type().un_resolved()
-            && !lhs.inferred_type().un_resolved()
-        {
-            let right_number_type = get_number(rhs)?;
-            let left_number_type = get_number(lhs)?;
-
-            if right_number_type == left_number_type {
-                *result_type = result_type.merge(InferredType::from(right_number_type.clone()));
-            } else {
-                return Err(TypeMismatchError {
-                    expr_with_wrong_type: lhs.clone(),
-                    parent_expr: None,
-                    expected_type: ExpectedType::Hint(TypeHint::Number),
-                    actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
-                    field_path: Default::default(),
-                    additional_error_detail: vec![
-                        "type mismatch in mathematical expression: operands have incompatible types. "
-                            .to_string(),
-                    ],
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    fn get_number(number_expr: &Expr) -> Result<InferredNumber, TypeMismatchError> {
-        let rhs_type = number_expr.inferred_type();
-
-        rhs_type.as_number().map_err(|_| TypeMismatchError {
-            expr_with_wrong_type: number_expr.clone(),
-            parent_expr: None,
-            expected_type: ExpectedType::Hint(TypeHint::Number),
-            actual_type: ActualType::Inferred(rhs_type),
-            field_path: Default::default(),
-            additional_error_detail: vec![],
-        })
-    }
-
-    pub(crate) fn handle_sequence(
-        current_expr_list: &[Expr],
-        current_inferred_type: &mut InferredType,
-    ) {
-        let mut new_inferred_type = vec![];
-
-        for expr in current_expr_list.iter() {
-            let new_type = expr.inferred_type();
-            new_inferred_type.push(new_type);
-        }
-
-        if let Some(first_inferred_type) = new_inferred_type.first() {
-            *current_inferred_type = current_inferred_type
-                .merge(InferredType::List(Box::new(first_inferred_type.clone())));
-        }
-    }
-
-    pub(crate) fn handle_record(
-        current_expr_list: &[(String, Box<Expr>)],
-        record_type: &mut InferredType,
-    ) {
-        let mut field_and_types = vec![];
-
-        for (field, expr) in current_expr_list.iter() {
-            field_and_types.push((field.clone(), expr.inferred_type()));
-        }
-        *record_type = record_type.merge(InferredType::Record(field_and_types));
-    }
-
-    pub(crate) fn handle_range(range: &Range, inferred_type: &mut InferredType) {
-        match range {
-            Range::Range { from, to } => {
-                let rhs = to.inferred_type();
-
-                let lhs = from.inferred_type();
-
-                let new_inferred_type = InferredType::Range {
-                    from: Box::new(lhs),
-                    to: Some(Box::new(rhs)),
-                };
-
-                *inferred_type = new_inferred_type;
-            }
-            Range::RangeInclusive { from, to } => {
-                let rhs = to.inferred_type();
-
-                let lhs = from.inferred_type();
-
-                let new_inferred_type = InferredType::Range {
-                    from: Box::new(lhs),
-                    to: Some(Box::new(rhs)),
-                };
-
-                *inferred_type = new_inferred_type;
-            }
-            Range::RangeFrom { from } => {
-                let lhs = from.inferred_type();
-
-                let new_inferred_type = InferredType::Range {
-                    from: Box::new(lhs),
-                    to: None,
-                };
-
-                *inferred_type = new_inferred_type;
-            }
-        }
-    }
-
-    pub(crate) fn get_inferred_type_of_selected_field(
-        select_from: &Expr,
-        field: &str,
-    ) -> Result<InferredType, RibTypeError> {
-        let select_from_inferred_type = select_from.inferred_type();
-        let refined_record = RecordType::refine(&select_from_inferred_type).ok_or({
-            TypeMismatchError {
-                expr_with_wrong_type: select_from.clone(),
-                parent_expr: None,
-                expected_type: ExpectedType::Hint(TypeHint::Record(None)),
-                actual_type: ActualType::Inferred(select_from_inferred_type.clone()),
-                field_path: Path::default(),
-                additional_error_detail: vec![format!(
-                    "cannot select {} from {} since it is not a record type. Found: {}",
-                    field,
-                    select_from,
-                    select_from_inferred_type.get_type_hint()
-                )],
-            }
-        })?;
-
-        Ok(refined_record.inner_type_by_name(field))
-    }
-
-    fn get_inferred_type_of_selection_dynamic(
-        select_from: &Expr,
-        index: &Expr,
-    ) -> Result<InferredType, RibTypeError> {
-        let select_from_type = select_from.inferred_type();
-        let select_index_type = index.inferred_type();
-
-        let refined_list = ListType::refine(&select_from_type).ok_or({
-            TypeMismatchError {
-                expr_with_wrong_type: select_from.clone(),
-                parent_expr: None,
-                expected_type: ExpectedType::Hint(TypeHint::List(None)),
-                actual_type: ActualType::Inferred(select_from_type.clone()),
-                field_path: Default::default(),
-                additional_error_detail: vec![format!(
-                    "cannot get index {} from {} since it is not a list type. Found: {}",
-                    index,
-                    select_from,
-                    select_from_type.get_type_hint()
-                )],
-            }
-        })?;
-
-        let list_type = refined_list.inner_type();
-
-        if select_index_type.contains_only_number() {
-            Ok(list_type)
+        if right_number_type == left_number_type {
+            *result_type = result_type.merge(InferredType::from(right_number_type.clone()));
         } else {
-            let range = RangeType::refine(&select_index_type).ok_or({
-                TypeMismatchError {
-                    expr_with_wrong_type: select_from.clone(),
-                    parent_expr: None,
-                    expected_type: ExpectedType::Hint(TypeHint::Number),
-                    actual_type: ActualType::Inferred(select_index_type.clone()),
-                    field_path: Default::default(),
-                    additional_error_detail: vec![format!(
-                        "cannot get index {} from {} since it is neither a number type or a range type. found: {}",
-                        index, select_from, select_index_type.get_type_hint()
-                    )],
-                }
-            })?;
-
-            Ok(InferredType::List(Box::new(list_type)))
+            return Err(TypeMismatchError {
+                expr_with_wrong_type: lhs.clone(),
+                parent_expr: None,
+                expected_type: ExpectedType::Hint(TypeHint::Number),
+                actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
+                field_path: Default::default(),
+                additional_error_detail: vec![
+                    "type mismatch in mathematical expression: operands have incompatible types. "
+                        .to_string(),
+                ],
+            });
         }
+    }
+
+    Ok(())
+}
+
+fn get_number(number_expr: &Expr) -> Result<InferredNumber, TypeMismatchError> {
+    let rhs_type = number_expr.inferred_type();
+
+    rhs_type.as_number().map_err(|_| TypeMismatchError {
+        expr_with_wrong_type: number_expr.clone(),
+        parent_expr: None,
+        expected_type: ExpectedType::Hint(TypeHint::Number),
+        actual_type: ActualType::Inferred(rhs_type),
+        field_path: Default::default(),
+        additional_error_detail: vec![],
+    })
+}
+
+fn handle_sequence(current_expr_list: &[Expr], current_inferred_type: &mut InferredType) {
+    let mut new_inferred_type = vec![];
+
+    for expr in current_expr_list.iter() {
+        let new_type = expr.inferred_type();
+        new_inferred_type.push(new_type);
+    }
+
+    if let Some(first_inferred_type) = new_inferred_type.first() {
+        *current_inferred_type =
+            current_inferred_type.merge(InferredType::List(Box::new(first_inferred_type.clone())));
+    }
+}
+
+fn handle_record(current_expr_list: &[(String, Box<Expr>)], record_type: &mut InferredType) {
+    let mut field_and_types = vec![];
+
+    for (field, expr) in current_expr_list.iter() {
+        field_and_types.push((field.clone(), expr.inferred_type()));
+    }
+    *record_type = record_type.merge(InferredType::Record(field_and_types));
+}
+
+fn handle_range(range: &Range, inferred_type: &mut InferredType) {
+    match range {
+        Range::Range { from, to } => {
+            let rhs = to.inferred_type();
+
+            let lhs = from.inferred_type();
+
+            let new_inferred_type = InferredType::Range {
+                from: Box::new(lhs),
+                to: Some(Box::new(rhs)),
+            };
+
+            *inferred_type = new_inferred_type;
+        }
+        Range::RangeInclusive { from, to } => {
+            let rhs = to.inferred_type();
+
+            let lhs = from.inferred_type();
+
+            let new_inferred_type = InferredType::Range {
+                from: Box::new(lhs),
+                to: Some(Box::new(rhs)),
+            };
+
+            *inferred_type = new_inferred_type;
+        }
+        Range::RangeFrom { from } => {
+            let lhs = from.inferred_type();
+
+            let new_inferred_type = InferredType::Range {
+                from: Box::new(lhs),
+                to: None,
+            };
+
+            *inferred_type = new_inferred_type;
+        }
+    }
+}
+
+fn get_inferred_type_of_selected_field(
+    select_from: &Expr,
+    field: &str,
+) -> Result<InferredType, RibTypeError> {
+    let select_from_inferred_type = select_from.inferred_type();
+    let refined_record = RecordType::refine(&select_from_inferred_type).ok_or({
+        TypeMismatchError {
+            expr_with_wrong_type: select_from.clone(),
+            parent_expr: None,
+            expected_type: ExpectedType::Hint(TypeHint::Record(None)),
+            actual_type: ActualType::Inferred(select_from_inferred_type.clone()),
+            field_path: Path::default(),
+            additional_error_detail: vec![format!(
+                "cannot select {} from {} since it is not a record type. Found: {}",
+                field,
+                select_from,
+                select_from_inferred_type.get_type_hint()
+            )],
+        }
+    })?;
+
+    Ok(refined_record.inner_type_by_name(field))
+}
+
+fn get_inferred_type_of_selection_dynamic(
+    select_from: &Expr,
+    index: &Expr,
+) -> Result<InferredType, RibTypeError> {
+    let select_from_type = select_from.inferred_type();
+    let select_index_type = index.inferred_type();
+
+    let refined_list = ListType::refine(&select_from_type).ok_or({
+        TypeMismatchError {
+            expr_with_wrong_type: select_from.clone(),
+            parent_expr: None,
+            expected_type: ExpectedType::Hint(TypeHint::List(None)),
+            actual_type: ActualType::Inferred(select_from_type.clone()),
+            field_path: Default::default(),
+            additional_error_detail: vec![format!(
+                "cannot get index {} from {} since it is not a list type. Found: {}",
+                index,
+                select_from,
+                select_from_type.get_type_hint()
+            )],
+        }
+    })?;
+
+    let list_type = refined_list.inner_type();
+
+    if select_index_type.contains_only_number() {
+        Ok(list_type)
+    } else {
+        Ok(InferredType::List(Box::new(list_type)))
     }
 }
 
@@ -586,9 +522,7 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{
-        ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry, InferredType, MatchArm, VariableId,
-    };
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
