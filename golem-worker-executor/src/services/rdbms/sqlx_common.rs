@@ -30,9 +30,10 @@ use itertools::Either;
 use sqlx::pool::PoolConnection;
 use sqlx::{Database, Describe, Execute, Pool, Row, TransactionManager};
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
 use std::fmt::Formatter;
+use std::fmt::{Debug, Display};
 use std::ops::{Deref, DerefMut};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
@@ -886,6 +887,31 @@ pub enum DbTransactionStatus {
     NotFound,
 }
 
+impl Display for DbTransactionStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DbTransactionStatus::InProgress => write!(f, "InProgress"),
+            DbTransactionStatus::Committed => write!(f, "Committed"),
+            DbTransactionStatus::RolledBack => write!(f, "RolledBack"),
+            DbTransactionStatus::NotFound => write!(f, "NotFound"),
+        }
+    }
+}
+
+impl FromStr for DbTransactionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "InProgress" => Ok(DbTransactionStatus::InProgress),
+            "Committed" => Ok(DbTransactionStatus::Committed),
+            "RolledBack" => Ok(DbTransactionStatus::RolledBack),
+            "NotFound" => Ok(DbTransactionStatus::NotFound),
+            _ => Err(format!("Unknown transaction status: {}", s)),
+        }
+    }
+}
+
 #[async_trait]
 pub(crate) trait DbTransactionSupport<T: RdbmsType, DB: Database> {
     async fn begin(
@@ -920,23 +946,19 @@ pub(crate) trait DbTransactionSupport<T: RdbmsType, DB: Database> {
 }
 
 pub(crate) struct TableDbTransactionSupport {
-    transaction_table: String,
     query_config: RdbmsQueryConfig,
 }
 
 impl TableDbTransactionSupport {
-    pub(crate) fn new(transaction_table: String, query_config: RdbmsQueryConfig) -> Self {
-        Self {
-            transaction_table,
-            query_config,
-        }
+    pub(crate) fn new(query_config: RdbmsQueryConfig) -> Self {
+        Self { query_config }
     }
 }
 
 #[async_trait]
 impl<T, DB> DbTransactionSupport<T, DB> for TableDbTransactionSupport
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB> + 'static,
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionTableRepo<DB> + 'static,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
@@ -950,7 +972,11 @@ where
             .acquire()
             .await
             .map_err(Error::connection_failure)?;
+
         let identifier = RdbmsTransactionIdentifier::generate();
+
+        T::create_transaction(identifier.id.clone(), pool.deref()).await?;
+
         DB::TransactionManager::begin(&mut connection)
             .await
             .map_err(Error::query_execution_failure)?;
@@ -983,7 +1009,7 @@ where
         pool: Arc<Pool<DB>>,
         identifier: RdbmsTransactionIdentifier,
     ) -> Result<DbTransactionStatus, Error> {
-        todo!()
+        T::get_transaction_status(identifier.id, pool.deref()).await
     }
 
     async fn cleanup(
@@ -991,6 +1017,37 @@ where
         pool: Arc<Pool<DB>>,
         identifier: RdbmsTransactionIdentifier,
     ) -> Result<(), Error> {
-        todo!()
+        T::delete_transaction(identifier.id, pool.deref()).await?;
+        Ok(())
     }
+}
+
+#[async_trait]
+pub(crate) trait TransactionTableRepo<DB: Database> {
+    async fn create_transaction_table<'c, E>(executor: E) -> Result<(), Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
+
+    async fn create_transaction<'c, E>(id: String, executor: E) -> Result<(), Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
+
+    async fn delete_transaction<'c, E>(id: String, executor: E) -> Result<bool, Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
+
+    async fn update_transaction_status<'c, E>(
+        id: String,
+        status: DbTransactionStatus,
+        executor: E,
+    ) -> Result<bool, Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
+
+    async fn get_transaction_status<'c, E>(
+        id: String,
+        executor: E,
+    ) -> Result<DbTransactionStatus, Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
 }

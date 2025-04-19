@@ -75,9 +75,7 @@ pub(crate) struct PostgresDbTransactionSupport {
 
 impl PostgresDbTransactionSupport {
     fn new(query_config: RdbmsQueryConfig) -> Self {
-        Self {
-            query_config
-        }
+        Self { query_config }
     }
 }
 
