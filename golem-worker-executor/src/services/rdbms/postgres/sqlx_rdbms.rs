@@ -85,7 +85,7 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
         &self,
         key: &RdbmsPoolKey,
         pool: Arc<Pool<sqlx::Postgres>>,
-    ) -> Result<Arc<dyn DbTransaction<PostgresType> + Send + Sync>, Error> {
+    ) -> Result<Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>, Error> {
         let mut connection = pool
             .deref()
             .acquire()
@@ -104,7 +104,7 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
         let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
         let identifier = RdbmsTransactionIdentifier::new(id);
 
-        let db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync> = Arc::new(
+        let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
             SqlxDbTransaction::new(identifier, key.clone(), connection, self.query_config),
         );
 
@@ -114,7 +114,7 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
     async fn pre_commit(
         &self,
         _pool: Arc<Pool<sqlx::Postgres>>,
-        _db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
+        _db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>,
     ) -> Result<(), Error> {
         Ok(())
     }
@@ -122,7 +122,7 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
     async fn pre_rollback(
         &self,
         _pool: Arc<Pool<sqlx::Postgres>>,
-        _db_transaction: Arc<dyn DbTransaction<PostgresType> + Send + Sync>,
+        _db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>,
     ) -> Result<(), Error> {
         Ok(())
     }

@@ -918,18 +918,18 @@ pub(crate) trait DbTransactionSupport<T: RdbmsType, DB: Database> {
         &self,
         key: &RdbmsPoolKey,
         pool: Arc<Pool<DB>>,
-    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error>;
+    ) -> Result<Arc<SqlxDbTransaction<T, DB>>, Error>;
 
     async fn pre_commit(
         &self,
         pool: Arc<Pool<DB>>,
-        db_transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
+        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
     ) -> Result<(), Error>;
 
     async fn pre_rollback(
         &self,
         pool: Arc<Pool<DB>>,
-        db_transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
+        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
     ) -> Result<(), Error>;
 
     async fn get_status(
@@ -966,7 +966,7 @@ where
         &self,
         key: &RdbmsPoolKey,
         pool: Arc<Pool<DB>>,
-    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error> {
+    ) -> Result<Arc<SqlxDbTransaction<T, DB>>, Error> {
         let mut connection = pool
             .deref()
             .acquire()
@@ -981,27 +981,44 @@ where
             .await
             .map_err(Error::query_execution_failure)?;
 
-        let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> = Arc::new(
-            SqlxDbTransaction::new(identifier, key.clone(), connection, self.query_config),
-        );
+        let db_transaction: Arc<SqlxDbTransaction<T, DB>> = Arc::new(SqlxDbTransaction::new(
+            identifier,
+            key.clone(),
+            connection,
+            self.query_config,
+        ));
 
         Ok(db_transaction)
     }
 
     async fn pre_commit(
         &self,
-        pool: Arc<Pool<DB>>,
-        db_transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
+        _pool: Arc<Pool<DB>>,
+        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
     ) -> Result<(), Error> {
-        todo!()
+        let identifier = db_transaction.identifier();
+        let _res = T::update_transaction_status(
+            identifier.id,
+            DbTransactionStatus::Committed,
+            db_transaction.tx_connection.clone(),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn pre_rollback(
         &self,
         pool: Arc<Pool<DB>>,
-        db_transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
+        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
     ) -> Result<(), Error> {
-        todo!()
+        let identifier = db_transaction.identifier();
+        let _res = T::update_transaction_status(
+            identifier.id,
+            DbTransactionStatus::RolledBack,
+            pool.deref(),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn get_status(

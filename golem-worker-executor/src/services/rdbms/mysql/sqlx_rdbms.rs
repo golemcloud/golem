@@ -44,16 +44,21 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
         }
         let options = sqlx::mysql::MySqlConnectOptions::from_url(&self.address)
             .map_err(Error::connection_failure)?;
-        sqlx::mysql::MySqlPoolOptions::new()
+
+        let pool = sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
             .connect_with(options)
             .await
-            .map_err(Error::connection_failure)
+            .map_err(Error::connection_failure)?;
+
+        // MysqlType::create_transaction_table(&pool).await?;
+
+        Ok(pool)
     }
 }
 
 #[async_trait]
-impl TransactionTableRepo<sqlx::MySql> for RdbmsPoolKey {
+impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     async fn create_transaction_table<'c, E>(executor: E) -> Result<(), Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
