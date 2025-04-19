@@ -115,6 +115,7 @@ pub struct TypeMismatchError {
     pub additional_error_detail: Vec<String>,
 }
 
+
 #[derive(Clone, Debug)]
 pub enum ExpectedType {
     AnalysedType(AnalysedType),
@@ -129,6 +130,12 @@ pub enum ActualType {
 }
 
 impl TypeMismatchError {
+    pub fn with_parent_expr(&self, expr: &Expr) -> TypeMismatchError {
+        let mut mismatch_error: TypeMismatchError = self.clone();
+        mismatch_error.parent_expr = Some(expr.clone());
+        mismatch_error
+    }
+
     pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
         mismatch_error.expected_type = ExpectedType::AnalysedType(expected_type.clone());

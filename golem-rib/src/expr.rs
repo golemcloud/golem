@@ -1098,7 +1098,6 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
         self.infer_orphan_literals()?;
         self.check_types(function_type_registry)?;
-        dbg!(self.clone());
         self.unify_types()?;
         Ok(())
     }
@@ -1134,8 +1133,7 @@ impl Expr {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
-        let expr = self.pull_types_up()?;
-        *self = expr;
+        self.pull_types_up()?;
         self.infer_global_inputs();
         Ok(())
     }
@@ -1197,7 +1195,7 @@ impl Expr {
         type_inference::infer_all_identifiers(self)
     }
 
-    pub fn pull_types_up(&self) -> Result<Expr, RibTypeError> {
+    pub fn pull_types_up(&mut self) -> Result<(), RibTypeError> {
         type_inference::type_pull_up(self)
     }
 
