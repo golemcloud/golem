@@ -192,7 +192,9 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
             Expr::And { .. } => {}
             Expr::Or { .. } => {}
             Expr::Call { .. } => {}
-            Expr::Unwrap { .. } => {}
+            Expr::Unwrap { expr, inferred_type, .. } => {
+                *inferred_type = inferred_type.merge(expr.inferred_type());
+            }
             Expr::Length { .. } => {}
             Expr::Throw { .. } => {}
             Expr::ListComprehension {
@@ -203,7 +205,9 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 internal::handle_list_comprehension(yield_expr, inferred_type);
             }
 
-            Expr::GetTag { .. } => {}
+            Expr::GetTag { expr, inferred_type, .. } => {
+                *inferred_type = inferred_type.merge(expr.inferred_type());
+            }
 
             Expr::ListReduce {
                 init_value_expr,
