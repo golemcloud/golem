@@ -48,11 +48,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_select_field(
-                    expr,
-                    field,
-                    inferred_type,
-                )?;
+                internal::handle_select_field(expr, field, inferred_type)?;
             }
 
             Expr::SelectIndex {
@@ -62,11 +58,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                 source_span,
                 ..
             } => {
-                internal::handle_select_index(
-                    expr,
-                    index,
-                    inferred_type,
-                )?;
+                internal::handle_select_index(expr, index, inferred_type)?;
             }
 
             Expr::Result {
@@ -74,10 +66,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_result_ok(
-                    expr,
-                    inferred_type,
-                );
+                internal::handle_result_ok(expr, inferred_type);
             }
 
             Expr::Result {
@@ -85,10 +74,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_result_error(
-                    expr,
-                    inferred_type,
-                );
+                internal::handle_result_error(expr, inferred_type);
             }
 
             Expr::Option {
@@ -96,15 +82,10 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_option_some(
-                    expr,
-                    inferred_type,
-                );
+                internal::handle_option_some(expr, inferred_type);
             }
 
-            Expr::Option {
-                ..
-            } => {}
+            Expr::Option { .. } => {}
 
             Expr::Cond {
                 lhs,
@@ -112,11 +93,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_if_else(
-                    lhs,
-                    rhs,
-                    inferred_type,
-                );
+                internal::handle_if_else(lhs, rhs, inferred_type);
             }
 
             Expr::PatternMatch {
@@ -124,260 +101,63 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_pattern_match(
-                    match_arms,
-                    inferred_type,
-                );
+                internal::handle_pattern_match(match_arms, inferred_type);
             }
 
-            Expr::Concat {
-               ..
-            } => {}
+            Expr::Concat { .. } => {}
 
             Expr::ExprBlock {
                 exprs,
                 inferred_type,
                 ..
             } => {
-                internal::handle_multiple(
-                    exprs,
-                    inferred_type,
-                );
+                internal::handle_multiple(exprs, inferred_type);
             }
 
-            Expr::Not {
-                inferred_type,
-                source_span,
-                ..
-            } => {
-                internal::handle_not(expr, inferred_type, &mut inferred_expr_stack, source_span);
-            }
+            Expr::Not { .. } => {}
+            Expr::GreaterThan { .. } => {}
+            Expr::GreaterThanOrEqualTo { .. } => {}
+            Expr::LessThanOrEqualTo { .. } => {}
+            Expr::EqualTo { .. } => {}
+            Expr::LessThan { .. } => {}
 
-            Expr::GreaterThan {
+            plus @ Expr::Plus {
                 lhs,
                 rhs,
                 inferred_type,
-                source_span,
-                type_annotation,
+                ..
             } => {
-                internal::handle_comparison_op(
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::GreaterThan {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                );
+                internal::handle_math_op(plus, lhs, rhs, inferred_type)?;
             }
 
-            Expr::GreaterThanOrEqualTo {
+            minus @ Expr::Minus {
                 lhs,
                 rhs,
                 inferred_type,
-                source_span,
-                type_annotation,
                 ..
             } => {
-                internal::handle_comparison_op(
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::GreaterThanOrEqualTo {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                );
+                internal::handle_math_op(minus, lhs, rhs, inferred_type)?;
             }
 
-            Expr::LessThanOrEqualTo {
+            multiply @ Expr::Multiply {
                 lhs,
                 rhs,
                 inferred_type,
-                source_span,
-                type_annotation,
                 ..
             } => {
-                internal::handle_comparison_op(
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::LessThanOrEqualTo {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                );
+                internal::handle_math_op(multiply, lhs, rhs, inferred_type)?;
             }
-            outer @ Expr::Plus {
+
+            divide @ Expr::Divide {
                 lhs,
                 rhs,
                 inferred_type,
-                source_span,
-                type_annotation,
                 ..
             } => {
-                internal::handle_math_op(
-                    outer,
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::Plus {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                )?;
+                internal::handle_math_op(divide, lhs, rhs, inferred_type)?;
             }
 
-            outer @ Expr::Minus {
-                lhs,
-                rhs,
-                inferred_type,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                internal::handle_math_op(
-                    outer,
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::Minus {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                )?;
-            }
-
-            outer @ Expr::Multiply {
-                lhs,
-                rhs,
-                inferred_type,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                internal::handle_math_op(
-                    outer,
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::Multiply {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                )?;
-            }
-
-            outer @ Expr::Divide {
-                lhs,
-                rhs,
-                inferred_type,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                internal::handle_math_op(
-                    outer,
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::Divide {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                )?;
-            }
-
-            Expr::EqualTo {
-                lhs,
-                rhs,
-                inferred_type,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                internal::handle_comparison_op(
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::EqualTo {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                );
-            }
-
-            Expr::LessThan {
-                lhs,
-                rhs,
-                inferred_type,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                internal::handle_comparison_op(
-                    lhs,
-                    rhs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::LessThan {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                );
-            }
-
-            Expr::Let {
-                variable_id,
-                expr,
-                type_annotation,
-                inferred_type,
-                source_span,
-            } => {
-                internal::handle_let(
-                    variable_id,
-                    expr,
-                    type_annotation,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
-                );
-            }
+            Expr::Let { .. } => {}
 
             Expr::Sequence {
                 exprs,
@@ -579,7 +359,10 @@ mod internal {
     use crate::type_inference::type_hint::TypeHint;
     use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
-    use crate::{ActualType, ExpectedType, Expr, GetTypeHint, InferredType, MatchArm, Path, Range, TypeMismatchError, TypeName, VariableId};
+    use crate::{
+        ActualType, ExpectedType, Expr, GetTypeHint, InferredNumber, InferredType, MatchArm, Path,
+        Range, TypeMismatchError, TypeName, VariableId,
+    };
 
     use std::collections::VecDeque;
     use std::ops::Deref;
@@ -660,18 +443,14 @@ mod internal {
         );
     }
 
-    pub(crate) fn handle_tuple(
-        tuple_elems: &[Expr],
-        current_tuple_type: &mut InferredType,
-    ) {
+    pub(crate) fn handle_tuple(tuple_elems: &[Expr], current_tuple_type: &mut InferredType) {
         let mut new_inferred_type = vec![];
 
         for current_tuple_elem in tuple_elems.iter().rev() {
             new_inferred_type.push(current_tuple_elem.inferred_type());
         }
 
-        let new_tuple_type =
-            InferredType::Tuple(new_inferred_type);
+        let new_tuple_type = InferredType::Tuple(new_inferred_type);
 
         *current_tuple_type = current_tuple_type.merge(new_tuple_type);
     }
@@ -681,10 +460,7 @@ mod internal {
         field: &str,
         current_field_type: &mut InferredType,
     ) -> Result<(), RibTypeError> {
-        let selection_field_type = get_inferred_type_of_selected_field(
-            select_from,
-            field,
-        )?;
+        let selection_field_type = get_inferred_type_of_selected_field(select_from, field)?;
 
         *current_field_type = current_field_type.merge(selection_field_type);
 
@@ -701,11 +477,7 @@ mod internal {
         // if select_from is not yet gone through any phase, we cannot guarantee
         // it is a list type, otherwise continue with the assumption that it is a record
         if !selection_expr_inferred_type.is_unknown() {
-            let index_type =
-                get_inferred_type_of_selection_dynamic(
-                    select_from,
-                    index,
-                )?;
+            let index_type = get_inferred_type_of_selection_dynamic(select_from, index)?;
 
             *current_select_index_type = current_select_index_type.merge(index_type);
         }
@@ -713,23 +485,16 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn handle_result_ok(
-        ok_expr: &Expr,
-        current_inferred_type: &mut InferredType,
-    ) {
-
+    pub(crate) fn handle_result_ok(ok_expr: &Expr, current_inferred_type: &mut InferredType) {
         let inferred_type_of_ok_expr = ok_expr.inferred_type();
         let result_type = InferredType::Result {
             ok: Some(Box::new(inferred_type_of_ok_expr)),
             error: None,
         };
-       *current_inferred_type = current_inferred_type.merge(result_type);
+        *current_inferred_type = current_inferred_type.merge(result_type);
     }
 
-    pub(crate) fn handle_result_error(
-        error_expr: &Expr,
-        current_inferred_type: &mut InferredType,
-    ) {
+    pub(crate) fn handle_result_error(error_expr: &Expr, current_inferred_type: &mut InferredType) {
         let inferred_type_of_error_expr = error_expr.inferred_type();
         let result_type = InferredType::Result {
             ok: None,
@@ -739,10 +504,7 @@ mod internal {
         *current_inferred_type = current_inferred_type.merge(result_type);
     }
 
-    pub(crate) fn handle_option_some(
-        some_expr: &Expr,
-        inferred_type: &mut InferredType,
-    ) {
+    pub(crate) fn handle_option_some(some_expr: &Expr, inferred_type: &mut InferredType) {
         let inferred_type_of_some_expr = some_expr.inferred_type();
         let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
 
@@ -757,18 +519,14 @@ mod internal {
         let inferred_type_of_then_expr = then_expr.inferred_type();
         let inferred_type_of_else_expr = else_expr.inferred_type();
 
-        *inferred_type = inferred_type
-            .merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
+        *inferred_type =
+            inferred_type.merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
     }
 
-    pub fn handle_pattern_match(
-        current_match_arms: &[MatchArm],
-        inferred_type: &mut InferredType,
-    ) {
-
+    pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut InferredType) {
         let mut arm_resolution_inferred_types = vec![];
 
-        for arm  in current_match_arms {
+        for arm in current_match_arms {
             let arm_inferred_type = arm.arm_resolution_expr.inferred_type();
             arm_resolution_inferred_types.push(arm_inferred_type);
         }
@@ -776,103 +534,35 @@ mod internal {
         let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);
 
         if let Some(new_inferred_type) = new_inferred_type {
-           *inferred_type = inferred_type.merge(new_inferred_type)
+            *inferred_type = inferred_type.merge(new_inferred_type)
         }
     }
-    
-    pub(crate) fn handle_multiple(
-        expr_block: &Vec<Expr>,
-        inferred_type: &mut InferredType,
-    ) {
 
-        let new_inferred_type =
-            expr_block.last().map(|x| x.inferred_type());
+    pub(crate) fn handle_multiple(expr_block: &Vec<Expr>, inferred_type: &mut InferredType) {
+        let new_inferred_type = expr_block.last().map(|x| x.inferred_type());
 
         if let Some(new_inferred_type) = new_inferred_type {
             *inferred_type = inferred_type.merge(new_inferred_type);
         }
     }
 
-    pub(crate) fn handle_not(
-        original_not_expr: &Expr,
-        current_not_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
-    ) {
-        let expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_not_expr.clone());
-        let new_not = Expr::not(expr)
-            .with_inferred_type(current_not_type.clone())
-            .with_source_span(source_span.clone());
-        inferred_expr_stack.push_front(new_not);
-    }
-
-    pub(crate) fn handle_math_op<F>(
+    pub(crate) fn handle_math_op(
         original_math_expr: &Expr,
-        original_left_expr: &Expr,
-        original_right_expr: &Expr,
-        result_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        f: F,
-    ) -> Result<(), TypeMismatchError>
-    where
-        F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr,
-    {
-        let right_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_right_expr.clone());
-
-        let left_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_left_expr.clone());
-
-        let right_expr_type = right_expr.inferred_type();
-        let left_expr_type = left_expr.inferred_type();
-
-        // This special check is optional in a pull up phase,
-        // and can be part of type check errors however, we have better control
-        // over error messages.
+        lhs: &Expr,
+        rhs: &Expr,
+        result_type: &mut InferredType,
+    ) -> Result<(), TypeMismatchError> {
+        // If final result  is not resolved, while both lhs and rhs are resolved
+        // then we expect the
         if result_type.un_resolved()
-            && !right_expr_type.un_resolved()
-            && !left_expr_type.un_resolved()
+            && !rhs.inferred_type().un_resolved()
+            && !lhs.inferred_type().un_resolved()
         {
-            // We shouldn't be merging the types of individual expressions's type to the result type
-            // because the result type of a math of can stay independent.
-            let right_number_type = right_expr_type.as_number().map_err(|_| TypeMismatchError {
-                expr_with_wrong_type: right_expr.clone(),
-                parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::Hint(TypeHint::Number),
-                actual_type: ActualType::Inferred(right_expr_type),
-                field_path: Default::default(),
-                additional_error_detail: vec![
-                    "type mismatch in mathematical expression: operands have incompatible types."
-                        .to_string(),
-                ],
-            })?;
-            let left_number_type = left_expr_type.as_number().map_err(|_| TypeMismatchError {
-                expr_with_wrong_type: left_expr.clone(),
-                parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::Hint(TypeHint::Number),
-                actual_type: ActualType::Inferred(left_expr_type),
-                field_path: Default::default(),
-                additional_error_detail: vec![
-                    "type mismatch in mathematical expression: operands have incompatible types."
-                        .to_string(),
-                ],
-            })?;
+            let right_number_type = get_number(rhs, original_math_expr)?;
+            let left_number_type = get_number(lhs, original_math_expr)?;
 
-            // Being typesafe here (inspired from languages like Rust)
-            // where without a casting its impossible to perform math operations
-            // on different types.
             if right_number_type == left_number_type {
-                let new_math_op = f(
-                    Box::new(left_expr),
-                    Box::new(right_expr),
-                    InferredType::from(right_number_type),
-                );
-
-                inferred_expr_stack.push_front(new_math_op);
+                *result_type = result_type.merge(InferredType::from(right_number_type.clone()));
             } else {
                 return Err(TypeMismatchError {
                     expr_with_wrong_type: original_math_expr.clone(),
@@ -886,40 +576,22 @@ mod internal {
                     ],
                 });
             }
-        } else {
-            let new_math_op = f(
-                Box::new(left_expr),
-                Box::new(right_expr),
-                result_type.clone(),
-            );
-
-            inferred_expr_stack.push_front(new_math_op);
         }
 
         Ok(())
     }
 
-    pub(crate) fn handle_comparison_op<F>(
-        original_left_expr: &Expr,
-        original_right_expr: &Expr,
-        result_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        f: F,
-    ) where
-        F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr,
-    {
-        let right_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_right_expr.clone());
-        let left_expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_left_expr.clone());
-        let new_binary = f(
-            Box::new(left_expr),
-            Box::new(right_expr),
-            result_type.clone(),
-        );
-        inferred_expr_stack.push_front(new_binary);
+    fn get_number(number_expr: &Expr, math_op: &Expr) -> Result<InferredNumber, TypeMismatchError> {
+        let rhs_type = number_expr.inferred_type();
+
+        rhs_type.as_number().map_err(|_| TypeMismatchError {
+            expr_with_wrong_type: number_expr.clone(),
+            parent_expr: Some(math_op.clone()),
+            expected_type: ExpectedType::Hint(TypeHint::Number),
+            actual_type: ActualType::Inferred(rhs_type),
+            field_path: Default::default(),
+            additional_error_detail: vec![],
+        })
     }
 
     pub(crate) fn handle_range(
@@ -1197,27 +869,6 @@ mod internal {
         inferred_expr_stack.push_front(new_get_tag);
     }
 
-    pub(crate) fn handle_let(
-        original_variable_id: &VariableId,
-        original_expr: &Expr,
-        optional_type: &Option<TypeName>,
-        current_inferred_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
-    ) {
-        let expr = inferred_expr_stack
-            .pop_front()
-            .unwrap_or(original_expr.clone());
-        let new_let = Expr::let_binding_with_variable_id(
-            original_variable_id.clone(),
-            expr,
-            optional_type.clone(),
-        )
-        .with_inferred_type(current_inferred_type.clone())
-        .with_source_span(source_span.clone());
-        inferred_expr_stack.push_front(new_let);
-    }
-
     pub(crate) fn handle_sequence(
         current_expr_list: &[Expr],
         current_inferred_type: &InferredType,
@@ -1297,7 +948,9 @@ mod internal {
                 field_path: Path::default(),
                 additional_error_detail: vec![format!(
                     "cannot select {} from {} since it is not a record type. Found: {}",
-                    field, select_from, select_from_inferred_type.get_type_hint()
+                    field,
+                    select_from,
+                    select_from_inferred_type.get_type_hint()
                 )],
             }
         })?;
@@ -1309,7 +962,6 @@ mod internal {
         select_from: &Expr,
         index: &Expr,
     ) -> Result<InferredType, RibTypeError> {
-
         let select_from_type = select_from.inferred_type();
         let select_index_type = index.inferred_type();
 
@@ -1322,7 +974,9 @@ mod internal {
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
                     "cannot get index {} from {} since it is not a list type. Found: {}",
-                    index, select_from, select_from_type.get_type_hint()
+                    index,
+                    select_from,
+                    select_from_type.get_type_hint()
                 )],
             }
         })?;
@@ -1346,7 +1000,7 @@ mod internal {
                 }
             })?;
 
-            Ok(InferredType::List(Box::new(list_type)),)
+            Ok(InferredType::List(Box::new(list_type)))
         }
     }
 }
@@ -1360,7 +1014,9 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{
+        ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry, InferredType, MatchArm, VariableId,
+    };
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -1821,7 +1477,7 @@ mod type_pull_up_tests {
                 } => {
                     let mut new_inferred_type = vec![];
                     for expr in exprs.iter() {
-                        let inferred_type =  expr.inferred_type();
+                        let inferred_type = expr.inferred_type();
                         new_inferred_type.push(inferred_type);
                     }
 
@@ -1836,7 +1492,7 @@ mod type_pull_up_tests {
                 } => {
                     let mut new_inferred_type = vec![];
                     for expr in exprs.iter() {
-                        let inferred_type =  expr.inferred_type();
+                        let inferred_type = expr.inferred_type();
                         new_inferred_type.push(inferred_type);
                     }
 
@@ -1849,24 +1505,26 @@ mod type_pull_up_tests {
                     source_span,
                     ..
                 } => {
-                    let new_inferred_type =
-                        exprs.last().map_or(InferredType::Unknown, |last_expr| last_expr.inferred_type());
+                    let new_inferred_type = exprs
+                        .last()
+                        .map_or(InferredType::Unknown, |last_expr| last_expr.inferred_type());
 
                     *inferred_type = new_inferred_type
                 }
 
                 _ => {}
             }
-
-
         }
     }
 
     #[test]
     fn test_tuple_pull_up() {
-        let expr = Expr::sequence(vec![
-            Expr::identifier_global("foo", None),
-            Expr::identifier_global("bar", None)], None
+        let expr = Expr::sequence(
+            vec![
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None),
+            ],
+            None,
         );
 
         let mut block = Expr::expr_block(vec![expr.clone(), expr.clone()]);
