@@ -161,17 +161,10 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
 
             Expr::Sequence {
                 exprs,
-                type_annotation,
                 inferred_type,
-                source_span,
+                ..
             } => {
-                internal::handle_sequence(
-                    exprs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    type_annotation,
-                    source_span,
-                );
+                internal::handle_sequence(exprs, inferred_type);
             }
 
             Expr::Record {
@@ -187,15 +180,9 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
                     source_span,
                 );
             }
-            Expr::Literal { .. } => {
-                inferred_expr_stack.push_front(expr.clone());
-            }
-            Expr::Number { .. } => {
-                inferred_expr_stack.push_front(expr.clone());
-            }
-            Expr::Boolean { .. } => {
-                inferred_expr_stack.push_front(expr.clone());
-            }
+            Expr::Literal { .. } => {}
+            Expr::Number { .. } => {}
+            Expr::Boolean { .. } => {}
             Expr::And {
                 lhs,
                 rhs,
@@ -871,37 +858,19 @@ mod internal {
 
     pub(crate) fn handle_sequence(
         current_expr_list: &[Expr],
-        current_inferred_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        type_annotation: &Option<TypeName>,
-        source_span: &SourceSpan,
+        current_inferred_type: &mut InferredType,
     ) {
-        let mut new_exprs = vec![];
+        let mut new_inferred_type = vec![];
 
-        for expr in current_expr_list.iter().rev() {
-            let expr = inferred_expr_stack.pop_front().unwrap_or(expr.clone());
-            new_exprs.push(expr);
+        for expr in current_expr_list.iter() {
+            let new_type = expr.inferred_type();
+            new_inferred_type.push(new_type);
         }
 
-        new_exprs.reverse();
-
-        let new_sequence = {
-            if let Some(first_expr) = new_exprs.clone().first() {
-                Expr::sequence(new_exprs, type_annotation.clone())
-                    .with_inferred_type(
-                        current_inferred_type
-                            .clone()
-                            .merge(InferredType::List(Box::new(first_expr.inferred_type()))),
-                    )
-                    .with_source_span(source_span.clone())
-            } else {
-                Expr::sequence(new_exprs, type_annotation.clone())
-                    .with_inferred_type(current_inferred_type.clone())
-                    .with_source_span(source_span.clone())
-            }
-        };
-
-        inferred_expr_stack.push_front(new_sequence);
+        if let Some(first_inferred_type) = new_inferred_type.first() {
+            *current_inferred_type = current_inferred_type
+                .merge(InferredType::List(Box::new(first_inferred_type.clone())));
+        }
     }
 
     pub(crate) fn handle_record(
