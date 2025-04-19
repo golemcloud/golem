@@ -23,6 +23,7 @@ service ComponentService {
   rpc UpdateComponent (stream UpdateComponentRequest) returns (UpdateComponentResponse);
   rpc GetComponentMetadata(GetVersionedComponentRequest) returns (GetComponentMetadataResponse);
   rpc CreateComponentConstraints(CreateComponentConstraintsRequest) returns (CreateComponentConstraintsResponse);
+  rpc DeleteComponentConstraint(DeleteComponentConstraintsRequest) returns (DeleteComponentConstraintsResponse);
 
   rpc GetInstalledPlugins (GetInstalledPluginsRequest) returns (GetInstalledPluginsResponse);
   rpc InstallPlugin (InstallPluginRequest) returns (InstallPluginResponse);
@@ -31,8 +32,11 @@ service ComponentService {
 }
 
 message CreateComponentConstraintsRequest {
-  golem.common.ProjectId projectId = 1;
-  ComponentConstraints componentConstraints = 2;
+  ComponentConstraints componentConstraints = 1;
+}
+
+message DeleteComponentConstraintsRequest {
+  ComponentConstraints componentConstraints = 1;
 }
 
 message CreateComponentConstraintsResponse {
@@ -42,7 +46,18 @@ message CreateComponentConstraintsResponse {
   }
 }
 
+message DeleteComponentConstraintsResponse {
+  oneof result {
+    DeleteComponentConstraintsSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
 message CreateComponentConstraintsSuccessResponse {
+  ComponentConstraints components = 1;
+}
+
+message DeleteComponentConstraintsSuccessResponse {
   ComponentConstraints components = 1;
 }
 

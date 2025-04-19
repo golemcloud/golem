@@ -17,7 +17,6 @@ use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, WorkerError, WorkerExecutionError,
 };
 use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
-use golem_service_base::model::validate_worker_name;
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use tonic::Status;
 
@@ -25,7 +24,7 @@ pub fn validated_worker_id(
     component_id: golem_common::model::ComponentId,
     worker_name: String,
 ) -> Result<WorkerId, WorkerError> {
-    validate_worker_name(&worker_name)
+    WorkerId::validate_worker_name(&worker_name)
         .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
     Ok(WorkerId {
         component_id,
@@ -38,7 +37,7 @@ pub fn validated_target_worker_id(
     worker_name: Option<String>,
 ) -> Result<TargetWorkerId, WorkerError> {
     if let Some(worker_name) = &worker_name {
-        validate_worker_name(worker_name)
+        WorkerId::validate_worker_name(worker_name)
             .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
     }
     Ok(TargetWorkerId {

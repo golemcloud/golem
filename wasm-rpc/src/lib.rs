@@ -83,13 +83,13 @@ pub use bindings::wasi;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_1_3 as golem_rpc_0_1_x;
+pub use bindings::golem::rpc0_2_0 as golem_rpc_0_2_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use golem_rpc_0_1_x::types::{
-    FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, WasmRpc, WitNode, WitType,
-    WitTypeNode, WitValue,
+pub use golem_rpc_0_2_x::types::{
+    ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WasmRpc,
+    WitNode, WitType, WitTypeNode, WitValue, WorkerId,
 };
 
 #[cfg(not(feature = "host-bindings"))]
@@ -114,7 +114,7 @@ mod generated {
             "golem:rpc/types/cancellation-token": super::CancellationTokenEntry,
             "wasi:io/poll/pollable": super::Pollable,
         },
-        wasmtime_crate: ::wasmtime
+        wasmtime_crate: ::wasmtime,
     });
 }
 
@@ -122,18 +122,38 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc0_1_3 as golem_rpc_0_1_x;
+pub use generated::golem::rpc0_2_0 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host-bindings")]
-pub use golem_rpc_0_1_x::types::{
-    Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, WitNode, WitType, WitTypeNode,
-    WitValue,
+pub use golem_rpc_0_2_x::types::{
+    ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode, WitType,
+    WitTypeNode, WitValue, WorkerId,
 };
+
+use std::fmt;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
 impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
     fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
         DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
             .expect("Received invalid datetime from wasi")
+    }
+}
+
+impl From<Uuid> for uuid::Uuid {
+    fn from(value: Uuid) -> Self {
+        uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
+    }
+}
+
+impl From<uuid::Uuid> for Uuid {
+    fn from(uuid: uuid::Uuid) -> Self {
+        let (high_bits, low_bits) = uuid.as_u64_pair();
+        Uuid {
+            high_bits,
+            low_bits,
+        }
     }
 }
 
@@ -456,6 +476,89 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let arbitrary_value = u.arbitrary::<Value>()?;
         Ok(arbitrary_value.into())
+    }
+}
+
+impl From<uuid::Uuid> for ComponentId {
+    fn from(value: uuid::Uuid) -> Self {
+        Self { uuid: value.into() }
+    }
+}
+
+impl From<ComponentId> for uuid::Uuid {
+    fn from(value: ComponentId) -> Self {
+        value.uuid.into()
+    }
+}
+
+impl FromStr for ComponentId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(uuid::Uuid::parse_str(s)?.into())
+    }
+}
+
+impl Display for ComponentId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let uuid: uuid::Uuid = self.uuid.into();
+        write!(f, "{uuid}")
+    }
+}
+
+impl Display for WorkerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.component_id, self.worker_name)
+    }
+}
+
+impl FromStr for WorkerId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 2 {
+            let component_id = ComponentId::from_str(parts[0])
+                .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
+            let worker_name = parts[1].to_string();
+            Ok(Self {
+                component_id,
+                worker_name,
+            })
+        } else {
+            Err(format!(
+                "invalid worker id: {s} - expected format: <component_id>/<worker_name>"
+            ))
+        }
+    }
+}
+
+impl TryFrom<Uri> for WorkerId {
+    type Error = String;
+
+    fn try_from(uri: Uri) -> Result<Self, Self::Error> {
+        let urn = uri.value;
+        if !urn.starts_with("urn:worker:") {
+            Err("Invalid URN: must start with 'urn:worker:', got '{urn}'".to_string())
+        } else {
+            let remaining = &urn[11..];
+            let parts: Vec<&str> = remaining.split('/').collect();
+            match parts.len() {
+                2 => {
+                    let component_id = ComponentId::from_str(parts[0]).map_err(|err|
+                        format!("Invalid URN: expected UUID for component_id: {err}")
+                    )?;
+                    let worker_name = parts[1];
+                    Ok(WorkerId {
+                        component_id,
+                        worker_name: worker_name.to_string(),
+                    })
+                }
+                _ => Err(format!(
+                    "Invalid URN: expected format 'urn:worker:<component_id>/<worker_name>', got '{urn}'",
+                )),
+            }
+        }
     }
 }
 

@@ -8,9 +8,12 @@ pub trait RibFunctionInvoke {
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
-    ) -> Result<ValueAndType, String>;
+    ) -> RibFunctionInvokeResult;
 }
 
+pub type RibFunctionInvokeResult = Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>>;
+
+#[derive(Debug)]
 pub struct EvaluatedFqFn(pub String);
 
 #[derive(Clone)]

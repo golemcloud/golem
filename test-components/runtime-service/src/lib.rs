@@ -1,3 +1,4 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
 use crate::bindings::exports::golem::it::api::Guest;
@@ -9,10 +10,6 @@ use reqwest::{Client, Response};
 struct Component;
 
 impl Guest for Component {
-    fn get_self_uri(function_name: String) -> String {
-        get_self_uri(&function_name).value
-    }
-
     fn jump() -> u64 {
         let mut state = 0;
 
@@ -63,6 +60,7 @@ impl Guest for Component {
             min_delay: 1000000000, // 1s
             max_delay: 1000000000, // 1s
             multiplier: 1.0,
+            max_jitter_factor: None,
         });
         let overridden_retry_policy = get_retry_policy();
         println!("Overridden retry policy: {overridden_retry_policy:?}");
@@ -141,6 +139,7 @@ impl Guest for Component {
         remote_side_effect("1"); // repeated 1x
 
         set_oplog_persistence_level(PersistenceLevel::PersistNothing);
+        // Unconditional side effect in persist-nothing block will lead to divergence
         remote_side_effect("2"); // repeated 3x
         println!("Changed level: {:?}", get_oplog_persistence_level());
         set_oplog_persistence_level(PersistenceLevel::Smart);

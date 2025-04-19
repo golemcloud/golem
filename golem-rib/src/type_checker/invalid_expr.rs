@@ -12,29 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_inference::kind::TypeKind;
-use crate::{Expr, InferredType};
-use std::collections::VecDeque;
+use crate::type_inference::TypeHint;
+use crate::{Expr, ExprVisitor, InferredType};
 
 // Check all exprs that cannot be the type it is tagged against
-pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+pub fn check_invalid_expr(expr: &mut Expr) -> Result<(), InvalidExpr> {
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = queue.pop_back() {
-        match expr {
-            Expr::Number { inferred_type, .. } => match inferred_type.as_number() {
+    while let Some(expr) = visitor.pop_back() {
+        if let Expr::Number { inferred_type, .. } = &expr {
+            match inferred_type.as_number() {
                 Ok(_) => {}
                 Err(message) => {
                     return Err(InvalidExpr {
                         expr: expr.clone(),
-                        expected_type: TypeKind::Number,
+                        expected_type: TypeHint::Number,
                         found: inferred_type.clone(),
                         message,
                     });
                 }
-            },
-            _ => expr.visit_children_bottom_up(&mut queue),
+            }
         }
     }
 
@@ -44,7 +41,7 @@ pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
 #[derive(Debug, Clone)]
 pub struct InvalidExpr {
     pub expr: Expr,
-    pub expected_type: TypeKind,
+    pub expected_type: TypeHint,
     pub found: InferredType,
     pub message: String,
 }

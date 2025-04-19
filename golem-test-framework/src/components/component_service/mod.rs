@@ -86,7 +86,7 @@ pub enum PluginServiceClient {
 }
 
 #[async_trait]
-pub trait ComponentServiceInternal {
+pub trait ComponentServiceInternal: Send + Sync {
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
@@ -198,7 +198,7 @@ pub trait ComponentService: ComponentServiceInternal {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
     ) -> Component {
-        let mut retries = 5;
+        let mut retries = 10;
         loop {
             let latest_component: Option<Component> = match self.component_client() {
                 ComponentServiceClient::Grpc(mut client) => {
@@ -248,7 +248,6 @@ pub trait ComponentService: ComponentServiceInternal {
                     }
                 }
             };
-
             if let Some(latest_component) = latest_component {
                 return latest_component;
             }
@@ -269,7 +268,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     if retries > 0 {
                         info!("Component with name {name} got created in parallel, retrying get_or_add_component");
                         retries -= 1;
-                        sleep(Duration::from_secs(1)).await;
+                        sleep(Duration::from_secs(5)).await;
                         continue;
                     } else {
                         panic!(
@@ -435,7 +434,7 @@ pub trait ComponentService: ComponentServiceInternal {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
-    ) -> u64 {
+    ) -> crate::Result<u64> {
         let mut file = File::open(local_path)
             .await
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
@@ -502,11 +501,11 @@ pub trait ComponentService: ComponentServiceInternal {
                     }
                     Some(update_component_response::Result::Success(component)) => {
                         info!("Updated component (GRPC) {component:?}");
-                        component.versioned_component_id.unwrap().version
+                        Ok(component.versioned_component_id.unwrap().version)
                     }
-                    Some(update_component_response::Result::Error(error)) => {
-                        panic!("Failed to update component in golem-component-service (GRPC): {error:?}");
-                    }
+                    Some(update_component_response::Result::Error(error)) => Err(anyhow!(
+                        "Failed to update component in golem-component-service (GRPC): {error:?}"
+                    )),
                 }
             }
             ComponentServiceClient::Http(client) => {
@@ -544,11 +543,11 @@ pub trait ComponentService: ComponentServiceInternal {
                 {
                     Ok(component) => {
                         debug!("Updated component (HTTP) {:?}", component);
-                        component.versioned_component_id.version
+                        Ok(component.versioned_component_id.version)
                     }
-                    Err(error) => {
-                        panic!("Failed to update component in golem-component-service (HTTP): {error:?}");
-                    }
+                    Err(error) => Err(anyhow!(
+                        "Failed to update component in golem-component-service (HTTP): {error:?}"
+                    )),
                 }
             }
         }
@@ -1020,7 +1019,7 @@ fn to_http_dynamic_linking(
                         DynamicLinkedInstance::WasmRpc(link) => {
                             golem_client::model::DynamicLinkedInstance::WasmRpc(
                                 golem_client::model::DynamicLinkedWasmRpc {
-                                    target_interface_name: link.target_interface_name.clone(),
+                                    targets: link.targets.clone(),
                                 },
                             )
                         }

@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
-use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetail};
+use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetails};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::HasAccountId;
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_common::{virtual_exports, widen_infallible};
+use golem_service_base::auth::GolemNamespace;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::TypeAnnotatedValueConstructors;
 use http::StatusCode;
@@ -32,7 +32,7 @@ pub trait HttpHandlerBindingHandler<Namespace> {
     async fn handle_http_handler_binding(
         &self,
         namespace: &Namespace,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
         incoming_http_request: IncomingHttpRequest,
     ) -> HttpHandlerBindingResult;
 }
@@ -64,16 +64,16 @@ impl<Namespace> DefaultHttpHandlerBindingHandler<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBindingHandler<Namespace>
+impl<Namespace: GolemNamespace> HttpHandlerBindingHandler<Namespace>
     for DefaultHttpHandlerBindingHandler<Namespace>
 {
     async fn handle_http_handler_binding(
         &self,
         namespace: &Namespace,
-        worker_detail: &WorkerDetail,
+        worker_detail: &WorkerDetails,
         incoming_http_request: IncomingHttpRequest,
     ) -> HttpHandlerBindingResult {
-        let component_id = worker_detail.component_id.component_id.clone();
+        let component_id = worker_detail.component_id.clone();
 
         let typ: golem_wasm_ast::analysis::protobuf::Type = (&golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest::analysed_type()).into();
 

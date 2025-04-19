@@ -12,53 +12,57 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredExpr, RibError};
+use crate::{Expr, ExprVisitor, InferredExpr, RibCompilationError};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 // RibInputTypeInfo refers to the required global inputs to a RibScript
 // with its type information. Example: `request` variable which should be of the type `Record`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct RibInputTypeInfo {
     pub types: HashMap<String, AnalysedType>,
 }
 impl RibInputTypeInfo {
+    pub fn get(&self, key: &str) -> Option<&AnalysedType> {
+        self.types.get(key)
+    }
+
     pub fn empty() -> Self {
         RibInputTypeInfo {
             types: HashMap::new(),
         }
     }
 
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibInputTypeInfo, RibError> {
-        let expr: &Expr = inferred_expr.get_expr();
-        let mut queue = VecDeque::new();
+    pub fn from_expr(
+        inferred_expr: &InferredExpr,
+    ) -> Result<RibInputTypeInfo, RibCompilationError> {
+        let mut expr = inferred_expr.get_expr().clone();
+        let mut queue = ExprVisitor::bottom_up(&mut expr);
 
         let mut global_variables = HashMap::new();
 
-        queue.push_back(expr);
-
         while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    ..
-                } => {
-                    if variable_id.is_global() {
-                        let analysed_type = AnalysedType::try_from(inferred_type).map_err(|e| {
-                            RibError::InternalError(format!(
-                                "failed to convert inferred type to analysed type: {}",
-                                e
-                            ))
-                        })?;
+            if let Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } = &expr
+            {
+                if variable_id.is_global() {
+                    let analysed_type = AnalysedType::try_from(inferred_type).map_err(|e| {
+                        RibCompilationError::RibStaticAnalysisError(format!(
+                            "failed to convert inferred type to analysed type: {}",
+                            e
+                        ))
+                    })?;
 
-                        global_variables.insert(variable_id.name(), analysed_type);
-                    }
+                    global_variables.insert(variable_id.name(), analysed_type);
                 }
-                _ => expr.visit_children_bottom_up(&mut queue),
             }
         }
 

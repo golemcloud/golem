@@ -5,7 +5,7 @@ interface api {
 
   run-with-interrupt: func() -> string;
 
-  send-request: func() -> ();
+  send-request: func();
   process-response: func() -> string;
 }
 

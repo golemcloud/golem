@@ -25,10 +25,12 @@ use tracing::Instrument;
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
 use golem_test_framework::dsl::TestDslUnsafe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -83,7 +85,6 @@ async fn get_oplog_1(
         .unwrap();
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-
     drop(executor);
 
     // Whether there is an "enqueued invocation" entry or just directly started invocation
@@ -332,9 +333,13 @@ async fn invocation_context_test(
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![(
+                targets: HashMap::from_iter(vec![(
                     "golem-ictest-api".to_string(),
-                    "golem:ictest-exports/golem-ictest-api".to_string(),
+                    WasmRpcTarget {
+                        interface_name: "golem:ictest-exports/golem-ictest-api".to_string(),
+                        component_name: "golem_ictest".to_string(),
+                        component_type: ComponentType::Durable,
+                    },
                 )]),
             }),
         )])
@@ -368,6 +373,8 @@ async fn invocation_context_test(
 
     let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
     info!("{:#?}", dump);
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     http_server.abort();
     drop(executor);

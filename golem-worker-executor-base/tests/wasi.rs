@@ -73,6 +73,8 @@ async fn write_stdout(
         }
     }
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(stdout_events(events.into_iter()) == vec!["Sample text written to the output\n"]);
@@ -105,6 +107,8 @@ async fn write_stderr(
         }
     }
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(stderr_events(events.into_iter()) == vec!["Sample text written to the error output\n"]);
@@ -124,6 +128,8 @@ async fn read_stdin(
     let worker_id = executor.start_worker(&component_id, "read-stdin-1").await;
 
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -147,6 +153,8 @@ async fn clocks(
         .invoke_and_await(&worker_id, "run", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -201,6 +209,8 @@ async fn file_write_read_delete(
         .invoke_and_await(&worker_id, "run", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -260,6 +270,8 @@ async fn initial_file_read_write(
         .invoke_and_await(&worker_id, "run", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -333,6 +345,8 @@ async fn initial_file_listing_through_api(
         .collect::<Vec<_>>();
 
     result.sort_by_key(|e| e.name.clone());
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -418,6 +432,8 @@ async fn initial_file_reading_through_api(
     let result2 = executor.get_file_contents(&worker_id, "/bar/baz.txt").await;
     let result2 = std::str::from_utf8(&result2).unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result1 == "foo\n");
@@ -441,6 +457,8 @@ async fn directories(
         .invoke_and_await(&worker_id, "run", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -499,6 +517,8 @@ async fn directories_replay(
         .invoke_and_await(&worker_id, "run", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
@@ -574,6 +594,8 @@ async fn file_write_read(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
 
@@ -636,6 +658,8 @@ async fn http_client(
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
         .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     drop(rx);
@@ -704,6 +728,8 @@ async fn http_client_using_reqwest(
         .unwrap();
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -742,6 +768,8 @@ async fn environment_service(
         .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -822,6 +850,8 @@ async fn http_client_response_persisted_between_invocations(
         .invoke_and_await(&worker_id, "golem:it/api.{send-request}", vec![])
         .await
         .expect("first send-request failed");
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     drop(rx);
@@ -930,6 +960,8 @@ async fn http_client_interrupting_response_stream(
         .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     http_server.abort();
@@ -960,6 +992,8 @@ async fn sleep(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
@@ -1010,6 +1044,8 @@ async fn resuming_sleep(
     );
 
     tokio::time::sleep(Duration::from_secs(5)).await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     let _ = fiber.await;
@@ -1070,6 +1106,8 @@ async fn failing_worker(
         .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result1.is_ok());
@@ -1106,6 +1144,8 @@ async fn file_service_write_direct(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
@@ -1160,6 +1200,8 @@ async fn filesystem_write_replay_restores_file_times(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
 
@@ -1204,6 +1246,8 @@ async fn filesystem_create_dir_replay_restores_file_times(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
@@ -1343,6 +1387,8 @@ async fn filesystem_link_replay_restores_file_times(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
 
@@ -1412,6 +1458,8 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
@@ -1517,6 +1565,10 @@ async fn filesystem_symlink_replay_restores_file_times(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
 
     check!(times_dir_1 == times_dir_2);
     check!(times_file_1 == times_file_2);
@@ -1627,6 +1679,9 @@ async fn filesystem_rename_replay_restores_file_times(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+
     check!(times_srcdir_1 == times_srcdir_2);
     check!(times_destdir_1 == times_destdir_2);
     check!(times_file_1 == times_file_2);
@@ -1695,6 +1750,9 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+
     check!(times1 == times2);
 }
 
@@ -1742,6 +1800,10 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
 
     check!(times1 == times2);
 }
@@ -1791,6 +1853,10 @@ async fn filesystem_metadata_hash(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
+
     check!(hash1 == hash2);
 }
 
@@ -1823,6 +1889,10 @@ async fn ip_address_resolve(
         .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
 
     // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the same order) but we can expect
     // that it could resolve golem.cloud to at least one address.
@@ -1874,6 +1944,8 @@ async fn wasi_incoming_request_handler(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -1963,6 +2035,8 @@ async fn wasi_incoming_request_handler_echo(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -2155,6 +2229,8 @@ async fn wasi_incoming_request_handler_state(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 

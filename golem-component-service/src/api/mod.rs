@@ -14,10 +14,10 @@
 
 use crate::service::Services;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
 use golem_component_service_base::service::component::ComponentError as ComponentServiceError;
 use golem_component_service_base::service::plugin::PluginError;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem::endpoint::PrometheusExporter;
 use poem::error::ReadBodyError;
 use poem::Route;
@@ -91,6 +91,17 @@ impl TraceErrorKind for ComponentError {
             ComponentError::LimitExceeded(_) => "LimitExceeded",
             ComponentError::Unauthorized(_) => "Unauthorized",
             ComponentError::InternalError(_) => "InternalError",
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            ComponentError::BadRequest(_) => true,
+            ComponentError::NotFound(_) => true,
+            ComponentError::AlreadyExists(_) => true,
+            ComponentError::LimitExceeded(_) => true,
+            ComponentError::Unauthorized(_) => true,
+            ComponentError::InternalError(_) => false,
         }
     }
 }
@@ -184,6 +195,11 @@ impl From<ComponentServiceError> for ComponentError {
             ComponentServiceError::InvalidFilePath(_) => {
                 ComponentError::InternalError(Json(ErrorBody {
                     error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::InvalidComponentName { .. } => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
                 }))
             }
         }

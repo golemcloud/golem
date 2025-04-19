@@ -14,15 +14,15 @@
 
 use crate::call_type::CallType;
 use crate::DynamicParsedFunctionName;
-use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
+use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 // A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
 // The structure is raw and closer to the original component metadata.
 // FunctionTypeRegistry act as a set of all dependencies in Rib.
-// Currently it talks about only 1 component.
+// Currently, it talks about only 1 component.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
@@ -51,6 +51,18 @@ impl FunctionTypeRegistry {
         }
 
         variants
+    }
+
+    pub fn get_enums(&self) -> Vec<TypeEnum> {
+        let mut enums = vec![];
+
+        for registry_value in self.types.values() {
+            if let RegistryValue::Value(AnalysedType::Enum(type_enum)) = registry_value {
+                enums.push(type_enum.clone())
+            }
+        }
+
+        enums
     }
 
     pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
@@ -165,6 +177,7 @@ impl FunctionTypeRegistry {
     }
 }
 
+// A registry key in Rib can in include real functions including the variant constructors.
 #[derive(Hash, Eq, PartialEq, PartialOrd, Ord, Clone, Debug)]
 pub enum RegistryKey {
     FunctionName(String),
@@ -440,12 +453,14 @@ mod protobuf {
         }
     }
 
-    impl From<RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
-        fn from(value: RegistryKey) -> Self {
+    impl From<&RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
+        fn from(value: &RegistryKey) -> Self {
             match value {
-                RegistryKey::FunctionName(str) => golem_api_grpc::proto::golem::rib::RegistryKey {
+                RegistryKey::FunctionName(name) => golem_api_grpc::proto::golem::rib::RegistryKey {
                     key_type: Some(KeyType::FunctionName(
-                        golem_api_grpc::proto::golem::rib::FunctionName { name: str },
+                        golem_api_grpc::proto::golem::rib::FunctionName {
+                            name: name.to_string(),
+                        },
                     )),
                 },
                 RegistryKey::FunctionNameWithInterface {
@@ -454,8 +469,8 @@ mod protobuf {
                 } => golem_api_grpc::proto::golem::rib::RegistryKey {
                     key_type: Some(KeyType::FunctionNameWithInterface(
                         golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
-                            interface_name,
-                            function_name,
+                            interface_name: interface_name.clone(),
+                            function_name: function_name.clone(),
                         },
                     )),
                 },

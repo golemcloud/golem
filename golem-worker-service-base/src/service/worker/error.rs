@@ -15,9 +15,10 @@
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
+use golem_common::model::component::VersionedComponentId;
+use golem_common::model::error::GolemError;
 use golem_common::model::{AccountId, ComponentFilePath, ComponentId, WorkerId};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{GolemError, VersionedComponentId};
 
 use crate::service::component::ComponentServiceError;
 use crate::service::worker::CallWorkerExecutorError;

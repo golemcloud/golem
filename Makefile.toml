@@ -80,7 +80,8 @@ rm -r wasm-rpc/wit/deps
 mkdir wasm-rpc/wit/deps
 cp wit/deps/io wasm-rpc/wit/deps
 cp wit/deps/clocks wasm-rpc/wit/deps
-cp wit/deps/wasm-rpc wasm-rpc/wit/deps
+cp wit/deps/golem-1.x wasm-rpc/wit/deps
+cp wit/deps/golem-rpc wasm-rpc/wit/deps
 """
 
 [tasks.wit-host]
@@ -497,6 +498,7 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
+    "publish-golem-rib-repl"
 ]
 
 [tasks.set-version]
@@ -611,6 +613,17 @@ args = [
     "-p",
     "golem-rib",
     "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-rib-repl]
+description = "Publishes golem-rib package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-rib-repl",
     "--allow-dirty",
     "--no-verify",
 ]

@@ -21,13 +21,12 @@ use golem_common::model::plugin::{
 };
 use golem_common::model::ComponentId;
 use golem_common::repo::RowMeta;
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool, QueryBuilder};
+use sqlx::QueryBuilder;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::ops::Deref;
-use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::{debug, info_span, Instrument, Span};
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -228,35 +227,12 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
         }
     }
 
-    fn logged<R>(message: &'static str, result: Result<R, RepoError>) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!("{}", message),
-            Err(error) => error!(error = error.to_string(), "{message}"),
-        }
-        result
-    }
-
-    fn logged_with_name<R>(
-        message: &'static str,
-        plugin_name: &str,
-        plugin_version: &str,
-        result: Result<R, RepoError>,
-    ) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!(
-                plugin_name = plugin_name,
-                plugin_version = plugin_version,
-                "{}",
-                message
-            ),
-            Err(error) => error!(
-                plugin_name = plugin_name,
-                plugin_version = plugin_version,
-                error = error.to_string(),
-                "{message}"
-            ),
-        }
-        result
+    fn span(plugin_name: &str, plugin_version: &str) -> Span {
+        info_span!(
+            "plugin repository",
+            plugin_name = plugin_name,
+            plugin_version = plugin_version
+        )
     }
 }
 
@@ -276,8 +252,7 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
         &self,
         owner: &Owner::Row,
     ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
-        let result = self.repo.get_all(owner).await;
-        Self::logged("get_all", result)
+        self.repo.get_all(owner).await
     }
 
     async fn get_for_scope(
@@ -285,8 +260,7 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
         owner: &Owner::Row,
         scope: &[Scope::Row],
     ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
-        let result = self.repo.get_for_scope(owner, scope).await;
-        Self::logged("get_for_scope", result)
+        self.repo.get_for_scope(owner, scope).await
     }
 
     async fn get_all_with_name(
@@ -294,13 +268,17 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
         owner: &Owner::Row,
         name: &str,
     ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
-        let result = self.repo.get_all_with_name(owner, name).await;
-        Self::logged_with_name("get_all_with_name", name, "*", result)
+        self.repo
+            .get_all_with_name(owner, name)
+            .instrument(Self::span(name, "*"))
+            .await
     }
 
     async fn create(&self, record: &PluginRecord<Owner, Scope>) -> Result<(), RepoError> {
-        let result = self.repo.create(record).await;
-        Self::logged_with_name("create", &record.name, &record.version, result)
+        self.repo
+            .create(record)
+            .instrument(Self::span(&record.name, &record.version))
+            .await
     }
 
     async fn get(
@@ -309,27 +287,31 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
         name: &str,
         version: &str,
     ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
-        let result = self.repo.get(owner, name, version).await;
-        Self::logged_with_name("get", name, version, result)
+        self.repo
+            .get(owner, name, version)
+            .instrument(Self::span(name, version))
+            .await
     }
 
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError> {
-        let result = self.repo.delete(owner, name, version).await;
-        Self::logged_with_name("delete", name, version, result)
+        self.repo
+            .delete(owner, name, version)
+            .instrument(Self::span(name, version))
+            .await
     }
 }
 
-pub struct DbPluginRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbPluginRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbPluginRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbPluginRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
 
-impl<DB: Database> Debug for DbPluginRepo<DB> {
+impl<DB: Pool> Debug for DbPluginRepo<DB> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DbPluginRepo")
             .field("db_pool", &self.db_pool)
@@ -337,10 +319,11 @@ impl<DB: Database> Debug for DbPluginRepo<DB> {
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+    )]
 #[async_trait]
 impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
-    for DbPluginRepo<sqlx::Postgres>
+    for DbPluginRepo<golem_service_base::db::postgres::PostgresPool>
 {
     async fn get_all(
         &self,
@@ -373,10 +356,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         owner.add_where_clause(&mut query);
 
-        Ok(query
-            .build_query_as::<PluginRecord<Owner, Scope>>()
-            .fetch_all(self.db_pool.deref())
-            .await?)
+        self.db_pool
+            .with_ro("plugin", "get_all")
+            .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .await
     }
 
     async fn get_for_scope(
@@ -422,10 +405,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         debug!("Built query for get_for_scope: {}", query.sql());
 
-        Ok(query
-            .build_query_as::<PluginRecord<Owner, Scope>>()
-            .fetch_all(self.db_pool.deref())
-            .await?)
+        self.db_pool
+            .with_ro("plugin", "get_for_scope")
+            .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .await
     }
 
     async fn get_all_with_name(
@@ -465,10 +448,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         debug!("Built query for get_all_with_name: {}", query.sql());
 
-        Ok(query
-            .build_query_as::<PluginRecord<Owner, Scope>>()
-            .fetch_all(self.db_pool.deref())
-            .await?)
+        self.db_pool
+            .with_ro("plugin", "get_all_with_name")
+            .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .await
     }
 
     async fn create(&self, record: &PluginRecord<Owner, Scope>) -> Result<(), RepoError> {
@@ -521,7 +504,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         debug!("Built query for create: {}", query.sql());
 
-        query.build().execute(self.db_pool.deref()).await?;
+        self.db_pool
+            .with_rw("plugin", "create")
+            .execute(query.build())
+            .await?;
 
         Ok(())
     }
@@ -563,10 +549,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         query.push(" AND version = ");
         query.push_bind(version);
 
-        Ok(query
-            .build_query_as::<PluginRecord<Owner, Scope>>()
-            .fetch_optional(self.db_pool.deref())
-            .await?)
+        self.db_pool
+            .with_ro("plugin", "get")
+            .fetch_optional_as(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .await
     }
 
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError> {
@@ -578,7 +564,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         query.push(" AND ");
         owner.add_where_clause(&mut query);
 
-        query.build().execute(self.db_pool.deref()).await?;
+        self.db_pool
+            .with_rw("plugin", "delete")
+            .execute(query.build())
+            .await?;
 
         Ok(())
     }

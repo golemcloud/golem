@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::{CustomError, Expr, InferredType};
 use std::collections::VecDeque;
 
@@ -49,7 +49,7 @@ use std::collections::VecDeque;
 // At the end of this process, each expression has an assigned
 // inferred type, created by traversing in a queue and stack order.
 
-pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibCompilationError> {
+pub fn type_pull_up(expr: &Expr) -> Result<Expr, RibTypeError> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
@@ -655,9 +655,9 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
-    use crate::rib_compilation_error::RibCompilationError;
     use crate::rib_source_span::SourceSpan;
-    use crate::type_inference::kind::TypeKind;
+    use crate::rib_type_error::RibTypeError;
+    use crate::type_inference::type_hint::TypeHint;
     use crate::type_refinement::precise_types::{ListType, RangeType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{
@@ -776,7 +776,7 @@ mod internal {
         current_field_type: &InferredType,
         inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
@@ -802,7 +802,7 @@ mod internal {
         curren_type: &InferredType,
         inferred_expr_stack: &mut VecDeque<Expr>,
         source_span: &SourceSpan,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let new_index_expr = inferred_expr_stack
             .pop_front()
             .unwrap_or(original_index_expr.clone());
@@ -1119,21 +1119,23 @@ mod internal {
             let right_number_type = right_expr_type.as_number().map_err(|_| TypeMismatchError {
                 expr_with_wrong_type: right_expr.clone(),
                 parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::Kind(TypeKind::Number),
+                expected_type: ExpectedType::Hint(TypeHint::Number),
                 actual_type: ActualType::Inferred(right_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
-                    "math expression consist of operands that are not valid numbers".to_string(),
+                    "type mismatch in mathematical expression: operands have incompatible types."
+                        .to_string(),
                 ],
             })?;
             let left_number_type = left_expr_type.as_number().map_err(|_| TypeMismatchError {
                 expr_with_wrong_type: left_expr.clone(),
                 parent_expr: Some(original_math_expr.clone()),
-                expected_type: ExpectedType::Kind(TypeKind::Number),
+                expected_type: ExpectedType::Hint(TypeHint::Number),
                 actual_type: ActualType::Inferred(left_expr_type),
                 field_path: Default::default(),
                 additional_error_detail: vec![
-                    "math expression consist of operands that are not valid numbers".to_string(),
+                    "type mismatch in mathematical expression: operands have incompatible types."
+                        .to_string(),
                 ],
             })?;
 
@@ -1152,11 +1154,11 @@ mod internal {
                 return Err(TypeMismatchError {
                     expr_with_wrong_type: original_math_expr.clone(),
                     parent_expr: None,
-                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    expected_type: ExpectedType::Hint(TypeHint::Number),
                     actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
                     field_path: Default::default(),
                     additional_error_detail: vec![
-                        "math expression consist of operands that are not valid numbers"
+                        "type mismatch in mathematical expression: operands have incompatible types. "
                             .to_string(),
                     ],
                 });
@@ -1370,12 +1372,30 @@ mod internal {
                         }
                     };
 
+                    let new_inferred_type = match inferred_type {
+                        InferredType::Instance { instance_type } => {
+                            instance_type.worker().map(|worker_expr| {
+                                let inferred_worker_expr = inferred_expr_stack
+                                    .pop_front()
+                                    .unwrap_or_else(|| worker_expr.clone());
+
+                                let mut new_instance_type = instance_type.clone();
+                                new_instance_type.set_worker_name(inferred_worker_expr);
+
+                                InferredType::Instance {
+                                    instance_type: new_instance_type,
+                                }
+                            })
+                        }
+                        _ => None,
+                    };
+
                     let new_call = Expr::call(
                         CallType::InstanceCreation(new_instance_creation.clone()),
                         generic_type_parameter,
                         new_arg_exprs,
                     )
-                    .with_inferred_type(inferred_type.clone())
+                    .with_inferred_type(new_inferred_type.unwrap_or_else(|| inferred_type.clone()))
                     .with_source_span(source_span.clone());
                     inferred_expr_stack.push_front(new_call);
                 } else {
@@ -1544,12 +1564,12 @@ mod internal {
         original_selection_expr: &Expr,
         select_field: &str,
         select_from_type: &InferredType,
-    ) -> Result<InferredType, RibCompilationError> {
+    ) -> Result<InferredType, RibTypeError> {
         let refined_record = RecordType::refine(select_from_type).ok_or({
             TypeMismatchError {
                 expr_with_wrong_type: original_selection_expr.clone(),
                 parent_expr: None,
-                expected_type: ExpectedType::Kind(TypeKind::Record),
+                expected_type: ExpectedType::Hint(TypeHint::Record(None)),
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
@@ -1573,12 +1593,12 @@ mod internal {
         selected_index: &Expr,
         select_from_type: &InferredType,
         select_index_type: &InferredType,
-    ) -> Result<(SelectionIndexType, InferredType), RibCompilationError> {
+    ) -> Result<(SelectionIndexType, InferredType), RibTypeError> {
         let refined_list = ListType::refine(select_from_type).ok_or({
             TypeMismatchError {
                 expr_with_wrong_type: original_selection_expr.clone(),
                 parent_expr: None,
-                expected_type: ExpectedType::Kind(TypeKind::List),
+                expected_type: ExpectedType::Hint(TypeHint::List(None)),
                 actual_type: ActualType::Inferred(select_from_type.clone()),
                 field_path: Default::default(),
                 additional_error_detail: vec![format!(
@@ -1602,7 +1622,7 @@ mod internal {
                 TypeMismatchError {
                     expr_with_wrong_type: original_selection_expr.clone(),
                     parent_expr: None,
-                    expected_type: ExpectedType::Kind(TypeKind::Number),
+                    expected_type: ExpectedType::Hint(TypeHint::Number),
                     actual_type: ActualType::Inferred(select_index_type.clone()),
                     field_path: Default::default(),
                     additional_error_detail: vec![format!(

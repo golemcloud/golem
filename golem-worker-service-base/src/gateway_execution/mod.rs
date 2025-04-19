@@ -14,7 +14,6 @@
 
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
-use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -49,19 +48,19 @@ pub struct GatewayResolvedWorkerRequest<Namespace> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct WorkerDetail {
-    pub component_id: VersionedComponentId,
+pub struct WorkerDetails {
+    pub component_id: ComponentId,
     pub worker_name: Option<String>,
     pub idempotency_key: Option<IdempotencyKey>,
     pub invocation_context: InvocationContextStack,
 }
 
-impl WorkerDetail {
+impl WorkerDetails {
     fn as_json(&self) -> Value {
         let mut worker_detail_content = HashMap::new();
         worker_detail_content.insert(
             "component_id".to_string(),
-            Value::String(self.component_id.component_id.0.to_string()),
+            Value::String(self.component_id.0.to_string()),
         );
 
         if let Some(worker_name) = &self.worker_name {

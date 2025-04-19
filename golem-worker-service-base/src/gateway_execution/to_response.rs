@@ -22,7 +22,7 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::HttpCors as CorsPreflight;
-use crate::gateway_rib_interpreter::EvaluationError;
+use crate::gateway_rib_interpreter::RibRuntimeError;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
@@ -57,8 +57,9 @@ pub type GatewayHttpResult<T> = Result<T, GatewayHttpError>;
 
 pub enum GatewayHttpError {
     BadRequest(String),
+    InternalError(String),
     RibInputTypeMismatch(RibInputTypeMismatch),
-    EvaluationError(EvaluationError),
+    EvaluationError(RibRuntimeError),
     RibInterpretPureError(String),
     HttpHandlerBindingError(HttpHandlerBindingError),
     FileServerBindingError(FileServerBindingError),
@@ -75,7 +76,7 @@ impl ToHttpResponse for GatewayHttpError {
         match self {
             GatewayHttpError::BadRequest(e) => poem::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(format!("Invalid input: {e}"))),
+                .body(Body::from_string(e)),
             GatewayHttpError::RibInputTypeMismatch(err) => {
                 err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST)
             }
@@ -96,6 +97,9 @@ impl ToHttpResponse for GatewayHttpError {
             GatewayHttpError::AuthorisationError(inner) => {
                 inner.to_response(request_details, session_store).await
             }
+            GatewayHttpError::InternalError(e) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(e)),
         }
     }
 }
@@ -295,7 +299,7 @@ mod internal {
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
     use crate::gateway_execution::request::RichRequest;
-    use crate::gateway_rib_interpreter::EvaluationError;
+    use crate::gateway_rib_interpreter::RibRuntimeError;
     use http::StatusCode;
 
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
@@ -316,18 +320,18 @@ mod internal {
     impl IntermediateHttpResponse {
         pub(crate) fn from(
             evaluation_result: &RibResult,
-        ) -> Result<IntermediateHttpResponse, EvaluationError> {
+        ) -> Result<IntermediateHttpResponse, RibRuntimeError> {
             match evaluation_result {
                 RibResult::Val(rib_result) => {
-                    let status = get_status_code_or_ok(rib_result).map_err(EvaluationError)?;
+                    let status = get_status_code_or_ok(rib_result).map_err(RibRuntimeError)?;
 
                     let headers =
-                        get_response_headers_or_default(rib_result).map_err(EvaluationError)?;
+                        get_response_headers_or_default(rib_result).map_err(RibRuntimeError)?;
 
                     let tav: TypeAnnotatedValue = rib_result
                         .clone()
                         .try_into()
-                        .map_err(|errs: Vec<String>| EvaluationError(errs.join(", ")))?;
+                        .map_err(|errs: Vec<String>| RibRuntimeError(errs.join(", ")))?;
 
                     let body = tav
                         .get_optional(&Path::from_key("body"))
@@ -430,13 +434,7 @@ mod test {
     }
 
     fn test_request() -> RichRequest {
-        RichRequest {
-            underlying: poem::Request::default(),
-            path_segments: vec![],
-            path_param_extractors: vec![],
-            query_info: vec![],
-            auth_data: None,
-        }
+        RichRequest::new(poem::Request::default())
     }
 
     #[test]
@@ -466,7 +464,7 @@ mod test {
         let headers = response_parts.headers;
         let status = response_parts.status;
 
-        let expected_body = "Hello";
+        let expected_body = "\"Hello\"";
         let expected_headers = poem::web::headers::HeaderMap::from_iter(vec![(
             CONTENT_TYPE,
             "application/json".parse().unwrap(),

@@ -15,7 +15,7 @@
 use crate::Expr;
 use std::collections::VecDeque;
 
-pub(crate) fn bind_type_annotations(expr: &mut Expr) {
+pub fn bind_type_annotations(expr: &mut Expr) {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 

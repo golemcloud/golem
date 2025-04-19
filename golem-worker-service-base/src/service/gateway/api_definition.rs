@@ -12,30 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Display};
-use std::hash::Hash;
-use std::sync::Arc;
-
+use super::{BoxConversionContext, ComponentView, ConversionContext};
 use crate::gateway_api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
-    HttpApiDefinitionRequest, RouteCompilationErrors,
+    HttpApiDefinitionRequest, OpenApiHttpApiDefinition, RouteCompilationErrors,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_security::IdentityProviderError;
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;
-use crate::service::component::ComponentService;
+use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
 use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::component::VersionedComponentId;
+use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{Component, VersionedComponentId};
+use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
+use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
-use rib::RibError;
+use rib::RibCompilationError;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::sync::Arc;
 use tracing::{error, info};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
@@ -56,8 +62,16 @@ pub enum ApiDefinitionError {
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
+    #[error("Unsupported input in Rib script: {0}")]
+    UnsupportedRibInput(String),
     #[error("Rib internal error: {0}")]
     RibInternal(String),
+    #[error("Rib static analysis error: {0}")]
+    RibStaticAnalysisError(String),
+    #[error("Rib byte code generation error: {0}")]
+    RibByteCodeGenerationError(String),
+    #[error("Invalid rib syntax: {0}")]
+    RibParseError(String),
     #[error("Security Scheme Error: {0}")]
     SecuritySchemeError(SecuritySchemeServiceError),
     #[error("Identity Provider Error: {0}")]
@@ -74,6 +88,8 @@ pub enum ApiDefinitionError {
     InternalRepoError(RepoError),
     #[error("Internal error: {0}")]
     Internal(String),
+    #[error("Invalid openapi api definition: {0}")]
+    InvalidOasDefinition(String),
 }
 
 impl ApiDefinitionError {}
@@ -99,6 +115,11 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::Internal(_) => self.to_string(),
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
             ApiDefinitionError::RibInternal(_) => self.to_string(),
+            ApiDefinitionError::RibParseError(_) => self.to_string(),
+            ApiDefinitionError::RibStaticAnalysisError(_) => self.to_string(),
+            ApiDefinitionError::RibByteCodeGenerationError(_) => self.to_string(),
+            ApiDefinitionError::UnsupportedRibInput(_) => self.to_string(),
+            ApiDefinitionError::InvalidOasDefinition(_) => self.to_string(),
         }
     }
 }
@@ -107,11 +128,26 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
     fn from(error: RouteCompilationErrors) -> Self {
         match error {
             RouteCompilationErrors::RibError(e) => match e {
-                RibError::RibCompilationError(e) => {
+                RibCompilationError::RibTypeError(e) => {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
-                RibError::InternalError(e) => ApiDefinitionError::RibInternal(e),
+                RibCompilationError::RibStaticAnalysisError(e) => {
+                    ApiDefinitionError::RibStaticAnalysisError(e)
+                }
+                RibCompilationError::InvalidSyntax(e) => ApiDefinitionError::RibParseError(e),
+                RibCompilationError::UnsupportedGlobalInput {
+                    valid_global_inputs: expected,
+                    invalid_global_inputs: found,
+                } => ApiDefinitionError::UnsupportedRibInput(format!(
+                    "Expected: {}, found: {}",
+                    expected.join(", "),
+                    found.join(", ")
+                )),
+                RibCompilationError::ByteCodeGenerationFail(error) => {
+                    ApiDefinitionError::RibByteCodeGenerationError(error.to_string())
+                }
             },
+            RouteCompilationErrors::ValidationError(e) => ApiDefinitionError::ValidationError(e),
             RouteCompilationErrors::MetadataNotFoundError(e) => {
                 ApiDefinitionError::RibCompilationErrors(format!(
                     "Failed to find the metadata of the component {}",
@@ -134,9 +170,23 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         auth_ctx: &AuthCtx,
     ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
 
+    async fn create_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
+
     async fn update(
         &self,
         definition: &HttpApiDefinitionRequest,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
+
+    async fn update_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
@@ -169,26 +219,130 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>>;
+
+    fn conversion_context<'a>(
+        &'a self,
+        namespace: &'a Namespace,
+        auth_ctx: &'a AuthCtx,
+    ) -> BoxConversionContext<'a>
+    where
+        Namespace: 'a,
+        AuthCtx: 'a;
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApiDefinitionServiceConfig {
+    component_by_name_cache_size: usize,
+    component_by_id_cache_size: usize,
+}
+
+impl Default for ApiDefinitionServiceConfig {
+    fn default() -> Self {
+        Self {
+            component_by_name_cache_size: 1024,
+            component_by_id_cache_size: 1024,
+        }
+    }
+}
+
+type ComponentByNameCache = Cache<ComponentName, (), Option<ComponentView>, String>;
+
+type ComponentByIdCache = Cache<ComponentId, (), Option<ComponentView>, String>;
+
+pub struct DefaultConversionContext<'a, Namespace, AuthCtx> {
+    component_service: &'a Arc<dyn ComponentService<Namespace, AuthCtx>>,
+    namespace: &'a Namespace,
+    auth_ctx: &'a AuthCtx,
+    component_name_cache: &'a ComponentByNameCache,
+    component_id_cache: &'a ComponentByIdCache,
+}
+
+#[async_trait]
+impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ConversionContext
+    for DefaultConversionContext<'_, Namespace, AuthCtx>
+{
+    async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
+        let name = name.clone();
+        let component = self
+            .component_name_cache
+            .get_or_insert_simple(&name, async || {
+                let result = self
+                    .component_service
+                    .get_by_name(&name, self.namespace, self.auth_ctx)
+                    .await;
+
+                match result {
+                    Ok(inner) => Ok(Some(inner.into())),
+                    Err(ComponentServiceError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(format!("Failed to lookup component by name: {e}")),
+                }
+            })
+            .await?;
+
+        if let Some(component) = component {
+            // put component into the other cache to save lookups
+            let _ = self
+                .component_id_cache
+                .get_or_insert_simple(&component.id, async || Ok(Some(component.clone())))
+                .await;
+
+            Ok(component)
+        } else {
+            Err(format!("Did not find component for name {name}"))
+        }
+    }
+    async fn component_by_id(&self, component_id: &ComponentId) -> Result<ComponentView, String> {
+        let component = self
+            .component_id_cache
+            .get_or_insert_simple(component_id, async || {
+                let result = self
+                    .component_service
+                    .get_latest(component_id, self.auth_ctx)
+                    .await;
+
+                match result {
+                    Ok(inner) => Ok(Some(inner.into())),
+                    Err(ComponentServiceError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(format!("Failed to lookup component by id: {e}")),
+                }
+            })
+            .await?;
+
+        if let Some(component) = component {
+            // put component into the other cache to save lookups
+            let _ = self
+                .component_name_cache
+                .get_or_insert_simple(&component.name, async || Ok(Some(component.clone())))
+                .await;
+
+            Ok(component)
+        } else {
+            Err(format!("Did not find component for id {component_id}"))
+        }
+    }
 }
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace> {
-    pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
-    pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
-    pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
-    pub security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
-    pub api_definition_validator:
+    component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
+    definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
+    deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
+    security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
+    api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
+    component_name_cache: ComponentByNameCache,
+    component_id_cache: ComponentByIdCache,
 }
 
 impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
     pub fn new(
-        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<Namespace, AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
         api_definition_validator: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send,
         >,
+        config: ApiDefinitionServiceConfig,
     ) -> Self {
         Self {
             component_service,
@@ -196,6 +350,18 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
             security_scheme_service,
             deployment_repo,
             api_definition_validator,
+            component_name_cache: Cache::new(
+                Some(config.component_by_name_cache_size),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_name",
+            ),
+            component_id_cache: Cache::new(
+                Some(config.component_by_id_cache_size),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_id",
+            ),
         }
     }
 
@@ -204,11 +370,15 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
         definition: &HttpApiDefinition,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<Component>, ApiDefinitionError> {
-        let get_components = definition
-            .get_bindings()
-            .iter()
-            .cloned()
+        let bindings = definition.get_bindings();
+        let component_ids = bindings
+            .clone()
+            .into_iter()
             .filter_map(|binding| binding.get_component_id())
+            .collect::<HashSet<_>>();
+
+        let futures = component_ids
+            .into_iter()
             .map(|id| async move {
                 self.component_service
                     .get_by_version(&id.component_id, id.version, auth_ctx)
@@ -224,33 +394,37 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
             })
             .collect::<Vec<_>>();
 
-        let components: Vec<Component> = {
-            let results = futures::future::join_all(get_components).await;
-            let (successes, errors) = results
-                .into_iter()
-                .partition::<Vec<_>, _>(|result| result.is_ok());
+        let results = ::futures::future::join_all(futures).await;
 
-            // Ensure that all components were retrieved.
-            if !errors.is_empty() {
-                let errors: Vec<VersionedComponentId> =
-                    errors.into_iter().map(|r| r.unwrap_err()).collect();
-                return Err(ApiDefinitionError::ComponentNotFoundError(errors));
+        let mut mapping = HashMap::new();
+        let mut failures = Vec::new();
+        for result in results {
+            match result {
+                Ok(component) => {
+                    mapping.insert(component.versioned_component_id.clone(), component);
+                }
+                Err(id) => {
+                    failures.push(id);
+                }
             }
+        }
+        failures.sort();
 
-            successes.into_iter().map(|r| r.unwrap()).collect()
-        };
-
-        Ok(components)
+        if !failures.is_empty() {
+            Err(ApiDefinitionError::ComponentNotFoundError(failures))
+        } else {
+            Ok(bindings
+                .into_iter()
+                .filter_map(|binding| binding.get_component_id())
+                .map(|id| mapping.get(&id).unwrap().clone())
+                .collect())
+        }
     }
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace> ApiDefinitionService<AuthCtx, Namespace>
+impl<AuthCtx: GolemAuthCtx, Namespace: GolemNamespace> ApiDefinitionService<AuthCtx, Namespace>
     for ApiDefinitionServiceDefault<AuthCtx, Namespace>
-where
-    AuthCtx: Send + Sync,
-    Namespace: Display + Clone + Send + Sync + TryFrom<String>,
-    <Namespace as TryFrom<String>>::Error: Display,
 {
     async fn create(
         &self,
@@ -312,6 +486,20 @@ where
         Ok(compiled_http_api_definition)
     }
 
+    async fn create_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
+        let conversion_ctx = self.conversion_context(namespace, auth_ctx);
+        let converted = definition
+            .to_http_api_definition_request(&conversion_ctx)
+            .await
+            .map_err(ApiDefinitionError::InvalidOasDefinition)?;
+        self.create(&converted, namespace, auth_ctx).await
+    }
+
     async fn update(
         &self,
         definition: &HttpApiDefinitionRequest,
@@ -368,6 +556,20 @@ where
         self.definition_repo.update(&record).await?;
 
         Ok(compiled_http_api_definition)
+    }
+
+    async fn update_with_oas(
+        &self,
+        definition: &OpenApiHttpApiDefinition,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
+        let conversion_ctx = self.conversion_context(namespace, auth_ctx);
+        let converted = definition
+            .to_http_api_definition_request(&conversion_ctx)
+            .await
+            .map_err(ApiDefinitionError::InvalidOasDefinition)?;
+        self.update(&converted, namespace, auth_ctx).await
     }
 
     async fn get(
@@ -477,6 +679,25 @@ where
             })?;
 
         Ok(values)
+    }
+
+    fn conversion_context<'a>(
+        &'a self,
+        namespace: &'a Namespace,
+        auth_ctx: &'a AuthCtx,
+    ) -> BoxConversionContext<'a>
+    where
+        Namespace: 'a,
+        AuthCtx: 'a,
+    {
+        DefaultConversionContext {
+            component_service: &self.component_service,
+            namespace,
+            auth_ctx,
+            component_name_cache: &self.component_name_cache,
+            component_id_cache: &self.component_id_cache,
+        }
+        .boxed()
     }
 }
 

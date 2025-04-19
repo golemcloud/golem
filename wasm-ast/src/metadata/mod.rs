@@ -16,7 +16,6 @@
 pub struct Metadata {
     pub name: Option<String>,
     pub producers: Option<Producers>,
-    pub registry_metadata: Option<wasm_metadata::RegistryMetadata>,
 }
 
 /// https://github.com/WebAssembly/tool-conventions/blob/main/ProducersSection.md

@@ -1,9 +1,10 @@
+#[allow(static_mut_refs)]
 mod bindings;
 
-use golem_rust::bindings::golem::api::host::set_oplog_persistence_level;
-use golem_rust::bindings::wasi::clocks::wall_clock::now;
-use golem_rust::PersistenceLevel;
 use crate::bindings::exports::golem::it::api::*;
+use golem_rust::bindings::golem::api::host::set_oplog_persistence_level;
+use golem_rust::wasm_rpc::wasi::clocks::wall_clock::now;
+use golem_rust::PersistenceLevel;
 
 struct Component;
 

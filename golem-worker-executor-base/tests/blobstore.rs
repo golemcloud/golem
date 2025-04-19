@@ -56,6 +56,8 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result == vec![Value::Bool(true)]);
@@ -83,6 +85,8 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 

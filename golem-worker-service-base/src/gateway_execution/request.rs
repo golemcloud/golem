@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::gateway_session::{DataKey, GatewaySessionStore, SessionId};
-use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
+use crate::gateway_api_definition::http::QueryInfo;
 use crate::gateway_binding::{GatewayBindingCompiled, ResolvedRouteEntry};
 use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::router::PathParamExtractor;
@@ -29,13 +29,33 @@ const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
 /// Thin wrapper around a poem::Request that is used to evaluate all binding types when coming from an http gateway.
 pub struct RichRequest {
     pub underlying: poem::Request,
-    pub path_segments: Vec<String>,
-    pub path_param_extractors: Vec<PathParamExtractor>,
-    pub query_info: Vec<QueryInfo>,
-    pub auth_data: Option<Value>,
+    path_segments: Vec<String>,
+    path_param_extractors: Vec<PathParamExtractor>,
+    query_info: Vec<QueryInfo>,
+    auth_data: Option<Value>,
+    cached_request_body: Value,
 }
 
 impl RichRequest {
+    pub fn new(underlying: poem::Request) -> RichRequest {
+        RichRequest {
+            underlying,
+            path_segments: vec![],
+            path_param_extractors: vec![],
+            query_info: vec![],
+            auth_data: None,
+            cached_request_body: serde_json::Value::Null,
+        }
+    }
+
+    pub fn auth_data(&self) -> Option<&Value> {
+        self.auth_data.as_ref()
+    }
+
+    pub fn headers(&self) -> &HeaderMap {
+        self.underlying.headers()
+    }
+
     pub fn query_params(&self) -> HashMap<String, String> {
         self.underlying
             .uri()
@@ -67,104 +87,38 @@ impl RichRequest {
             .ok_or("No path and query provided".to_string())
     }
 
-    fn request_path_values(&self) -> RequestPathValues {
+    pub fn path_params(&self) -> HashMap<String, String> {
         use crate::gateway_request::http_request::router;
 
-        let path_param_values: HashMap<VarInfo, String> = self
-            .path_param_extractors
+        self.path_param_extractors
             .iter()
             .map(|param| match param {
-                router::PathParamExtractor::Single { var_info, index } => {
-                    (var_info.clone(), self.path_segments[*index].clone())
-                }
+                router::PathParamExtractor::Single { var_info, index } => (
+                    var_info.key_name.clone(),
+                    self.path_segments[*index].clone(),
+                ),
                 router::PathParamExtractor::AllFollowing { var_info, index } => {
                     let value = self.path_segments[*index..].join("/");
-                    (var_info.clone(), value)
+                    (var_info.key_name.clone(), value)
                 }
             })
-            .collect();
-
-        RequestPathValues::from(path_param_values)
+            .collect()
     }
 
-    fn request_query_values(&self) -> Result<RequestQueryValues, String> {
+    pub fn request_query_values(&self) -> Result<RequestQueryValues, String> {
         RequestQueryValues::from(&self.query_params(), &self.query_info)
             .map_err(|e| format!("Failed to extract query values, missing: [{}]", e.join(",")))
     }
 
-    fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
+    pub fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
         RequestHeaderValues::from(self.underlying.headers())
             .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
-    /// consumes the body of the underlying request
-    async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
-        let body = self.underlying.take_body();
+    pub async fn request_body(&mut self) -> Result<&Value, String> {
+        self.take_request_body().await?;
 
-        let json_request_body: Value = if body.is_empty() {
-            Value::Null
-        } else {
-            match body.into_json().await {
-                Ok(json_request_body) => json_request_body,
-                Err(err) => {
-                    tracing::error!("Failed reading http request body as json: {}", err);
-                    Err(format!("Request body parse error: {err}"))?
-                }
-            }
-        };
-
-        Ok(RequestBodyValue(json_request_body))
-    }
-
-    fn as_basic_json_hashmap(&self) -> Result<serde_json::Map<String, Value>, String> {
-        let typed_path_values = self.request_path_values();
-        let typed_query_values = self.request_query_values()?;
-        let typed_header_values = self.request_header_values()?;
-
-        let mut path_values = serde_json::Map::new();
-
-        for field in typed_path_values.0.fields.into_iter() {
-            path_values.insert(field.name, field.value);
-        }
-
-        for field in typed_query_values.0.fields.into_iter() {
-            path_values.insert(field.name, field.value);
-        }
-
-        let merged_request_path_and_query = Value::Object(path_values);
-
-        let mut header_records = serde_json::Map::new();
-
-        for field in typed_header_values.0.fields.iter() {
-            header_records.insert(field.name.clone(), field.value.clone());
-        }
-
-        let header_value = Value::Object(header_records);
-
-        let mut basic = serde_json::Map::from_iter(vec![
-            ("path".to_string(), merged_request_path_and_query),
-            ("headers".to_string(), header_value),
-        ]);
-
-        if let Some(auth_data) = self.auth_data.as_ref() {
-            basic.insert("auth".to_string(), auth_data.clone());
-        };
-
-        Ok(basic)
-    }
-
-    pub fn as_json(&self) -> Result<Value, String> {
-        Ok(Value::Object(self.as_basic_json_hashmap()?))
-    }
-
-    /// consumes the body of the underlying request
-    pub async fn as_json_with_body(&mut self) -> Result<Value, String> {
-        let mut basic = self.as_basic_json_hashmap()?;
-        let body = self.request_body_value().await?;
-
-        basic.insert("body".to_string(), body.0);
-
-        Ok(Value::Object(basic))
+        Ok(self.cached_request_body())
     }
 
     /// consumes the body of the underlying request
@@ -226,6 +180,35 @@ impl RichRequest {
 
         result
     }
+
+    fn cached_request_body(&self) -> &Value {
+        &self.cached_request_body
+    }
+
+    /// Consumes the body of the underlying request, and make it as part of RichRequest as `cached_request_body`.
+    /// The following logic is subtle enough that it takes the following into consideration:
+    /// 99% of the time, number of separate rib scripts in API definition that needs to look up request body is 1,
+    /// and for that rib-script, there will be no extra logic to read the request body in the hot path.
+    /// At the same, if by any chance, multiple rib scripts exist (within a request) that require to lookup the request body, `take_request_body`
+    /// is idempotent, that it doesn't affect correctness.
+    /// We intentionally don't consume the body if its not required in any Rib script.
+    async fn take_request_body(&mut self) -> Result<(), String> {
+        let body = self.underlying.take_body();
+
+        if !body.is_empty() {
+            match body.into_json().await {
+                Ok(json_request_body) => {
+                    self.cached_request_body = json_request_body;
+                }
+                Err(err) => {
+                    tracing::error!("Failed reading http request body as json: {}", err);
+                    return Err(format!("Request body parse error: {err}"))?;
+                }
+            }
+        };
+
+        Ok(())
+    }
 }
 
 pub struct SplitResolvedRouteEntryResult<Namespace> {
@@ -251,6 +234,7 @@ pub fn split_resolved_route_entry<Namespace>(
         path_param_extractors: entry.route_entry.path_params,
         query_info: entry.route_entry.query_params,
         auth_data: None,
+        cached_request_body: Value::Null,
     };
 
     SplitResolvedRouteEntryResult {
@@ -288,7 +272,7 @@ pub fn authority_from_request(request: &poem::Request) -> Result<String, String>
 }
 
 #[derive(Debug, Clone)]
-pub struct RequestQueryValues(pub JsonKeyValues);
+pub struct RequestQueryValues(pub HashMap<String, String>);
 
 impl RequestQueryValues {
     pub fn from(
@@ -296,13 +280,12 @@ impl RequestQueryValues {
         query_keys: &[QueryInfo],
     ) -> Result<RequestQueryValues, Vec<String>> {
         let mut unavailable_query_variables: Vec<String> = vec![];
-        let mut query_variable_map: JsonKeyValues = JsonKeyValues::default();
+        let mut query_variable_map: HashMap<String, String> = HashMap::new();
 
         for spec_query_variable in query_keys.iter() {
             let key = &spec_query_variable.key_name;
             if let Some(query_value) = query_key_values.get(key) {
-                let typed_value = internal::refine_json_str_value(query_value);
-                query_variable_map.push(key.clone(), typed_value);
+                query_variable_map.insert(key.clone(), query_value.to_string());
             } else {
                 unavailable_query_variables.push(spec_query_variable.to_string());
             }
@@ -317,91 +300,18 @@ impl RequestQueryValues {
 }
 
 #[derive(Debug, Clone)]
-pub struct RequestHeaderValues(pub JsonKeyValues);
+pub struct RequestHeaderValues(pub HashMap<String, String>);
 
 impl RequestHeaderValues {
     pub fn from(headers: &HeaderMap) -> Result<RequestHeaderValues, Vec<String>> {
-        let mut headers_map: JsonKeyValues = JsonKeyValues::default();
+        let mut headers_map: HashMap<String, String> = HashMap::new();
 
         for (header_name, header_value) in headers {
             let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
 
-            let typed_header_value = internal::refine_json_str_value(header_value_str);
-
-            headers_map.push(header_name.to_string(), typed_header_value);
+            headers_map.insert(header_name.to_string(), header_value_str.to_string());
         }
 
         Ok(RequestHeaderValues(headers_map))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RequestBodyValue(pub Value);
-
-#[derive(Clone, Debug, Default)]
-pub struct JsonKeyValues {
-    pub fields: Vec<JsonKeyValue>,
-}
-
-impl JsonKeyValues {
-    pub fn push(&mut self, key: String, value: Value) {
-        self.fields.push(JsonKeyValue { name: key, value });
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct JsonKeyValue {
-    pub name: String,
-    pub value: Value,
-}
-
-mod internal {
-    use rib::{CoercedNumericValue, LiteralValue};
-    use serde_json::Value;
-
-    pub(crate) fn refine_json_str_value(value: impl AsRef<str>) -> Value {
-        let primitive = LiteralValue::from(value.as_ref().to_string());
-        match primitive {
-            LiteralValue::Num(number) => match number {
-                CoercedNumericValue::PosInt(value) => {
-                    Value::Number(serde_json::Number::from(value))
-                }
-                CoercedNumericValue::NegInt(value) => {
-                    Value::Number(serde_json::Number::from(value))
-                }
-                CoercedNumericValue::Float(value) => {
-                    Value::Number(serde_json::Number::from_f64(value).unwrap())
-                }
-            },
-            LiteralValue::String(value) => Value::String(value),
-            LiteralValue::Bool(value) => Value::Bool(value),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct RequestPathValues(pub JsonKeyValues);
-
-impl RequestPathValues {
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.0
-            .fields
-            .iter()
-            .find(|field| field.name == key)
-            .map(|field| &field.value)
-    }
-
-    fn from(path_variables: HashMap<VarInfo, String>) -> RequestPathValues {
-        let record_fields: Vec<JsonKeyValue> = path_variables
-            .into_iter()
-            .map(|(key, value)| JsonKeyValue {
-                name: key.key_name,
-                value: internal::refine_json_str_value(value),
-            })
-            .collect();
-
-        RequestPathValues(JsonKeyValues {
-            fields: record_fields,
-        })
     }
 }

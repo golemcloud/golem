@@ -95,23 +95,25 @@ impl FileSystemComponentService {
             .await
             .map_err(|err| {
                 AddComponentError::Other(format!(
-                    "Failed to copy WASM to the local component store: {err}"
+                    "Failed to copy WASM to the local component store: {err:#}"
                 ))
             })?;
 
-        let (memories, exports) = if skip_analysis {
-            (vec![], vec![])
+        let (raw_component_metadata, memories, exports) = if skip_analysis {
+            (RawComponentMetadata::default(), vec![], vec![])
         } else {
             Self::analyze_memories_and_exports(&target_path)
                 .await
-                .ok_or(AddComponentError::Other(
-                    "Failed to analyze component".to_string(),
-                ))?
+                .map_err(|err| {
+                    AddComponentError::Other(format!("Failed to analyze component: {err:#}"))
+                })?
         };
 
         let size = tokio::fs::metadata(&target_path)
             .await
-            .map_err(|e| AddComponentError::Other(format!("Failed to read component size: {}", e)))?
+            .map_err(|err| {
+                AddComponentError::Other(format!("Failed to read component size: {err:#}"))
+            })?
             .len();
 
         let metadata = LocalFileSystemComponentMetadata {
@@ -149,6 +151,9 @@ impl FileSystemComponentService {
                     .iter()
                     .map(|(link, instance)| (link.clone(), instance.clone().into()))
                     .collect(),
+                binary_wit: raw_component_metadata.binary_wit,
+                root_package_name: raw_component_metadata.root_package_name,
+                root_package_version: raw_component_metadata.root_package_version,
             }),
             account_id: None,
             project_id: None,
@@ -161,26 +166,23 @@ impl FileSystemComponentService {
 
     async fn analyze_memories_and_exports(
         path: &Path,
-    ) -> Option<(Vec<LinearMemory>, Vec<AnalysedExport>)> {
-        let component_bytes = &tokio::fs::read(path).await.ok()?;
-        let raw_component_metadata =
-            RawComponentMetadata::analyse_component(component_bytes).ok()?;
+    ) -> crate::Result<(RawComponentMetadata, Vec<LinearMemory>, Vec<AnalysedExport>)> {
+        let component_bytes = &tokio::fs::read(path).await?;
+        let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)?;
 
-        let exports = raw_component_metadata
-            .exports
-            .into_iter()
-            .collect::<Vec<_>>();
+        let exports = raw_component_metadata.exports.to_vec();
 
         let linear_memories: Vec<LinearMemory> = raw_component_metadata
             .memories
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|mem| LinearMemory {
                 initial: mem.mem_type.limits.min * 65536,
                 maximum: mem.mem_type.limits.max.map(|m| m * 65536),
             })
             .collect::<Vec<_>>();
 
-        Some((linear_memories, exports))
+        Ok((raw_component_metadata, linear_memories, exports))
     }
 
     async fn load_metadata(
@@ -292,7 +294,7 @@ impl ComponentService for FileSystemComponentService {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
-    ) -> u64 {
+    ) -> crate::Result<u64> {
         let target_dir = &self.root;
 
         debug!("Local component store: {target_dir:?}");
@@ -332,7 +334,8 @@ impl ComponentService for FileSystemComponentService {
         )
         .await
         .expect("Failed to write component to filesystem");
-        new_version
+
+        Ok(new_version)
     }
 
     async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
@@ -347,7 +350,7 @@ impl ComponentService for FileSystemComponentService {
                 let file_name = path.file_name().unwrap().to_str().unwrap();
 
                 if file_name.starts_with(&component_id_str) && file_name.ends_with(".json") {
-                    let version_part = file_name.split('-').last().unwrap();
+                    let version_part = file_name.split('-').next_back().unwrap();
                     let version_part = version_part[..version_part.len() - 5].to_string();
                     version_part.parse::<u64>().ok()
                 } else {

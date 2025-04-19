@@ -22,6 +22,7 @@ use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::future::join_all;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
@@ -41,6 +42,7 @@ use golem_api_grpc::proto::golem::apidefinition::{
 use golem_api_grpc::proto::golem::common::{
     AccountId, Empty, FilterComparator, PluginInstallationId, StringFilterComparator,
 };
+use golem_api_grpc::proto::golem::component as grpc_components;
 use golem_api_grpc::proto::golem::component::ComponentFilePermissions;
 use golem_api_grpc::proto::golem::rib::Expr;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient as WorkerServiceGrpcClient;
@@ -80,13 +82,15 @@ use golem_client::api::ApiSecurityClient as ApiSecurityServiceHttpClient;
 use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive;
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
-use golem_client::model::{ApiDeployment, ApiDeploymentRequest, SecuritySchemeData};
+use golem_client::model::{
+    ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
+};
 use golem_client::Context;
-use golem_common::model::{ComponentId, WorkerEvent};
-use golem_service_base::model::VersionedComponentId;
+use golem_common::model::WorkerEvent;
 use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::TcpStream;
@@ -131,14 +135,17 @@ pub enum ApiSecurityServiceClient {
     Http(Arc<ApiSecurityServiceHttpClientLive>),
 }
 
-#[async_trait]
-pub trait WorkerService {
+pub trait WorkerServiceInternal: Send + Sync {
     fn client_protocol(&self) -> GolemClientProtocol;
     fn worker_client(&self) -> WorkerServiceClient;
     fn api_definition_client(&self) -> ApiDefinitionServiceClient;
     fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
     fn api_security_client(&self) -> ApiSecurityServiceClient;
+    fn component_service(&self) -> &Arc<dyn ComponentService>;
+}
 
+#[async_trait]
+pub trait WorkerService: WorkerServiceInternal {
     // Overridable client functions - using these instead of client() allows
     // testing worker executors directly without the need to start a worker service,
     // when the `WorkerService` implementation is `ForwardingWorkerService`.
@@ -952,10 +959,15 @@ pub trait WorkerService {
             ApiDefinitionServiceClient::Http(client) => match request.api_definition.unwrap() {
                 create_api_definition_request::ApiDefinition::Definition(request) => {
                     match client
-                        .create_definition_json(&grpc_api_definition_request_to_http(request))
+                        .create_definition_json(
+                            &grpc_api_definition_request_to_http(request, self.component_service())
+                                .await,
+                        )
                         .await
                     {
-                        Ok(result) => Ok(http_api_definition_to_grpc(result)),
+                        Ok(result) => {
+                            Ok(http_api_definition_to_grpc(result, self.component_service()).await)
+                        }
                         Err(error) => Err(anyhow!("{error:?}")),
                     }
                 }
@@ -963,7 +975,9 @@ pub trait WorkerService {
                     .import_open_api_yaml(&serde_yaml::from_str(&open_api)?)
                     .await
                 {
-                    Ok(result) => Ok(http_api_definition_to_grpc(result)),
+                    Ok(result) => {
+                        Ok(http_api_definition_to_grpc(result, self.component_service()).await)
+                    }
                     Err(error) => Err(anyhow!("{error:?}")),
                 },
             },
@@ -995,16 +1009,22 @@ pub trait WorkerService {
                         .update_definition_yaml(
                             &request.id.clone().unwrap().value,
                             &request.clone().version,
-                            &grpc_api_definition_request_to_http(ApiDefinitionRequest {
-                                id: request.id,
-                                version: request.version,
-                                draft: request.draft,
-                                definition: request.definition,
-                            }),
+                            &grpc_api_definition_request_to_http(
+                                ApiDefinitionRequest {
+                                    id: request.id,
+                                    version: request.version,
+                                    draft: request.draft,
+                                    definition: request.definition,
+                                },
+                                self.component_service(),
+                            )
+                            .await,
                         )
                         .await
                     {
-                        Ok(result) => Ok(http_api_definition_to_grpc(result)),
+                        Ok(result) => {
+                            Ok(http_api_definition_to_grpc(result, self.component_service()).await)
+                        }
                         Err(error) => Err(anyhow!("{error:?}")),
                     }
                 }
@@ -1035,7 +1055,9 @@ pub trait WorkerService {
                     .get_definition(&request.api_definition_id.unwrap().value, &request.version)
                     .await
                 {
-                    Ok(definition) => Ok(http_api_definition_to_grpc(definition)),
+                    Ok(definition) => {
+                        Ok(http_api_definition_to_grpc(definition, self.component_service()).await)
+                    }
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
             }
@@ -1066,10 +1088,10 @@ pub trait WorkerService {
                     .list_definitions(request.api_definition_id.map(|id| id.value).as_deref())
                     .await
                 {
-                    Ok(result) => Ok(result
-                        .into_iter()
-                        .map(http_api_definition_to_grpc)
-                        .collect()),
+                    Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
+                        http_api_definition_to_grpc(def, self.component_service()).await
+                    }))
+                    .await),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
             }
@@ -1089,10 +1111,10 @@ pub trait WorkerService {
                 get_all_api_definitions_response::Result::Error(error) => Err(anyhow!("{error:?}")),
             },
             ApiDefinitionServiceClient::Http(client) => match client.list_definitions(None).await {
-                Ok(result) => Ok(result
-                    .into_iter()
-                    .map(http_api_definition_to_grpc)
-                    .collect()),
+                Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
+                    http_api_definition_to_grpc(def, self.component_service()).await
+                }))
+                .await),
                 Err(error) => Err(anyhow!("{error:?}")),
             },
         }
@@ -1386,9 +1408,9 @@ async fn env_vars(
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+    component_service: &Arc<dyn ComponentService>,
+    shard_manager: &Arc<dyn ShardManager + Send + Sync>,
+    rdb: &Arc<dyn Rdb + Send + Sync>,
     verbosity: Level,
     rdb_private_connection: bool,
 ) -> HashMap<String, String> {
@@ -1625,8 +1647,9 @@ fn invoke_parameters_to_grpc(parameters: Vec<ValueAndType>) -> Option<InvokePara
     })
 }
 
-fn http_api_definition_to_grpc(
+async fn http_api_definition_to_grpc(
     response: golem_client::model::HttpApiDefinitionResponseData,
+    component_service: &Arc<dyn ComponentService>,
 ) -> ApiDefinition {
     ApiDefinition {
         id: Some(ApiDefinitionId { value: response.id }),
@@ -1634,10 +1657,8 @@ fn http_api_definition_to_grpc(
         draft: response.draft,
         created_at: response.created_at.map(|ts| SystemTime::from(ts).into()),
         definition: Some(Definition::Http(HttpApiDefinition {
-            routes: response
-                .routes
-                .into_iter()
-                .map(|route| HttpRoute {
+            routes: join_all(response.routes.into_iter().map(async |route| {
+                HttpRoute {
                     method: match route.method {
                         golem_client::model::MethodPattern::Get => HttpMethod::Get,
                         golem_client::model::MethodPattern::Connect => HttpMethod::Connect,
@@ -1651,13 +1672,28 @@ fn http_api_definition_to_grpc(
                     } as i32,
                     path: route.path,
                     binding: Some(GatewayBinding {
-                        component: route.binding.component_id.map(|versioned_component_id| {
-                            VersionedComponentId {
-                                component_id: ComponentId(versioned_component_id.component_id),
-                                version: versioned_component_id.version,
+                        component: join_option(route.binding.component.map(async |component| {
+                            let response = component_service
+                                .get_components(grpc_components::v1::GetComponentsRequest {
+                                    project_id: None,
+                                    component_name: Some(component.name),
+                                })
+                                .await
+                                .unwrap();
+                            let resolved_component = response.first().unwrap();
+
+                            grpc_components::VersionedComponentId {
+                                component_id: Some(
+                                    resolved_component
+                                        .versioned_component_id
+                                        .unwrap()
+                                        .component_id
+                                        .unwrap(),
+                                ),
+                                version: component.version,
                             }
-                            .into()
-                        }),
+                        }))
+                        .await,
                         worker_name: route.binding.worker_name.as_deref().map(to_grpc_rib_expr),
                         response: route.binding.response.as_deref().map(to_grpc_rib_expr),
                         idempotency_key: route
@@ -1701,39 +1737,33 @@ fn http_api_definition_to_grpc(
                         invocation_context: None, // TODO
                     }),
                     middleware: None, // TODO
-                })
-                .collect(),
+                }
+            }))
+            .await,
         })),
     }
 }
 
-fn grpc_api_definition_request_to_http(
+async fn join_option<F: Future>(value: Option<F>) -> Option<F::Output> {
+    match value {
+        Some(inner) => Some(inner.await),
+        None => None,
+    }
+}
+
+async fn grpc_api_definition_request_to_http(
     request: ApiDefinitionRequest,
+    component_service: &Arc<dyn ComponentService>,
 ) -> golem_client::model::HttpApiDefinitionRequest {
     golem_client::model::HttpApiDefinitionRequest {
         id: request.id.unwrap().value,
         version: request.version,
         security: None, // TODO: is this missing in GRPC (or deprecated)?
-        routes: request
-            .definition
-            .map(|definition| match definition {
-                api_definition_request::Definition::Http(definition) => definition
-                    .routes
-                    .into_iter()
-                    .map(|route| {
+        routes: join_option(request.definition.map(async |definition| {
+            match definition {
+                api_definition_request::Definition::Http(definition) => {
+                    join_all(definition.routes.into_iter().map(async |route| {
                         let binding = route.binding.unwrap();
-                        let cors_preflight = binding
-                            .static_binding
-                            .and_then(|binding| binding.static_binding)
-                            .map(|binding| match binding {
-                                static_binding::StaticBinding::HttpCorsPreflight(
-                                    cors_preflight,
-                                ) => cors_preflight,
-                                static_binding::StaticBinding::AuthCallback(_) => {
-                                    todo!() // TODO: is this supported on http?
-                                }
-                            });
-
                         golem_client::model::RouteRequestData {
                             method: match HttpMethod::try_from(route.method).unwrap() {
                                 HttpMethod::Get => golem_client::model::MethodPattern::Get,
@@ -1767,47 +1797,40 @@ fn grpc_api_definition_request_to_http(
                                         }
                                     }
                                 }),
-                                component_id: binding.component.map(|version_component_id| {
-                                    golem_client::model::VersionedComponentId {
-                                        component_id: version_component_id
-                                            .component_id
-                                            .unwrap()
-                                            .value
-                                            .unwrap()
-                                            .into(),
-                                        version: version_component_id.version,
-                                    }
-                                }),
+                                component: join_option(binding.component.map(
+                                    async |versioned_component_id| {
+                                        let component = component_service
+                                            .get_latest_component_metadata(
+                                                grpc_components::v1::GetLatestComponentRequest {
+                                                    component_id: versioned_component_id
+                                                        .component_id,
+                                                },
+                                            )
+                                            .await
+                                            .unwrap();
+                                        GatewayBindingComponent {
+                                            name: component.component_name,
+                                            version: Some(versioned_component_id.version),
+                                        }
+                                    },
+                                ))
+                                .await,
                                 worker_name: binding.worker_name.map(to_http_rib_expr),
                                 idempotency_key: binding.idempotency_key.map(to_http_rib_expr),
                                 invocation_context: binding
                                     .invocation_context
                                     .map(to_http_rib_expr),
                                 response: binding.response.map(to_http_rib_expr),
-                                allow_origin: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_origin.clone()),
-                                allow_methods: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_methods.clone()),
-                                allow_headers: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_headers.clone()),
-                                expose_headers: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.expose_headers.clone()),
-                                max_age: cors_preflight.as_ref().and_then(|cp| cp.max_age),
-                                allow_credentials: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_credentials),
                             },
-                            cors: None,     // TODO: map this from route.middleware?
-                            security: None, // TODO: map this from route.middleware?
+                            security: None,
                         }
-                    })
-                    .collect(),
-            })
-            .unwrap_or_default(),
+                    }))
+                    .await
+                }
+            }
+        }))
+        .await
+        .unwrap_or_default(),
         draft: request.draft,
     }
 }

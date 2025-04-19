@@ -13,33 +13,50 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibError, VariableId};
+use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibCompilationError};
 
 // A wrapper service over original Rib Compiler concerning
 // the details of the worker bridge.
 pub trait WorkerServiceRibCompiler {
-    fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, RibError>;
+    fn compile(
+        rib: &Expr,
+        export_metadata: &[AnalysedExport],
+    ) -> Result<CompilerOutput, RibCompilationError>;
 }
 
 pub struct DefaultWorkerServiceRibCompiler;
 
 impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
-    fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, RibError> {
+    fn compile(
+        rib: &Expr,
+        export_metadata: &[AnalysedExport],
+    ) -> Result<CompilerOutput, RibCompilationError> {
         rib::compile_with_restricted_global_variables(
             rib.clone(),
             &export_metadata.to_vec(),
             Some(vec!["request".to_string()]),
             &vec![
-                GlobalVariableTypeSpec {
-                    variable_id: VariableId::global("request".to_string()),
-                    path: Path::from_elems(vec!["path"]),
-                    inferred_type: InferredType::Str,
-                },
-                GlobalVariableTypeSpec {
-                    variable_id: VariableId::global("request".to_string()),
-                    path: Path::from_elems(vec!["headers"]),
-                    inferred_type: InferredType::Str,
-                },
+                GlobalVariableTypeSpec::new(
+                    "request",
+                    Path::from_elems(vec!["path"]),
+                    InferredType::Str,
+                ),
+                GlobalVariableTypeSpec::new(
+                    "request",
+                    Path::from_elems(vec!["query"]),
+                    InferredType::Str,
+                ),
+                // `request.headers.*` or `request.header.*` should be a `string`.
+                GlobalVariableTypeSpec::new(
+                    "request",
+                    Path::from_elems(vec!["headers"]),
+                    InferredType::Str,
+                ),
+                GlobalVariableTypeSpec::new(
+                    "request",
+                    Path::from_elems(vec!["header"]),
+                    InferredType::Str,
+                ),
             ],
         )
     }

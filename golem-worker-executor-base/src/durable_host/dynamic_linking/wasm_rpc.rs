@@ -12,23 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::wasm_rpc::{
-    create_rpc_connection_span, UrnExtensions, WasmRpcEntryPayload,
-};
+use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayload};
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::OwnedWorkerId;
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, HostFutureInvokeResult};
+use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore};
 use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
-use tracing::Instrument;
-use wasmtime::component::types::{ComponentInstance, ComponentItem, Field};
+use tracing::{warn, Instrument};
+use uuid::Uuid;
+use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
 use wasmtime_wasi::WasiView;
@@ -89,6 +88,7 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
     let mut resource_types = HashMap::new();
     for ((interface_name, resource_name), methods) in resources {
         let resource_type = DynamicRpcResource::analyse(&resource_name, &methods, rpc_metadata)?;
+        warn!("Resource {interface_name}.{resource_name} has type {resource_type:?}");
 
         if let Some(resource_type) = &resource_type {
             resource_types.insert(
@@ -106,20 +106,16 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
                 )?;
             }
             Some(DynamicRpcResource::Stub) | Some(DynamicRpcResource::ResourceStub) => {
-                let interface_name = rpc_metadata
-                    .target_interface_name
-                    .get(&resource_name)
-                    .cloned()
-                    .ok_or(anyhow!(
-                        "Failed to get target interface name for resource {resource_name}"
-                    ))?;
+                let target = rpc_metadata
+                    .target(&resource_name)
+                    .map_err(|err| anyhow!(err.clone()))?;
                 let resource_name_clone = resource_name.clone();
 
                 instance.resource_async(
                     &resource_name,
                     ResourceType::host::<WasmRpcEntry>(),
                     move |store, rep| {
-                        let interface_name = interface_name.clone();
+                        let interface_name = target.interface_name.clone();
                         let resource_name = resource_name_clone.clone();
 
                         Box::new(
@@ -146,6 +142,8 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
             rpc_metadata,
             &resource_types,
         )?;
+        warn!("Function {} has call type {call_type:?}", function.name);
+
         if let Some(call_type) = call_type {
             instance.func_new_async(
                 &function.name.function.function_name(),
@@ -208,12 +206,51 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
 ) -> anyhow::Result<()> {
     let mut store = store.as_context_mut();
     match call_type {
-        DynamicRpcCall::GlobalStubConstructor => {
+        DynamicRpcCall::GlobalStubConstructor {
+            component_name,
+            component_type,
+        } => {
             // Simple stub interface constructor
 
-            let target_worker_urn = params[0].clone();
-            let (remote_worker_id, demand) =
-                create_rpc_target(&mut store, target_worker_urn).await?;
+            let (remote_worker_id, demand) = match component_type {
+                ComponentType::Durable => {
+                    let target_worker_name = params[0].clone();
+                    create_default_durable_rpc_target(
+                        &mut store,
+                        component_name,
+                        target_worker_name,
+                    )
+                    .await?
+                }
+                ComponentType::Ephemeral => {
+                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
+                }
+            };
+
+            let span =
+                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
+
+            let handle = register_wasm_rpc_entry(
+                &mut store,
+                remote_worker_id,
+                demand,
+                span.span_id().clone(),
+            )?;
+            results[0] = Val::Resource(handle.try_into_resource_any(store)?);
+        }
+        DynamicRpcCall::GlobalCustomConstructor { component_type } => {
+            // Simple stub interface constructor that takes a worker-id or component-id as a parameter
+
+            let (remote_worker_id, demand) = match component_type {
+                ComponentType::Durable => {
+                    let worker_id = params[0].clone();
+                    create_durable_rpc_target(&mut store, worker_id).await?
+                }
+                ComponentType::Ephemeral => {
+                    let component_id = params[0].clone();
+                    create_ephemeral_rpc_target(&mut store, component_id).await?
+                }
+            };
 
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
@@ -228,16 +265,28 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
         }
         DynamicRpcCall::ResourceStubConstructor {
             target_constructor_name,
-            ..
+            component_name,
+            component_type,
         } => {
             // Resource stub constructor
 
             // First parameter is the target uri
             // Rest of the parameters must be sent to the remote constructor
 
-            let target_worker_urn = params[0].clone();
-            let (remote_worker_id, demand) =
-                create_rpc_target(&mut store, target_worker_urn.clone()).await?;
+            let (remote_worker_id, demand) = match component_type {
+                ComponentType::Durable => {
+                    let target_worker_name = params[0].clone();
+                    create_default_durable_rpc_target(
+                        &mut store,
+                        component_name,
+                        target_worker_name,
+                    )
+                    .await?
+                }
+                ComponentType::Ephemeral => {
+                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
+                }
+            };
 
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
@@ -263,8 +312,97 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (resource_uri, resource_id) = unwrap_constructor_result(constructor_result)
                 .context(format!("Unwrapping constructor result of {function_name}"))?;
 
-            let (remote_worker_id, demand) =
-                create_rpc_target(&mut store, target_worker_urn).await?;
+            let (remote_worker_id, demand) = match component_type {
+                ComponentType::Durable => {
+                    let target_worker_name = params[0].clone();
+                    create_default_durable_rpc_target(
+                        &mut store,
+                        component_name,
+                        target_worker_name,
+                    )
+                    .await?
+                }
+                ComponentType::Ephemeral => {
+                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
+                }
+            };
+
+            let span =
+                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
+
+            let handle = {
+                let mut wasi = store.data_mut().as_wasi_view();
+                let table = wasi.table();
+
+                let temp_handle: Resource<WasmRpcEntry> = Resource::new_own(temp_handle);
+                table.delete(temp_handle)?; // Removing the temporary handle
+
+                table.push(WasmRpcEntry {
+                    payload: Box::new(WasmRpcEntryPayload::Resource {
+                        demand,
+                        remote_worker_id,
+                        resource_uri,
+                        resource_id,
+                        span_id: span.span_id().clone(),
+                    }),
+                })?
+            };
+            results[0] = Val::Resource(handle.try_into_resource_any(store)?);
+        }
+        DynamicRpcCall::ResourceCustomConstructor {
+            target_constructor_name,
+            component_type,
+        } => {
+            // Resource stub custom constructor
+
+            // First parameter is the worker-id or component-id (for ephemeral)
+            // Rest of the parameters must be sent to the remote constructor
+
+            let (remote_worker_id, demand) = match component_type {
+                ComponentType::Durable => {
+                    let worker_id = params[0].clone();
+                    create_durable_rpc_target(&mut store, worker_id).await?
+                }
+                ComponentType::Ephemeral => {
+                    let component_id = params[0].clone();
+                    create_ephemeral_rpc_target(&mut store, component_id).await?
+                }
+            };
+
+            let span =
+                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
+
+            // First creating a resource for invoking the constructor (to avoid having to make a special case)
+            let handle = register_wasm_rpc_entry(
+                &mut store,
+                remote_worker_id,
+                demand,
+                span.span_id().clone(),
+            )?;
+            let temp_handle = handle.rep();
+
+            let constructor_result = remote_invoke_and_await(
+                target_constructor_name,
+                params,
+                param_types,
+                &mut store,
+                handle,
+            )
+            .await?;
+
+            let (resource_uri, resource_id) = unwrap_constructor_result(constructor_result)
+                .context(format!("Unwrapping constructor result of {function_name}"))?;
+
+            let (remote_worker_id, demand) = match component_type {
+                ComponentType::Durable => {
+                    let worker_id = params[0].clone();
+                    create_durable_rpc_target(&mut store, worker_id).await?
+                }
+                ComponentType::Ephemeral => {
+                    let component_id = params[0].clone();
+                    create_ephemeral_rpc_target(&mut store, component_id).await?
+                }
+            };
 
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
@@ -294,9 +432,9 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
         } => {
             // Simple stub interface method
             let handle = match params[0] {
-                    Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
-                };
+                Val::Resource(handle) => handle,
+                _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
+            };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
             let result = remote_invoke_and_await(
@@ -308,8 +446,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             )
             .await?;
             value_result_to_wasmtime_vals(result, results, result_types, &mut store)
-                    .await
-                    .context(format!("In {function_name}, decoding result value of remote {target_function_name} call"))?;
+                .await
+                .context(format!("In {function_name}, decoding result value of remote {target_function_name} call"))?;
         }
         DynamicRpcCall::FireAndForgetFunctionCall {
             target_function_name,
@@ -317,9 +455,9 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
         } => {
             // Fire-and-forget stub interface method
             let handle = match params[0] {
-                    Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
-                };
+                Val::Resource(handle) => handle,
+                _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
+            };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
             remote_invoke(
@@ -337,9 +475,9 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
         } => {
             // scheduled function call
             let handle = match params[0] {
-                    Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
-                };
+                Val::Resource(handle) => handle,
+                _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
+            };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
             // function should have at least one parameter for the scheduled_for datetime.
@@ -369,9 +507,9 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
         } => {
             // Async stub interface method
             let handle = match params[0] {
-                    Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
-                };
+                Val::Resource(handle) => handle,
+                _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
+            };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
             let result = remote_async_invoke_and_await(
@@ -384,14 +522,14 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             .await?;
 
             value_result_to_wasmtime_vals(result, results, result_types, &mut store)
-                    .await
-                    .context(format!("In {function_name}, decoding result value of remote {target_function_name} call"))?;
+                .await
+                .context(format!("In {function_name}, decoding result value of remote {target_function_name} call"))?;
         }
         DynamicRpcCall::FutureInvokeResultSubscribe => {
             let handle = match params[0] {
-                    Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
-                };
+                Val::Resource(handle) => handle,
+                _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
+            };
             let handle: Resource<FutureInvokeResult> = handle.try_into_resource(&mut store)?;
             let pollable = store.data_mut().subscribe(handle).await?;
             let pollable_any = pollable.try_into_resource_any(&mut store)?;
@@ -407,9 +545,9 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
         }
         DynamicRpcCall::FutureInvokeResultGet => {
             let handle = match params[0] {
-                    Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
-                };
+                Val::Resource(handle) => handle,
+                _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
+            };
             let handle: Resource<FutureInvokeResult> = handle.try_into_resource(&mut store)?;
             let result = HostFutureInvokeResult::get(store.data_mut(), handle).await?;
 
@@ -419,11 +557,11 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 Some(Ok(value)) => {
                     let value: Value = value.into();
                     match value {
-                            Value::Tuple(items) if items.len() == 1 => {
-                                Value::Option(Some(Box::new(items.into_iter().next().unwrap())))
-                            }
-                            _ => Err(anyhow!("Invalid future invoke result value in {function_name} - expected a tuple with a single item, got {value:?}"))?,
+                        Value::Tuple(items) if items.len() == 1 => {
+                            Value::Option(Some(Box::new(items.into_iter().next().unwrap())))
                         }
+                        _ => Err(anyhow!("Invalid future invoke result value in {function_name} - expected a tuple with a single item, got {value:?}"))?,
+                    }
                 }
                 Some(Err(err)) => {
                     let rpc_error: RpcError = err.into();
@@ -663,60 +801,158 @@ fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wal
     })
 }
 
-async fn create_rpc_target<Ctx: WorkerCtx>(
+async fn create_default_durable_rpc_target<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    target_worker_urn: Val,
+    component_name: &String,
+    target_worker_name: Val,
 ) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
-    let worker_urn = match target_worker_urn {
-        Val::Record(ref record) => {
-            let mut target = None;
-            for (key, val) in record.iter() {
-                if key == "value" {
-                    if let Val::String(s) = val {
-                        target = Some(s.clone());
+    let worker_name = match target_worker_name {
+        Val::String(name) => name,
+        _ => return Err(anyhow!("Missing or invalid worker name parameter. Expected to get a string worker name as constructor parameter, got {target_worker_name:?}")),
+    };
+
+    let result = store
+        .data()
+        .component_service()
+        .resolve_component(
+            component_name.clone(),
+            store.data().component_metadata().component_owner.clone(),
+        )
+        .await?;
+
+    if let Some(component_id) = result {
+        let remote_worker_id = WorkerId {
+            component_id,
+            worker_name,
+        };
+        let remote_worker_id = OwnedWorkerId::new(
+            &store.data().owned_worker_id().account_id,
+            &remote_worker_id,
+        );
+        let demand = store.data().rpc().create_demand(&remote_worker_id).await;
+        Ok((remote_worker_id, demand))
+    } else {
+        Err(anyhow!("Failed to resolve component {component_name}"))
+    }
+}
+
+fn decode_component_id(component_id: Val) -> Option<ComponentId> {
+    match component_id {
+        Val::Record(component_id_fields) if component_id_fields.len() == 1 => {
+            match &component_id_fields[0].1 {
+                Val::Record(uuid_fields) if uuid_fields.len() == 2 => {
+                    match (&uuid_fields[0].1, &uuid_fields[1].1) {
+                        (Val::U64(hibits), Val::U64(lobits)) => {
+                            Some(ComponentId(Uuid::from_u64_pair(*hibits, *lobits)))
+                        }
+                        _ => None,
                     }
                 }
+                _ => None,
             }
-            target
         }
         _ => None,
-    };
+    }
+}
 
-    let (remote_worker_id, demand) = if let Some(location) = worker_urn {
-        let uri = Uri {
-            value: location.clone(),
-        };
-        match uri.parse_as_golem_urn() {
-            Some((remote_worker_id, None)) => {
-                let remote_worker_id = store
-                    .data_mut()
-                    .generate_unique_local_worker_id(remote_worker_id)
-                    .await?;
-
-                let remote_worker_id = OwnedWorkerId::new(
-                    &store.data().owned_worker_id().account_id,
-                    &remote_worker_id,
-                );
-                let demand = store.data().rpc().create_demand(&remote_worker_id).await;
-                (remote_worker_id, demand)
-            }
-            _ => {
-                return Err(anyhow!(
-                    "Invalid URI: {}. Must be urn:worker:component-id/worker-name",
-                    location
-                ))
+fn decode_worker_id(worker_id: Val) -> Option<WorkerId> {
+    match worker_id {
+        Val::Record(worker_id_fields) if worker_id_fields.len() == 2 => {
+            let component_id = decode_component_id(worker_id_fields[0].1.clone())?;
+            match &worker_id_fields[1].1 {
+                Val::String(name) => Some(WorkerId {
+                    component_id,
+                    worker_name: name.clone(),
+                }),
+                _ => None,
             }
         }
-    } else {
-        return Err(anyhow!("Missing or invalid worker URN parameter. Expected to use golem:rpc/types@0.1.0.{{uri}} as constructor parameter, got {target_worker_urn:?}"));
-    };
+        _ => None,
+    }
+}
+
+async fn create_durable_rpc_target<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    worker_id: Val,
+) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
+    let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get a worker-id value as a custom constructor parameter, got {worker_id:?}"))?;
+
+    let remote_worker_id = OwnedWorkerId::new(
+        &store.data().owned_worker_id().account_id,
+        &remote_worker_id,
+    );
+    let demand = store.data().rpc().create_demand(&remote_worker_id).await;
     Ok((remote_worker_id, demand))
 }
 
-#[derive(Clone)]
+async fn create_default_ephemeral_rpc_target<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    component_name: &String,
+) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
+    let result = store
+        .data()
+        .component_service()
+        .resolve_component(
+            component_name.clone(),
+            store.data().component_metadata().component_owner.clone(),
+        )
+        .await?;
+
+    if let Some(component_id) = result {
+        let remote_worker_id = store
+            .data_mut()
+            .generate_unique_local_worker_id(TargetWorkerId {
+                component_id,
+                worker_name: None,
+            })
+            .await?;
+        let remote_worker_id = OwnedWorkerId::new(
+            &store.data().owned_worker_id().account_id,
+            &remote_worker_id,
+        );
+        let demand = store.data().rpc().create_demand(&remote_worker_id).await;
+        Ok((remote_worker_id, demand))
+    } else {
+        Err(anyhow!("Failed to resolve component {component_name}"))
+    }
+}
+
+async fn create_ephemeral_rpc_target<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    component_id: Val,
+) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
+    let component_id = decode_component_id(component_id.clone()).ok_or_else(|| anyhow!("Missing or invalid component id parameter. Expected to get a component-id value as a custom constructor parameter, got {component_id:?}"))?;
+    let remote_worker_id = store
+        .data_mut()
+        .generate_unique_local_worker_id(TargetWorkerId {
+            component_id,
+            worker_name: None,
+        })
+        .await?;
+    let remote_worker_id = OwnedWorkerId::new(
+        &store.data().owned_worker_id().account_id,
+        &remote_worker_id,
+    );
+    let demand = store.data().rpc().create_demand(&remote_worker_id).await;
+    Ok((remote_worker_id, demand))
+}
+
+#[derive(Debug, Clone)]
 enum DynamicRpcCall {
-    GlobalStubConstructor,
+    GlobalStubConstructor {
+        component_name: String,
+        component_type: ComponentType,
+    },
+    GlobalCustomConstructor {
+        component_type: ComponentType,
+    },
     ResourceStubConstructor {
+        component_name: String,
+        component_type: ComponentType,
+        target_constructor_name: ParsedFunctionName,
+    },
+    ResourceCustomConstructor {
+        component_type: ComponentType,
         target_constructor_name: ParsedFunctionName,
     },
     BlockingFunctionCall {
@@ -743,25 +979,52 @@ impl DynamicRpcCall {
         rpc_metadata: &DynamicLinkedWasmRpc,
         resource_types: &HashMap<(String, String), DynamicRpcResource>,
     ) -> anyhow::Result<Option<DynamicRpcCall>> {
+        fn context(rpc_metadata: &DynamicLinkedWasmRpc) -> String {
+            format!(
+                "Failed to get mapped target site ({}) from dynamic linking metadata",
+                rpc_metadata
+                    .targets
+                    .iter()
+                    .map(|(k, v)| format!("{k}=>{v}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        }
+
         if let Some(resource_name) = stub_name.is_constructor() {
             match resource_types.get(&(
                 stub_name.site.interface_name().unwrap_or_default(),
                 resource_name.to_string(),
             )) {
-                Some(DynamicRpcResource::Stub) => Ok(Some(DynamicRpcCall::GlobalStubConstructor)),
+                Some(DynamicRpcResource::Stub) => {
+                    let target = rpc_metadata
+                        .target(resource_name)
+                        .map_err(|err| anyhow!(err))
+                        .context(context(rpc_metadata))?;
+
+                    Ok(Some(DynamicRpcCall::GlobalStubConstructor {
+                        component_name: target.component_name,
+                        component_type: target.component_type,
+                    }))
+                }
                 Some(DynamicRpcResource::ResourceStub) => {
-                    let target_constructor_name = ParsedFunctionName {
-                        site: rpc_metadata.target_site(resource_name).map_err(|err| anyhow!("Failed to get mapped target site ({}) from dynamic linking metadata: {}",
-                            rpc_metadata.target_interface_name.iter().map(|(k, v)| format!("{k}=>{v}")).collect::<Vec<_>>().join(", "),
-                            err
-                        ))?,
-                        function: ParsedFunctionReference::RawResourceConstructor {
-                            resource: resource_name.to_string(),
-                        },
-                    };
+                    let target = rpc_metadata
+                        .target(resource_name)
+                        .map_err(|err| anyhow!(err))
+                        .context(context(rpc_metadata))?;
 
                     Ok(Some(DynamicRpcCall::ResourceStubConstructor {
-                        target_constructor_name,
+                        target_constructor_name: ParsedFunctionName {
+                            site: target
+                                .site()
+                                .map_err(|err| anyhow!(err))
+                                .context(context(rpc_metadata))?,
+                            function: ParsedFunctionReference::RawResourceConstructor {
+                                resource: resource_name.to_string(),
+                            },
+                        },
+                        component_name: target.component_name,
+                        component_type: target.component_type,
                     }))
                 }
                 _ => Ok(None),
@@ -782,55 +1045,98 @@ impl DynamicRpcCall {
                 }
                 Some(stub) => {
                     let method_name = stub_name.function.resource_method_name().unwrap(); // safe because of stub_name.is_method()
-                    let blocking = method_name.starts_with("blocking-");
-                    let scheduled = method_name.starts_with("schedule-");
 
-                    let target_method_name = if blocking {
-                        method_name
-                            .strip_prefix("blocking-")
-                            .unwrap_or(&method_name)
-                    } else if scheduled {
-                        method_name
-                            .strip_prefix("schedule-")
-                            .unwrap_or(&method_name)
+                    if stub_name.is_static_method().is_some() && method_name == "custom" {
+                        match stub {
+                            DynamicRpcResource::Stub => {
+                                let target = rpc_metadata
+                                    .target(resource_name)
+                                    .map_err(|err| anyhow!(err))
+                                    .context(context(rpc_metadata))?;
+
+                                Ok(Some(DynamicRpcCall::GlobalCustomConstructor {
+                                    component_type: target.component_type,
+                                }))
+                            }
+                            DynamicRpcResource::ResourceStub => {
+                                let target = rpc_metadata
+                                    .target(resource_name)
+                                    .map_err(|err| anyhow!(err))
+                                    .context(context(rpc_metadata))?;
+
+                                Ok(Some(DynamicRpcCall::ResourceCustomConstructor {
+                                    target_constructor_name: ParsedFunctionName {
+                                        site: target
+                                            .site()
+                                            .map_err(|err| anyhow!(err))
+                                            .context(context(rpc_metadata))?,
+                                        function: ParsedFunctionReference::RawResourceConstructor {
+                                            resource: resource_name.to_string(),
+                                        },
+                                    },
+                                    component_type: target.component_type,
+                                }))
+                            }
+                            DynamicRpcResource::InvokeResult => {
+                                unreachable!()
+                            }
+                        }
                     } else {
-                        &method_name
-                    };
+                        let blocking = method_name.starts_with("blocking-");
+                        let scheduled = method_name.starts_with("schedule-");
 
-                    let target_function = match stub {
-                        DynamicRpcResource::Stub => ParsedFunctionReference::Function {
-                            function: target_method_name.to_string(),
-                        },
-                        _ => ParsedFunctionReference::RawResourceMethod {
-                            resource: resource_name.to_string(),
-                            method: target_method_name.to_string(),
-                        },
-                    };
+                        let target_method_name = if blocking {
+                            method_name
+                                .strip_prefix("blocking-")
+                                .unwrap_or(&method_name)
+                        } else if scheduled {
+                            method_name
+                                .strip_prefix("schedule-")
+                                .unwrap_or(&method_name)
+                        } else {
+                            &method_name
+                        };
 
-                    let target_function_name = ParsedFunctionName {
-                        site: rpc_metadata.target_site(resource_name).map_err(|err| anyhow!("Failed to get mapped target site ({}) from dynamic linking metadata: {}",
-                            rpc_metadata.target_interface_name.iter().map(|(k, v)| format!("{k}=>{v}")).collect::<Vec<_>>().join(", "),
-                            err
-                        ))?,
-                        function: target_function,
-                    };
+                        let target_function = match stub {
+                            DynamicRpcResource::Stub => ParsedFunctionReference::Function {
+                                function: target_method_name.to_string(),
+                            },
+                            _ => ParsedFunctionReference::RawResourceMethod {
+                                resource: resource_name.to_string(),
+                                method: target_method_name.to_string(),
+                            },
+                        };
 
-                    if blocking {
-                        Ok(Some(DynamicRpcCall::BlockingFunctionCall {
-                            target_function_name,
-                        }))
-                    } else if scheduled {
-                        Ok(Some(DynamicRpcCall::ScheduledFunctionCall {
-                            target_function_name,
-                        }))
-                    } else if !result_types.is_empty() {
-                        Ok(Some(DynamicRpcCall::AsyncFunctionCall {
-                            target_function_name,
-                        }))
-                    } else {
-                        Ok(Some(DynamicRpcCall::FireAndForgetFunctionCall {
-                            target_function_name,
-                        }))
+                        let target = rpc_metadata
+                            .target(resource_name)
+                            .map_err(|err| anyhow!(err))
+                            .context(context(rpc_metadata))?;
+
+                        let target_function_name = ParsedFunctionName {
+                            site: target
+                                .site()
+                                .map_err(|err| anyhow!(err))
+                                .context(context(rpc_metadata))?,
+                            function: target_function,
+                        };
+
+                        if blocking {
+                            Ok(Some(DynamicRpcCall::BlockingFunctionCall {
+                                target_function_name,
+                            }))
+                        } else if scheduled {
+                            Ok(Some(DynamicRpcCall::ScheduledFunctionCall {
+                                target_function_name,
+                            }))
+                        } else if !result_types.is_empty() {
+                            Ok(Some(DynamicRpcCall::AsyncFunctionCall {
+                                target_function_name,
+                            }))
+                        } else {
+                            Ok(Some(DynamicRpcCall::FireAndForgetFunctionCall {
+                                target_function_name,
+                            }))
+                        }
                     }
                 }
                 None => Ok(None),
@@ -842,7 +1148,7 @@ impl DynamicRpcCall {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum DynamicRpcResource {
     Stub,
     ResourceStub,
@@ -859,26 +1165,20 @@ impl DynamicRpcResource {
             Ok(None)
         } else if Self::is_invoke_result(resource_name, methods) {
             Ok(Some(DynamicRpcResource::InvokeResult))
-        } else if let Some(constructor) = methods
+        } else if let Some(_constructor) = methods
             .iter()
             .find_or_first(|m| m.method_name.contains("[constructor]"))
         {
-            if Self::first_parameter_is_uri(&constructor.params) {
-                if constructor.params.len() > 1 {
-                    Ok(Some(DynamicRpcResource::ResourceStub))
-                } else if let Some(target_interface_name) =
-                    rpc_metadata.target_interface_name.get(resource_name)
+            if let Some(target) = rpc_metadata.targets.get(resource_name) {
+                if target
+                    .interface_name
+                    .ends_with(&format!("/{resource_name}"))
                 {
-                    if target_interface_name.ends_with(&format!("/{resource_name}")) {
-                        Ok(Some(DynamicRpcResource::Stub))
-                    } else {
-                        Ok(Some(DynamicRpcResource::ResourceStub))
-                    }
-                } else {
                     Ok(Some(DynamicRpcResource::Stub))
+                } else {
+                    Ok(Some(DynamicRpcResource::ResourceStub))
                 }
             } else {
-                // First constructor parameter is not a Uri => not a stub
                 Ok(None)
             }
         } else {
@@ -892,7 +1192,7 @@ impl DynamicRpcResource {
             && resource_name.ends_with("-result")
             && methods
                 .iter()
-                .filter_map(|m| m.method_name.split('.').last().map(|s| s.to_string()))
+                .filter_map(|m| m.method_name.split('.').next_back().map(|s| s.to_string()))
                 .sorted()
                 .collect::<Vec<_>>()
                 == vec!["get".to_string(), "subscribe".to_string()]
@@ -906,15 +1206,6 @@ impl DynamicRpcResource {
                     && subscribe.results.len() == 1
                     && matches!(subscribe.results[0], Type::Own(_))
             }
-    }
-
-    fn first_parameter_is_uri(param_types: &[Type]) -> bool {
-        if let Some(Type::Record(record)) = param_types.first() {
-            let fields: Vec<Field> = record.fields().collect();
-            fields.len() == 1 && matches!(fields[0].ty, Type::String) && fields[0].name == "value"
-        } else {
-            false
-        }
     }
 }
 

@@ -107,7 +107,7 @@ impl Benchmark for ThroughputCpuIntensive {
         warmup_workers(
             &benchmark_context.deps,
             &context.worker_ids,
-            "golem:it/api.{echo}",
+            "golem:it-exports/api.{echo}",
             vec!["hello".into_value_and_type()],
         )
         .await;
@@ -128,7 +128,7 @@ impl Benchmark for ThroughputCpuIntensive {
             recorder.clone(),
             self.config.length,
             &context.worker_ids,
-            "golem:it/api.{calculate}",
+            "golem:it-exports/api.{calculate}",
             vec![calculate_iter.into_value_and_type()],
             "worker-calculate-",
         )

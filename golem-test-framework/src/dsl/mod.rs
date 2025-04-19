@@ -13,8 +13,10 @@
 // limitations under the License.
 
 pub mod benchmark;
+mod debug_render;
 
 use crate::config::TestDependencies;
+use crate::dsl::debug_render::debug_render_oplog_entry;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -597,6 +599,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 None,
             )
             .await
+            .unwrap()
     }
 
     async fn update_component_with_files(
@@ -615,6 +618,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 None,
             )
             .await
+            .unwrap()
     }
 
     async fn start_worker(
@@ -1350,7 +1354,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     }
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
-        TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
+        let oplog = TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
+
+        for (idx, entry) in oplog.iter().enumerate() {
+            debug!("#{}:\n{}", idx + 1, debug_render_oplog_entry(entry));
+        }
+
         Ok(())
     }
 

@@ -15,12 +15,11 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool, Row};
+use sqlx::Row;
 use std::fmt::Display;
-use std::ops::Deref;
-use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::{info_span, Instrument, Span};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDefinitionRecord {
@@ -140,40 +139,29 @@ impl<Repo: ApiDefinitionRepo> LoggedApiDefinitionRepo<Repo> {
         Self { repo }
     }
 
-    fn logged_with_id<R>(
-        message: &'static str,
-        namespace: &str,
-        api_definition_id: &str,
-        result: Result<R, RepoError>,
-    ) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!(
-                namespace = namespace,
-                api_definition_id = api_definition_id.to_string(),
-                "{}",
-                message
-            ),
-            Err(error) => error!(
-                namespace = namespace,
-                api_definition_id = api_definition_id.to_string(),
-                error = error.to_string(),
-                "{message}"
-            ),
-        }
-        result
+    fn span(namespace: &str, api_definition_id: &str) -> Span {
+        info_span!(
+            "API definition repository",
+            namespace = namespace,
+            api_definition_id = api_definition_id
+        )
     }
 }
 
 #[async_trait]
 impl<Repo: ApiDefinitionRepo + Sync> ApiDefinitionRepo for LoggedApiDefinitionRepo<Repo> {
     async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        let result = self.repo.create(definition).await;
-        Self::logged_with_id("create", &definition.namespace, &definition.id, result)
+        self.repo
+            .create(definition)
+            .instrument(Self::span(&definition.namespace, &definition.id))
+            .await
     }
 
     async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        let result = self.repo.update(definition).await;
-        Self::logged_with_id("update", &definition.namespace, &definition.id, result)
+        self.repo
+            .update(definition)
+            .instrument(Self::span(&definition.namespace, &definition.id))
+            .await
     }
 
     async fn set_draft(
@@ -183,8 +171,10 @@ impl<Repo: ApiDefinitionRepo + Sync> ApiDefinitionRepo for LoggedApiDefinitionRe
         version: &str,
         draft: bool,
     ) -> Result<(), RepoError> {
-        let result = self.repo.set_draft(namespace, id, version, draft).await;
-        Self::logged_with_id("set_draft", namespace, id, result)
+        self.repo
+            .set_draft(namespace, id, version, draft)
+            .instrument(Self::span(namespace, id))
+            .await
     }
 
     async fn get(
@@ -193,8 +183,10 @@ impl<Repo: ApiDefinitionRepo + Sync> ApiDefinitionRepo for LoggedApiDefinitionRe
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        let result = self.repo.get(namespace, id, version).await;
-        Self::logged_with_id("get", namespace, id, result)
+        self.repo
+            .get(namespace, id, version)
+            .instrument(Self::span(namespace, id))
+            .await
     }
 
     async fn get_draft(
@@ -203,18 +195,24 @@ impl<Repo: ApiDefinitionRepo + Sync> ApiDefinitionRepo for LoggedApiDefinitionRe
         id: &str,
         version: &str,
     ) -> Result<Option<bool>, RepoError> {
-        let result = self.repo.get_draft(namespace, id, version).await;
-        Self::logged_with_id("get_draft", namespace, id, result)
+        self.repo
+            .get_draft(namespace, id, version)
+            .instrument(Self::span(namespace, id))
+            .await
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        let result = self.repo.delete(namespace, id, version).await;
-        Self::logged_with_id("delete", namespace, id, result)
+        self.repo
+            .delete(namespace, id, version)
+            .instrument(Self::span(namespace, id))
+            .await
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let result = self.repo.get_all(namespace).await;
-        Self::logged_with_id("get_all", namespace, "*", result)
+        self.repo
+            .get_all(namespace)
+            .instrument(Self::span(namespace, "*"))
+            .await
     }
 
     async fn get_all_versions(
@@ -222,26 +220,29 @@ impl<Repo: ApiDefinitionRepo + Sync> ApiDefinitionRepo for LoggedApiDefinitionRe
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let result = self.repo.get_all_versions(namespace, id).await;
-        Self::logged_with_id("get_all_versions", namespace, id, result)
+        self.repo
+            .get_all_versions(namespace, id)
+            .instrument(Self::span(namespace, id))
+            .await
     }
 }
 
-pub struct DbApiDefinitionRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbApiDefinitionRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbApiDefinitionRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbApiDefinitionRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
+impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               INSERT INTO api_definitions
                 (namespace, id, version, draft, data, created_at)
@@ -254,15 +255,18 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .bind(definition.version.clone())
         .bind(definition.draft)
         .bind(definition.data.clone())
-        .bind(definition.created_at)
-        .execute(self.db_pool.deref())
-        .await?;
+        .bind(definition.created_at);
+
+        self.db_pool
+            .with_rw("api_definition", "create")
+            .execute(query)
+            .await?;
 
         Ok(())
     }
 
     async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               UPDATE api_definitions
               SET draft = $4, data = $5
@@ -274,9 +278,12 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .bind(definition.version.clone())
         .bind(definition.draft)
         .bind(definition.data.clone())
-        .bind(definition.created_at)
-        .execute(self.db_pool.deref())
-        .await?;
+        .bind(definition.created_at);
+
+        self.db_pool
+            .with_rw("api_definition", "update")
+            .execute(query)
+            .await?;
 
         Ok(())
     }
@@ -288,7 +295,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         version: &str,
         draft: bool,
     ) -> Result<(), RepoError> {
-        sqlx::query(
+        let query = sqlx::query(
             r#"
               UPDATE api_definitions
               SET draft = $4
@@ -298,43 +305,50 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .bind(namespace)
         .bind(id)
         .bind(version)
-        .bind(draft)
-        .execute(self.db_pool.deref())
-        .await?;
+        .bind(draft);
+
+        self.db_pool
+            .with_rw("api_definition", "set_draft")
+            .execute(query)
+            .await?;
 
         Ok(())
     }
 
-    #[when(sqlx::Postgres -> get)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get)]
     async fn get_postgres(
         &self,
         namespace: &str,
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
             .bind(namespace)
             .bind(id)
-            .bind(version)
-            .fetch_optional(self.db_pool.deref())
+            .bind(version);
+
+        self.db_pool
+            .with("api_definition", "get")
+            .fetch_optional_as(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Sqlite -> get)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get)]
     async fn get_sqlite(
         &self,
         namespace: &str,
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
             .bind(namespace)
             .bind(id)
-            .bind(version)
-            .fetch_optional(self.db_pool.deref())
+            .bind(version);
+
+        self.db_pool
+            .with_ro("api_definition", "get")
+            .fetch_optional_as(query)
             .await
-            .map_err(|e| e.into())
     }
 
     async fn get_draft(
@@ -343,83 +357,98 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         id: &str,
         version: &str,
     ) -> Result<Option<bool>, RepoError> {
-        let result = sqlx::query(
+        let query = sqlx::query(
             "SELECT draft FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
         )
         .bind(namespace)
         .bind(id)
-        .bind(version)
-        .fetch_optional(self.db_pool.deref())
-        .await?;
+        .bind(version);
+
+        let result = self
+            .db_pool
+            .with_ro("api_definition", "get_draft")
+            .fetch_optional(query)
+            .await?;
 
         let draft: Option<bool> = result.map(|r| r.get("draft"));
         Ok(draft)
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        let result = sqlx::query(
+        let query = sqlx::query(
             "DELETE FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
         )
         .bind(namespace)
         .bind(id)
-        .bind(version)
-        .execute(self.db_pool.deref())
-        .await?;
+        .bind(version);
+        let result = self
+            .db_pool
+            .with_rw("api_definition", "delete")
+            .execute(query)
+            .await?;
 
         Ok(result.rows_affected() > 0)
     }
 
-    #[when(sqlx::Postgres -> get_all)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_all)]
     async fn get_all_postgres(
         &self,
         namespace: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>(
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>(
             "SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 ORDER BY namespace, id, version",
         )
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+        .bind(namespace);
+
+        self.db_pool
+            .with("api_definition", "get_all")
+            .fetch_all(query)
+            .await
     }
 
-    #[when(sqlx::Sqlite -> get_all)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_all)]
     async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>(
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>(
             "SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 ORDER BY namespace, id, version",
         )
-            .bind(namespace)
-            .fetch_all(self.db_pool.deref())
+            .bind(namespace);
+
+        self.db_pool
+            .with_ro("api_definition", "get_all")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Postgres -> get_all_versions)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_all_versions)]
     async fn get_all_versions_postgres(
         &self,
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2 ORDER BY version")
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2 ORDER BY version")
             .bind(namespace)
-            .bind(id)
-            .fetch_all(self.db_pool.deref())
+            .bind(id);
+
+        self.db_pool
+            .with("api_definition", "get_all_versions")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Sqlite -> get_all_versions)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_all_versions)]
     async fn get_all_versions_sqlite(
         &self,
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2 ORDER BY version")
+        let query = sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2 ORDER BY version")
             .bind(namespace)
-            .bind(id)
-            .fetch_all(self.db_pool.deref())
+            .bind(id);
+
+        self.db_pool
+            .with_ro("api_definition", "get_all_versions")
+            .fetch_all(query)
             .await
-            .map_err(|e| e.into())
     }
 }
 

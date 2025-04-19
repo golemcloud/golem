@@ -19,8 +19,8 @@ use std::fmt::Formatter;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::GolemError;
 use golem_common::retriable_error::IsRetriableError;
-use golem_service_base::model::GolemError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ShardManagerError {
@@ -153,6 +153,17 @@ impl TraceErrorKind for ShardManagerTraceErrorKind<'_> {
                 shard_manager_error::Error::InvalidRequest(_) => "InvalidRequest",
                 shard_manager_error::Error::Timeout(_) => "Timeout",
                 shard_manager_error::Error::Unknown(_) => "Unknown",
+            },
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                shard_manager_error::Error::InvalidRequest(_) => true,
+                shard_manager_error::Error::Timeout(_) => true,
+                shard_manager_error::Error::Unknown(_) => false,
             },
         }
     }

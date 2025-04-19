@@ -21,6 +21,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 
+use crate::model::invocation_context::InvocationContextStack;
 use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
@@ -38,11 +39,12 @@ use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
 pub use crate::base_model::*;
-use crate::model::invocation_context::InvocationContextStack;
 
+pub mod base64;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod error;
 pub mod exports;
 pub mod invocation_context;
 pub mod lucene;
@@ -1067,10 +1069,6 @@ impl IntoValue for AccountId {
     }
 }
 
-pub trait HasAccountId {
-    fn account_id(&self) -> AccountId;
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -1846,7 +1844,7 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[repr(i32)]
 pub enum ComponentType {
@@ -2125,6 +2123,46 @@ impl TryFrom<String> for GatewayBindingType {
             "default" => Ok(GatewayBindingType::Default),
             "file-server" => Ok(GatewayBindingType::FileServer),
             _ => Err(format!("Invalid WorkerBindingType: {}", value)),
+        }
+    }
+}
+
+impl From<crate::model::WorkerId> for golem_wasm_rpc::WorkerId {
+    fn from(worker_id: crate::model::WorkerId) -> Self {
+        golem_wasm_rpc::WorkerId {
+            component_id: worker_id.component_id.into(),
+            worker_name: worker_id.worker_name,
+        }
+    }
+}
+
+impl From<golem_wasm_rpc::WorkerId> for crate::model::WorkerId {
+    fn from(host: golem_wasm_rpc::WorkerId) -> Self {
+        Self {
+            component_id: host.component_id.into(),
+            worker_name: host.worker_name,
+        }
+    }
+}
+
+impl From<golem_wasm_rpc::ComponentId> for crate::model::ComponentId {
+    fn from(host: golem_wasm_rpc::ComponentId) -> Self {
+        let high_bits = host.uuid.high_bits;
+        let low_bits = host.uuid.low_bits;
+
+        Self(uuid::Uuid::from_u64_pair(high_bits, low_bits))
+    }
+}
+
+impl From<crate::model::ComponentId> for golem_wasm_rpc::ComponentId {
+    fn from(component_id: crate::model::ComponentId) -> Self {
+        let (high_bits, low_bits) = component_id.0.as_u64_pair();
+
+        golem_wasm_rpc::ComponentId {
+            uuid: golem_wasm_rpc::Uuid {
+                high_bits,
+                low_bits,
+            },
         }
     }
 }

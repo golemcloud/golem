@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use http_api_definition::*;
-pub use http_api_definition_request::*;
-pub use http_oas_api_definition::*;
+pub use api_definition::*;
+pub use api_definition_request::*;
+pub use oas_api_definition::*;
 
-mod http_api_definition;
-mod http_api_definition_request;
-mod http_oas_api_definition;
-pub(crate) mod path_pattern_parser;
-pub(crate) mod place_holder_parser;
+mod api_definition;
+mod api_definition_request;
+mod oas_api_definition;
+mod path_pattern_parser;
+mod place_holder_parser;

@@ -18,15 +18,13 @@ use crate::gateway_security::{
 };
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-use sqlx::{Database, Pool};
 use std::fmt::Display;
-use std::ops::Deref;
 use std::result::Result;
 use std::str::FromStr;
-use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::{info_span, Instrument, Span};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct SecuritySchemeRecord {
@@ -115,12 +113,12 @@ pub trait SecuritySchemeRepo {
     ) -> Result<Option<SecuritySchemeRecord>, RepoError>;
 }
 
-pub struct DbSecuritySchemeRepo<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+pub struct DbSecuritySchemeRepo<DB: Pool> {
+    db_pool: DB,
 }
 
-impl<DB: Database> DbSecuritySchemeRepo<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
+impl<DB: Pool> DbSecuritySchemeRepo<DB> {
+    pub fn new(db_pool: DB) -> Self {
         Self { db_pool }
     }
 }
@@ -134,49 +132,46 @@ impl<Repo: SecuritySchemeRepo> LoggedSecuritySchemeRepo<Repo> {
         Self { repo }
     }
 
-    fn logged_with_id<R>(
-        message: &'static str,
-        security_scheme_id: &String,
-        result: Result<R, RepoError>,
-    ) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!(
-                security_scheme_id = security_scheme_id.to_string(),
-                "{}", message
-            ),
-            Err(error) => error!(
-                security_scheme_id = security_scheme_id.to_string(),
-                error = error.to_string(),
-                "{message}"
-            ),
-        }
-        result
+    fn span(security_scheme_id: &str) -> Span {
+        info_span!(
+            "security scheme repository ",
+            security_scheme_id = security_scheme_id
+        )
     }
 }
 
 #[async_trait]
 impl<Repo: SecuritySchemeRepo + Send + Sync> SecuritySchemeRepo for LoggedSecuritySchemeRepo<Repo> {
     async fn create(&self, security_scheme_record: &SecuritySchemeRecord) -> Result<(), RepoError> {
-        let result = self.repo.create(security_scheme_record).await;
-        Self::logged_with_id("create", &security_scheme_record.security_scheme_id, result)
+        self.repo
+            .create(security_scheme_record)
+            .instrument(Self::span(&security_scheme_record.security_scheme_id))
+            .await
     }
 
     async fn get(
         &self,
         security_scheme_id: &str,
     ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
-        let result = self.repo.get(security_scheme_id).await;
-        Self::logged_with_id("get", &security_scheme_id.to_string(), result)
+        self.repo
+            .get(security_scheme_id)
+            .instrument(Self::span(security_scheme_id))
+            .await
     }
 }
 
-#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+#[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
+)]
 #[async_trait]
-impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
+impl SecuritySchemeRepo for DbSecuritySchemeRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, security: &SecuritySchemeRecord) -> Result<(), RepoError> {
-        let mut transaction = self.db_pool.begin().await?;
+        let mut transaction = self
+            .db_pool
+            .with_rw("security_scheme", "create")
+            .begin()
+            .await?;
 
-        sqlx::query(
+        let query = sqlx::query(
             r#"
                   INSERT INTO security_schemes
                     (namespace, security_scheme_id, provider_type, client_id, client_secret, redirect_url, scopes, security_scheme_metadata)
@@ -191,20 +186,23 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
             .bind(security.client_secret.clone())
             .bind(security.redirect_url.clone())
             .bind(security.scopes.clone())
-            .bind(security.security_scheme_metadata.clone())
-            .execute(&mut *transaction)
-            .await?;
+            .bind(security.security_scheme_metadata.clone());
 
-        transaction.commit().await?;
+        transaction.execute(query).await?;
+
+        self.db_pool
+            .with_rw("security_scheme", "create")
+            .commit(transaction)
+            .await?;
         Ok(())
     }
 
-    #[when(sqlx::Postgres -> get)]
+    #[when(golem_service_base::db::postgres::PostgresPool -> get)]
     async fn get_postgres(
         &self,
         security_scheme_id: &str,
     ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
-        let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
+        let query = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"
                 SELECT
                     namespace,
@@ -219,20 +217,20 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
                 WHERE security_scheme_id = $1
                 "#,
         )
-        .bind(security_scheme_id.to_string())
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(security_scheme_id.to_string());
 
-        Ok(security_scheme_record)
+        self.db_pool
+            .with("security_scheme", "get")
+            .fetch_optional_as(query)
+            .await
     }
 
-    #[when(sqlx::Sqlite -> get)]
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get)]
     async fn get(
         &self,
         security_scheme_id: &str,
     ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
-        let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
+        let query = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"
                 SELECT
                     namespace,
@@ -247,12 +245,12 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
                 WHERE security_scheme_id = $1
                "#,
         )
-        .bind(security_scheme_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(security_scheme_id);
 
-        Ok(security_scheme_record)
+        self.db_pool
+            .with_ro("security_scheme", "get")
+            .fetch_optional_as(query)
+            .await
     }
 }
 
@@ -295,12 +293,12 @@ pub mod identity_provider_metadata_serde {
 pub mod constraint_serde {
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-    use golem_common::model::component_constraint::FunctionConstraintCollection;
+    use golem_common::model::component_constraint::FunctionConstraints;
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &FunctionConstraintCollection) -> Result<Bytes, String> {
+    pub fn serialize(value: &FunctionConstraints) -> Result<Bytes, String> {
         let proto_value: FunctionConstraintCollectionProto =
             FunctionConstraintCollectionProto::from(value.clone());
 
@@ -310,7 +308,7 @@ pub mod constraint_serde {
         Ok(bytes.freeze())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraintCollection, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraints, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
@@ -318,7 +316,7 @@ pub mod constraint_serde {
                 let proto_value: FunctionConstraintCollectionProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                let value = FunctionConstraintCollection::try_from(proto_value.clone())?;
+                let value = FunctionConstraints::try_from(proto_value.clone())?;
 
                 Ok(value)
             }

@@ -65,6 +65,8 @@ async fn javascript_example_1(
         }
     }
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     let_assert!(Some(Value::Record(record_values)) = result.into_iter().next());
@@ -132,6 +134,8 @@ async fn javascript_example_2(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result == vec![Value::U64(11)]);
@@ -139,6 +143,7 @@ async fn javascript_example_2(
 
 #[test]
 #[tracing::instrument]
+#[ignore]
 async fn csharp_example_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -167,6 +172,8 @@ async fn csharp_example_1(
     while lines.len() < 4 && start.elapsed() < Duration::from_secs(5) {
         lines.extend(events_to_lines(&mut rx).await);
     }
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 

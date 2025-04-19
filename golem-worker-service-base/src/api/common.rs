@@ -17,8 +17,8 @@ use std::fmt::{Debug, Formatter};
 use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Union};
 
@@ -54,6 +54,17 @@ impl TraceErrorKind for ApiEndpointError {
             ApiEndpointError::Forbidden(_) => "Forbidden",
             ApiEndpointError::Unauthorized(_) => "Unauthorized",
             ApiEndpointError::InternalError(_) => "InternalError",
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            ApiEndpointError::BadRequest(_) => true,
+            ApiEndpointError::NotFound(_) => true,
+            ApiEndpointError::AlreadyExists(_) => true,
+            ApiEndpointError::Forbidden(_) => true,
+            ApiEndpointError::Unauthorized(_) => true,
+            ApiEndpointError::InternalError(_) => false,
         }
     }
 }
@@ -116,6 +127,20 @@ impl TraceErrorKind for WorkerTraceErrorKind<'_> {
             },
         }
     }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                worker::v1::worker_error::Error::BadRequest(_) => true,
+                worker::v1::worker_error::Error::Unauthorized(_) => true,
+                worker::v1::worker_error::Error::LimitExceeded(_) => true,
+                worker::v1::worker_error::Error::NotFound(_) => true,
+                worker::v1::worker_error::Error::AlreadyExists(_) => true,
+                worker::v1::worker_error::Error::InternalError(_) => false,
+            },
+        }
+    }
 }
 
 pub struct ApiDefinitionTraceErrorKind<'a>(pub &'a ApiDefinitionError);
@@ -139,6 +164,22 @@ impl TraceErrorKind for ApiDefinitionTraceErrorKind<'_> {
                 api_definition_error::Error::AlreadyExists(_) => "AlreadyExists",
                 api_definition_error::Error::InternalError(_) => "InternalError",
                 api_definition_error::Error::NotDraft(_) => "NotDraft",
+            },
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self.0.error {
+            None => false,
+            Some(error) => match error {
+                api_definition_error::Error::BadRequest(_) => true,
+                api_definition_error::Error::InvalidRoutes(_) => true,
+                api_definition_error::Error::Unauthorized(_) => true,
+                api_definition_error::Error::LimitExceeded(_) => true,
+                api_definition_error::Error::NotFound(_) => true,
+                api_definition_error::Error::AlreadyExists(_) => true,
+                api_definition_error::Error::InternalError(_) => false,
+                api_definition_error::Error::NotDraft(_) => true,
             },
         }
     }
@@ -228,6 +269,19 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
                 ApiDefinitionServiceError::RibInternal(_) => ApiEndpointError::internal(error),
+                ApiDefinitionServiceError::RibParseError(_) => ApiEndpointError::bad_request(error),
+                ApiDefinitionServiceError::UnsupportedRibInput(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
+                ApiDefinitionServiceError::InvalidOasDefinition(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
+                ApiDefinitionServiceError::RibStaticAnalysisError(_) => {
+                    ApiEndpointError::internal(error)
+                }
+                ApiDefinitionServiceError::RibByteCodeGenerationError(_) => {
+                    ApiEndpointError::internal(error)
+                }
             }
         }
     }
@@ -261,7 +315,7 @@ mod conversion {
     impl From<ValidationErrors> for ApiEndpointError {
         fn from(error: ValidationErrors) -> Self {
             let error =
-                WorkerServiceErrorsBody::Validation(golem_service_base::model::ErrorsBody {
+                WorkerServiceErrorsBody::Validation(golem_common::model::error::ErrorsBody {
                     errors: error.errors,
                 });
 
@@ -297,9 +351,33 @@ mod conversion {
                     })),
                 },
 
+                ApiDefinitionServiceError::RibStaticAnalysisError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+
+                ApiDefinitionServiceError::RibByteCodeGenerationError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+
                 ApiDefinitionServiceError::RibInternal(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
+                    })),
+                },
+
+                ApiDefinitionServiceError::RibParseError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
+                    })),
+                },
+
+                ApiDefinitionServiceError::UnsupportedRibInput(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
                     })),
                 },
 
@@ -343,6 +421,11 @@ mod conversion {
                 ApiDefinitionServiceError::Internal(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::InvalidOasDefinition(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
                     })),
                 },
             }

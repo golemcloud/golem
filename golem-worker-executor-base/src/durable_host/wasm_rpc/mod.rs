@@ -23,7 +23,6 @@ use crate::durable_host::wasm_rpc::serialized::{
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, OplogEntryVersion};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
-use crate::model::PersistenceLevel;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
@@ -33,14 +32,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::exports::function_by_name;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
     WorkerId,
 };
 use golem_common::serialization::try_deserialize;
-use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
-use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
     Uri,
 };
@@ -51,7 +49,6 @@ use golem_wasm_rpc::{
 };
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, warn, Instrument};
 use uuid::Uuid;
@@ -62,34 +59,31 @@ use wasmtime_wasi::subscribe;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
-    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpcEntry>> {
+    async fn new(
+        &mut self,
+        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::WorkerId,
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
-        match location.parse_as_golem_urn() {
-            Some((remote_worker_id, None)) => {
-                let remote_worker_id = self
-                    .generate_unique_local_worker_id(remote_worker_id)
-                    .await?;
+        let worker_id: WorkerId = worker_id.into();
+        let remote_worker_id = worker_id.into_target_worker_id();
 
-                let span = create_rpc_connection_span(self, &remote_worker_id).await?;
+        construct_wasm_rpc_resource(self, remote_worker_id).await
+    }
 
-                let remote_worker_id =
-                    OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
-                let demand = self.rpc().create_demand(&remote_worker_id).await;
-                let entry = self.table().push(WasmRpcEntry {
-                    payload: Box::new(WasmRpcEntryPayload::Interface {
-                        demand,
-                        remote_worker_id,
-                        span_id: span.span_id().clone(),
-                    }),
-                })?;
-                Ok(entry)
-            }
-            _ => Err(anyhow!(
-                "Invalid URI: {}. Must be urn:worker:component-id/worker-name",
-                location.value
-            )),
-        }
+    async fn ephemeral(
+        &mut self,
+        component_id: golem_wasm_rpc::golem_rpc_0_2_x::types::ComponentId,
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
+        self.observe_function_call("golem::rpc::wasm-rpc", "ephemeral");
+
+        let component_id: ComponentId = component_id.into();
+        let remote_worker_id = TargetWorkerId {
+            component_id,
+            worker_name: None,
+        };
+
+        construct_wasm_rpc_resource(self, remote_worker_id).await
     }
 
     async fn invoke_and_await(
@@ -477,7 +471,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         full_function_name: String,
-        function_input: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
+        function_input: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<()> {
         self.schedule_cancelable_invocation(this, datetime, full_function_name, function_input)
             .await?;
@@ -490,7 +484,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
         function_name: String,
-        mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
+        mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         let durability = Durability::<SerializableScheduleId, GolemError>::new(
             self,
@@ -717,8 +711,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         };
 
         let handle = this.rep();
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
-        {
+        if self.state.is_live() || self.state.snapshotting_mode.is_some() {
             let stack = self
                 .state
                 .invocation_context
@@ -849,7 +842,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            if self.state.persistence_level != PersistenceLevel::PersistNothing {
+            if self.state.snapshotting_mode.is_none() {
                 self.state
                     .oplog
                     .add_imported_function_invoked(
@@ -892,6 +885,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 Ok(None) => Ok(None),
                 Err(err) => Err(err),
             }
+        } else if self.state.persistence_level == PersistenceLevel::PersistNothing {
+            Err(
+                GolemError::runtime("Trying to replay an RPC call in a PersistNothing block")
+                    .into(),
+            )
         } else {
             let (_, oplog_entry) =
                 get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
@@ -1026,21 +1024,57 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
+    async fn parse_uuid(
+        &mut self,
+        uuid: String,
+    ) -> anyhow::Result<Result<golem_wasm_rpc::Uuid, String>> {
+        Ok(Uuid::parse_str(&uuid)
+            .map(|uuid| uuid.into())
+            .map_err(|e| e.to_string()))
+    }
+
+    async fn uuid_to_string(&mut self, uuid: golem_wasm_rpc::Uuid) -> anyhow::Result<String> {
+        let uuid: uuid::Uuid = uuid.into();
+        Ok(uuid.to_string())
+    }
+
     // NOTE: these extract functions are only added as a workaround for the fact that the binding
     // generator does not include types that are not used in any exported _functions_
     async fn extract_value(
         &mut self,
-        vnt: golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType,
     ) -> anyhow::Result<WitValue> {
         Ok(vnt.value)
     }
 
     async fn extract_type(
         &mut self,
-        vnt: golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType,
     ) -> anyhow::Result<WitType> {
         Ok(vnt.typ)
     }
+}
+
+async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_worker_id: TargetWorkerId,
+) -> anyhow::Result<Resource<WasmRpcEntry>> {
+    let remote_worker_id = ctx
+        .generate_unique_local_worker_id(remote_worker_id)
+        .await?;
+
+    let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+
+    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.account_id, &remote_worker_id);
+    let demand = ctx.rpc().create_demand(&remote_worker_id).await;
+    let entry = ctx.table().push(WasmRpcEntry {
+        payload: Box::new(WasmRpcEntryPayload::Interface {
+            demand,
+            remote_worker_id,
+            span_id: span.span_id().clone(),
+        }),
+    })?;
+    Ok(entry)
 }
 
 /// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the
@@ -1139,38 +1173,6 @@ impl WasmRpcEntryPayload {
         match self {
             Self::Interface { demand, .. } => demand,
             Self::Resource { demand, .. } => demand,
-        }
-    }
-}
-
-pub trait UrnExtensions {
-    fn parse_as_golem_urn(&self) -> Option<(TargetWorkerId, Option<String>)>;
-
-    fn golem_urn(worker_id: &WorkerId, function_name: Option<&str>) -> Self;
-}
-
-impl UrnExtensions for Uri {
-    fn parse_as_golem_urn(&self) -> Option<(TargetWorkerId, Option<String>)> {
-        let urn = WorkerOrFunctionUrn::from_str(&self.value).ok()?;
-
-        match urn {
-            WorkerOrFunctionUrn::Worker(w) => Some((w.id, None)),
-            WorkerOrFunctionUrn::Function(f) => {
-                Some((f.id.into_target_worker_id(), Some(f.function)))
-            }
-        }
-    }
-
-    fn golem_urn(worker_id: &WorkerId, function_name: Option<&str>) -> Self {
-        Self {
-            value: match function_name {
-                Some(function_name) => WorkerFunctionUrn {
-                    id: worker_id.clone(),
-                    function: function_name.to_string(),
-                }
-                .to_string(),
-                None => worker_id.uri(),
-            },
         }
     }
 }

@@ -15,9 +15,8 @@
 use crate::Tracing;
 use golem_common::config::DbPostgresConfig;
 use golem_service_base::db;
+use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
-use sqlx::Pool;
-use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -130,14 +129,14 @@ mod tests {
 
 struct PostgresDb {
     _container: ContainerAsync<Postgres>,
-    pub pool: Arc<Pool<sqlx::Postgres>>,
+    pub pool: PostgresPool,
 }
 
 impl PostgresDb {
     async fn new() -> Self {
         let (db_config, container) = Self::start_docker_postgres().await;
 
-        db::postgres_migrate(
+        db::postgres::migrate(
             &db_config,
             MigrationsDir::new("../golem-component-service/db/migration".into())
                 .postgres_migrations(),
@@ -145,7 +144,7 @@ impl PostgresDb {
         .await
         .unwrap();
 
-        let pool = Arc::new(db::create_postgres_pool(&db_config).await.unwrap());
+        let pool = PostgresPool::configured(&db_config).await.unwrap();
 
         Self {
             _container: container,

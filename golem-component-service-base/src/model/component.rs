@@ -13,15 +13,17 @@
 // limitations under the License.
 
 use chrono::Utc;
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component_constraint::{
+    FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
+};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use rib::WorkerFunctionsInRib;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -146,7 +148,19 @@ impl<Owner: ComponentOwner> From<Component<Owner>>
 pub struct ComponentConstraints<Owner: ComponentOwner> {
     pub owner: Owner,
     pub component_id: ComponentId,
-    pub constraints: FunctionConstraintCollection,
+    pub constraints: FunctionConstraints,
+}
+
+impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
+    pub fn function_signatures(&self) -> Vec<FunctionSignature> {
+        let constraints = &self.constraints;
+
+        constraints
+            .constraints
+            .iter()
+            .map(|x| x.function_signature.clone())
+            .collect()
+    }
 }
 
 impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
@@ -158,31 +172,14 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
         ComponentConstraints {
             owner: owner.clone(),
             component_id: component_id.clone(),
-            constraints: FunctionConstraintCollection {
-                function_constraints: worker_functions_in_rib
+            constraints: FunctionConstraints {
+                constraints: worker_functions_in_rib
                     .function_calls
                     .iter()
-                    .map(FunctionConstraint::from_worker_function_type)
+                    .map(FunctionUsageConstraint::from_worker_function_type)
                     .collect(),
             },
         }
-    }
-
-    pub fn update_with(
-        &self,
-        function_constraints: &FunctionConstraintCollection,
-    ) -> Result<ComponentConstraints<Owner>, String> {
-        let constraints = FunctionConstraintCollection::try_merge(vec![
-            self.constraints.clone(),
-            function_constraints.clone(),
-        ])?;
-        let component_constraints = ComponentConstraints {
-            owner: self.owner.clone(),
-            component_id: self.component_id.clone(),
-            constraints,
-        };
-
-        Ok(component_constraints)
     }
 }
 

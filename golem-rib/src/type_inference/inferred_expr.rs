@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, RegistryKey,
+    DynamicParsedFunctionName, Expr, ExprVisitor, FunctionTypeRegistry, GlobalVariableTypeSpec,
+    RegistryKey,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct InferredExpr(Expr);
@@ -31,7 +32,7 @@ impl InferredExpr {
         expr: Expr,
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<InferredExpr, RibCompilationError> {
+    ) -> Result<InferredExpr, RibTypeError> {
         let mut mutable_expr = expr;
 
         mutable_expr.infer_types(function_type_registry, type_spec)?;
@@ -42,26 +43,17 @@ impl InferredExpr {
     // Only a fully inferred Rib can reliably tell us what are the exact
     // function calls.
     pub fn worker_invoke_calls(&self) -> Vec<DynamicParsedFunctionName> {
+        let mut expr = self.0.clone();
         let mut worker_calls = vec![];
-        let mut queue = VecDeque::new();
-        queue.push_back(&self.0);
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Call {
-                    call_type:
-                        CallType::Function {
-                            function_name,
-                            worker,
-                        },
-                    ..
-                } => {
-                    worker_calls.push(function_name.clone());
+        let mut visitor = ExprVisitor::bottom_up(&mut expr);
 
-                    if let Some(worker) = worker {
-                        queue.push_back(worker);
-                    }
-                }
-                _ => expr.visit_children_bottom_up(&mut queue),
+        while let Some(expr) = visitor.pop_back() {
+            if let Expr::Call {
+                call_type: CallType::Function { function_name, .. },
+                ..
+            } = expr
+            {
+                worker_calls.push(function_name.clone());
             }
         }
 

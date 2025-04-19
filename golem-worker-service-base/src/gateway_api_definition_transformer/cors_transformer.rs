@@ -102,8 +102,6 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
     use crate::gateway_api_definition::http::{
         AllPathPatterns, HttpApiDefinition, MethodPattern, Route,
     };
@@ -112,9 +110,10 @@ mod tests {
     use crate::gateway_api_definition_transformer::ApiDefTransformationError;
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
+    use golem_common::model::component::VersionedComponentId;
     use golem_common::model::ComponentId;
-    use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
+    use test_r::test;
 
     fn get_cors_preflight_route() -> Route {
         Route {
@@ -170,9 +169,7 @@ mod tests {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Default(worker_binding.clone()),
-            middlewares: Some(HttpMiddlewares(vec![
-                HttpMiddleware::AddCorsHeaders(cors()),
-            ])),
+            middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::Cors(cors())])),
         }
     }
 
@@ -246,7 +243,7 @@ mod tests {
             ApiDefTransformationError::Custom(custom) => custom.to_string(),
         });
 
-        assert_eq!(result.err(), Some("Invalid binding for resource '/test' with method 'Get'. CORS binding is only supported for the OPTIONS method.".to_string()));
+        assert_eq!(result.err(), Some("Invalid binding for resource '/test' with method 'GET'. CORS binding is only supported for the OPTIONS method.".to_string()));
     }
 
     #[test]

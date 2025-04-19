@@ -112,7 +112,7 @@ pub struct CliParams {
     #[arg(long, default_value = "false")]
     pub primary_only: bool,
 
-    #[arg(long, default_value = "GolemClientProtocol::Grpc")]
+    #[arg(long, default_value = "grpc")]
     pub golem_client_protocol: GolemClientProtocol,
 }
 
@@ -1026,6 +1026,7 @@ impl CliTestDependencies {
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
                         params.golem_client_protocol,
+                        component_service.clone(),
                     )
                     .await,
                 );

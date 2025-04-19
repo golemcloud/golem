@@ -540,6 +540,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // Worker does not exist, we still check if it is in the list active workers due to some inconsistency
                 if let Some((_, worker)) = self
                     .active_workers()
+                    .snapshot()
                     .iter()
                     .find(|(id, _)| id == &owned_worker_id.worker_id)
                 {
@@ -834,7 +835,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids)?;
 
-        for (worker_id, worker_details) in self.active_workers().iter() {
+        for (worker_id, worker_details) in self.active_workers().snapshot() {
             if self.shard_service().check_worker(&worker_id).is_err() {
                 if let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)

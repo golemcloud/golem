@@ -14,15 +14,19 @@
 
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
-use crate::{DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeName};
+use crate::{
+    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError,
+    InferredType, TypeName,
+};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations
 // such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
-pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilationError> {
+// lazy method invocations are converted to actual Expr::Call
+pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -135,7 +139,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                             ),
                                         })?;
 
-                                    let dynamic_parsed_function_name = resource_method
+                                    let mut dynamic_parsed_function_name = resource_method
                                         .dynamic_parsed_function_name(resource_args.clone())
                                         .map_err(|err| FunctionCallError::InvalidFunctionCall {
                                             function_name: resource_method
@@ -144,6 +148,26 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                                             expr: expr_copied,
                                             message: format!("Invalid function name: {}", err),
                                         })?;
+
+                                    // Making sure the various compile phased resolved resource_args are kept intact
+                                    match &mut dynamic_parsed_function_name.function {
+                                        DynamicParsedFunctionReference::IndexedResourceConstructor { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+                                        DynamicParsedFunctionReference::IndexedResourceMethod { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+
+                                        DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+
+                                        DynamicParsedFunctionReference::IndexedResourceDrop { resource_params, .. } => {
+                                            *resource_params = resource_args.clone();
+                                        }
+
+                                        _ => {}
+                                    };
 
                                     let method_args = args.clone();
 
@@ -175,7 +199,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibCompilati
                     }
                 }
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
-                // Re-running the same phase will help identify the instance type of `lhs`.
+                // Re-running (fix point) the same phase will help identify the instance type of `lhs`.
                 // Hence, this phase is part of computing the fix-point of compiler type inference.
                 InferredType::Unknown => {}
                 _ => {

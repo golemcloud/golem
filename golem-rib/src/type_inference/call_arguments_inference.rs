@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, FunctionCallError};
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
 // If the function call is a mere instance creation, then the return type i
@@ -22,26 +21,24 @@ pub fn infer_function_call_types(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), FunctionCallError> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
-    while let Some(expr) = queue.pop_back() {
+    let mut visitor = ExprVisitor::bottom_up(expr);
+    while let Some(expr) = visitor.pop_back() {
         let expr_copied = expr.clone();
-        match expr {
-            Expr::Call {
+
+        if let Expr::Call {
+            call_type,
+            args,
+            inferred_type,
+            ..
+        } = expr
+        {
+            internal::resolve_call_argument_types(
+                &expr_copied,
                 call_type,
+                function_type_registry,
                 args,
                 inferred_type,
-                ..
-            } => {
-                internal::resolve_call_argument_types(
-                    &expr_copied,
-                    call_type,
-                    function_type_registry,
-                    args,
-                    inferred_type,
-                )?;
-            }
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
+            )?;
         }
     }
 
@@ -50,7 +47,7 @@ pub fn infer_function_call_types(
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
-    use crate::type_inference::kind::GetTypeKind;
+    use crate::type_inference::GetTypeHint;
     use crate::{
         ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
         FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
@@ -343,7 +340,8 @@ mod internal {
         let is_valid = if provided.inferred_type().is_unknown() {
             true
         } else {
-            provided.inferred_type().get_type_kind() == expected.get_type_kind()
+            provided.inferred_type().get_type_hint().get_type_kind()
+                == expected.get_type_hint().get_type_kind()
         };
 
         if is_valid {

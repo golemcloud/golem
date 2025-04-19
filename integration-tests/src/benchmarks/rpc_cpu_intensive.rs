@@ -157,7 +157,7 @@ impl Benchmark for RpcCpuIntensive {
                 .iter()
                 .map(|w| w.parent.clone())
                 .collect::<Vec<WorkerId>>(),
-            "golem:itrpc/rpc-api.{echo}",
+            "golem:itrpc-exports/rpc-api.{echo}",
             vec!["hello".into_value_and_type()],
         )
         .await;
@@ -193,7 +193,7 @@ impl Benchmark for RpcCpuIntensive {
             context,
             &recorder,
             &shard_manager_routing_table,
-            "golem:itrpc/rpc-api.{calculate}",
+            "golem:itrpc-exports/rpc-api.{calculate}",
             vec![calculate_iter.into_value_and_type()],
             "worker-calculate-invocation",
         )

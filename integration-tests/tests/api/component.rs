@@ -18,7 +18,9 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::Component;
-use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
 use golem_common::model::{
     AccountId, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
 };
@@ -45,11 +47,22 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 (
                     "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        targets: HashMap::from_iter(vec![
+                            (
+                                "api".to_string(),
+                                WasmRpcTarget {
+                                    interface_name: "rpc:counters-exports/api".to_string(),
+                                    component_name: "rpc:counters".to_string(),
+                                    component_type: ComponentType::Durable,
+                                },
+                            ),
                             (
                                 "counter".to_string(),
-                                "rpc:counters-exports/api".to_string(),
+                                WasmRpcTarget {
+                                    interface_name: "rpc:counters-exports/api".to_string(),
+                                    component_name: "rpc:counters".to_string(),
+                                    component_type: ComponentType::Durable,
+                                },
                             ),
                         ]),
                     }),
@@ -57,9 +70,13 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 (
                     "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        target_interface_name: HashMap::from_iter(vec![(
+                        targets: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral-exports/api".to_string(),
+                            WasmRpcTarget {
+                                interface_name: "rpc:ephemeral-exports/api".to_string(),
+                                component_name: "rpc:ephemeral".to_string(),
+                                component_type: ComponentType::Ephemeral
+                            }
                         )]),
                     }),
                 ),
@@ -149,14 +166,25 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
         )
         .unwrap()
             == DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![
-                    ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                targets: HashMap::from_iter(vec![
+                    (
+                        "api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    ),
                     (
                         "counter".to_string(),
-                        "rpc:counters-exports/api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "rpc:counters-exports/api".to_string(),
+                            component_name: "rpc:counters".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
                     ),
                 ]),
-            })
+            }),
     );
     check!(
         DynamicLinkedInstance::try_from(
@@ -168,11 +196,15 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
         )
         .unwrap()
             == DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: HashMap::from_iter(vec![(
+                targets: HashMap::from_iter(vec![(
                     "api".to_string(),
-                    "rpc:ephemeral-exports/api".to_string(),
+                    WasmRpcTarget {
+                        interface_name: "rpc:ephemeral-exports/api".to_string(),
+                        component_name: "rpc:ephemeral".to_string(),
+                        component_type: ComponentType::Ephemeral,
+                    }
                 )]),
-            })
+            }),
     );
     check!(ephemeral_meta.dynamic_linking.len() == 0);
 }
@@ -282,9 +314,13 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
     let link = (
         "dummy:dummy/dummy".to_string(),
         DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-            target_interface_name: HashMap::from_iter(vec![(
+            targets: HashMap::from_iter(vec![(
                 "dummy".to_string(),
-                "dummy:dummy/dummy-x".to_string(),
+                WasmRpcTarget {
+                    interface_name: "dummy:dummy/dummy-x".to_string(),
+                    component_name: "dummy:dummy".to_string(),
+                    component_type: ComponentType::Durable,
+                },
             )]),
         }),
     );
@@ -296,7 +332,8 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             Some(&files),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     deps.component_service()
         .update_component(
@@ -306,7 +343,8 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             None,
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     deps.component_service()
         .update_component(
@@ -316,7 +354,8 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             None,
             Some(&HashMap::from([link.clone()])),
         )
-        .await;
+        .await
+        .unwrap();
 
     // Get all versions
     let result = deps

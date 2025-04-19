@@ -13,16 +13,14 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
-use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner, VersionedComponentId};
+use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
     DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
     PluginInstallation, PluginOwner, PluginTypeSpecificDefinition,
 };
-use golem_common::model::{
-    AccountId, ComponentId, ComponentType, Empty, HasAccountId, PluginInstallationId,
-};
+use golem_common::model::{AccountId, ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::repo::component::DefaultComponentOwnerRow;
 use golem_common::repo::plugin::{DefaultPluginOwnerRow, DefaultPluginScopeRow};
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
@@ -30,7 +28,7 @@ use golem_common::repo::RowMeta;
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{ComponentRecord, ComponentRepo};
 use golem_component_service_base::repo::plugin::PluginRepo;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use poem_openapi::NewType;
@@ -72,7 +70,9 @@ impl FromStr for UuidOwner {
     }
 }
 
-impl HasAccountId for UuidOwner {
+impl ComponentOwner for UuidOwner {
+    type Row = UuidOwnerRow;
+    type PluginOwner = UuidOwner;
     fn account_id(&self) -> AccountId {
         AccountId {
             value: self.0.to_string(),
@@ -80,13 +80,13 @@ impl HasAccountId for UuidOwner {
     }
 }
 
-impl ComponentOwner for UuidOwner {
-    type Row = UuidOwnerRow;
-    type PluginOwner = UuidOwner;
-}
-
 impl PluginOwner for UuidOwner {
     type Row = UuidOwnerRow;
+    fn account_id(&self) -> AccountId {
+        AccountId {
+            value: self.0.to_string(),
+        }
+    }
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -384,12 +384,11 @@ async fn test_repo_component_constraints(
 
     let expected_updated_constraint = {
         let mut function_constraints =
-            constraint_data::get_shopping_cart_worker_functions_constraint2().function_constraints;
-        function_constraints.extend(
-            constraint_data::get_shopping_cart_worker_functions_constraint1().function_constraints,
-        );
-        Some(FunctionConstraintCollection {
-            function_constraints,
+            constraint_data::get_shopping_cart_worker_functions_constraint2().constraints;
+        function_constraints
+            .extend(constraint_data::get_shopping_cart_worker_functions_constraint1().constraints);
+        Some(FunctionConstraints {
+            constraints: function_constraints,
         })
     };
 

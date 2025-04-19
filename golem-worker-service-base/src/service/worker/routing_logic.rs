@@ -22,17 +22,17 @@ use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
 use tonic::transport::Channel;
 use tonic::Status;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
+use golem_common::model::error::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
 use golem_common::model::RetryConfig;
 use golem_common::model::{Pod, ShardId, TargetWorkerId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
 
 use crate::service::worker::WorkerServiceError;
@@ -316,6 +316,9 @@ pub enum ResponseMapResult {
         shard_ids: HashSet<ShardId>,
     },
     ShardingNotReady,
+    /// Error that is expected, not to be logged/counted as an error
+    Expected(WorkerServiceError),
+    /// Error that is unexpected, to be logged/counted as an error
     Other(WorkerServiceError),
 }
 
@@ -330,6 +333,9 @@ impl From<GolemError> for ResponseMapResult {
                 shard_ids,
             },
             GolemError::ShardingNotReady(_) => ResponseMapResult::ShardingNotReady,
+            GolemError::WorkerNotFound(_) | GolemError::WorkerAlreadyExists(_) => {
+                ResponseMapResult::Expected(error.into())
+            }
             other => ResponseMapResult::Other(other.into()),
         }
     }
@@ -349,7 +355,7 @@ impl From<WorkerExecutionError> for ResponseMapResult {
             })
         });
         let response_map_result = golem_error.clone().into();
-        debug!(
+        trace!(
             error = format!("{:?}", error),
             golem_error = golem_error.to_string(),
             response_map_result = format!("{:?}", response_map_result),
@@ -390,7 +396,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
         G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync,
         H: Fn(CallWorkerExecutorError) -> WorkerServiceError + Send + Sync,
     {
-        let mut retry = RetryState::new(self.worker_executor_retry_config());
+        let mut retry = RetryState::new(self.worker_executor_retry_config(), description.as_ref());
         loop {
             let span = retry.start_attempt(Target::tracing_kind(&target));
 
@@ -412,6 +418,9 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                             }
                             Err(error @ ResponseMapResult::ShardingNotReady) => {
                                 retry.retry(self, &error, &pod).await
+                            }
+                            Err(ResponseMapResult::Expected(error)) => {
+                                retry.non_retryable_expected_error(error, &pod)
                             }
                             Err(ResponseMapResult::Other(error)) => {
                                 retry.non_retryable_error(error, &pod)
@@ -499,21 +508,29 @@ struct RetryState<'a> {
     attempt: u64,
     retry_attempt: u64,
     retry_config: &'a RetryConfig,
+    op: &'a str,
 }
 
 impl<'a> RetryState<'a> {
-    fn new(retry_config: &'a RetryConfig) -> Self {
+    fn new(retry_config: &'a RetryConfig, op: &'a str) -> Self {
         RetryState {
             started_at: Instant::now(),
             attempt: 0,
             retry_attempt: 0,
             retry_config,
+            op,
         }
     }
 
     fn start_attempt(&mut self, executor_kind: &'static str) -> RetrySpan {
         self.attempt += 1;
         self.retry_attempt += 1;
+        debug!(
+            attempt = self.attempt,
+            executor_kind = executor_kind,
+            op = self.op,
+            "Call on executor - start attempt"
+        );
         RetrySpan::new(executor_kind, self.attempt)
     }
 
@@ -535,6 +552,7 @@ impl<'a> RetryState<'a> {
                     ?error,
                     ?pod,
                     delay_ms = delay.as_millis(),
+                    op = self.op,
                     "Call on executor - retry"
                 );
                 sleep(delay).await;
@@ -548,11 +566,26 @@ impl<'a> RetryState<'a> {
                     error = format!("{error:?}"),
                     pod = format_pod(pod),
                     delay_ms = delay.as_millis(),
+                    op = self.op,
                     "Call on executor - retry - resetting retry attempts"
                 );
                 Ok(None)
             }
         }
+    }
+
+    fn non_retryable_expected_error<T>(
+        &self,
+        error: WorkerServiceError,
+        pod: &Option<Pod>,
+    ) -> Result<Option<T>, WorkerServiceError> {
+        trace!(
+            error = error.to_string(),
+            pod = format_pod(pod),
+            op = self.op,
+            "Call on executor - non retriable expected error"
+        );
+        Err(error)
     }
 
     fn non_retryable_error<T>(
@@ -563,6 +596,7 @@ impl<'a> RetryState<'a> {
         error!(
             error = error.to_string(),
             pod = format_pod(pod),
+            op = self.op,
             "Call on executor - non retriable error"
         );
         Err(error)
@@ -572,6 +606,7 @@ impl<'a> RetryState<'a> {
         info!(
             duration_ms = self.started_at.elapsed().as_millis(),
             pod = format_pod(pod),
+            op = self.op,
             "Call on executor - success"
         );
     }

@@ -15,8 +15,10 @@
 use crate::service::component::ComponentServiceError;
 use crate::service::worker::WorkerServiceError;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{
+    ErrorBody, ErrorsBody, GolemError, GolemErrorBody, GolemErrorUnknown,
+};
 use golem_common::SafeDisplay;
-use golem_service_base::model::*;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tonic::Status;
@@ -52,6 +54,17 @@ impl TraceErrorKind for WorkerApiBaseError {
             WorkerApiBaseError::Forbidden(_) => "Forbidden",
             WorkerApiBaseError::Unauthorized(_) => "Unauthorized",
             WorkerApiBaseError::InternalError(_) => "InternalError",
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match &self {
+            WorkerApiBaseError::BadRequest(_) => true,
+            WorkerApiBaseError::NotFound(_) => true,
+            WorkerApiBaseError::AlreadyExists(_) => true,
+            WorkerApiBaseError::Forbidden(_) => true,
+            WorkerApiBaseError::Unauthorized(_) => true,
+            WorkerApiBaseError::InternalError(_) => false,
         }
     }
 }

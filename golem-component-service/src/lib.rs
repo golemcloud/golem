@@ -24,7 +24,6 @@ use include_dir::{include_dir, Dir};
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, IntoEndpoint};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
@@ -75,12 +74,12 @@ impl ComponentService {
 
         match config.db.clone() {
             DbConfig::Postgres(c) => {
-                db::postgres_migrate(&c, migrations.postgres_migrations())
+                db::postgres::migrate(&c, migrations.postgres_migrations())
                     .await
                     .context("Postgres DB migration")?;
             }
             DbConfig::Sqlite(c) => {
-                db::sqlite_migrate(&c, migrations.sqlite_migrations())
+                db::sqlite::migrate(&c, migrations.sqlite_migrations())
                     .await
                     .context("SQLite DB migration")?;
             }
@@ -161,9 +160,7 @@ impl ComponentService {
     ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
 
-        let app = api::combined_routes(prometheus_registry, &self.services)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+        let app = api::combined_routes(prometheus_registry, &self.services);
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));

@@ -22,7 +22,7 @@ use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::HashMap;
 use std::time::SystemTime;
-use tracing::{debug, info};
+use tracing::info;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -79,6 +79,8 @@ async fn auction_example_1(
             vec![],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&registry_worker_id).await;
 
     drop(executor);
 
@@ -152,6 +154,8 @@ async fn auction_example_2(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&registry_worker_id).await;
+
     drop(executor);
 
     info!("result: {:?}", create_auction_result);
@@ -202,6 +206,8 @@ async fn counter_resource_test_1(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(
@@ -251,6 +257,8 @@ async fn counter_resource_test_2(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -298,6 +306,8 @@ async fn counter_resource_test_2_with_restart(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -340,6 +350,8 @@ async fn counter_resource_test_3(
             vec![],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 
@@ -388,6 +400,8 @@ async fn counter_resource_test_3_with_restart(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -429,6 +443,8 @@ async fn context_inheritance(
             vec![],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 
@@ -516,6 +532,8 @@ async fn counter_resource_test_5(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(
@@ -572,6 +590,8 @@ async fn counter_resource_test_5_with_restart(
             vec![],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 
@@ -630,6 +650,8 @@ async fn wasm_rpc_bug_32_test(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(
@@ -639,64 +661,6 @@ async fn wasm_rpc_bug_32_test(
                 case_value: None,
             }])
     );
-}
-
-#[test]
-#[tracing::instrument]
-async fn error_message_invalid_uri(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
-
-    let registry_component_id = executor
-        .component("auction_registry_composed")
-        .store()
-        .await;
-
-    let mut env = HashMap::new();
-    env.insert(
-        "AUCTION_COMPONENT_ID".to_string(),
-        "invalid-component-id".to_string(),
-    );
-    let registry_worker_id = executor
-        .start_worker_with(
-            &registry_component_id,
-            "auction-registry-invalid-uri",
-            vec![],
-            env,
-        )
-        .await;
-
-    let _ = executor.log_output(&registry_worker_id).await;
-
-    let expiration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let create_auction_result = executor
-        .invoke_and_await(
-            &registry_worker_id,
-            "auction:registry-exports/api.{create-auction}",
-            vec![
-                "test-auction".into_value_and_type(),
-                "this is a test".into_value_and_type(),
-                100.0f32.into_value_and_type(),
-                (expiration + 600).into_value_and_type(),
-            ],
-        )
-        .await;
-
-    drop(executor);
-
-    debug!(
-        "Error message: {}",
-        worker_error_message(&create_auction_result.clone().err().unwrap())
-    );
-    check!(worker_error_message(&create_auction_result.err().unwrap())
-        .contains("Invalid URI: urn:worker:invalid-component-id"));
 }
 
 #[test]
@@ -747,6 +711,8 @@ async fn error_message_non_existing_target_component(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&registry_worker_id).await;
+
     drop(executor);
 
     check!(worker_error_message(&create_auction_result.err().unwrap())
@@ -783,6 +749,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 

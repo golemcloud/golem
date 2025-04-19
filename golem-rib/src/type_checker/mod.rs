@@ -32,7 +32,7 @@ mod type_check_in_function_calls;
 mod type_mismatch;
 mod unresolved_types;
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::invalid_expr::check_invalid_expr;
 use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
@@ -43,7 +43,7 @@ use crate::{Expr, FunctionTypeRegistry};
 pub fn type_check(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
-) -> Result<(), RibCompilationError> {
+) -> Result<(), RibTypeError> {
     check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
@@ -57,7 +57,7 @@ pub fn type_check(
 #[cfg(test)]
 mod type_check_tests {
 
-    mod unresolved_types_error {
+    mod type_mismatch_errors {
         use test_r::test;
 
         use crate::type_checker::type_check_tests::internal;
@@ -65,40 +65,32 @@ mod type_check_tests {
         use crate::{compile, Expr};
 
         #[test]
-        fn test_invalid_key_in_record_in_function_call() {
+        async fn test_inference_pattern_match_invalid() {
             let expr = r#"
-          let result = foo({x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});
-          result
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => x,
+            none => "none"
+          }
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_message = compile(expr, &metadata).unwrap_err().to_string();
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 32
-            `3`
-            found within:
-            `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}}`
+            error in the following rib found at line 3, column 11
+            `match x {  some(x) => x, none => "none" } `
             cause: cannot determine the type
-            unresolved type at path: `x`
-            invalid argument to `foo`. expected record{a: record{aa: s32, ab: s32, ac: list<s32>, ad: record{ada: s32}, ae: tuple<s32, string>}, b: u64, c: list<s32>, d: record{da: s32}}
-            help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-            help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+            invalid pattern match, conflicting types inferred. u64, string
+            help: try specifying the expected type explicitly
+            help: if the issue persists, please review the script for potential type inconsistencies
             "#;
 
-            assert_eq!(error_message, strip_spaces(expected));
+            assert_eq!(error_msg, strip_spaces(expected));
         }
-    }
-
-    mod type_mismatch_errors {
-        use test_r::test;
-
-        use crate::type_checker::type_check_tests::internal;
-        use crate::type_checker::type_check_tests::internal::strip_spaces;
-        use crate::{compile, Expr};
 
         #[test]
         fn test_type_mismatch_in_record_in_function_call1() {
@@ -195,8 +187,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 51
             `(1, 2)`
-            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `tuple`
-            help: ensure this expression is only used in contexts that align with its actual type
+            cause: ambiguous types: `list<number>`, `tuple<number, number>`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -219,8 +210,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 21
             `{a: "foo"}`
-            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `record`
-            help: ensure this expression is only used in contexts that align with its actual type
+            cause: ambiguous types: `list<number>`, `record{a: str}`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

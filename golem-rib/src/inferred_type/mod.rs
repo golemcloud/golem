@@ -16,7 +16,7 @@ pub(crate) use flatten::*;
 mod flatten;
 mod unification;
 use crate::instance_type::InstanceType;
-use crate::type_inference::kind::GetTypeKind;
+use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
@@ -312,7 +312,7 @@ impl InferredType {
         // get the `kind` of inferred type
         TypeName::try_from(self.clone())
             .map(|tn| tn.to_string())
-            .unwrap_or(self.get_type_kind().to_string())
+            .unwrap_or(self.get_type_hint().to_string())
     }
 
     pub fn contains_only_number(&self) -> bool {

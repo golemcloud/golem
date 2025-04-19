@@ -18,8 +18,8 @@ use nom::character::complete::{char, multispace0};
 use nom::combinator::{map, map_res, not, opt, peek};
 
 use nom::multi::{many0, separated_list0};
-use nom::sequence::{delimited, preceded, tuple};
-use nom::IResult;
+use nom::sequence::{delimited, preceded, terminated, tuple};
+use nom::{IResult, Parser};
 
 use crate::gateway_api_definition::http::{
     place_holder_parser, AllPathPatterns, PathPattern, QueryInfo,
@@ -39,19 +39,18 @@ pub fn parse_path_pattern(input: &str) -> IResult<&str, AllPathPatterns> {
 }
 
 fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
-    let item_parser = delimited(
-        multispace0,
-        alt((path_var_parser, literal_parser)),
-        multispace0,
-    );
-    let final_item_parser = delimited(multispace0, catch_all_path_var_parser, multispace0);
-    let (input, (mut patterns, final_pattern)) = tuple((
-        many0(preceded(char('/'), item_parser)),
-        opt(preceded(char('/'), final_item_parser)),
+    let middle_segment_parser = alt((path_var_parser, literal_parser));
+
+    let final_segment_parser = alt((path_var_parser, literal_parser, catch_all_path_var_parser));
+
+    let (input, (_, mut patterns, final_pattern)) = tuple((
+        opt(slash_parser),
+        many0(terminated(middle_segment_parser, slash_parser)),
+        opt(final_segment_parser),
     ))(input)?;
 
-    if let Some(final_pattern) = final_pattern {
-        patterns.push(final_pattern);
+    if let Some(pattern) = final_pattern {
+        patterns.push(pattern);
     };
 
     let indexed_patterns = patterns
@@ -104,6 +103,12 @@ fn catch_all_path_var_inner_parser(
     Ok(ParsedPattern::CatchAllVar(i))
 }
 
+fn slash_parser(input: &str) -> IResult<&str, ()> {
+    delimited(multispace0, char('/'), multispace0)
+        .map(|_| ())
+        .parse(input)
+}
+
 #[derive(Debug)]
 enum ParsedPattern<'a> {
     Literal(&'a str),
@@ -120,13 +125,13 @@ fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
 #[cfg(test)]
 mod tests {
     use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
-    use crate::gateway_api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
+    use crate::gateway_api_definition::http::{
+        AllPathPatterns, LiteralInfo, PathPattern, QueryInfo,
+    };
     use test_r::test;
 
     #[test]
     fn test_parse() {
-        use crate::gateway_api_definition::http::LiteralInfo;
-
         let result = parse_path_pattern("/api/{id}/test/{name}/test2?{query1}&{query2}");
         assert_eq!(
             AllPathPatterns {
@@ -181,5 +186,70 @@ mod tests {
 
         // {+var} is not allowed in the middle of the path
         assert!(AllPathPatterns::parse("/api/{foo}/{+others}/{bar}").is_err());
+    }
+
+    #[test]
+    fn test_parse_root_only() {
+        assert_eq!(
+            parse_path_pattern("/").unwrap().1,
+            AllPathPatterns {
+                path_patterns: vec![],
+                query_params: vec![]
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_root_with_query_params() {
+        assert_eq!(
+            parse_path_pattern("/?{query}").unwrap().1,
+            AllPathPatterns {
+                path_patterns: vec![],
+                query_params: vec![QueryInfo {
+                    key_name: "query".to_string()
+                },]
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_empty() {
+        assert_eq!(
+            parse_path_pattern("").unwrap().1,
+            AllPathPatterns {
+                path_patterns: vec![],
+                query_params: vec![]
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_with_query_params() {
+        assert_eq!(
+            parse_path_pattern("?{query}").unwrap().1,
+            AllPathPatterns {
+                path_patterns: vec![],
+                query_params: vec![QueryInfo {
+                    key_name: "query".to_string()
+                },]
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_no_slash_with_path() {
+        let result = parse_path_pattern("api/{id}/foo/{+others}").unwrap().1;
+        assert_eq!(
+            result,
+            AllPathPatterns {
+                path_patterns: vec![
+                    PathPattern::Literal(LiteralInfo("api".to_string())),
+                    PathPattern::var("id"),
+                    PathPattern::Literal(LiteralInfo("foo".to_string())),
+                    PathPattern::catch_all_var("others"),
+                ],
+                query_params: vec![]
+            },
+        );
     }
 }

@@ -50,9 +50,10 @@ use golem_common::model::invocation_context::TraceId;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
-    CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
-    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
+    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
+    DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PublicExternalSpanData,
@@ -852,6 +853,12 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     value: value.into(),
                 },
             )),
+            OplogEntry::ChangePersistenceLevel { timestamp, level } => Ok(
+                PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParameters {
+                    timestamp,
+                    persistence_level: level,
+                }),
+            ),
         }
     }
 }
@@ -1132,7 +1139,8 @@ fn encode_host_function_request_as_value(
             let payload: SerializableInvokeRequest = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem::rpc::wasm-rpc::invoke-and-await" => {
+        "golem::rpc::wasm-rpc::invoke-and-await"
+        | "golem::rpc::wasm-rpc::invoke-and-await result" => {
             let payload: SerializableInvokeRequest = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
@@ -1200,7 +1208,11 @@ fn encode_host_function_request_as_value(
         | "rdbms::postgres::db-transaction::commit"
         | "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
-        _ => Err(format!("Unsupported host function name: {}", function_name)),
+        _ => {
+            // For everything else we assume that payload is a serialized ValueAndType
+            let payload: ValueAndType = try_deserialize(bytes)?;
+            Ok(payload)
+        }
     }
 }
 
@@ -1459,7 +1471,8 @@ fn encode_host_function_response_as_value(
             let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem::rpc::wasm-rpc::invoke-and-await" => {
+        "golem::rpc::wasm-rpc::invoke-and-await"
+        | "golem::rpc::wasm-rpc::invoke-and-await result" => {
             let payload: Result<Result<TypeAnnotatedValue, SerializableError>, String> =
                 try_deserialize(bytes);
 
@@ -1608,7 +1621,11 @@ fn encode_host_function_response_as_value(
             > = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        _ => Err(format!("Unsupported host function name: {}", function_name)),
+        _ => {
+            // For everything else we assume that payload is a serialized ValueAndType
+            let payload: ValueAndType = try_deserialize(bytes)?;
+            Ok(payload)
+        }
     }
 }
 

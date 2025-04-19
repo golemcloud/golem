@@ -312,11 +312,17 @@ pub mod api {
 
     pub trait TraceErrorKind {
         fn trace_error_kind(&self) -> &'static str;
+
+        fn is_expected(&self) -> bool;
     }
 
     impl TraceErrorKind for &'static str {
         fn trace_error_kind(&self) -> &'static str {
             self
+        }
+
+        fn is_expected(&self) -> bool {
+            false
         }
     }
 
@@ -347,11 +353,20 @@ pub mod api {
             match self.start_time.take() {
                 Some(start) => self.span.in_scope(|| {
                     let elapsed = start.elapsed();
-                    error!(
-                        elapsed_ms = elapsed.as_millis(),
-                        error = format!("{:?}", error),
-                        "API request failed",
-                    );
+
+                    if error.is_expected() {
+                        info!(
+                            elapsed_ms = elapsed.as_millis(),
+                            error = format!("{:?}", error),
+                            "API request failed",
+                        );
+                    } else {
+                        error!(
+                            elapsed_ms = elapsed.as_millis(),
+                            error = format!("{:?}", error),
+                            "API request failed",
+                        );
+                    }
 
                     record_api_failure(
                         self.api_name,

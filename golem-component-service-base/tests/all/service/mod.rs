@@ -46,7 +46,7 @@ use golem_component_service_base::repo::component::{
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
-    LazyComponentService,
+    LazyComponentService, ParameterTypeConflict, ReturnTypeConflict,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
@@ -293,13 +293,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .await
         .unwrap();
 
-    assert_eq!(
-        component1_constrained
-            .constraints
-            .function_constraints
-            .len(),
-        2
-    );
+    assert_eq!(component1_constrained.constraints.constraints.len(), 2);
 
     let component1v2 = component_service
         .update(
@@ -311,6 +305,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
             &DefaultComponentOwner,
         )
         .await
+        .map_err(|err| err.to_string())
         .unwrap();
 
     let component1_result = component_service
@@ -656,10 +651,14 @@ async fn test_component_constraint_incompatible_updates(
                 interface_name: "golem:it/api".to_string(),
                 function_name: "initialize-cart".to_string(),
             },
-            existing_parameter_types: vec![u64()],
-            new_parameter_types: vec![str()],
-            existing_result_types: vec![str()],
-            new_result_types: vec![],
+            parameter_type_conflict: Some(ParameterTypeConflict {
+                existing: vec![u64()],
+                new: vec![str()],
+            }),
+            return_type_conflict: Some(ReturnTypeConflict {
+                existing: vec![str()],
+                new: vec![],
+            }),
         }],
     })
     .to_safe_string();
@@ -698,19 +697,21 @@ async fn test_component_oplog_process_plugin_creation(
     let plugin_priority = 0;
 
     plugin_service
-        .create_plugin(PluginDefinitionCreation {
-            name: plugin_name.to_string(),
-            version: plugin_version.to_string(),
-            description: "a plugin".to_string(),
-            icon: vec![],
-            homepage: "".to_string(),
-            specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
-                component_id: created_plugin_component.versioned_component_id.component_id,
-                component_version: created_plugin_component.versioned_component_id.version,
-            }),
-            scope: DefaultPluginScope::Global(Empty {}),
-            owner: DefaultPluginOwner,
-        })
+        .create_plugin(
+            &DefaultPluginOwner,
+            PluginDefinitionCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: "a plugin".to_string(),
+                icon: vec![],
+                homepage: "".to_string(),
+                specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
+                    component_id: created_plugin_component.versioned_component_id.component_id,
+                    component_version: created_plugin_component.versioned_component_id.version,
+                }),
+                scope: DefaultPluginScope::Global(Empty {}),
+            },
+        )
         .await
         .unwrap();
 
@@ -791,19 +792,21 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
     let plugin_version = "1";
 
     let result = plugin_service
-        .create_plugin(PluginDefinitionCreation {
-            name: plugin_name.to_string(),
-            version: plugin_version.to_string(),
-            description: "a plugin".to_string(),
-            icon: vec![],
-            homepage: "".to_string(),
-            specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
-                component_id: created_plugin_component.versioned_component_id.component_id,
-                component_version: created_plugin_component.versioned_component_id.version,
-            }),
-            scope: DefaultPluginScope::Global(Empty {}),
-            owner: DefaultPluginOwner,
-        })
+        .create_plugin(
+            &DefaultPluginOwner,
+            PluginDefinitionCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: "a plugin".to_string(),
+                icon: vec![],
+                homepage: "".to_string(),
+                specs: PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
+                    component_id: created_plugin_component.versioned_component_id.component_id,
+                    component_version: created_plugin_component.versioned_component_id.version,
+                }),
+                scope: DefaultPluginScope::Global(Empty {}),
+            },
+        )
         .await;
 
     assert!(matches!(
@@ -842,23 +845,25 @@ async fn test_failing_component_transformer_plugin(
     let plugin_version = "1";
 
     plugin_service
-        .create_plugin(PluginDefinitionCreation {
-            name: plugin_name.to_string(),
-            version: plugin_version.to_string(),
-            description: "a plugin".to_string(),
-            icon: vec![],
-            homepage: "".to_string(),
-            specs: PluginTypeSpecificCreation::ComponentTransformer(
-                ComponentTransformerDefinition {
-                    provided_wit_package: None,
-                    json_schema: None,
-                    validate_url: "http://localhost:9000/validate".to_string(),
-                    transform_url: "http://localhost:9000/transform".to_string(),
-                },
-            ),
-            scope: DefaultPluginScope::Global(Empty {}),
-            owner: DefaultPluginOwner,
-        })
+        .create_plugin(
+            &DefaultPluginOwner,
+            PluginDefinitionCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: "a plugin".to_string(),
+                icon: vec![],
+                homepage: "".to_string(),
+                specs: PluginTypeSpecificCreation::ComponentTransformer(
+                    ComponentTransformerDefinition {
+                        provided_wit_package: None,
+                        json_schema: None,
+                        validate_url: "http://localhost:9000/validate".to_string(),
+                        transform_url: "http://localhost:9000/transform".to_string(),
+                    },
+                ),
+                scope: DefaultPluginScope::Global(Empty {}),
+            },
+        )
         .await
         .unwrap();
 
@@ -916,18 +921,20 @@ async fn test_library_plugin_creation(
         .erased();
 
     plugin_service
-        .create_plugin(PluginDefinitionCreation {
-            name: plugin_name.to_string(),
-            version: plugin_version.to_string(),
-            description: "a plugin".to_string(),
-            icon: vec![],
-            homepage: "".to_string(),
-            specs: PluginTypeSpecificCreation::Library(LibraryPluginCreation {
-                data: PluginWasmFileReference::Data(Box::new(library_plugin_stream)),
-            }),
-            scope: DefaultPluginScope::Global(Empty {}),
-            owner: DefaultPluginOwner,
-        })
+        .create_plugin(
+            &DefaultPluginOwner,
+            PluginDefinitionCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: "a plugin".to_string(),
+                icon: vec![],
+                homepage: "".to_string(),
+                specs: PluginTypeSpecificCreation::Library(LibraryPluginCreation {
+                    data: PluginWasmFileReference::Data(Box::new(library_plugin_stream)),
+                }),
+                scope: DefaultPluginScope::Global(Empty {}),
+            },
+        )
         .await
         .unwrap();
 
@@ -1000,18 +1007,20 @@ async fn test_app_plugin_creation(
         .erased();
 
     plugin_service
-        .create_plugin(PluginDefinitionCreation {
-            name: plugin_name.to_string(),
-            version: plugin_version.to_string(),
-            description: "a plugin".to_string(),
-            icon: vec![],
-            homepage: "".to_string(),
-            specs: PluginTypeSpecificCreation::App(AppPluginCreation {
-                data: PluginWasmFileReference::Data(Box::new(app_plugin_stream)),
-            }),
-            scope: DefaultPluginScope::Global(Empty {}),
-            owner: DefaultPluginOwner,
-        })
+        .create_plugin(
+            &DefaultPluginOwner,
+            PluginDefinitionCreation {
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: "a plugin".to_string(),
+                icon: vec![],
+                homepage: "".to_string(),
+                specs: PluginTypeSpecificCreation::App(AppPluginCreation {
+                    data: PluginWasmFileReference::Data(Box::new(app_plugin_stream)),
+                }),
+                scope: DefaultPluginScope::Global(Empty {}),
+            },
+        )
         .await
         .unwrap();
 

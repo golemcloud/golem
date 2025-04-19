@@ -45,11 +45,10 @@ where
         between(
             char('(').skip(spaces()),
             char(')').skip(spaces()),
-            sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
+            sep_by(rib_expr(), char(',').skip(spaces())),
         ),
     )
         .map(|(name, tp, args)| Expr::call_worker_function(name, tp, None, args))
-        .message("Invalid function call")
 }
 
 pub fn function_name<Input>() -> impl Parser<Input, Output = DynamicParsedFunctionName>
@@ -61,10 +60,10 @@ where
     Input::Position: GetSourcePosition,
 {
     let identifier = || many1(alpha_num().or(token('-'))).map(|string: String| string);
-    let namespace = many1(identifier()).message("namespace");
-    let package = many1(identifier()).message("package");
+    let namespace = many1(identifier());
+    let package = many1(identifier());
     let ns_pkg = (namespace, token(':'), package).map(|(ns, _, pkg)| (ns, pkg));
-    let interface = many1(identifier()).message("interface");
+    let interface = many1(identifier());
 
     let capture_resource_params = || {
         parser(|input| {
@@ -176,6 +175,19 @@ where
             }
         },
     );
+    let indexed_static_method_syntax = (
+        string("[static]"),
+        indexed_resource_syntax(),
+        token('.'),
+        identifier(),
+    )
+        .map(|(_, (resource, resource_params), _, method)| {
+            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
+                resource,
+                resource_params,
+                method,
+            }
+        });
 
     let raw_constructor_syntax = (identifier(), token('.'), string("new"))
         .map(|(resource, _, _)| DynamicParsedFunctionReference::RawResourceConstructor { resource })
@@ -215,6 +227,7 @@ where
         attempt(indexed_constructor_syntax),
         attempt(indexed_drop_syntax),
         attempt(indexed_method_syntax),
+        attempt(indexed_static_method_syntax),
         attempt(raw_constructor_syntax),
         attempt(raw_drop_syntax),
         attempt(raw_method_syntax),

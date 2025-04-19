@@ -22,7 +22,7 @@ use futures::Stream;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
@@ -256,6 +256,12 @@ impl TrapType {
                             Some(GolemError::InvalidRequest { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
+                            Some(GolemError::ParamTypeMismatch { details }) => {
+                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                            }
+                            Some(GolemError::ValueMismatch { details }) => {
+                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                            }
                             _ => TrapType::Error(WorkerError::Unknown(format!("{:#}", error))),
                         },
                     },
@@ -301,40 +307,33 @@ impl Display for LastError {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
-pub enum PersistenceLevel {
-    PersistNothing,
-    PersistRemoteSideEffects,
-    Smart,
-}
-
-impl From<crate::preview2::golem_api_0_2_x::host::PersistenceLevel> for PersistenceLevel {
-    fn from(value: crate::preview2::golem_api_0_2_x::host::PersistenceLevel) -> Self {
+impl From<crate::preview2::golem_api_1_x::host::PersistenceLevel> for PersistenceLevel {
+    fn from(value: crate::preview2::golem_api_1_x::host::PersistenceLevel) -> Self {
         match value {
-            crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistNothing => {
+            crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistNothing => {
                 PersistenceLevel::PersistNothing
             }
-            crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistRemoteSideEffects => {
+            crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistRemoteSideEffects => {
                 PersistenceLevel::PersistRemoteSideEffects
             }
-            crate::preview2::golem_api_0_2_x::host::PersistenceLevel::Smart => {
+            crate::preview2::golem_api_1_x::host::PersistenceLevel::Smart => {
                 PersistenceLevel::Smart
             }
         }
     }
 }
 
-impl From<PersistenceLevel> for crate::preview2::golem_api_0_2_x::host::PersistenceLevel {
+impl From<PersistenceLevel> for crate::preview2::golem_api_1_x::host::PersistenceLevel {
     fn from(value: PersistenceLevel) -> Self {
         match value {
             PersistenceLevel::PersistNothing => {
-                crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistNothing
+                crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistNothing
             }
             PersistenceLevel::PersistRemoteSideEffects => {
-                crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistRemoteSideEffects
+                crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistRemoteSideEffects
             }
             PersistenceLevel::Smart => {
-                crate::preview2::golem_api_0_2_x::host::PersistenceLevel::Smart
+                crate::preview2::golem_api_1_x::host::PersistenceLevel::Smart
             }
         }
     }

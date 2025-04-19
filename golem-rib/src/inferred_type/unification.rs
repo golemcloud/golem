@@ -1,6 +1,6 @@
 use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list};
 use crate::InferredType;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug)]
 pub struct Unified(InferredType);
@@ -438,24 +438,24 @@ pub fn unify_with_required(
 
         match (inferred_type, other) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
-                let mut fields: HashMap<String, InferredType> = HashMap::new();
+                let mut fields: Vec<(String, InferredType)> = vec![];
                 // Common fields unified else kept it as it is
                 for (a_name, a_type) in a_fields {
                     if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name)
                     {
-                        fields.insert(a_name.clone(), a_type.unify_with_required(b_type)?);
+                        fields.push((a_name.clone(), a_type.unify_with_required(b_type)?));
                     } else {
-                        fields.insert(a_name.clone(), a_type.clone());
+                        fields.push((a_name.clone(), a_type.clone()));
                     }
                 }
 
                 for (a_name, a_type) in b_fields {
                     if !a_fields.iter().any(|(b_name, _)| b_name == a_name) {
-                        fields.insert(a_name.clone(), a_type.clone());
+                        fields.push((a_name.clone(), a_type.clone()));
                     }
                 }
 
-                Ok(InferredType::Record(internal::sort_and_convert(fields)))
+                Ok(InferredType::Record(fields))
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
@@ -572,7 +572,7 @@ pub fn unify_with_required(
                 Ok(InferredType::Result { ok, error })
             }
             (InferredType::Variant(a_variants), InferredType::Variant(b_variants)) => {
-                let mut variants = HashMap::new();
+                let mut variants = vec![];
                 for (a_name, a_type) in a_variants {
                     if let Some((_, b_type)) =
                         b_variants.iter().find(|(b_name, _)| b_name == a_name)
@@ -585,7 +585,7 @@ pub fn unify_with_required(
                             (Some(_), None) => None,
                             (None, Some(_)) => None,
                         };
-                        variants.insert(a_name.clone(), unified_type);
+                        variants.push((a_name.clone(), unified_type));
                     }
                 }
                 Ok(InferredType::Variant(
@@ -721,10 +721,6 @@ pub fn unify_with_required(
                         inferred_type_left.clone(),
                         inferred_type_right.clone(),
                     ]))
-                } else if inferred_type_left.is_string() && inferred_type_right.is_number() {
-                    Ok(inferred_type_right.clone())
-                } else if inferred_type_left.is_number() && inferred_type_right.is_string() {
-                    Ok(inferred_type_left.clone())
                 } else {
                     Err(format!(
                         "conflicting types inferred. {}, {}",
@@ -740,15 +736,6 @@ pub fn unify_with_required(
 mod internal {
     use crate::inferred_type::unification::Unified;
     use crate::InferredType;
-    use std::collections::HashMap;
-
-    pub(crate) fn sort_and_convert(
-        hashmap: HashMap<String, InferredType>,
-    ) -> Vec<(String, InferredType)> {
-        let mut vec: Vec<(String, InferredType)> = hashmap.into_iter().collect();
-        vec.sort_by(|a, b| a.0.cmp(&b.0));
-        vec
-    }
 
     pub(crate) fn validate_unified_type(inferred_type: &InferredType) -> Result<Unified, String> {
         match inferred_type {

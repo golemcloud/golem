@@ -448,12 +448,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// executor implementations.
     ///
     /// - `Interrupt` means that the worker should be interrupted as soon as possible, and it should
-    ///    remain interrupted.
+    ///   remain interrupted.
     /// - `Restart` is a simulated crash, the worker gets automatically restarted after it got interrupted,
-    ///    but only if the worker context supports recovering workers.
+    ///   but only if the worker context supports recovering workers.
     /// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
-    ///    automatically resumed when the worker is needed again. This only works if the worker context
-    ///    supports recovering workers.
+    ///   automatically resumed when the worker is needed again. This only works if the worker context
+    ///   supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
         if let WorkerInstance::Running(running) = &*self.instance.lock().await {
             running.interrupt(interrupt_kind.clone());
@@ -1510,7 +1510,10 @@ impl RunningWorker {
     }
 
     fn interrupt(&self, kind: InterruptKind) {
-        self.sender.send(WorkerCommand::Interrupt(kind)).unwrap();
+        // In some cases it is possible that the invocation loop is already quitting and the receiver gets
+        // dropped when we get here. In this case the send fails, but we ignore it as the running worker got
+        // interrupted anyway.
+        let _ = self.sender.send(WorkerCommand::Interrupt(kind));
     }
 
     async fn create_instance<Ctx: WorkerCtx>(

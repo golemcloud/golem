@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::spaces;
 use combine::{
     attempt, choice,
     parser::char::{char, string},
@@ -35,9 +34,9 @@ where
 {
     (choice((
         attempt(string("ok").skip(char('(')))
-            .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::ok(expr, None))),
+            .with((rib_expr(), char(')')).map(|(expr, _)| Expr::ok(expr, None))),
         attempt(string("err").skip(char('(')))
-            .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::err(expr, None))),
+            .with((rib_expr(), char(')')).map(|(expr, _)| Expr::err(expr, None))),
     )))
     .and_then(|expr| match expr {
         Expr::Result { expr: Ok(expr), .. } => Ok(Expr::ok(*expr, None)),
@@ -48,7 +47,6 @@ where
             "Invalid syntax for Result type".to_string(),
         )),
     })
-    .message("Invalid syntax for Result type")
 }
 
 #[cfg(test)]

@@ -25,13 +25,13 @@ interface api {
     success(order-confirmation),
   }
 
-  initialize-cart: func(user-id: string) -> ();
+  initialize-cart: func(user-id: string);
 
-  add-item: func(item: product-item) -> ();
+  add-item: func(item: product-item);
 
-  remove-item: func(product-id: string) -> ();
+  remove-item: func(product-id: string);
 
-  update-item-quantity: func(product-id: string, quantity: u32) -> ();
+  update-item-quantity: func(product-id: string, quantity: u32);
 
   checkout: func() -> checkout-result;
 
@@ -41,7 +41,7 @@ interface api {
 }
 
 world shopping-cart {
-  import golem:api/host@0.2.2;
+  import golem:api/host@1.1.6;
 
   export api;
 }

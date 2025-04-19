@@ -13,18 +13,19 @@
 // limitations under the License.
 
 use crate::api::{ComponentError, Result};
+use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::ErrorBody;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
 use std::sync::Arc;
 use tracing::Instrument;
+
 pub struct PluginApi {
     pub plugin_service:
         Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
@@ -96,7 +97,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.0.with_owner(DefaultPluginOwner))
+            .create_plugin(&DefaultPluginOwner, plugin.0.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -123,7 +124,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.with_owner(DefaultPluginOwner))
+            .create_plugin(&DefaultPluginOwner, plugin.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -150,7 +151,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.with_owner(DefaultPluginOwner))
+            .create_plugin(&DefaultPluginOwner, plugin.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

@@ -6,22 +6,23 @@ edition = "2021"
 [package.metadata.component.target]
 path = "wit-generated"
 
-[package.metadata.component.target.dependencies."auction:auction-client"]
-path = "wit-generated/deps/auction_auction-client"
+[package.metadata.component.target.dependencies]
+"wasi:io" = { path = "wit-generated/deps/io" }
+"wasi:clocks" = { path = "wit-generated/deps/clocks" }
+"golem:rpc" = { path = "wit-generated/deps/golem-rpc" }
+"auction:auction-exports" = { path = "wit-generated/deps/auction_auction-exports" }
+"auction:auction-client" = { path = "wit-generated/deps/auction_auction-client" }
+"auction:registry-exports" = { path = "wit-generated/deps/auction_registry-exports" }
 
-[package.metadata.component.target.dependencies."auction:auction-exports"]
-path = "wit-generated/deps/auction_auction-exports"
+[package.metadata.component.bindings]
 
-[package.metadata.component.target.dependencies."auction:registry-exports"]
-path = "wit-generated/deps/auction_registry-exports"
-
-[package.metadata.component.target.dependencies."golem:rpc"]
-path = "wit-generated/deps/wasm-rpc"
-
-[package.metadata.component.target.dependencies."wasi:io"]
-path = "wit-generated/deps/io"
+[package.metadata.component.bindings.with]
+"wasi:io/poll@0.2.0" = "golem_rust::wasm_rpc::wasi::io::poll"
+"wasi:clocks/wall-clock@0.2.0" = "golem_rust::wasm_rpc::wasi::clocks::wall_clock"
+"golem:rpc/types@0.2.0" = "golem_rust::wasm_rpc::golem_rpc_0_2_x::types"
 
 [dependencies]
+golem-rust = { version = "1.4.0" }
 once_cell = "1.19.0"
 rand = "0.8.5"
 
@@ -30,7 +31,7 @@ version = "1.7.0"
 features = ["v4", "serde"]
 
 [dependencies.wit-bindgen-rt]
-version = "0.26.0"
+version = "0.40.0"
 features = ["bitflags"]
 
 [lib]

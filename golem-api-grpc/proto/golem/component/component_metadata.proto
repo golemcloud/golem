@@ -12,4 +12,7 @@ message ComponentMetadata {
   repeated Producers producers = 2;
   repeated LinearMemory memories = 3;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 4;
+  bytes binary_wit = 5;
+  optional string root_package_name = 6;
+  optional string root_package_version = 7;
 }
