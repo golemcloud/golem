@@ -270,7 +270,7 @@ mod internal {
     pub(crate) fn handle_tuple(tuple_elems: &[Expr], current_tuple_type: &mut InferredType) {
         let mut new_inferred_type = vec![];
 
-        for current_tuple_elem in tuple_elems.iter().rev() {
+        for current_tuple_elem in tuple_elems.iter() {
             new_inferred_type.push(current_tuple_elem.inferred_type());
         }
 
@@ -547,7 +547,8 @@ mod type_pull_up_tests {
                 InferredType::Record(vec![("bar".to_string(), InferredType::U64)]),
             )]));
         let select_expr = Expr::select_field(record_identifier, "foo", None);
-        let expr = Expr::select_field(select_expr, "bar", None);
+        let mut expr = Expr::select_field(select_expr, "bar", None);
+        expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::U64);
     }
 
