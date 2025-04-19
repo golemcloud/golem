@@ -14,7 +14,6 @@
 
 use crate::rib_type_error::RibTypeError;
 use crate::{CustomError, Expr, ExprVisitor, InferredType};
-use std::collections::VecDeque;
 
 pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
@@ -170,62 +169,14 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<Expr, RibTypeError> {
             Expr::Record {
                 exprs,
                 inferred_type,
-                source_span,
                 ..
-            } => {
-                internal::handle_record(
-                    exprs,
-                    inferred_type,
-                    &mut inferred_expr_stack,
-                    source_span,
-                );
-            }
+            } => internal::handle_record(exprs, inferred_type),
+
             Expr::Literal { .. } => {}
             Expr::Number { .. } => {}
             Expr::Boolean { .. } => {}
-            Expr::And {
-                lhs,
-                rhs,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                internal::handle_comparison_op(
-                    lhs,
-                    rhs,
-                    &InferredType::Bool,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::And {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                );
-            }
-
-            Expr::Or {
-                lhs,
-                rhs,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                internal::handle_comparison_op(
-                    lhs,
-                    rhs,
-                    &InferredType::Bool,
-                    &mut inferred_expr_stack,
-                    |a, b, c| Expr::Or {
-                        lhs: a,
-                        rhs: b,
-                        inferred_type: c,
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                    },
-                );
-            }
+            Expr::And { .. } => {}
+            Expr::Or { .. } => {}
 
             Expr::Call {
                 call_type,
@@ -875,32 +826,15 @@ mod internal {
 
     pub(crate) fn handle_record(
         current_expr_list: &[(String, Box<Expr>)],
-        current_inferred_type: &InferredType,
-        inferred_expr_stack: &mut VecDeque<Expr>,
-        source_span: &SourceSpan,
+        record_type: &mut InferredType,
     ) {
-        let mut ordered_types = vec![];
-        let mut new_exprs = vec![];
+        let mut field_and_types = vec![];
 
-        for (field, expr) in current_expr_list.iter().rev() {
-            let expr: Expr = inferred_expr_stack
-                .pop_front()
-                .unwrap_or(expr.deref().clone());
-            ordered_types.push((field.clone(), expr.inferred_type()));
-            new_exprs.push((field.clone(), expr.clone()));
+        for (field, expr) in current_expr_list.iter() {
+            field_and_types.push((field.clone(), expr.inferred_type()));
         }
+        *record_type = record_type.merge(InferredType::Record(field_and_types));
 
-        new_exprs.reverse();
-        ordered_types.reverse();
-
-        let new_record_type = InferredType::Record(ordered_types);
-
-        let merged_record_type = current_inferred_type.merge(new_record_type);
-
-        let new_record = Expr::record(new_exprs.to_vec())
-            .with_inferred_type(merged_record_type)
-            .with_source_span(source_span.clone());
-        inferred_expr_stack.push_front(new_record);
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
