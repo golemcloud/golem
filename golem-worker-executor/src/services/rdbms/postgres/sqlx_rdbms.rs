@@ -23,7 +23,7 @@ use crate::services::rdbms::sqlx_common::{
     QueryParamsBinder, SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms,
 };
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey,
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey,
     RdbmsTransactionIdentifier,
 };
 use async_trait::async_trait;
@@ -35,10 +35,10 @@ use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{
-    Column, ConnectOptions, Database, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef,
+    Column, ConnectOptions, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef,
 };
 use sqlx_core::executor::Executor;
-use std::fmt::{format, Display};
+use std::fmt::Display;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -46,7 +46,8 @@ use try_match::try_match;
 use uuid::Uuid;
 
 pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
-    let sqlx: SqlxRdbms<PostgresType, sqlx::postgres::Postgres> = SqlxRdbms::new(config);
+    let ts = Arc::new(PostgresDbTransactionSupport::new(config.query));
+    let sqlx: SqlxRdbms<PostgresType, sqlx::postgres::Postgres> = SqlxRdbms::new(ts, config);
     Arc::new(sqlx)
 }
 

@@ -17,7 +17,7 @@ use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::mysql::{MysqlType, MYSQL};
 use crate::services::rdbms::sqlx_common::{
     create_db_result, DbTransactionStatus, PoolCreator, QueryExecutor, QueryParamsBinder,
-    SqlxDbResultStream, SqlxRdbms, TransactionTableRepo,
+    SqlxDbResultStream, SqlxRdbms, TableDbTransactionSupport, TransactionTableRepo,
 };
 use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
 use async_trait::async_trait;
@@ -29,7 +29,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
-    let sqlx: SqlxRdbms<MysqlType, sqlx::mysql::MySql> = SqlxRdbms::new(config);
+    let ts = Arc::new(TableDbTransactionSupport::new(config.query));
+    let sqlx: SqlxRdbms<MysqlType, sqlx::mysql::MySql> = SqlxRdbms::new(ts, config);
     Arc::new(sqlx)
 }
 
@@ -51,7 +52,7 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
             .await
             .map_err(Error::connection_failure)?;
 
-        // MysqlType::create_transaction_table(&pool).await?;
+        MysqlType::create_transaction_table(&pool).await?;
 
         Ok(pool)
     }
@@ -65,11 +66,13 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     {
         let query = sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS golem_transactions {
-                `id` VARCHAR(50) PRIMARY KEY,
-                `status` VARCHAR(25) NOT NULL,
-                 created_on TIMESTAP NOT NULL DEFAULT NOW(),
-            }
+            CREATE TABLE IF NOT EXISTS golem_transactions
+            (
+                id             varchar(50)    NOT NULL,
+                status         varchar(25)    NOT NULL,
+                created_on     timestamp NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (id)
+            );
             "#,
         );
         let _res = query
@@ -83,7 +86,9 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
-        let query = sqlx::query("INSERT INTO golem_transactions(id) VALUES (?)").bind(id);
+        let query = sqlx::query("INSERT INTO golem_transactions(id, status) VALUES (?, ?)")
+            .bind(id)
+            .bind(DbTransactionStatus::InProgress.to_string());
         let _res = query
             .execute(executor)
             .await

@@ -48,6 +48,7 @@ where
     config: RdbmsConfig,
     pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
     pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<WorkerId>>,
+    transaction_support: Arc<dyn DbTransactionSupport<T, DB> + Sync + Send>,
 }
 
 impl<T, DB> SqlxRdbms<T, DB>
@@ -56,7 +57,10 @@ where
     DB: Database,
     RdbmsPoolKey: PoolCreator<DB>,
 {
-    pub(crate) fn new(config: RdbmsConfig) -> Self {
+    pub(crate) fn new(
+        transaction_support: Arc<dyn DbTransactionSupport<T, DB> + Sync + Send>,
+        config: RdbmsConfig,
+    ) -> Self {
         let rdbms_type = T::default();
         let cache_name: &'static str = format!("rdbms-{}-pools", rdbms_type).leak();
         let pool_cache = Cache::new(
@@ -74,6 +78,7 @@ where
             config,
             pool_cache,
             pool_workers_cache,
+            transaction_support,
         }
     }
 
@@ -312,25 +317,28 @@ where
 
         let result = {
             let pool = self.get_or_create(key, worker_id).await?;
-
-            let mut connection = pool
-                .deref()
-                .acquire()
+            self.transaction_support
+                .begin(key, pool)
                 .await
-                .map_err(Error::connection_failure)?;
-            DB::TransactionManager::begin(&mut connection, None)
-                .await
-                .map_err(Error::query_execution_failure)?;
-
-            let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> =
-                Arc::new(SqlxDbTransaction::new(
-                    RdbmsTransactionIdentifier::generate(),
-                    key.clone(),
-                    connection,
-                    self.config.query,
-                ));
-
-            Ok(db_transaction)
+                .map(|r| r as Arc<dyn DbTransaction<T> + Send + Sync>)
+            // let mut connection = pool
+            //     .deref()
+            //     .acquire()
+            //     .await
+            //     .map_err(Error::connection_failure)?;
+            // DB::TransactionManager::begin(&mut connection)
+            //     .await
+            //     .map_err(Error::query_execution_failure)?;
+            //
+            // let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> =
+            //     Arc::new(SqlxDbTransaction::new(
+            //         RdbmsTransactionIdentifier::generate(),
+            //         key.clone(),
+            //         connection,
+            //         self.config.query,
+            //     ));
+            //
+            // Ok(db_transaction)
         };
 
         let result = result.map_err(|e| {
