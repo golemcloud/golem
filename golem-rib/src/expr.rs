@@ -861,10 +861,7 @@ impl Expr {
         )
     }
 
-    pub fn bind_global_variable_types(
-        &self,
-        type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<Self, RibTypeError> {
+    pub fn bind_global_variable_types(&mut self, type_spec: &Vec<GlobalVariableTypeSpec>) {
         type_inference::bind_global_variable_types(self, type_spec)
     }
 
@@ -1108,7 +1105,7 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.identify_instance_creation(function_type_registry)?;
-        *self = self.bind_global_variable_types(type_spec)?;
+        self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();

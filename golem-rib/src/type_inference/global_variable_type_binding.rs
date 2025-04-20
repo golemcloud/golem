@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_type_error::RibTypeError;
 use crate::type_checker::Path;
 use crate::{Expr, InferredType, VariableId};
 
@@ -42,17 +41,10 @@ impl GlobalVariableTypeSpec {
     }
 }
 
-pub fn bind_global_variable_types(
-    expr: &Expr,
-    type_pecs: &Vec<GlobalVariableTypeSpec>,
-) -> Result<Expr, RibTypeError> {
-    let mut result_expr = expr.clone();
-
+pub fn bind_global_variable_types(expr: &mut Expr, type_pecs: &Vec<GlobalVariableTypeSpec>) {
     for spec in type_pecs {
-        internal::override_type(&mut result_expr, spec);
+        internal::override_type(expr, spec);
     }
-
-    Ok(result_expr)
 }
 
 mod internal {
@@ -100,21 +92,27 @@ mod internal {
                     source_span,
                     type_annotation,
                 } => {
+                    // yes
                     if let Some(previous_identifier) = &previous_expr {
                         if inner_expr.as_ref() == previous_identifier {
-                            if path.current() == Some(&PathElem::Field(field.to_string())) {
-                                path.progress();
-
-                                if path.is_empty() {
-                                    *inferred_type = type_spec.inferred_type.clone();
-                                } else {
+                            if path.is_empty() {
+                                *inferred_type = type_spec.inferred_type.clone();
+                                previous_expr = None;
+                                path = set_path(type_spec);
+                            } else {
+                                // path is finished
+                                if path.current() == Some(&PathElem::Field(field.to_string())) {
+                                    path.progress();
                                     previous_expr = Some(Expr::SelectField {
                                         expr: inner_expr.clone(),
                                         field: field.clone(),
                                         type_annotation: type_annotation.clone(),
-                                        inferred_type: type_spec.inferred_type.clone(),
+                                        inferred_type: inferred_type.clone(),
                                         source_span: source_span.clone(),
                                     });
+                                } else {
+                                    previous_expr = None;
+                                    path = set_path(type_spec);
                                 }
                             }
                         } else {
@@ -139,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_override_types_1() {
-        let expr = Expr::from_text(
+        let mut expr = Expr::from_text(
             r#"
             foo
         "#,
@@ -152,17 +150,16 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
+        expr.bind_global_variable_types(&vec![type_spec]);
 
         let expected = Expr::identifier_global("foo", None).with_inferred_type(InferredType::Str);
 
-        assert_eq!(result, expected);
+        assert_eq!(expr, expected);
     }
 
-    // Be able to
     #[test]
     fn test_override_types_2() {
-        let expr = Expr::from_text(
+        let mut expr = Expr::from_text(
             r#"
             foo.bar.baz
         "#,
@@ -175,7 +172,7 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
+        expr.bind_global_variable_types(&vec![type_spec]);
 
         let expected = Expr::select_field(
             Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
@@ -184,12 +181,12 @@ mod tests {
         )
         .with_inferred_type(InferredType::Str);
 
-        assert_eq!(result, expected);
+        assert_eq!(expr, expected);
     }
 
     #[test]
     fn test_override_types_3() {
-        let expr = Expr::from_text(
+        let mut expr = Expr::from_text(
             r#"
             foo.bar.baz
         "#,
@@ -202,7 +199,7 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
+        expr.bind_global_variable_types(&vec![type_spec]);
 
         let expected = Expr::select_field(
             Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
@@ -211,12 +208,12 @@ mod tests {
         )
         .with_inferred_type(InferredType::Str);
 
-        assert_eq!(result, expected);
+        assert_eq!(expr, expected);
     }
 
     #[test]
     fn test_override_types_4() {
-        let expr = Expr::from_text(
+        let mut expr = Expr::from_text(
             r#"
             foo.bar.baz
         "#,
@@ -229,7 +226,7 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
+        expr.bind_global_variable_types(&vec![type_spec]);
 
         let expected = Expr::select_field(
             Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
@@ -238,7 +235,7 @@ mod tests {
         )
         .with_inferred_type(InferredType::Str);
 
-        assert_eq!(result, expected);
+        assert_eq!(expr, expected);
     }
 
     #[test]
