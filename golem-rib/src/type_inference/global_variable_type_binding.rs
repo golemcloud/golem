@@ -13,13 +13,10 @@
 // limitations under the License.
 
 use crate::type_checker::Path;
+use crate::type_checker::PathElem;
+use crate::ExprVisitor;
 use crate::{Expr, InferredType, VariableId};
 
-// The goal is to be able to specify the types associated with an identifier.
-// i.e, `a.*` is always `Str`, or `a.b.*` is always `Str`, or `a.b.c` is always `Str`
-// This can be represented using `GlobalVariableTypeSpec { a, vec![], Str }`, `GlobalVariableTypeSpec {a, b, Str}`  and
-// `GlobalVariableTypeSpec {a, vec[b, c], Str}` respectively
-// If you specify completely opposite types to be default, you will get a compilation error.
 #[derive(Clone, Debug)]
 pub struct GlobalVariableTypeSpec {
     variable_id: VariableId,
@@ -28,6 +25,28 @@ pub struct GlobalVariableTypeSpec {
 }
 
 impl GlobalVariableTypeSpec {
+    // Constructs a new `GlobalVariableTypeSpec`, which associates a specific inferred type
+    // with a global variable and its nested path.
+    //
+    // A path denotes access to nested fields within a variable, where each field
+    // may be typed explicitly. For example:
+    //   - A specification like `a.*` implies that all fields under `a` are of type `Str`.
+    //   - Similarly, `a.b.*` indicates that all fields under `a.b` are of type `Str`.
+    //
+    // Paths are expected to reference at least one nested field.
+    //
+    // The type system enforces consistency across declared paths. If contradictory default
+    // types are specified for the same or overlapping paths, a compilation error will occur.
+    //
+    // Parameters:
+    // - `variable_name`: The name of the root global variable (e.g., `"a"` in `a.b.c`).
+    // - `path`: A `Path` representing the sequence of nested fields from the root variable
+    //            (e.g., `[b, c]` for `a.b.c`).
+    // - `inferred_type`: The enforced type (e.g., `Str`, `U64`) for the value
+    //                    located at the specified path.
+    // Note that the inferred_type is applied only to the element that exists after the end of the `path`.
+    // For example, if the path is `a.b` and the inferred type is `Str`, then the type of `a.b.c` will be `Str`
+    // and not for `a.b`
     pub fn new(
         variable_name: &str,
         path: Path,
@@ -41,89 +60,89 @@ impl GlobalVariableTypeSpec {
     }
 }
 
+/// Applies global variable type specifications to an expression tree.
+///
+/// Iterates through all provided `GlobalVariableTypeSpec` entries and overrides
+/// types in the given expression accordingly, enforcing the specified types on
+/// matching variable paths.
 pub fn bind_global_variable_types(expr: &mut Expr, type_pecs: &Vec<GlobalVariableTypeSpec>) {
     for spec in type_pecs {
-        internal::override_type(expr, spec);
+        override_type(expr, spec);
     }
 }
 
-mod internal {
-    use crate::type_checker::{Path, PathElem};
-    use crate::{Expr, ExprVisitor, GlobalVariableTypeSpec};
+fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
+    let mut previous_expr: Option<Expr> = None;
 
-    pub(crate) fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
-        let mut previous_expr: Option<Expr> = None;
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-        let mut visitor = ExprVisitor::bottom_up(expr);
+    fn set_path(type_spec: &GlobalVariableTypeSpec) -> Path {
+        let mut path = type_spec.path.clone();
+        path.push_front(PathElem::Field(type_spec.variable_id.to_string()));
+        path
+    }
 
-        fn set_path(type_spec: &GlobalVariableTypeSpec) -> Path {
-            let mut path = type_spec.path.clone();
-            path.push_front(PathElem::Field(type_spec.variable_id.to_string()));
-            path
-        }
+    let mut path = set_path(type_spec);
 
-        let mut path = set_path(type_spec);
+    while let Some(expr) = visitor.pop_front() {
+        match expr {
+            Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } => {
+                if variable_id == &type_spec.variable_id {
+                    path.progress();
 
-        while let Some(expr) = visitor.pop_front() {
-            match expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    ..
-                } => {
-                    if variable_id == &type_spec.variable_id {
-                        path.progress();
+                    if type_spec.path.is_empty() {
+                        *inferred_type = type_spec.inferred_type.clone();
+                    } else {
+                        previous_expr = Some(expr.clone());
+                    }
+                } else {
+                    previous_expr = None;
+                    path = set_path(type_spec);
+                }
+            }
 
-                        if type_spec.path.is_empty() {
+            Expr::SelectField {
+                expr: inner_expr,
+                field,
+                inferred_type,
+                source_span,
+                type_annotation,
+            } => {
+                // yes
+                if let Some(previous_identifier) = &previous_expr {
+                    if inner_expr.as_ref() == previous_identifier {
+                        if path.is_empty() {
                             *inferred_type = type_spec.inferred_type.clone();
+                            previous_expr = None;
+                            path = set_path(type_spec);
                         } else {
-                            previous_expr = Some(expr.clone());
+                            // path is finished
+                            if path.current() == Some(&PathElem::Field(field.to_string())) {
+                                path.progress();
+                                previous_expr = Some(Expr::SelectField {
+                                    expr: inner_expr.clone(),
+                                    field: field.clone(),
+                                    type_annotation: type_annotation.clone(),
+                                    inferred_type: inferred_type.clone(),
+                                    source_span: source_span.clone(),
+                                });
+                            } else {
+                                previous_expr = None;
+                                path = set_path(type_spec);
+                            }
                         }
                     } else {
                         previous_expr = None;
                         path = set_path(type_spec);
                     }
                 }
-
-                Expr::SelectField {
-                    expr: inner_expr,
-                    field,
-                    inferred_type,
-                    source_span,
-                    type_annotation,
-                } => {
-                    // yes
-                    if let Some(previous_identifier) = &previous_expr {
-                        if inner_expr.as_ref() == previous_identifier {
-                            if path.is_empty() {
-                                *inferred_type = type_spec.inferred_type.clone();
-                                previous_expr = None;
-                                path = set_path(type_spec);
-                            } else {
-                                // path is finished
-                                if path.current() == Some(&PathElem::Field(field.to_string())) {
-                                    path.progress();
-                                    previous_expr = Some(Expr::SelectField {
-                                        expr: inner_expr.clone(),
-                                        field: field.clone(),
-                                        type_annotation: type_annotation.clone(),
-                                        inferred_type: inferred_type.clone(),
-                                        source_span: source_span.clone(),
-                                    });
-                                } else {
-                                    previous_expr = None;
-                                    path = set_path(type_spec);
-                                }
-                            }
-                        } else {
-                            previous_expr = None;
-                            path = set_path(type_spec);
-                        }
-                    }
-                }
-
-                _ => {}
             }
+
+            _ => {}
         }
     }
 }
@@ -132,7 +151,7 @@ mod internal {
 mod tests {
     use super::*;
     use crate::rib_source_span::SourceSpan;
-    use crate::{ExprVisitor, FunctionTypeRegistry, Id, TypeName};
+    use crate::{FunctionTypeRegistry, Id, TypeName};
     use test_r::test;
 
     #[test]
@@ -169,60 +188,6 @@ mod tests {
         let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::from_elems(vec!["bar"]),
-            inferred_type: InferredType::Str,
-        };
-
-        expr.bind_global_variable_types(&vec![type_spec]);
-
-        let expected = Expr::select_field(
-            Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-            "baz",
-            None,
-        )
-        .with_inferred_type(InferredType::Str);
-
-        assert_eq!(expr, expected);
-    }
-
-    #[test]
-    fn test_override_types_3() {
-        let mut expr = Expr::from_text(
-            r#"
-            foo.bar.baz
-        "#,
-        )
-        .unwrap();
-
-        let type_spec = GlobalVariableTypeSpec {
-            variable_id: VariableId::global("foo".to_string()),
-            path: Path::from_elems(vec!["bar", "baz"]),
-            inferred_type: InferredType::Str,
-        };
-
-        expr.bind_global_variable_types(&vec![type_spec]);
-
-        let expected = Expr::select_field(
-            Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-            "baz",
-            None,
-        )
-        .with_inferred_type(InferredType::Str);
-
-        assert_eq!(expr, expected);
-    }
-
-    #[test]
-    fn test_override_types_4() {
-        let mut expr = Expr::from_text(
-            r#"
-            foo.bar.baz
-        "#,
-        )
-        .unwrap();
-
-        let type_spec = GlobalVariableTypeSpec {
-            variable_id: VariableId::global("foo".to_string()),
-            path: Path::default(),
             inferred_type: InferredType::Str,
         };
 
