@@ -72,17 +72,17 @@ pub fn bind_global_variable_types(expr: &mut Expr, type_pecs: &Vec<GlobalVariabl
 }
 
 fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
-    let mut previous_expr: Option<Expr> = None;
-
     let mut visitor = ExprVisitor::bottom_up(expr);
 
-    fn set_path(type_spec: &GlobalVariableTypeSpec) -> Path {
-        let mut path = type_spec.path.clone();
-        path.push_front(PathElem::Field(type_spec.variable_id.to_string()));
-        path
-    }
+    // The full path starts from the variable_id and goes through the `path`
+    let full_path = {
+        let mut p = type_spec.path.clone();
+        p.push_front(PathElem::Field(type_spec.variable_id.to_string()));
+        p
+    };
 
-    let mut path = set_path(type_spec);
+    let mut current_path = full_path.clone();
+    let mut previous_expr_ptr: Option<*const Expr> = None;
 
     while let Some(expr) = visitor.pop_front() {
         match expr {
@@ -92,16 +92,18 @@ fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
                 ..
             } => {
                 if variable_id == &type_spec.variable_id {
-                    path.progress();
+                    current_path.progress();
 
                     if type_spec.path.is_empty() {
                         *inferred_type = type_spec.inferred_type.clone();
+                        previous_expr_ptr = None;
+                        current_path = full_path.clone();
                     } else {
-                        previous_expr = Some(expr.clone());
+                        previous_expr_ptr = Some(expr as *const _);
                     }
                 } else {
-                    previous_expr = None;
-                    path = set_path(type_spec);
+                    previous_expr_ptr = None;
+                    current_path = full_path.clone();
                 }
             }
 
@@ -109,40 +111,34 @@ fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
                 expr: inner_expr,
                 field,
                 inferred_type,
-                source_span,
-                type_annotation,
+                ..
             } => {
-                // yes
-                if let Some(previous_identifier) = &previous_expr {
-                    if inner_expr.as_ref() == previous_identifier {
-                        if path.is_empty() {
+                if let Some(prev_ptr) = previous_expr_ptr {
+                    if (inner_expr.as_ref() as *const _) == prev_ptr {
+                        if current_path.is_empty() {
                             *inferred_type = type_spec.inferred_type.clone();
-                            previous_expr = None;
-                            path = set_path(type_spec);
+                            previous_expr_ptr = None;
+                            current_path = full_path.clone();
+                        } else if current_path.current()
+                            == Some(&PathElem::Field(field.to_string()))
+                        {
+                            current_path.progress();
+                            previous_expr_ptr = Some(expr as *const _);
                         } else {
-                            // path is finished
-                            if path.current() == Some(&PathElem::Field(field.to_string())) {
-                                path.progress();
-                                previous_expr = Some(Expr::SelectField {
-                                    expr: inner_expr.clone(),
-                                    field: field.clone(),
-                                    type_annotation: type_annotation.clone(),
-                                    inferred_type: inferred_type.clone(),
-                                    source_span: source_span.clone(),
-                                });
-                            } else {
-                                previous_expr = None;
-                                path = set_path(type_spec);
-                            }
+                            previous_expr_ptr = None;
+                            current_path = full_path.clone();
                         }
                     } else {
-                        previous_expr = None;
-                        path = set_path(type_spec);
+                        previous_expr_ptr = None;
+                        current_path = full_path.clone();
                     }
                 }
             }
 
-            _ => {}
+            _ => {
+                previous_expr_ptr = None;
+                current_path = full_path.clone();
+            }
         }
     }
 }
