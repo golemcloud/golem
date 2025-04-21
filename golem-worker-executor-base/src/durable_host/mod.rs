@@ -120,7 +120,7 @@ pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
-mod durability;
+pub mod durability;
 mod dynamic_linking;
 pub mod rdbms;
 mod replay_state;

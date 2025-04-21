@@ -34,6 +34,7 @@ wasmtime::component::bindgen!({
         "golem:api/host/get-workers": super::durable_host::golem::v1x::GetWorkersEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
+        "golem:durability/durability/lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
         "golem:rpc": golem_wasm_rpc::golem_rpc_0_2_x,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:io/poll/pollable": golem_wasm_rpc::wasi::io::poll::Pollable,
