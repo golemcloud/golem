@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{ArmPattern, Expr, ExprVisitor, MatchArm, MatchIdentifier, VariableId};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 // This function will assign ids to variables declared with `let` expressions,
 // and propagate these ids to the usage sites (`Expr::Identifier` nodes).
@@ -200,10 +200,9 @@ fn update_all_identifier_in_lhs_expr(
     global_arm_index: usize,
 ) -> Vec<MatchIdentifier> {
     let mut identifier_names = vec![];
-    let mut queue = VecDeque::new();
-    queue.push_front(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = queue.pop_front() {
+    while let Some(expr) = visitor.pop_front() {
         match expr {
             Expr::Identifier { variable_id, .. } => {
                 let match_identifier = MatchIdentifier::new(variable_id.name(), global_arm_index);
@@ -213,9 +212,7 @@ fn update_all_identifier_in_lhs_expr(
                 *variable_id = new_variable_id;
             }
 
-            _ => {
-                expr.visit_children_mut_top_down(&mut queue);
-            }
+            _ => {}
         }
     }
 
