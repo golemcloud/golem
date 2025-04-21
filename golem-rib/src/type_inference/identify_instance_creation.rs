@@ -44,19 +44,16 @@ mod internal {
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
     ) -> Result<(), RibTypeError> {
-        let mut queue = VecDeque::new();
-        queue.push_front(expr);
-        while let Some(expr) = queue.pop_front() {
-            let expr_copied = expr.clone();
+        let mut visitor = ExprVisitor::bottom_up(expr);
+
+        while let Some(expr) = visitor.pop_front() {
             match expr {
                 Expr::Let {
                     variable_id, expr, ..
                 } => {
-                    queue.push_front(expr);
-
                     if variable_id.name() == "instance" {
                         return Err(CustomError::new(
-                            &expr_copied,
+                            &expr,
                             "`instance` is a reserved keyword and cannot be used as a variable.",
                         )
                         .into());
@@ -65,7 +62,7 @@ mod internal {
                 Expr::Identifier { variable_id, .. } => {
                     if variable_id.name() == "instance" && variable_id.is_global() {
                         let err = CustomError::new(
-                            &expr_copied,
+                            &expr,
                              "`instance` is a reserved keyword"
                         ).with_help_message(
                             "use `instance()` instead of `instance` to create an ephemeral worker instance."
@@ -77,7 +74,7 @@ mod internal {
                     }
                 }
 
-                _ => expr.visit_children_mut_top_down(&mut queue),
+                _ => {}
             }
         }
 
@@ -102,28 +99,38 @@ mod internal {
                     inferred_type,
                     ..
                 } => {
+
                     let type_parameter = generic_type_parameter
                         .as_ref()
                         .map(|gtp| {
                             TypeParameter::from_str(&gtp.value).map_err(|err| {
                                 FunctionCallError::invalid_generic_type_parameter(
-                                    expr, &gtp.value, err,
+                                    &gtp.value, err,
                                 )
                             })
                         })
                         .transpose()?;
 
-                    let instance_creation_details =
-                        get_instance_creation_details(call_type, args.clone());
-                    // We change the call_type to instance creation which hardly does anything during interpretation
-                    if let Some(instance_creation_details) = instance_creation_details {
-                        *call_type = CallType::InstanceCreation(instance_creation_details.clone());
+                    let instance_creation_type =
+                        get_instance_creation_details(call_type, args);
+
+                    if let Some(instance_creation_details) = instance_creation_type {
+                        let worker_name = instance_creation_details.clone().worker_name().cloned();
+
+                        *call_type = CallType::InstanceCreation(instance_creation_details);
+
                         let new_instance_type = InstanceType::from(
                             function_type_registry,
-                            instance_creation_details.worker_name(),
+                            worker_name.as_ref(),
                             type_parameter,
-                            expr,
-                        )?;
+                        ).map_err(|err| {
+                            RibTypeError::from(CustomError::new(
+                                &expr,
+                                format!("Failed to create instance type: {}", err),
+                            ))
+
+                        })?;
+
                         *inferred_type = InferredType::Instance {
                             instance_type: Box::new(new_instance_type),
                         }
@@ -139,7 +146,7 @@ mod internal {
 
     fn get_instance_creation_details(
         call_type: &CallType,
-        args: Vec<Expr>,
+        args: &Vec<Expr>,
     ) -> Option<InstanceCreationType> {
         match call_type {
             CallType::Function { function_name, .. } => {

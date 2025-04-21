@@ -45,11 +45,11 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
             match &inferred_type {
                 InferredType::Instance { instance_type } => {
                     let type_parameter = generic_type_parameter
-                        .clone()
+                        .as_ref()
                         .map(|gtp| {
                             TypeParameter::from_str(&gtp.value).map_err(|err| {
                                 FunctionCallError::invalid_generic_type_parameter(
-                                    expr, &gtp.value, err,
+                                    &gtp.value, err,
                                 )
                             })
                         })

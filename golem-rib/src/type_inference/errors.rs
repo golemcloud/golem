@@ -311,7 +311,6 @@ pub enum FunctionCallError {
 
     InvalidGenericTypeParameter {
         generic_type_parameter: String,
-        expr: Expr,
         message: String,
     },
 
@@ -336,13 +335,11 @@ impl FunctionCallError {
         }
     }
     pub fn invalid_generic_type_parameter(
-        expr: &Expr,
         generic_type_parameter: &str,
         message: impl AsRef<str>,
     ) -> FunctionCallError {
         FunctionCallError::InvalidGenericTypeParameter {
             generic_type_parameter: generic_type_parameter.to_string(),
-            expr: expr.clone(),
             message: message.as_ref().to_string(),
         }
     }
@@ -363,7 +360,7 @@ pub struct CustomError {
 impl CustomError {
     pub fn new(expr: &Expr, message: impl AsRef<str>) -> CustomError {
         CustomError {
-            expr: expr.clone(),
+            expr:expr.clone(),
             message: message.as_ref().to_string(),
             help_message: Vec::new(),
         }

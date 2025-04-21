@@ -213,11 +213,10 @@ impl From<FunctionCallError> for RibTypeError {
             },
             FunctionCallError::InvalidGenericTypeParameter {
                 generic_type_parameter,
-                expr,
                 message,
             } => RibTypeError {
-                cause: format!("invalid generic type parameter {}", generic_type_parameter),
-                expr,
+                cause: "invalid type parameter".to_string(),
+                expr: Expr::literal(generic_type_parameter),
                 immediate_parent: None,
                 additional_error_details: vec![message],
                 help_messages: vec![],

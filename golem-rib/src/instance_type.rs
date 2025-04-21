@@ -405,9 +405,8 @@ impl InstanceType {
         registry: &FunctionTypeRegistry,
         worker_name: Option<&Expr>,
         type_parameter: Option<TypeParameter>,
-        expr: &Expr,
-    ) -> Result<InstanceType, RibTypeError> {
-        let function_dict = FunctionDictionary::from_function_type_registry(registry, expr)?;
+    ) -> Result<InstanceType, String> {
+        let function_dict = FunctionDictionary::from_function_type_registry(registry)?;
 
         match type_parameter {
             None => Ok(InstanceType::Global {
@@ -513,11 +512,11 @@ pub struct ResourceMethod {
     resource_name: String,
 }
 
+
 impl FunctionDictionary {
     pub fn from_function_type_registry(
         registry: &FunctionTypeRegistry,
-        expr: &Expr,
-    ) -> Result<FunctionDictionary, RibTypeError> {
+    ) -> Result<FunctionDictionary, String> {
         let mut map = vec![];
 
         for (key, value) in registry.types.iter() {
@@ -527,12 +526,7 @@ impl FunctionDictionary {
                     return_types,
                 } => match key {
                     RegistryKey::FunctionName(function_name) => {
-                        let function_name = resolve_function_name(None, None, &function_name)
-                            .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                function_name: function_name.clone(),
-                                message: err,
-                                expr: expr.clone(),
-                            })?;
+                        let function_name = resolve_function_name(None, None, &function_name)?;
 
                         map.push((
                             function_name,
@@ -550,23 +544,13 @@ impl FunctionDictionary {
                         interface_name,
                         function_name,
                     } => {
-                        let type_parameter = TypeParameter::from_str(interface_name.as_str())
-                            .map_err(|err| FunctionCallError::InvalidGenericTypeParameter {
-                                generic_type_parameter: interface_name.clone(),
-                                expr: expr.clone(),
-                                message: err,
-                            })?;
+                        let type_parameter = TypeParameter::from_str(interface_name.as_str())?;
 
                         let interface_name = type_parameter.get_interface_name();
                         let package_name = type_parameter.get_package_name();
 
                         let function_name =
-                            resolve_function_name(package_name, interface_name, &function_name)
-                                .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                    function_name: function_name.clone(),
-                                    message: err,
-                                    expr: expr.clone(),
-                                })?;
+                            resolve_function_name(package_name, interface_name, &function_name)?;
 
                         map.push((
                             function_name,
@@ -619,7 +603,7 @@ fn resolve_function_name(
                 function_name: function_name.to_string(),
             })),
 
-            Err(e) => Err(format!("Invalid function call. {}", e)),
+            Err(e) => Err(format!("invalid function call. {}", e)),
         },
     }
 }
