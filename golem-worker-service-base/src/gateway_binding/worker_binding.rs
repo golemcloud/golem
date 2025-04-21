@@ -17,7 +17,10 @@ use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 use golem_common::model::component::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{Expr, RibByteCode, RibError, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
+use rib::{
+    Expr, RibByteCode, RibCompilationError, RibInputTypeInfo, RibOutputTypeInfo,
+    WorkerFunctionsInRib,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,7 +45,7 @@ impl WorkerBindingCompiled {
     pub fn from_raw_worker_binding(
         gateway_worker_binding: &WorkerBinding,
         export_metadata: &[AnalysedExport],
-    ) -> Result<Self, RibError> {
+    ) -> Result<Self, RibCompilationError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
             .worker_name
             .clone()
@@ -120,7 +123,7 @@ impl ResponseMappingCompiled {
     pub fn from_response_mapping(
         response_mapping: &ResponseMapping,
         exports: &[AnalysedExport],
-    ) -> Result<Self, RibError> {
+    ) -> Result<Self, RibCompilationError> {
         let response_compiled =
             DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, exports)?;
 

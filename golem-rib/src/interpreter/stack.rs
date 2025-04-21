@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::GetLiteralValue;
+use crate::interpreter::rib_runtime_error::{
+    empty_stack, insufficient_stack_items, type_mismatch_with_value,
+};
+use crate::{internal_corrupted_state, GetLiteralValue, RibInterpreterResult, TypeHint};
 use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
@@ -50,9 +53,8 @@ impl InterpreterStack {
         self.stack.pop()
     }
 
-    pub fn try_pop(&mut self) -> Result<RibInterpreterStackValue, String> {
-        self.pop()
-            .ok_or("internal error: failed to pop value from the interpreter stack".to_string())
+    pub fn try_pop(&mut self) -> RibInterpreterResult<RibInterpreterStackValue> {
+        self.pop().ok_or(empty_stack())
     }
 
     pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
@@ -72,25 +74,24 @@ impl InterpreterStack {
         Some(results)
     }
 
-    pub fn try_pop_n(&mut self, n: usize) -> Result<Vec<RibInterpreterStackValue>, String> {
-        self.pop_n(n).ok_or(format!(
-            "internal error: failed to pop {} values from the interpreter stack",
-            n
-        ))
+    pub fn try_pop_n(&mut self, n: usize) -> RibInterpreterResult<Vec<RibInterpreterStackValue>> {
+        self.pop_n(n).ok_or(insufficient_stack_items(n))
     }
 
-    pub fn try_pop_n_val(&mut self, n: usize) -> Result<Vec<ValueAndType>, String> {
+    pub fn try_pop_n_val(&mut self, n: usize) -> RibInterpreterResult<Vec<ValueAndType>> {
         let stack_values = self.try_pop_n(n)?;
 
         stack_values
             .iter()
             .map(|interpreter_result| {
-                interpreter_result.get_val().ok_or(format!(
-                    "internal error: failed to convert last {} in the stack to ValueAndType",
-                    n
-                ))
+                interpreter_result
+                    .get_val()
+                    .ok_or(internal_corrupted_state!(
+                        "failed to convert last {} in the stack to ValueAndType",
+                        n
+                    ))
             })
-            .collect::<Result<Vec<ValueAndType>, String>>()
+            .collect::<RibInterpreterResult<Vec<ValueAndType>>>()
     }
 
     pub fn pop_str(&mut self) -> Option<String> {
@@ -107,15 +108,15 @@ impl InterpreterStack {
         self.stack.pop().and_then(|v| v.get_val())
     }
 
-    pub fn try_pop_val(&mut self) -> Result<ValueAndType, String> {
+    pub fn try_pop_val(&mut self) -> RibInterpreterResult<ValueAndType> {
         self.try_pop().and_then(|x| {
-            x.get_val().ok_or(
-                "internal error: failed to pop ValueAndType from the interpreter stack".to_string(),
-            )
+            x.get_val().ok_or(internal_corrupted_state!(
+                "failed to pop ValueAndType from the interpreter stack"
+            ))
         })
     }
 
-    pub fn try_pop_record(&mut self) -> Result<(Vec<Value>, TypeRecord), String> {
+    pub fn try_pop_record(&mut self) -> RibInterpreterResult<(Vec<Value>, TypeRecord)> {
         let value = self.try_pop_val()?;
 
         match value {
@@ -123,15 +124,21 @@ impl InterpreterStack {
                 value: Value::Record(field_values),
                 typ: AnalysedType::Record(typ),
             } => Ok((field_values, typ)),
-            _ => Err("internal error: failed to pop a record from the interpreter".to_string()),
+            _ => Err(type_mismatch_with_value(
+                vec![TypeHint::Record(None)],
+                value.value.clone(),
+            )),
         }
     }
 
-    pub fn try_pop_bool(&mut self) -> Result<bool, String> {
+    pub fn try_pop_bool(&mut self) -> RibInterpreterResult<bool> {
         self.try_pop_val().and_then(|val| {
-            val.get_literal().and_then(|x| x.get_bool()).ok_or(
-                "internal error: failed to pop boolean from the interpreter stack".to_string(),
-            )
+            val.get_literal()
+                .and_then(|x| x.get_bool())
+                .ok_or(type_mismatch_with_value(
+                    vec![TypeHint::Boolean],
+                    val.value.clone(),
+                ))
         })
     }
 
@@ -150,15 +157,15 @@ impl InterpreterStack {
         self.stack.push(RibInterpreterStackValue::val(element));
     }
 
-    pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> Result<(), String> {
+    pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> RibInterpreterResult<()> {
         let sink = self.pop();
         // sink always followed by an iterator
-        let possible_iterator = self
-            .pop()
-            .ok_or("Failed to get the iterator before pushing to the sink")?;
+        let possible_iterator = self.pop().ok_or(empty_stack())?;
 
         if !possible_iterator.is_iterator() {
-            return Err("Expecting an the iterator before pushing to the sink".to_string());
+            return Err(internal_corrupted_state!(
+                "failed to obtain an iterator from the stack",
+            ));
         }
 
         match sink {
@@ -169,9 +176,9 @@ impl InterpreterStack {
                 Ok(())
             }
 
-            a => Err(format!(
-                "internal error: failed to push values to sink {:?}",
-                a
+            non_sink_value => Err(internal_corrupted_state!(
+                "failed to push values to sink {:?}",
+                non_sink_value
             )),
         }
     }
@@ -181,12 +188,12 @@ impl InterpreterStack {
         variant_name: String,
         optional_variant_value: Option<Value>,
         cases: Vec<NameOptionTypePair>,
-    ) -> Result<(), String> {
+    ) -> RibInterpreterResult<()> {
         let case_idx = cases
             .iter()
             .position(|case| case.name == variant_name)
-            .ok_or(format!(
-                "internal Error: Failed to find the variant {} in the cases",
+            .ok_or(internal_corrupted_state!(
+                "failed to find the variant {}",
                 variant_name
             ))? as u32;
 
@@ -202,12 +209,9 @@ impl InterpreterStack {
         Ok(())
     }
 
-    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> Result<(), String> {
+    pub fn push_enum(&mut self, enum_name: String, cases: Vec<String>) -> RibInterpreterResult<()> {
         let idx = cases.iter().position(|x| x == &enum_name).ok_or_else(|| {
-            format!(
-                "internal error: failed to find the enum {} in the cases",
-                enum_name
-            )
+            internal_corrupted_state!("failed to find the enum {} in the cases", enum_name)
         })? as u32;
         self.push_val(ValueAndType::new(
             Value::Enum(idx),

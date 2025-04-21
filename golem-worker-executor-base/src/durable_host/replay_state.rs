@@ -73,6 +73,7 @@ impl ReplayState {
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
+        result.skip_forward().await;
         result
     }
 
@@ -190,50 +191,7 @@ impl ReplayState {
         let entry = self.internal_get_next_oplog_entry().await;
 
         if condition(&entry) {
-            // Skipping hint entries and recording log entries
-            let mut logs = HashSet::new();
-            while self.is_replay() {
-                let saved_replay_idx = self.last_replayed_index.get();
-                let saved_next_skipped_region = {
-                    let internal = self.internal.read().await;
-                    internal.next_skipped_region.clone()
-                };
-                let entry = self.internal_get_next_oplog_entry().await;
-                match self.should_skip_to(&entry).await {
-                    Some(last_read_idx) => {
-                        // Recording seen log entries
-                        if let OplogEntry::Log {
-                            level,
-                            context,
-                            message,
-                            ..
-                        } = &entry
-                        {
-                            let hash = Self::hash_log_entry(*level, context, message);
-                            logs.insert(hash);
-                        }
-
-                        // Moving the replay pointer
-                        self.last_replayed_index.set(last_read_idx);
-                        // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
-                    }
-                    None => {
-                        // We've found the first non-hint entry after the first read one,
-                        // so we move everything back the last position (saved_replay_idx), including
-                        // possibly skipped regions.
-                        self.last_replayed_index.set(saved_replay_idx);
-                        let mut internal = self.internal.write().await;
-                        // TODO: cache the last hint entry to avoid reading it again
-                        internal.next_skipped_region = saved_next_skipped_region;
-                        break;
-                    }
-                }
-            }
-
-            self.has_seen_logs
-                .store(!logs.is_empty(), Ordering::Relaxed);
-            let mut internal = self.internal.write().await;
-            internal.log_hashes = logs;
+            self.skip_forward().await;
 
             Some((read_idx, entry))
         } else {
@@ -243,6 +201,53 @@ impl ReplayState {
 
             None
         }
+    }
+
+    async fn skip_forward(&mut self) {
+        // Skipping hint entries and recording log entries
+        let mut logs = HashSet::new();
+        while self.is_replay() {
+            let saved_replay_idx = self.last_replayed_index.get();
+            let saved_next_skipped_region = {
+                let internal = self.internal.read().await;
+                internal.next_skipped_region.clone()
+            };
+            let entry = self.internal_get_next_oplog_entry().await;
+            match self.should_skip_to(&entry).await {
+                Some(last_read_idx) => {
+                    // Recording seen log entries
+                    if let OplogEntry::Log {
+                        level,
+                        context,
+                        message,
+                        ..
+                    } = &entry
+                    {
+                        let hash = Self::hash_log_entry(*level, context, message);
+                        logs.insert(hash);
+                    }
+
+                    // Moving the replay pointer
+                    self.last_replayed_index.set(last_read_idx);
+                    // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
+                }
+                None => {
+                    // We've found the first non-hint entry after the first read one,
+                    // so we move everything back the last position (saved_replay_idx), including
+                    // possibly skipped regions.
+                    self.last_replayed_index.set(saved_replay_idx);
+                    let mut internal = self.internal.write().await;
+                    // TODO: cache the last hint entry to avoid reading it again
+                    internal.next_skipped_region = saved_next_skipped_region;
+                    break;
+                }
+            }
+        }
+
+        self.has_seen_logs
+            .store(!logs.is_empty(), Ordering::Relaxed);
+        let mut internal = self.internal.write().await;
+        internal.log_hashes = logs;
     }
 
     /// Returns true if the given log entry has been seen since the last non-hint oplog entry.

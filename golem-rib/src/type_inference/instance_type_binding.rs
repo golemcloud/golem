@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredType};
-use std::collections::{HashMap, VecDeque};
+use crate::{Expr, ExprVisitor, InferredType};
+use std::collections::HashMap;
 
 // This is about binding the `InstanceType` to the corresponding identifiers.
 //
@@ -32,8 +32,7 @@ use std::collections::{HashMap, VecDeque};
 //
 // In this case `foo` in `foo` should have inferred type of `String` and not `InstanceType`
 pub fn bind_instance_types(expr: &mut Expr) {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+    let mut queue = ExprVisitor::top_down(expr);
 
     let mut instance_variables = HashMap::new();
 
@@ -45,8 +44,6 @@ pub fn bind_instance_types(expr: &mut Expr) {
                 if let InferredType::Instance { instance_type } = expr.inferred_type() {
                     instance_variables.insert(variable_id.clone(), instance_type);
                 }
-
-                queue.push_front(expr)
             }
             Expr::Identifier {
                 variable_id,
@@ -60,7 +57,7 @@ pub fn bind_instance_types(expr: &mut Expr) {
                 }
             }
 
-            _ => expr.visit_children_mut_top_down(&mut queue),
+            _ => {}
         }
     }
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub use call_arguments_inference::*;
-pub use enum_resolution::*;
+pub use enum_inference::*;
 pub use errors::*;
 pub use expr_visitor::*;
 pub use global_input_inference::*;
@@ -27,20 +27,18 @@ pub use inferred_expr::*;
 pub use instance_type_binding::*;
 pub use rib_input_type::*;
 pub use rib_output_type::*;
-pub(crate) use type_annotation_binding::*;
+pub use type_annotation_binding::*;
+pub use type_hint::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
 pub use type_reset::*;
 pub use type_unification::*;
-pub use variable_binding_let_assignment::*;
-pub use variable_binding_list_comprehension::*;
-pub use variable_binding_list_reduce::*;
-pub use variable_binding_pattern_match::*;
-pub use variant_resolution::*;
+pub use variable_binding::*;
+pub use variant_inference::*;
 pub use worker_function_invocation::*;
 
 mod call_arguments_inference;
-mod enum_resolution;
+mod enum_inference;
 mod errors;
 mod expr_visitor;
 mod global_input_inference;
@@ -55,16 +53,13 @@ mod instance_type_binding;
 mod rib_input_type;
 mod rib_output_type;
 mod type_annotation_binding;
-pub(crate) mod type_hint;
+mod type_hint;
 mod type_pull_up;
 mod type_push_down;
 mod type_reset;
 mod type_unification;
-mod variable_binding_let_assignment;
-mod variable_binding_list_comprehension;
-mod variable_binding_list_reduce;
-mod variable_binding_pattern_match;
-mod variant_resolution;
+mod variable_binding;
+mod variant_inference;
 mod worker_function_invocation;
 
 #[cfg(test)]
@@ -96,11 +91,8 @@ mod tests {
             "#;
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        let type_spec = GlobalVariableTypeSpec {
-            variable_id: VariableId::global("foo".to_string()),
-            path: Path::from_elems(vec![]),
-            inferred_type: InferredType::Str,
-        };
+        let type_spec =
+            GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::Str);
 
         let with_type_spec = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec]);
 
@@ -121,11 +113,11 @@ mod tests {
             "#;
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        let type_spec = GlobalVariableTypeSpec {
-            variable_id: VariableId::global("request".to_string()),
-            path: Path::from_elems(vec!["path"]),
-            inferred_type: InferredType::Str,
-        };
+        let type_spec = GlobalVariableTypeSpec::new(
+            "request",
+            Path::from_elems(vec!["path"]),
+            InferredType::Str,
+        );
 
         assert!(expr
             .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
@@ -143,16 +135,16 @@ mod tests {
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
         let type_spec = vec![
-            GlobalVariableTypeSpec {
-                variable_id: VariableId::global("request".to_string()),
-                path: Path::from_elems(vec!["path"]),
-                inferred_type: InferredType::Str,
-            },
-            GlobalVariableTypeSpec {
-                variable_id: VariableId::global("request".to_string()),
-                path: Path::from_elems(vec!["headers"]),
-                inferred_type: InferredType::Str,
-            },
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["path"]),
+                InferredType::Str,
+            ),
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["headers"]),
+                InferredType::Str,
+            ),
         ];
 
         assert!(expr
@@ -192,11 +184,8 @@ mod tests {
 
     #[test]
     fn test_inference_inline_type_annotation_2() {
-        let type_spec = GlobalVariableTypeSpec {
-            variable_id: VariableId::global("foo".to_string()),
-            path: Path::from_elems(vec!["bar"]),
-            inferred_type: InferredType::Str,
-        };
+        let type_spec =
+            GlobalVariableTypeSpec::new("foo", Path::from_elems(vec!["bar"]), InferredType::Str);
 
         // by default foo.bar.* will be inferred to be a string (given the above type spec) and
         // foo.bar.baz + 1u32 should fail compilation since we are adding string with a u32.
@@ -217,11 +206,8 @@ mod tests {
 
     #[test]
     fn test_inference_inline_type_annotation_3() {
-        let type_spec = GlobalVariableTypeSpec {
-            variable_id: VariableId::global("foo".to_string()),
-            path: Path::from_elems(vec![]),
-            inferred_type: InferredType::Str,
-        };
+        let type_spec =
+            GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::Str);
 
         // by default foo will be inferred to be a string (given the above type spec) and
         // foo + 1u32 should fail compilation since we are adding string with a u32.

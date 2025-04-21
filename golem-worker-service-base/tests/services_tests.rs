@@ -528,7 +528,7 @@ async fn test_deployment(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/1/foo/{user-id}",
-            "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let my-worker=instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = my-worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
+            "${ let userid: u64 = request.path.user-id; let res = if userid>100u64 then 0u64 else 1u64; let my-worker=instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = my-worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
         ).await;
 
@@ -536,7 +536,7 @@ async fn test_deployment(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/2/foo/{user-id}",
-            "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker-name = \"shopping-cart-${res}\"; let my-worker = instance[golem:it](worker-name); let not_found: u64 = 401; let success: u64 = 200; let result = my-worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
+            "${ let userid: u64 = request.path.user-id; let res = if userid>100u64 then 0u64 else 1u64; let worker-name = \"shopping-cart-${res}\"; let my-worker = instance[golem:it](worker-name); let not_found: u64 = 401; let success: u64 = 200; let result = my-worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             true,
         ).await;
     let def2 = HttpApiDefinitionRequest {
@@ -547,14 +547,14 @@ async fn test_deployment(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/3/foo/{user-id}?{id}",
-            "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
+            "${ let userid: u64 = request.path.user-id; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
         ).await;
     let def4 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/4/foo/{user-id}",
-            "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
+            "${ let userid: u64 = request.path.user-id; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance[golem:it](\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents[api](\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
         ).await;
 
@@ -667,7 +667,7 @@ async fn test_deployment(
         .unwrap();
 
     let deployment = deployment_service
-        .get_by_site(&ApiSiteString("test.com".to_string()))
+        .get_by_site(&DefaultNamespace(), &ApiSiteString("test.com".to_string()))
         .await
         .unwrap();
     assert!(deployment.is_some());
@@ -744,7 +744,7 @@ async fn test_deployment(
     assert!(definitions.is_empty());
 
     let deployment = deployment_service
-        .get_by_site(&ApiSiteString("test.com".to_string()))
+        .get_by_site(&DefaultNamespace(), &ApiSiteString("test.com".to_string()))
         .await
         .unwrap();
     assert!(deployment.is_none());
@@ -885,21 +885,21 @@ async fn test_definition_crud(
     let def1v1 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get1",
+            "/api/{user}/get1",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
         ).await;
     let def1v1_upd = get_api_definition(
             &def1v1.id.0,
             "0.0.1",
-            "/api/get1/1",
+            "/api/{user}/get1/1",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
         ).await;
     let def1v2 = get_api_definition(
             &def1v1.id.0,
             "0.0.2",
-            "/api/get1/2",
+            "/api/{user}/get1/2",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
         ).await;
@@ -907,7 +907,7 @@ async fn test_definition_crud(
     let def1v2_upd = get_api_definition(
             &def1v1.id.0,
             "0.0.2",
-            "/api/get1/22",
+            "/api/{user}/get1/22",
             "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
         ).await;
@@ -915,7 +915,7 @@ async fn test_definition_crud(
     let def1v3 = get_api_definition(
         "test-def;;",
         "0.0.2",
-        "/api/get1/22v3",
+        "/api/{user}/get1/22v3",
         "${ let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; let worker = instance(\"shopping-cart-${res}\"); let not_found: u64 = 401; let success: u64 = 200; let result = worker.get-cart-contents(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
         true,
     ).await;

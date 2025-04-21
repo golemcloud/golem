@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
+use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
@@ -106,13 +106,6 @@ impl WorkerDetails {
             }
             None => Ok(RibInput::default()),
         }
-    }
-
-    fn worker_id(&self) -> Option<WorkerId> {
-        self.worker_name.as_ref().map(|wn| WorkerId {
-            component_id: self.component_id.clone(),
-            worker_name: wn.clone(),
-        })
     }
 }
 

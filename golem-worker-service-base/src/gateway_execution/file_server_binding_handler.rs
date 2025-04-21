@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::empty_worker_metadata;
-use crate::gateway_execution::WorkerDetails;
 use crate::getter::{get_response_headers_or_default, get_status_code};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::worker::{WorkerResult, WorkerService, WorkerServiceError};
@@ -22,7 +21,7 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::Stream;
 use futures_util::TryStreamExt;
-use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
+use golem_common::model::{ComponentFilePath, ComponentId, TargetWorkerId, WorkerId};
 use golem_service_base::auth::{DefaultNamespace, GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::Component;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -39,8 +38,9 @@ use std::sync::Arc;
 pub trait FileServerBindingHandler<Namespace> {
     async fn handle_file_server_binding_result(
         &self,
-        namespace: &Namespace,
-        worker_detail: &WorkerDetails,
+        namespace: Namespace,
+        worker_name: Option<&str>,
+        component_id: &ComponentId,
         original_result: RibResult,
     ) -> FileServerBindingResult;
 }
@@ -244,15 +244,22 @@ impl<Namespace: GolemNamespace, AuthCtx> DefaultFileServerBindingHandler<Namespa
     async fn get_component_metadata(
         &self,
         namespace: &Namespace,
-        worker_detail: &WorkerDetails,
+        worker_name: Option<&str>,
+        component_id: &ComponentId,
     ) -> Result<Component, FileServerBindingError> {
         // Two cases, we either have an existing worker or not (either not configured or not existing).
         // If there is no worker we need use the lastest component version, if there is none we need to use the exact component version
         // the worker is using. Not doing that would make the blob_storage optimization for read-only files visible to users.
 
-        let component_version = if let Some(worker_id) = worker_detail.worker_id() {
+        let component_version = if let Some(worker_name) = worker_name {
             self.worker_service
-                .get_worker_version(&worker_id, namespace)
+                .get_worker_version(
+                    &WorkerId {
+                        component_id: component_id.clone(),
+                        worker_name: worker_name.to_string(),
+                    },
+                    namespace,
+                )
                 .await?
         } else {
             None
@@ -260,16 +267,12 @@ impl<Namespace: GolemNamespace, AuthCtx> DefaultFileServerBindingHandler<Namespa
 
         let component_metadata = if let Some(component_version) = component_version {
             self.component_service
-                .get_by_version(
-                    &worker_detail.component_id,
-                    component_version,
-                    &self.auth_ctx,
-                )
+                .get_by_version(component_id, component_version, &self.auth_ctx)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         } else {
             self.component_service
-                .get_latest(&worker_detail.component_id, &self.auth_ctx)
+                .get_latest(component_id, &self.auth_ctx)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         };
@@ -284,15 +287,16 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> FileServerBindingHandler<
 {
     async fn handle_file_server_binding_result(
         &self,
-        namespace: &Namespace,
-        worker_detail: &WorkerDetails,
+        namespace: Namespace,
+        worker_name: Option<&str>,
+        component_id: &ComponentId,
         original_result: RibResult,
     ) -> FileServerBindingResult {
         let binding_details = FileServerBindingDetails::from_rib_result(original_result)
             .map_err(FileServerBindingError::InvalidRibResult)?;
 
         let component_metadata = self
-            .get_component_metadata(namespace, worker_detail)
+            .get_component_metadata(&namespace, worker_name, component_id)
             .await?;
 
         // if we are serving a read_only file, we can just go straight to the blob storage.
@@ -328,25 +332,24 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> FileServerBindingHandler<
         } else {
             // Read write files need to be fetched from a running worker.
             // Ask the worker service to get the file contents. If no worker is running, one will be started.
-            let worker_name_opt_validated = worker_detail
-                .worker_name
+            let worker_name_opt_validated = worker_name
                 .as_ref()
-                .map(|w| WorkerId::validate_worker_name(w).map(|_| w.clone()))
+                .map(|&w| WorkerId::validate_worker_name(w).map(|_| w.to_string()))
                 .transpose()
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!("Invalid worker name: {}", e))
                 })?;
 
-            let component_id = worker_detail.component_id.clone();
+            let component_id = component_id.clone();
 
             let worker_id = TargetWorkerId {
                 component_id,
-                worker_name: worker_name_opt_validated.clone(),
+                worker_name: worker_name_opt_validated.map(|w| w.to_string()),
             };
 
             let stream = self
                 .worker_service
-                .get_file_contents(&worker_id, binding_details.file_path.clone(), namespace)
+                .get_file_contents(&worker_id, binding_details.file_path.clone(), &namespace)
                 .await?;
 
             let stream =

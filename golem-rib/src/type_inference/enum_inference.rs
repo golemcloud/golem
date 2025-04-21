@@ -24,7 +24,6 @@ mod internal {
     use crate::call_type::CallType;
     use crate::{Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue};
     use golem_wasm_ast::analysis::AnalysedType;
-    use std::collections::VecDeque;
 
     pub(crate) fn convert_identifiers_to_enum_function_calls(
         expr: &mut Expr,
@@ -61,31 +60,27 @@ mod internal {
         function_type_registry: &FunctionTypeRegistry,
     ) -> EnumInfo {
         let mut enum_cases = vec![];
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    ..
-                } => {
-                    // If variable is local, it takes priority over being a global enum
-                    if !variable_id.is_local() {
-                        // Retrieve the possible no-arg variant from the registry
-                        let key = RegistryKey::FunctionName(variable_id.name().clone());
-                        if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) =
-                            function_type_registry.types.get(&key)
-                        {
-                            enum_cases.push(variable_id.name());
-                            *inferred_type = inferred_type
-                                .merge(AnalysedType::Enum(typed_enum.clone()).clone().into());
-                        }
+        while let Some(expr) = visitor.pop_back() {
+            if let Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } = expr
+            {
+                // If variable is local, it takes priority over being a global enum
+                if !variable_id.is_local() {
+                    // Retrieve the possible no-arg variant from the registry
+                    let key = RegistryKey::FunctionName(variable_id.name().clone());
+                    if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) =
+                        function_type_registry.types.get(&key)
+                    {
+                        enum_cases.push(variable_id.name());
+                        *inferred_type =
+                            inferred_type.merge((&AnalysedType::Enum(typed_enum.clone())).into());
                     }
                 }
-
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
             }
         }
 

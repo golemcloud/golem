@@ -129,6 +129,12 @@ pub enum ActualType {
 }
 
 impl TypeMismatchError {
+    pub fn with_parent_expr(&self, expr: &Expr) -> TypeMismatchError {
+        let mut mismatch_error: TypeMismatchError = self.clone();
+        mismatch_error.parent_expr = Some(expr.clone());
+        mismatch_error
+    }
+
     pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
         mismatch_error.expected_type = ExpectedType::AnalysedType(expected_type.clone());
@@ -305,7 +311,6 @@ pub enum FunctionCallError {
 
     InvalidGenericTypeParameter {
         generic_type_parameter: String,
-        expr: Expr,
         message: String,
     },
 
@@ -315,6 +320,29 @@ pub enum FunctionCallError {
         expected: usize,
         provided: usize,
     },
+}
+
+impl FunctionCallError {
+    pub fn invalid_function_call(
+        function_name: &str,
+        expr: &Expr,
+        message: impl AsRef<str>,
+    ) -> FunctionCallError {
+        FunctionCallError::InvalidFunctionCall {
+            function_name: function_name.to_string(),
+            expr: expr.clone(),
+            message: message.as_ref().to_string(),
+        }
+    }
+    pub fn invalid_generic_type_parameter(
+        generic_type_parameter: &str,
+        message: impl AsRef<str>,
+    ) -> FunctionCallError {
+        FunctionCallError::InvalidGenericTypeParameter {
+            generic_type_parameter: generic_type_parameter.to_string(),
+            message: message.as_ref().to_string(),
+        }
+    }
 }
 
 pub struct InvalidWorkerName {
