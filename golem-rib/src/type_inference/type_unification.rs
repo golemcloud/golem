@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{
-    ArmPattern, Expr, ExprVisitor, InferredType, UnResolvedTypesError,
-};
+use crate::{Expr, ExprVisitor, InferredType, UnResolvedTypesError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
@@ -344,36 +342,35 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 generic_type_parameter,
             } => {
                 match call_type {
-                    CallType::InstanceCreation(instance_creation) => match inferred_type {
-                        InferredType::Instance { .. } => {}
+                    CallType::InstanceCreation(_) => {
+                        let unified_inferred_type = inferred_type.unify();
 
-                        inferred_type => {
-                            let unified_inferred_type = inferred_type.unify();
-
-                            match unified_inferred_type {
-                                Ok(unified_type) => *inferred_type = unified_type,
-                                Err(e) => {
-                                    return Err(UnResolvedTypesError::from(
-                                        &Expr::Call {
-                                            call_type: call_type.clone(),
-                                            args: args.clone(),
-                                            inferred_type: InferredType::Unknown,
-                                            source_span: source_span.clone(),
-                                            generic_type_parameter: generic_type_parameter.clone(),
-                                            type_annotation: type_annotation.clone(),
-                                        },
-                                        None,
-                                    )
-                                    .with_additional_error_detail(format!(
-                                        "cannot determine the type of instance creation {}",
-                                        e
-                                    )));
-                                }
+                        match unified_inferred_type {
+                            Ok(unified_type) => *inferred_type = unified_type,
+                            Err(e) => {
+                                return Err(UnResolvedTypesError::from(
+                                    &Expr::Call {
+                                        call_type: call_type.clone(),
+                                        args: args.clone(),
+                                        inferred_type: InferredType::Unknown,
+                                        source_span: source_span.clone(),
+                                        generic_type_parameter: generic_type_parameter.clone(),
+                                        type_annotation: type_annotation.clone(),
+                                    },
+                                    None,
+                                )
+                                .with_additional_error_detail(format!(
+                                    "cannot determine the type of instance creation {}",
+                                    e
+                                )));
                             }
                         }
-                    },
+                    }
                     // Make sure worker expression in function
-                    CallType::Function { function_name, worker } => {
+                    CallType::Function {
+                        function_name,
+                        worker,
+                    } => {
                         let unified_inferred_type = inferred_type.unify();
 
                         match unified_inferred_type {
@@ -576,8 +573,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        let expr =
-                            expr.unwrap().with_source_span(source_span.clone());
+                        let expr = expr.unwrap().with_source_span(source_span.clone());
 
                         return Err(UnResolvedTypesError::from(&expr, None)
                             .with_additional_error_detail(format!(
@@ -738,65 +734,4 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
     }
 
     Ok(())
-}
-
-mod internal {
-    use crate::{ArmPattern, Expr, InferredType, UnResolvedTypesError};
-
-    pub(crate) fn handle_math_op<'a>(
-        inferred_type: &mut InferredType,
-        expr: &Expr,
-    ) -> Result<(), UnResolvedTypesError> {
-        let unified_inferred_type = inferred_type.unify();
-
-        match unified_inferred_type {
-            Ok(unified_type) => *inferred_type = unified_type,
-            Err(e) => {
-                return Err(UnResolvedTypesError::from(expr, None)
-                    .with_additional_error_detail(format!("invalid math operation, {}", e)))
-            }
-        }
-
-        Ok(())
-    }
-
-    // Push any existence of expr in arm patterns to queue
-    pub(crate) fn push_arm_pattern_expr<'a>(
-        arm_pattern: &'a mut ArmPattern,
-        queue: &mut Vec<&'a mut Expr>,
-    ) {
-        match arm_pattern {
-            ArmPattern::Literal(expr) => {
-                queue.push(expr);
-            }
-            ArmPattern::As(_, pattern) => {
-                push_arm_pattern_expr(pattern, queue);
-            }
-            ArmPattern::Constructor(_, patterns) => {
-                for pattern in patterns {
-                    push_arm_pattern_expr(pattern, queue);
-                }
-            }
-
-            ArmPattern::TupleConstructor(patterns) => {
-                for pattern in patterns {
-                    push_arm_pattern_expr(pattern, queue);
-                }
-            }
-
-            ArmPattern::ListConstructor(patterns) => {
-                for pattern in patterns {
-                    push_arm_pattern_expr(pattern, queue);
-                }
-            }
-
-            ArmPattern::RecordConstructor(fields) => {
-                for (_, pattern) in fields {
-                    push_arm_pattern_expr(pattern, queue);
-                }
-            }
-
-            ArmPattern::WildCard => {}
-        }
-    }
 }
