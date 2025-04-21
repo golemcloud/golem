@@ -813,7 +813,7 @@ impl From<&AnalysedType> for InferredType {
                     .collect(),
             ),
             AnalysedType::Flags(vs) => InferredType::Flags(vs.names.clone()),
-            AnalysedType::Enum(vs) => InferredType::from_enum_cases(&vs),
+            AnalysedType::Enum(vs) => InferredType::from_enum_cases(vs),
             AnalysedType::Option(t) => InferredType::Option(Box::new(t.inner.as_ref().into())),
             AnalysedType::Result(golem_wasm_ast::analysis::TypeResult { ok, err, .. }) => {
                 InferredType::Result {
@@ -821,7 +821,7 @@ impl From<&AnalysedType> for InferredType {
                     error: err.as_ref().map(|t| Box::new(t.as_ref().into())),
                 }
             }
-            AnalysedType::Variant(vs) => InferredType::from_variant_cases(&vs),
+            AnalysedType::Variant(vs) => InferredType::from_variant_cases(vs),
             AnalysedType::Handle(golem_wasm_ast::analysis::TypeHandle { resource_id, mode }) => {
                 InferredType::Resource {
                     resource_id: resource_id.0,

@@ -268,7 +268,7 @@ mod internal {
                         if let Some(function_result_type) = function_result_inferred_type {
                             *function_result_type = {
                                 if return_types.len() == 1 {
-                                    return_types.get(0).unwrap().into()
+                                    return_types.first().unwrap().into()
                                 } else {
                                     InferredType::Sequence(
                                         return_types.iter().map(|t| t.into()).collect(),

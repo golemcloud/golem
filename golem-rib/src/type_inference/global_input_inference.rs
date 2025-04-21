@@ -24,22 +24,20 @@ pub fn infer_global_inputs(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_back() {
-        match expr {
-            Expr::Identifier {
-                variable_id,
-                inferred_type,
-                ..
-            } => {
-                // We are only interested in global variables
-                if variable_id.is_global() {
-                    if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
-                        if let Some(all_of) = InferredType::all_of(types.clone()) {
-                            *inferred_type = inferred_type.merge(all_of)
-                        }
+        if let Expr::Identifier {
+            variable_id,
+            inferred_type,
+            ..
+        } = expr
+        {
+            // We are only interested in global variables
+            if variable_id.is_global() {
+                if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
+                    if let Some(all_of) = InferredType::all_of(types.clone()) {
+                        *inferred_type = inferred_type.merge(all_of)
                     }
                 }
             }
-            _ => {}
         }
     }
 }
@@ -49,28 +47,26 @@ fn collect_all_global_variables_type(expr: &mut Expr) -> HashMap<String, Vec<Inf
 
     let mut all_types_of_global_variables = HashMap::new();
     while let Some(expr) = visitor.pop_back() {
-        match expr {
-            Expr::Identifier {
-                variable_id,
-                inferred_type,
-                ..
-            } => {
-                if variable_id.is_global() {
-                    match all_types_of_global_variables.get_mut(&variable_id.name().clone()) {
-                        None => {
-                            all_types_of_global_variables
-                                .insert(variable_id.name(), vec![inferred_type.clone()]);
-                        }
+        if let Expr::Identifier {
+            variable_id,
+            inferred_type,
+            ..
+        } = expr
+        {
+            if variable_id.is_global() {
+                match all_types_of_global_variables.get_mut(&variable_id.name().clone()) {
+                    None => {
+                        all_types_of_global_variables
+                            .insert(variable_id.name(), vec![inferred_type.clone()]);
+                    }
 
-                        Some(v) => {
-                            if !v.contains(inferred_type) {
-                                v.push(inferred_type.clone())
-                            }
+                    Some(v) => {
+                        if !v.contains(inferred_type) {
+                            v.push(inferred_type.clone())
                         }
                     }
                 }
             }
-            _ => {}
         }
     }
 

@@ -485,11 +485,8 @@ impl FunctionDictionary {
                         map.push((
                             function_name,
                             FunctionType {
-                                parameter_types: parameter_types
-                                    .into_iter()
-                                    .map(|x| x.into())
-                                    .collect(),
-                                return_type: return_types.into_iter().map(|x| x.into()).collect(),
+                                parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
+                                return_type: return_types.iter().map(|x| x.into()).collect(),
                             },
                         ));
                     }
@@ -504,16 +501,13 @@ impl FunctionDictionary {
                         let package_name = type_parameter.get_package_name();
 
                         let function_name =
-                            resolve_function_name(package_name, interface_name, &function_name)?;
+                            resolve_function_name(package_name, interface_name, function_name)?;
 
                         map.push((
                             function_name,
                             FunctionType {
-                                parameter_types: parameter_types
-                                    .into_iter()
-                                    .map(|x| x.into())
-                                    .collect(),
-                                return_type: return_types.into_iter().map(|x| x.into()).collect(),
+                                parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
+                                return_type: return_types.iter().map(|x| x.into()).collect(),
                             },
                         ));
                     }

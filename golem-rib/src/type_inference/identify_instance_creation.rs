@@ -53,7 +53,7 @@ mod internal {
                 } => {
                     if variable_id.name() == "instance" {
                         return Err(CustomError::new(
-                            &expr,
+                            expr,
                             "`instance` is a reserved keyword and cannot be used as a variable.",
                         )
                         .into());
@@ -62,7 +62,7 @@ mod internal {
                 Expr::Identifier { variable_id, .. } => {
                     if variable_id.name() == "instance" && variable_id.is_global() {
                         let err = CustomError::new(
-                            &expr,
+                            expr,
                              "`instance` is a reserved keyword"
                         ).with_help_message(
                             "use `instance()` instead of `instance` to create an ephemeral worker instance."
@@ -91,57 +91,54 @@ mod internal {
         let mut visitor = ExprVisitor::bottom_up(expr);
 
         while let Some(expr) = visitor.pop_back() {
-            match expr {
-                Expr::Call {
-                    call_type,
-                    generic_type_parameter,
-                    args,
-                    inferred_type,
-                    source_span,
-                    type_annotation,
-                } => {
-                    let type_parameter = generic_type_parameter
-                        .as_ref()
-                        .map(|gtp| {
-                            TypeParameter::from_str(&gtp.value).map_err(|err| {
-                                FunctionCallError::invalid_generic_type_parameter(&gtp.value, err)
-                            })
+            if let Expr::Call {
+                call_type,
+                generic_type_parameter,
+                args,
+                inferred_type,
+                source_span,
+                type_annotation,
+            } = expr
+            {
+                let type_parameter = generic_type_parameter
+                    .as_ref()
+                    .map(|gtp| {
+                        TypeParameter::from_str(&gtp.value).map_err(|err| {
+                            FunctionCallError::invalid_generic_type_parameter(&gtp.value, err)
                         })
-                        .transpose()?;
+                    })
+                    .transpose()?;
 
-                    let instance_creation_type = get_instance_creation_details(call_type, args);
+                let instance_creation_type = get_instance_creation_details(call_type, args);
 
-                    if let Some(instance_creation_details) = instance_creation_type {
-                        let worker_name = instance_creation_details.clone().worker_name().cloned();
+                if let Some(instance_creation_details) = instance_creation_type {
+                    let worker_name = instance_creation_details.clone().worker_name().cloned();
 
-                        *call_type = CallType::InstanceCreation(instance_creation_details);
+                    *call_type = CallType::InstanceCreation(instance_creation_details);
 
-                        let new_instance_type = InstanceType::from(
-                            function_type_registry,
-                            worker_name.as_ref(),
-                            type_parameter,
-                        )
-                        .map_err(|err| {
-                            RibTypeError::from(CustomError::new(
-                                &Expr::Call {
-                                    call_type: call_type.clone(),
-                                    generic_type_parameter: None,
-                                    args: args.clone(),
-                                    inferred_type: InferredType::Unknown,
-                                    source_span: source_span.clone(),
-                                    type_annotation: type_annotation.clone(),
-                                },
-                                format!("Failed to create instance type: {}", err),
-                            ))
-                        })?;
+                    let new_instance_type = InstanceType::from(
+                        function_type_registry,
+                        worker_name.as_ref(),
+                        type_parameter,
+                    )
+                    .map_err(|err| {
+                        RibTypeError::from(CustomError::new(
+                            &Expr::Call {
+                                call_type: call_type.clone(),
+                                generic_type_parameter: None,
+                                args: args.clone(),
+                                inferred_type: InferredType::Unknown,
+                                source_span: source_span.clone(),
+                                type_annotation: type_annotation.clone(),
+                            },
+                            format!("Failed to create instance type: {}", err),
+                        ))
+                    })?;
 
-                        *inferred_type = InferredType::Instance {
-                            instance_type: Box::new(new_instance_type),
-                        }
+                    *inferred_type = InferredType::Instance {
+                        instance_type: Box::new(new_instance_type),
                     }
                 }
-
-                _ => {}
             }
         }
 
@@ -150,7 +147,7 @@ mod internal {
 
     fn get_instance_creation_details(
         call_type: &CallType,
-        args: &Vec<Expr>,
+        args: &[Expr],
     ) -> Option<InstanceCreationType> {
         match call_type {
             CallType::Function { function_name, .. } => {

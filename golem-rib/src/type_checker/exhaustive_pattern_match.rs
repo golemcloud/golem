@@ -26,16 +26,12 @@ pub fn check_exhaustive_pattern_match(
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_back() {
-        match expr {
-            Expr::PatternMatch { match_arms, .. } => {
-                let match_arm = match_arms
-                    .iter()
-                    .map(|p| p.arm_pattern.clone())
-                    .collect::<Vec<_>>();
-                internal::check_exhaustive_pattern_match(expr, &match_arm, function_type_registry)?;
-            }
-
-            _ => {}
+        if let Expr::PatternMatch { match_arms, .. } = expr {
+            let match_arm = match_arms
+                .iter()
+                .map(|p| p.arm_pattern.clone())
+                .collect::<Vec<_>>();
+            internal::check_exhaustive_pattern_match(expr, &match_arm, function_type_registry)?;
         }
     }
 

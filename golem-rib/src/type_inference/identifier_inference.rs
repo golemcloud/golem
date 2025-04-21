@@ -183,18 +183,15 @@ mod internal {
         let mut visitor = ExprVisitor::bottom_up(expr);
 
         while let Some(expr) = visitor.pop_back() {
-            match expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    ..
-                } => {
-                    if !inferred_type.is_unknown() {
-                        state.update(variable_id.clone(), inferred_type.clone())
-                    }
+            if let Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } = expr
+            {
+                if !inferred_type.is_unknown() {
+                    state.update(variable_id.clone(), inferred_type.clone())
                 }
-
-                _ => {}
             }
         }
     }
