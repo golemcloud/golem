@@ -66,7 +66,7 @@ impl ReplState {
         Self {
             byte_code: RibByteCode::default(),
             interpreter: Interpreter::new(
-                &RibInput::default(),
+                RibInput::default(),
                 invoke,
                 Some(InterpreterStack::default()),
                 Some(interpreter_env),

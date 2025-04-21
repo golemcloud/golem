@@ -16,8 +16,8 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
-use crate::rib_compilation_error::RibCompilationError;
 use crate::rib_source_span::SourceSpan;
+use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
@@ -861,10 +861,7 @@ impl Expr {
         )
     }
 
-    pub fn bind_global_variable_types(
-        &self,
-        type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<Self, RibCompilationError> {
+    pub fn bind_global_variable_types(&mut self, type_spec: &Vec<GlobalVariableTypeSpec>) {
         type_inference::bind_global_variable_types(self, type_spec)
     }
 
@@ -1086,7 +1083,7 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
@@ -1106,9 +1103,9 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         self.identify_instance_creation(function_type_registry)?;
-        *self = self.bind_global_variable_types(type_spec)?;
+        self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();
@@ -1120,7 +1117,7 @@ impl Expr {
         Ok(())
     }
 
-    pub fn resolve_method_calls(&mut self) -> Result<(), RibCompilationError> {
+    pub fn resolve_method_calls(&mut self) -> Result<(), RibTypeError> {
         self.bind_instance_types();
         self.infer_worker_function_invokes()?;
         Ok(())
@@ -1129,21 +1126,20 @@ impl Expr {
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
     // Not all phases of compilation will be part of this scan.
     // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
-    pub fn inference_scan(&mut self) -> Result<(), RibCompilationError> {
+    pub fn inference_scan(&mut self) -> Result<(), RibTypeError> {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
-        let expr = self.pull_types_up()?;
-        *self = expr;
+        self.pull_types_up()?;
         self.infer_global_inputs();
         Ok(())
     }
 
-    pub fn infer_orphan_literals(&mut self) -> Result<(), RibCompilationError> {
+    pub fn infer_orphan_literals(&mut self) -> Result<(), RibTypeError> {
         type_inference::infer_orphan_literals(self)
     }
 
-    pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibCompilationError> {
+    pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibTypeError> {
         type_inference::infer_worker_function_invokes(self)
     }
 
@@ -1176,19 +1172,19 @@ impl Expr {
     pub fn identify_instance_creation(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         type_inference::identify_instance_creation(self, function_type_registry)
     }
 
     pub fn infer_function_call_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         type_inference::infer_function_call_types(self, function_type_registry)?;
         Ok(())
     }
 
-    pub fn push_types_down(&mut self) -> Result<(), RibCompilationError> {
+    pub fn push_types_down(&mut self) -> Result<(), RibTypeError> {
         type_inference::push_types_down(self)
     }
 
@@ -1196,7 +1192,7 @@ impl Expr {
         type_inference::infer_all_identifiers(self)
     }
 
-    pub fn pull_types_up(&self) -> Result<Expr, RibCompilationError> {
+    pub fn pull_types_up(&mut self) -> Result<(), RibTypeError> {
         type_inference::type_pull_up(self)
     }
 
@@ -1211,11 +1207,11 @@ impl Expr {
     pub fn check_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         type_checker::type_check(self, function_type_registry)
     }
 
-    pub fn unify_types(&mut self) -> Result<(), RibCompilationError> {
+    pub fn unify_types(&mut self) -> Result<(), RibTypeError> {
         type_inference::unify_types(self)?;
         Ok(())
     }
@@ -1569,14 +1565,6 @@ impl Expr {
 
     pub fn infer_variants(&mut self, function_type_registry: &FunctionTypeRegistry) {
         type_inference::infer_variants(self, function_type_registry);
-    }
-
-    pub fn visit_children_bottom_up<'a>(&'a self, queue: &mut VecDeque<&'a Expr>) {
-        type_inference::visit_children_bottom_up(self, queue);
-    }
-
-    pub fn visit_children_mut_top_down<'a>(&'a mut self, queue: &mut VecDeque<&'a mut Expr>) {
-        type_inference::visit_children_mut_top_down(self, queue);
     }
 
     pub fn visit_children_mut_bottom_up<'a>(&'a mut self, queue: &mut VecDeque<&'a mut Expr>) {

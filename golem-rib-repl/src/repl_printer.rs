@@ -14,13 +14,13 @@
 
 use crate::rib_repl::ReplBootstrapError;
 use colored::Colorize;
-use rib::{RibError, RibResult};
+use rib::{RibCompilationError, RibResult, RibRuntimeError};
 
 pub trait ReplPrinter {
     fn print_rib_result(&self, result: &RibResult);
-    fn print_rib_error(&self, error: &RibError);
+    fn print_rib_compilation_error(&self, error: &RibCompilationError);
     fn print_bootstrap_error(&self, error: &ReplBootstrapError);
-    fn print_runtime_error(&self, error: &str);
+    fn print_rib_runtime_error(&self, error: &RibRuntimeError);
 }
 
 #[derive(Clone)]
@@ -31,12 +31,30 @@ impl ReplPrinter for DefaultReplResultPrinter {
         println!("{}", result.to_string().green());
     }
 
-    fn print_rib_error(&self, error: &RibError) {
+    fn print_rib_compilation_error(&self, error: &RibCompilationError) {
         match error {
-            RibError::InternalError(msg) => {
-                println!("{} {}", "[internal rib error]".red(), msg.red());
+            RibCompilationError::RibStaticAnalysisError(msg) => {
+                println!("{} {}", "[rib static analysis error]".red(), msg.red());
             }
-            RibError::RibCompilationError(compilation_error) => {
+
+            RibCompilationError::UnsupportedGlobalInput {
+                invalid_global_inputs: found,
+                valid_global_inputs: expected,
+            } => {
+                println!(
+                    "{} {} {}",
+                    "[unsupported input]".red(),
+                    "found:".yellow(),
+                    found.join(", ").white()
+                );
+                println!(
+                    "{} {} {}",
+                    "[supported inputs]".green(),
+                    "expected:".yellow(),
+                    expected.join(", ").white()
+                );
+            }
+            RibCompilationError::RibTypeError(compilation_error) => {
                 let cause = &compilation_error.cause;
                 let position = compilation_error.expr.source_span().start_column();
 
@@ -56,8 +74,15 @@ impl ReplPrinter for DefaultReplResultPrinter {
                     }
                 }
             }
-            RibError::InvalidRibScript(script) => {
+            RibCompilationError::InvalidSyntax(script) => {
                 println!("{} {}", "[invalid script]".red(), script.white());
+            }
+            RibCompilationError::ByteCodeGenerationFail(error) => {
+                println!(
+                    "{} {}",
+                    "[internal bytecode generation error]".red(),
+                    error.to_string().red()
+                );
             }
         }
     }
@@ -86,7 +111,7 @@ impl ReplPrinter for DefaultReplResultPrinter {
         }
     }
 
-    fn print_runtime_error(&self, error: &str) {
-        println!("{} {}", "[runtime error]".red(), error.white());
+    fn print_rib_runtime_error(&self, error: &RibRuntimeError) {
+        println!("{} {}", "[runtime error]".red(), error.to_string().white());
     }
 }

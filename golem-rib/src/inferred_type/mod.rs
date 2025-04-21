@@ -16,7 +16,7 @@ pub(crate) use flatten::*;
 mod flatten;
 mod unification;
 use crate::instance_type::InstanceType;
-use crate::type_inference::type_hint::GetTypeHint;
+use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
@@ -667,7 +667,7 @@ impl InferredType {
             .map(|name_type_pair| {
                 (
                     name_type_pair.name.clone(),
-                    name_type_pair.typ.clone().map(|t| t.into()),
+                    name_type_pair.typ.as_ref().map(|t| t.into()),
                 )
             })
             .collect();
@@ -786,8 +786,8 @@ impl TryFrom<InferredType> for AnalysedType {
     }
 }
 
-impl From<AnalysedType> for InferredType {
-    fn from(analysed_type: AnalysedType) -> Self {
+impl From<&AnalysedType> for InferredType {
+    fn from(analysed_type: &AnalysedType) -> Self {
         match analysed_type {
             AnalysedType::Bool(_) => InferredType::Bool,
             AnalysedType::S8(_) => InferredType::S8,
@@ -802,26 +802,26 @@ impl From<AnalysedType> for InferredType {
             AnalysedType::F64(_) => InferredType::F64,
             AnalysedType::Chr(_) => InferredType::Chr,
             AnalysedType::Str(_) => InferredType::Str,
-            AnalysedType::List(t) => InferredType::List(Box::new((*t.inner).into())),
+            AnalysedType::List(t) => InferredType::List(Box::new(t.inner.as_ref().into())),
             AnalysedType::Tuple(ts) => {
-                InferredType::Tuple(ts.items.into_iter().map(|t| t.into()).collect())
+                InferredType::Tuple(ts.items.iter().map(|t| t.into()).collect())
             }
             AnalysedType::Record(fs) => InferredType::Record(
                 fs.fields
-                    .into_iter()
-                    .map(|name_type| (name_type.name, name_type.typ.into()))
+                    .iter()
+                    .map(|name_type| (name_type.name.clone(), (&name_type.typ).into()))
                     .collect(),
             ),
-            AnalysedType::Flags(vs) => InferredType::Flags(vs.names),
-            AnalysedType::Enum(vs) => InferredType::from_enum_cases(&vs),
-            AnalysedType::Option(t) => InferredType::Option(Box::new((*t.inner).into())),
+            AnalysedType::Flags(vs) => InferredType::Flags(vs.names.clone()),
+            AnalysedType::Enum(vs) => InferredType::from_enum_cases(vs),
+            AnalysedType::Option(t) => InferredType::Option(Box::new(t.inner.as_ref().into())),
             AnalysedType::Result(golem_wasm_ast::analysis::TypeResult { ok, err, .. }) => {
                 InferredType::Result {
-                    ok: ok.map(|t| Box::new((*t).into())),
-                    error: err.map(|t| Box::new((*t).into())),
+                    ok: ok.as_ref().map(|t| Box::new(t.as_ref().into())),
+                    error: err.as_ref().map(|t| Box::new(t.as_ref().into())),
                 }
             }
-            AnalysedType::Variant(vs) => InferredType::from_variant_cases(&vs),
+            AnalysedType::Variant(vs) => InferredType::from_variant_cases(vs),
             AnalysedType::Handle(golem_wasm_ast::analysis::TypeHandle { resource_id, mode }) => {
                 InferredType::Resource {
                     resource_id: resource_id.0,

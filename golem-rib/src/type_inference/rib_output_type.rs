@@ -12,21 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{InferredExpr, RibError};
+use crate::{InferredExpr, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct RibOutputTypeInfo {
     pub analysed_type: AnalysedType,
 }
 
 impl RibOutputTypeInfo {
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibOutputTypeInfo, RibError> {
+    pub fn from_expr(
+        inferred_expr: &InferredExpr,
+    ) -> Result<RibOutputTypeInfo, RibCompilationError> {
         let inferred_type = inferred_expr.get_expr().inferred_type();
         let analysed_type = AnalysedType::try_from(&inferred_type).map_err(|e| {
-            RibError::InternalError(format!(
+            RibCompilationError::RibStaticAnalysisError(format!(
                 "failed to convert inferred type to analysed type: {}",
                 e
             ))

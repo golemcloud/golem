@@ -36,7 +36,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
 use golem_service_base::model::{Component, ComponentName};
 use golem_service_base::repo::RepoError;
-use rib::RibError;
+use rib::RibCompilationError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -62,10 +62,16 @@ pub enum ApiDefinitionError {
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
+    #[error("Unsupported input in Rib script: {0}")]
+    UnsupportedRibInput(String),
     #[error("Rib internal error: {0}")]
     RibInternal(String),
-    #[error("Invalid rib script: {0}")]
-    InvalidRibScript(String),
+    #[error("Rib static analysis error: {0}")]
+    RibStaticAnalysisError(String),
+    #[error("Rib byte code generation error: {0}")]
+    RibByteCodeGenerationError(String),
+    #[error("Invalid rib syntax: {0}")]
+    RibParseError(String),
     #[error("Security Scheme Error: {0}")]
     SecuritySchemeError(SecuritySchemeServiceError),
     #[error("Identity Provider Error: {0}")]
@@ -109,7 +115,10 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::Internal(_) => self.to_string(),
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
             ApiDefinitionError::RibInternal(_) => self.to_string(),
-            ApiDefinitionError::InvalidRibScript(_) => self.to_string(),
+            ApiDefinitionError::RibParseError(_) => self.to_string(),
+            ApiDefinitionError::RibStaticAnalysisError(_) => self.to_string(),
+            ApiDefinitionError::RibByteCodeGenerationError(_) => self.to_string(),
+            ApiDefinitionError::UnsupportedRibInput(_) => self.to_string(),
             ApiDefinitionError::InvalidOasDefinition(_) => self.to_string(),
         }
     }
@@ -119,12 +128,26 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
     fn from(error: RouteCompilationErrors) -> Self {
         match error {
             RouteCompilationErrors::RibError(e) => match e {
-                RibError::RibCompilationError(e) => {
+                RibCompilationError::RibTypeError(e) => {
                     ApiDefinitionError::RibCompilationErrors(e.to_string())
                 }
-                RibError::InternalError(e) => ApiDefinitionError::RibInternal(e),
-                RibError::InvalidRibScript(e) => ApiDefinitionError::InvalidRibScript(e),
+                RibCompilationError::RibStaticAnalysisError(e) => {
+                    ApiDefinitionError::RibStaticAnalysisError(e)
+                }
+                RibCompilationError::InvalidSyntax(e) => ApiDefinitionError::RibParseError(e),
+                RibCompilationError::UnsupportedGlobalInput {
+                    valid_global_inputs: expected,
+                    invalid_global_inputs: found,
+                } => ApiDefinitionError::UnsupportedRibInput(format!(
+                    "Expected: {}, found: {}",
+                    expected.join(", "),
+                    found.join(", ")
+                )),
+                RibCompilationError::ByteCodeGenerationFail(error) => {
+                    ApiDefinitionError::RibByteCodeGenerationError(error.to_string())
+                }
             },
+            RouteCompilationErrors::ValidationError(e) => ApiDefinitionError::ValidationError(e),
             RouteCompilationErrors::MetadataNotFoundError(e) => {
                 ApiDefinitionError::RibCompilationErrors(format!(
                     "Failed to find the metadata of the component {}",

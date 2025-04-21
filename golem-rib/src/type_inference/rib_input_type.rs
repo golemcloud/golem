@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredExpr, RibError};
+use crate::{Expr, ExprVisitor, InferredExpr, RibCompilationError};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
@@ -22,17 +22,25 @@ use std::collections::HashMap;
 // with its type information. Example: `request` variable which should be of the type `Record`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct RibInputTypeInfo {
     pub types: HashMap<String, AnalysedType>,
 }
 impl RibInputTypeInfo {
+    pub fn get(&self, key: &str) -> Option<&AnalysedType> {
+        self.types.get(key)
+    }
+
     pub fn empty() -> Self {
         RibInputTypeInfo {
             types: HashMap::new(),
         }
     }
 
-    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibInputTypeInfo, RibError> {
+    pub fn from_expr(
+        inferred_expr: &InferredExpr,
+    ) -> Result<RibInputTypeInfo, RibCompilationError> {
         let mut expr = inferred_expr.get_expr().clone();
         let mut queue = ExprVisitor::bottom_up(&mut expr);
 
@@ -47,7 +55,7 @@ impl RibInputTypeInfo {
             {
                 if variable_id.is_global() {
                     let analysed_type = AnalysedType::try_from(inferred_type).map_err(|e| {
-                        RibError::InternalError(format!(
+                        RibCompilationError::RibStaticAnalysisError(format!(
                             "failed to convert inferred type to analysed type: {}",
                             e
                         ))

@@ -28,6 +28,7 @@ use crate::security::TestIdentityProvider;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_worker_service_base::gateway_api_definition::http::RouteCompilationErrors;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
@@ -40,6 +41,7 @@ use golem_worker_service_base::gateway_request::http_request::ApiInputPath;
 use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
+use golem_worker_service_base::service::gateway::api_definition_validator::ValidationErrors;
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::header::{LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
@@ -402,9 +404,146 @@ async fn test_api_def_with_query_and_path_params() {
     assert_eq!(result, expected);
 }
 
+#[test]
+async fn test_api_def_with_invalid_path_lookup() {
+    let response_mapping = r#"
+       let user-id = request.path.user-id;
+       let worker-name = "shopping-cart-${user-id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec!["Following request.path lookups in response mapping rib script is not present in API route: user-id".to_string()],
+        }
+    );
+
+    assert_eq!(result, expected)
+}
+
+#[test]
+async fn test_api_def_with_invalid_query_and_path_lookup() {
+    let response_mapping = r#"
+       let user-id = request.path.user-id;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user-id}-${country}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, country);
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec![
+                "Following request.query lookups in response mapping rib script is not present in API route: country".to_string(),
+                "Following request.path lookups in response mapping rib script is not present in API route: user-id".to_string(),
+            ],
+        }
+    );
+
+    assert_eq!(result, expected)
+}
+
+#[test]
+async fn test_api_def_with_invalid_query_lookup() {
+    let response_mapping = r#"
+       let user-id = request.query.user-id;
+       let worker-name = "shopping-cart-${user-id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{userid}", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec!["Following request.query lookups in response mapping rib script is not present in API route: user-id".to_string()],
+        }
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_api_def_with_request_path_0() {
+    let empty_headers = HeaderMap::new();
+
+    let api_request = get_gateway_request("/foo/foo_value/1", None, &empty_headers, Value::Null);
+
+    let response_mapping = r#"
+         let bar-value: u32 = request.path.bar;
+         let worker = instance(request.path.foo);
+         let response = worker.add-item(bar-value, "bar");
+         response
+        "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{foo}/{bar}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "foo_value".to_string(),
+        "golem:it/api.{add-item}".to_string(),
+        Value::Array(vec![
+            Value::Number(1.into()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
 // A test where the input path is a number, and the rib script refers to request.path.* as a u64
 #[test]
-async fn test_api_def_with_path_only_1() {
+async fn test_api_def_with_request_path_only_1() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
@@ -445,7 +584,7 @@ async fn test_api_def_with_path_only_1() {
 
 // A test where the input path is a number, but the rib script refers to request.path.* as a string (which is by default)
 #[test]
-async fn test_api_def_with_path_only_2() {
+async fn test_api_def_with_request_path_only_2() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     // Anything under request.path is a string
@@ -550,6 +689,65 @@ async fn test_api_def_with_invalid_input_1() {
     .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+async fn test_api_def_with_request_body_0() {
+    let empty_headers = HeaderMap::new();
+
+    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+
+    request_body.insert("foo_key".to_string(), Value::Number(Number::from(1)));
+
+    request_body.insert(
+        "bar_key".to_string(),
+        Value::String("bar_value".to_string()),
+    );
+
+    let api_request = get_gateway_request(
+        "/foo/john",
+        None,
+        &empty_headers,
+        Value::Object(request_body),
+    );
+
+    let response_mapping = r#"
+         let worker = instance(request.body.bar_key);
+         let response = worker.add-item(request.body.foo_key, "bar");
+         response
+        "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "bar_value".to_string(),
+        "golem:it/api.{add-item}".to_string(),
+        Value::Array(vec![
+            Value::Number(1.into()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
 }
 
 #[test]
@@ -2358,7 +2556,7 @@ mod internal {
     };
     use golem_worker_service_base::gateway_middleware::HttpCors;
     use golem_worker_service_base::gateway_rib_interpreter::{
-        DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
+        DefaultRibInterpreter, RibRuntimeError, WorkerServiceRibInterpreter,
     };
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
@@ -2456,11 +2654,12 @@ mod internal {
 
     struct TestFileServerBindingHandler {}
     #[async_trait]
-    impl<Namespace> FileServerBindingHandler<Namespace> for TestFileServerBindingHandler {
+    impl FileServerBindingHandler<DefaultNamespace> for TestFileServerBindingHandler {
         async fn handle_file_server_binding_result(
             &self,
-            _namespace: &Namespace,
-            _worker_detail: &WorkerDetails,
+            _namespace: DefaultNamespace,
+            _worker_name: Option<&str>,
+            _component_id: &ComponentId,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
             unimplemented!()
@@ -2518,13 +2717,13 @@ mod internal {
 
     pub fn create_record(
         values: Vec<(String, TypeAnnotatedValue)>,
-    ) -> Result<TypeAnnotatedValue, EvaluationError> {
+    ) -> Result<TypeAnnotatedValue, RibRuntimeError> {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
             let typ = Type::try_from(value)
-                .map_err(|_| EvaluationError("Failed to get type".to_string()))?;
+                .map_err(|_| RibRuntimeError("Failed to get type".to_string()))?;
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),
@@ -2732,8 +2931,8 @@ mod internal {
         ))
     }
 
-    pub fn get_test_file_server_binding_handler<Namespace>(
-    ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
+    pub fn get_test_file_server_binding_handler(
+    ) -> Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send> {
         Arc::new(TestFileServerBindingHandler {})
     }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibError};
+use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -31,7 +31,7 @@ impl WorkerFunctionsInRib {
     pub fn from_inferred_expr(
         inferred_expr: &InferredExpr,
         original_type_registry: &FunctionTypeRegistry,
-    ) -> Result<Option<WorkerFunctionsInRib>, RibError> {
+    ) -> Result<Option<WorkerFunctionsInRib>, RibCompilationError> {
         let worker_invoke_registry_keys = inferred_expr.worker_invoke_registry_keys();
         let type_registry_subset =
             original_type_registry.get_from_keys(worker_invoke_registry_keys);
@@ -50,8 +50,8 @@ impl WorkerFunctionsInRib {
                 };
                 function_calls.push(function_call_in_rib)
             } else {
-                return Err(RibError::InternalError(
-                    "function calls should have parameter types and return types".to_string(),
+                return Err(RibCompilationError::RibStaticAnalysisError(
+                    "unable to inspect the worker function calls in rib. functional calls should have parameter types and return types".to_string(),
                 ));
             }
         }

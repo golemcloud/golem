@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
 use crate::{Expr, ExprVisitor, InferredType, MatchArm};
 
-pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
+pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(outer_expr) = visitor.pop_back() {
@@ -244,7 +244,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibCompilationError> {
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::rib_compilation_error::RibCompilationError;
+    use crate::rib_type_error::RibTypeError;
     use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
@@ -260,7 +260,7 @@ mod internal {
         iterable_expr: &mut Expr,
         yield_expr: &mut Expr,
         comprehension_result_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         update_yield_expr_in_list_comprehension(variable_id, iterable_expr, yield_expr)?;
 
         let refined_list_type = ListType::refine(comprehension_result_type).ok_or_else(|| {
@@ -286,7 +286,7 @@ mod internal {
         init_value_expr: &mut Expr,
         yield_expr: &mut Expr,
         aggregation_result_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         // If the iterable_expr is List<Y> , the identifier with the same variable name within yield should be Y
         update_yield_expr_in_list_reduce(
             result_variable_id,
@@ -307,7 +307,7 @@ mod internal {
         variable: &mut VariableId,
         iterable_expr: &Expr,
         yield_expr: &mut Expr,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let iterable_type: InferredType = iterable_expr.inferred_type();
 
         if !iterable_type.is_unknown() {
@@ -355,7 +355,7 @@ mod internal {
         iterable_expr: &Expr,
         yield_expr: &mut Expr,
         init_value_expr: &mut Expr,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let iterable_type = iterable_expr.inferred_type();
 
         if !iterable_expr.inferred_type().is_unknown() {
@@ -408,7 +408,7 @@ mod internal {
         inner_expr: &mut Expr,
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
@@ -427,7 +427,7 @@ mod internal {
         inner_expr: &mut Expr,
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let refined_ok_type = OkType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
@@ -450,7 +450,7 @@ mod internal {
         inner_expr: &mut Expr,
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let refined_err_type = ErrType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
@@ -473,7 +473,7 @@ mod internal {
         inner_expressions: &mut [Expr],
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let refined_list_type = ListType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
@@ -494,7 +494,7 @@ mod internal {
         inner_expressions: &mut [Expr],
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
@@ -515,7 +515,7 @@ mod internal {
         inner_expressions: &mut [(String, Box<Expr>)],
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         let refined_record_type = RecordType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
@@ -565,7 +565,7 @@ mod internal {
         arm_pattern: &mut ArmPattern,
         predicate_type: &InferredType,
         original_predicate: &Expr,
-    ) -> Result<(), RibCompilationError> {
+    ) -> Result<(), RibTypeError> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
                 expr.add_infer_type_mut(predicate_type.clone());
@@ -753,7 +753,7 @@ mod internal {
         actual_inferred_type: &InferredType,
         expr: &Expr,
         push_down_kind: &TypeHint,
-    ) -> RibCompilationError {
+    ) -> RibTypeError {
         // First check if the inferred type is a fully valid WIT type
         // If so, we trust this as this may handle majority of the cases
         // in compiler's best effort to create precise error message

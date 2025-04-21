@@ -364,6 +364,12 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             key,
             value,
         },
+        OplogEntry::ChangePersistenceLevel { timestamp, level } => {
+            OplogEntry::ChangePersistenceLevel {
+                timestamp: rounded_ts(timestamp),
+                level,
+            }
+        }
     }
 }
 
