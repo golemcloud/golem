@@ -26,7 +26,7 @@ pub fn infer_all_identifiers(expr: &mut Expr) {
 mod internal {
 
     use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
 
     pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();
@@ -180,23 +180,18 @@ mod internal {
     }
 
     fn accumulate_types_of_identifiers(expr: &mut Expr, state: &mut IdentifierTypeState) {
-        let mut queue = VecDeque::new();
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        queue.push_back(expr);
-
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Identifier {
-                    variable_id,
-                    inferred_type,
-                    ..
-                } => {
-                    if !inferred_type.is_unknown() {
-                        state.update(variable_id.clone(), inferred_type.clone())
-                    }
+        while let Some(expr) = visitor.pop_back() {
+            if let Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } = expr
+            {
+                if !inferred_type.is_unknown() {
+                    state.update(variable_id.clone(), inferred_type.clone())
                 }
-
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
             }
         }
     }
@@ -205,10 +200,9 @@ mod internal {
         arm_resolution: &mut Expr,
         state: &IdentifierTypeState,
     ) {
-        let mut queue = VecDeque::new();
-        queue.push_back(arm_resolution);
+        let mut visitor = ExprVisitor::bottom_up(arm_resolution);
 
-        while let Some(expr) = queue.pop_back() {
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::Identifier {
                     variable_id,
@@ -219,7 +213,7 @@ mod internal {
                         *inferred_type = inferred_type.merge(new_inferred_type)
                     }
                 }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => {}
             }
         }
     }

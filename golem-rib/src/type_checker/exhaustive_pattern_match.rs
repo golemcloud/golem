@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ArmPattern, Expr, FunctionTypeRegistry};
-use std::collections::VecDeque;
+use crate::{ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry};
 
 // When checking exhaustive pattern match, there is no need to ensure
 // if the pattern aligns with conditions because those checks are done
@@ -23,20 +22,15 @@ pub fn check_exhaustive_pattern_match(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), ExhaustivePatternMatchError> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = queue.pop_back() {
-        match expr {
-            Expr::PatternMatch { match_arms, .. } => {
-                let match_arm = match_arms
-                    .iter()
-                    .map(|p| p.arm_pattern.clone())
-                    .collect::<Vec<_>>();
-                internal::check_exhaustive_pattern_match(expr, &match_arm, function_type_registry)?;
-            }
-
-            expr => expr.visit_children_mut_bottom_up(&mut queue),
+    while let Some(expr) = visitor.pop_back() {
+        if let Expr::PatternMatch { match_arms, .. } = expr {
+            let match_arm = match_arms
+                .iter()
+                .map(|p| p.arm_pattern.clone())
+                .collect::<Vec<_>>();
+            internal::check_exhaustive_pattern_match(expr, &match_arm, function_type_registry)?;
         }
     }
 
