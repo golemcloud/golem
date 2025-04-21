@@ -39,7 +39,6 @@ mod internal {
     use crate::{
         CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
     };
-    use std::collections::VecDeque;
 
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::{ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry};
-use std::collections::VecDeque;
 
 // When checking exhaustive pattern match, there is no need to ensure
 // if the pattern aligns with conditions because those checks are done

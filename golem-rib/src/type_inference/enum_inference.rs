@@ -24,7 +24,6 @@ mod internal {
     use crate::call_type::CallType;
     use crate::{Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue};
     use golem_wasm_ast::analysis::AnalysedType;
-    use std::collections::VecDeque;
 
     pub(crate) fn convert_identifiers_to_enum_function_calls(
         expr: &mut Expr,

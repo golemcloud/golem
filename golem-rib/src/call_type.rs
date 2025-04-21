@@ -15,7 +15,6 @@
 use crate::instance_type::FullyQualifiedResourceConstructor;
 use crate::{DynamicParsedFunctionName, Expr};
 use std::fmt::Display;
-use std::ops::Deref;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {

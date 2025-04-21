@@ -1,9 +1,7 @@
 use crate::parser::{PackageName, TypeParameter};
-use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::InterfaceName;
 use crate::{
-    DynamicParsedFunctionName, Expr, FunctionCallError, FunctionTypeRegistry, InferredType,
-    RegistryKey, RegistryValue,
+    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
 };
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
@@ -480,7 +478,7 @@ impl FunctionDictionary {
                     return_types,
                 } => match key {
                     RegistryKey::FunctionName(function_name) => {
-                        let function_name = resolve_function_name(None, None, &function_name)?;
+                        let function_name = resolve_function_name(None, None, function_name)?;
 
                         map.push((
                             function_name,

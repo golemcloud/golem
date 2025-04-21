@@ -26,7 +26,7 @@ pub fn infer_all_identifiers(expr: &mut Expr) {
 mod internal {
 
     use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
 
     pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
         let mut identifier_lookup = IdentifierTypeState::new();

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor, InferredType};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 // request.path.user is used as a string in one place
 // request.path.id is used an integer in some other
