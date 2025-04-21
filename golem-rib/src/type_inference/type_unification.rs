@@ -340,7 +340,6 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 type_annotation,
                 generic_type_parameter,
             } => {
-
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {

@@ -205,12 +205,14 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 },
             ))),
 
-            InferredType::OneOf(_) => Err(
-                "ambiguous types".to_string(),
-            ),
+            InferredType::OneOf(_) => Err("ambiguous types".to_string()),
             InferredType::AllOf(types) => Err(format!(
                 "ambiguous types {}",
-                types.iter().map(|x| x.get_type_hint().to_string()).collect::<Vec<_>>().join(", ")
+                types
+                    .iter()
+                    .map(|x| x.get_type_hint().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
             InferredType::Unknown => Err("failed to infer type".to_string()),
             // We don't expect to have a sequence type in the inferred type.as
