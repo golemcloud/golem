@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::InferredType;
+use crate::{GetTypeHint, InferredType};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, tuple};
 use golem_wasm_ast::analysis::{
@@ -206,14 +206,13 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             ))),
 
             InferredType::OneOf(_) => Err(
-                "Cannot convert OneOf types (different possibilities of types) to AnalysedType"
-                    .to_string(),
+                "ambiguous types".to_string(),
             ),
             InferredType::AllOf(types) => Err(format!(
-                "Cannot convert AllOf types (multiple types) to AnalysedType. {:?}",
-                types
+                "ambiguous types {}",
+                types.iter().map(|x| x.get_type_hint().to_string()).collect::<Vec<_>>().join(", ")
             )),
-            InferredType::Unknown => Err("  convert Unknown type to AnalysedType".to_string()),
+            InferredType::Unknown => Err("failed to infer type".to_string()),
             // We don't expect to have a sequence type in the inferred type.as
             // This implies Rib will not support multiple types from worker-function results
             InferredType::Sequence(vec) => {
@@ -223,7 +222,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                     let first = &vec[0];
                     Ok(first.try_into()?)
                 } else {
-                    Err("Cannot convert Sequence type to AnalysedType".to_string())
+                    Err("unexpected multi parameter function returns".to_string())
                 }
             }
         }

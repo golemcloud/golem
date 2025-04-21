@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::CallType;
 use crate::{Expr, ExprVisitor, InferredType, UnResolvedTypesError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = visitor.pop_back() {
+    while let Some(expr) = visitor.pop_front() {
         match expr {
             Expr::Number {
                 inferred_type,
@@ -341,83 +340,26 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 type_annotation,
                 generic_type_parameter,
             } => {
-                match call_type {
-                    CallType::InstanceCreation(_) => {
-                        let unified_inferred_type = inferred_type.unify();
 
-                        match unified_inferred_type {
-                            Ok(unified_type) => *inferred_type = unified_type,
-                            Err(e) => {
-                                return Err(UnResolvedTypesError::from(
-                                    &Expr::Call {
-                                        call_type: call_type.clone(),
-                                        args: args.clone(),
-                                        inferred_type: InferredType::Unknown,
-                                        source_span: source_span.clone(),
-                                        generic_type_parameter: generic_type_parameter.clone(),
-                                        type_annotation: type_annotation.clone(),
-                                    },
-                                    None,
-                                )
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of instance creation {}",
-                                    e
-                                )));
-                            }
-                        }
-                    }
-                    // Make sure worker expression in function
-                    CallType::Function {
-                        function_name,
-                        worker,
-                    } => {
-                        let unified_inferred_type = inferred_type.unify();
+                let unified_inferred_type = inferred_type.unify();
 
-                        match unified_inferred_type {
-                            Ok(unified_type) => *inferred_type = unified_type,
-                            Err(e) => {
-                                let expr = Expr::Call {
-                                    call_type: CallType::Function {
-                                        function_name: function_name.clone(),
-                                        worker: worker.clone(),
-                                    },
-                                    args: args.clone(),
-                                    inferred_type: InferredType::Unknown,
-                                    source_span: source_span.clone(),
-                                    generic_type_parameter: generic_type_parameter.clone(),
-                                    type_annotation: type_annotation.clone(),
-                                };
+                match unified_inferred_type {
+                    Ok(unified_type) => *inferred_type = unified_type,
+                    Err(e) => {
+                        let expr = Expr::Call {
+                            call_type: call_type.clone(),
+                            args: args.clone(),
+                            inferred_type: InferredType::Unknown,
+                            source_span: source_span.clone(),
+                            generic_type_parameter: generic_type_parameter.clone(),
+                            type_annotation: type_annotation.clone(),
+                        };
 
-                                return Err(UnResolvedTypesError::from(&expr, None)
-                                    .with_additional_error_detail(format!(
-                                        "cannot determine the return type of function {}, {}",
-                                        function_name, e
-                                    )));
-                            }
-                        }
-                    }
-
-                    _ => {
-                        let unified_inferred_type = inferred_type.unify();
-
-                        match unified_inferred_type {
-                            Ok(unified_type) => *inferred_type = unified_type,
-                            Err(e) => {
-                                let expr = Expr::Call {
-                                    call_type: call_type.clone(),
-                                    args: args.clone(),
-                                    inferred_type: InferredType::Unknown,
-                                    source_span: source_span.clone(),
-                                    generic_type_parameter: generic_type_parameter.clone(),
-                                    type_annotation: type_annotation.clone(),
-                                };
-                                return Err(UnResolvedTypesError::from(&expr, None)
-                                    .with_additional_error_detail(format!(
-                                        "invalid function return, {}",
-                                        e
-                                    )));
-                            }
-                        }
+                        return Err(UnResolvedTypesError::from(&expr, None)
+                            .with_additional_error_detail(format!(
+                                "invalid function call, {}",
+                                e
+                            )));
                     }
                 }
             }
