@@ -180,11 +180,9 @@ mod internal {
     }
 
     fn accumulate_types_of_identifiers(expr: &mut Expr, state: &mut IdentifierTypeState) {
-        let mut queue = VecDeque::new();
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        queue.push_back(expr);
-
-        while let Some(expr) = queue.pop_back() {
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::Identifier {
                     variable_id,
@@ -196,7 +194,7 @@ mod internal {
                     }
                 }
 
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => {}
             }
         }
     }
@@ -205,10 +203,9 @@ mod internal {
         arm_resolution: &mut Expr,
         state: &IdentifierTypeState,
     ) {
-        let mut queue = VecDeque::new();
-        queue.push_back(arm_resolution);
+        let mut visitor = ExprVisitor::bottom_up(arm_resolution);
 
-        while let Some(expr) = queue.pop_back() {
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::Identifier {
                     variable_id,
@@ -219,7 +216,7 @@ mod internal {
                         *inferred_type = inferred_type.merge(new_inferred_type)
                     }
                 }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => {}
             }
         }
     }

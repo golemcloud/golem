@@ -323,6 +323,31 @@ pub enum FunctionCallError {
     },
 }
 
+impl FunctionCallError {
+    pub fn invalid_function_call(
+        function_name: &str,
+        expr: &Expr,
+        message: impl AsRef<str>,
+    ) -> FunctionCallError {
+        FunctionCallError::InvalidFunctionCall {
+            function_name: function_name.to_string(),
+            expr: expr.clone(),
+            message: message.as_ref().to_string(),
+        }
+    }
+    pub fn invalid_generic_type_parameter(
+        expr: &Expr,
+        generic_type_parameter: &str,
+        message: impl AsRef<str>,
+    ) -> FunctionCallError {
+        FunctionCallError::InvalidGenericTypeParameter {
+            generic_type_parameter: generic_type_parameter.to_string(),
+            expr: expr.clone(),
+            message: message.as_ref().to_string(),
+        }
+    }
+}
+
 pub struct InvalidWorkerName {
     pub worker_name_expr: Expr,
     pub message: String,

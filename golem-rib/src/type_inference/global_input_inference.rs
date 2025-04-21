@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredType};
+use crate::{Expr, ExprVisitor, InferredType};
 use std::collections::{HashMap, VecDeque};
 
 // request.path.user is used as a string in one place
@@ -21,9 +21,9 @@ use std::collections::{HashMap, VecDeque};
 pub fn infer_global_inputs(expr: &mut Expr) {
     let global_variables_dictionary = collect_all_global_variables_type(expr);
     // Updating the collected types in all positions of input
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
-    while let Some(expr) = queue.pop_back() {
+    let mut visitor = ExprVisitor::bottom_up(expr);
+
+    while let Some(expr) = visitor.pop_back() {
         match expr {
             Expr::Identifier {
                 variable_id,
@@ -39,17 +39,16 @@ pub fn infer_global_inputs(expr: &mut Expr) {
                     }
                 }
             }
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
+            _ => {}
         }
     }
 }
 
 fn collect_all_global_variables_type(expr: &mut Expr) -> HashMap<String, Vec<InferredType>> {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
     let mut all_types_of_global_variables = HashMap::new();
-    while let Some(expr) = queue.pop_back() {
+    while let Some(expr) = visitor.pop_back() {
         match expr {
             Expr::Identifier {
                 variable_id,
@@ -71,7 +70,7 @@ fn collect_all_global_variables_type(expr: &mut Expr) -> HashMap<String, Vec<Inf
                     }
                 }
             }
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
+            _ => {}
         }
     }
 

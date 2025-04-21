@@ -36,7 +36,9 @@ mod internal {
     use crate::rib_type_error::RibTypeError;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{CustomError, Expr, FunctionCallError, InferredType, ParsedFunctionReference};
+    use crate::{
+        CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
+    };
     use std::collections::VecDeque;
 
     pub(crate) fn search_for_invalid_instance_declarations(
@@ -89,12 +91,9 @@ mod internal {
         expr: &mut Expr,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), RibTypeError> {
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        while let Some(expr) = queue.pop_back() {
-            let expr_copied = expr.clone();
-
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::Call {
                     call_type,
@@ -104,14 +103,12 @@ mod internal {
                     ..
                 } => {
                     let type_parameter = generic_type_parameter
-                        .clone()
-                        .map(|type_parameter| {
-                            TypeParameter::from_str(&type_parameter.value).map_err(|err| {
-                                FunctionCallError::InvalidGenericTypeParameter {
-                                    generic_type_parameter: type_parameter.value.clone(),
-                                    expr: expr_copied.clone(),
-                                    message: err,
-                                }
+                        .as_ref()
+                        .map(|gtp| {
+                            TypeParameter::from_str(&gtp.value).map_err(|err| {
+                                FunctionCallError::invalid_generic_type_parameter(
+                                    expr, &gtp.value, err,
+                                )
                             })
                         })
                         .transpose()?;
@@ -122,10 +119,10 @@ mod internal {
                     if let Some(instance_creation_details) = instance_creation_details {
                         *call_type = CallType::InstanceCreation(instance_creation_details.clone());
                         let new_instance_type = InstanceType::from(
-                            function_type_registry.clone(),
+                            function_type_registry,
                             instance_creation_details.worker_name(),
                             type_parameter,
-                            expr_copied,
+                            expr,
                         )?;
                         *inferred_type = InferredType::Instance {
                             instance_type: Box::new(new_instance_type),
@@ -133,7 +130,7 @@ mod internal {
                     }
                 }
 
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => {}
             }
         }
 

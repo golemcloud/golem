@@ -213,8 +213,8 @@ impl From<FunctionCallError> for RibTypeError {
             },
             FunctionCallError::InvalidGenericTypeParameter {
                 generic_type_parameter,
-                message,
                 expr,
+                message,
             } => RibTypeError {
                 cause: format!("invalid generic type parameter {}", generic_type_parameter),
                 expr,

@@ -61,10 +61,9 @@ mod internal {
         function_type_registry: &FunctionTypeRegistry,
     ) -> EnumInfo {
         let mut enum_cases = vec![];
-        let mut queue = VecDeque::new();
-        queue.push_back(expr);
+        let mut visitor = ExprVisitor::bottom_up(expr);
 
-        while let Some(expr) = queue.pop_back() {
+        while let Some(expr) = visitor.pop_back() {
             match expr {
                 Expr::Identifier {
                     variable_id,
@@ -80,12 +79,12 @@ mod internal {
                         {
                             enum_cases.push(variable_id.name());
                             *inferred_type = inferred_type
-                                .merge(AnalysedType::Enum(typed_enum.clone()).clone().into());
+                                .merge((&AnalysedType::Enum(typed_enum.clone())).into());
                         }
                     }
                 }
 
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => {}
             }
         }
 

@@ -198,7 +198,7 @@ impl InstanceType {
     }
     pub fn get_function(
         &self,
-        expr: Expr,
+        expr: &Expr,
         method_name: &str,
         type_parameter: Option<TypeParameter>,
     ) -> Result<Function, FunctionCallError> {
@@ -215,7 +215,7 @@ impl InstanceType {
                     if interfaces.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
                             function_name: method_name.to_string(),
-                            expr,
+                            expr: expr.clone(),
                             message: format!("Interface '{}' not found", iface),
                         });
                     }
@@ -228,7 +228,7 @@ impl InstanceType {
                     if functions.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
                             function_name: method_name.to_string(),
-                            expr,
+                            expr: expr.clone(),
                             message: format!(
                                 "Function '{}' not found in interface '{}'",
                                 method_name, iface
@@ -248,7 +248,7 @@ impl InstanceType {
                         search_function_in_instance(self, method_name).map_err(|err| {
                             FunctionCallError::InvalidFunctionCall {
                                 function_name: method_name.to_string(),
-                                expr,
+                                expr: expr.clone(),
                                 message: err,
                             }
                         })
@@ -266,7 +266,7 @@ impl InstanceType {
                     if packages.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
                             function_name: method_name.to_string(),
-                            expr,
+                            expr: expr.clone(),
                             message: format!("package '{}' not found", pkg),
                         });
                     }
@@ -279,7 +279,7 @@ impl InstanceType {
                     if functions.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
                             function_name: method_name.to_string(),
-                            expr,
+                            expr: expr.clone(),
                             message: format!(
                                 "function '{}' not found in package '{}'",
                                 method_name, pkg
@@ -297,7 +297,7 @@ impl InstanceType {
                         search_function_in_instance(self, method_name).map_err(|err| {
                             FunctionCallError::InvalidFunctionCall {
                                 function_name: method_name.to_string(),
-                                expr,
+                                expr: expr.clone(),
                                 message: err,
                             }
                         })
@@ -319,7 +319,7 @@ impl InstanceType {
                     if functions.is_empty() {
                         return Err(FunctionCallError::InvalidFunctionCall {
                             function_name: method_name.to_string(),
-                            expr,
+                            expr: expr.clone(),
                             message: format!(
                                 "function '{}' not found in interface '{}'",
                                 method_name, fq_iface
@@ -337,7 +337,7 @@ impl InstanceType {
                         search_function_in_instance(self, method_name).map_err(|err| {
                             FunctionCallError::InvalidFunctionCall {
                                 function_name: method_name.to_string(),
-                                expr,
+                                expr: expr.clone(),
                                 message: err,
                             }
                         })
@@ -347,7 +347,7 @@ impl InstanceType {
             None => search_function_in_instance(self, method_name).map_err(|err| {
                 FunctionCallError::InvalidFunctionCall {
                     function_name: method_name.to_string(),
-                    expr,
+                    expr: expr.clone(),
                     message: err,
                 }
             }),
@@ -402,16 +402,16 @@ impl InstanceType {
     }
 
     pub fn from(
-        registry: FunctionTypeRegistry,
-        worker_name: Option<Expr>,
+        registry: &FunctionTypeRegistry,
+        worker_name: Option<&Expr>,
         type_parameter: Option<TypeParameter>,
-        expr: Expr,
+        expr: &Expr,
     ) -> Result<InstanceType, RibTypeError> {
         let function_dict = FunctionDictionary::from_function_type_registry(registry, expr)?;
 
         match type_parameter {
             None => Ok(InstanceType::Global {
-                worker_name: worker_name.map(Box::new),
+                worker_name: worker_name.cloned().map(Box::new),
                 functions_global: function_dict,
             }),
             Some(type_parameter) => match type_parameter {
@@ -425,7 +425,7 @@ impl InstanceType {
                     };
 
                     Ok(InstanceType::Interface {
-                        worker_name: worker_name.map(Box::new),
+                        worker_name: worker_name.cloned().map(Box::new),
                         interface_name,
                         functions_in_interface: function_dict,
                     })
@@ -440,7 +440,7 @@ impl InstanceType {
                     };
 
                     Ok(InstanceType::Package {
-                        worker_name: worker_name.map(Box::new),
+                        worker_name: worker_name.cloned().map(Box::new),
                         package_name,
                         functions_in_package: function_dict,
                     })
@@ -459,7 +459,7 @@ impl InstanceType {
                     };
 
                     Ok(InstanceType::PackageInterface {
-                        worker_name: worker_name.map(Box::new),
+                        worker_name: worker_name.cloned().map(Box::new),
                         package_name: fq_interface.package_name,
                         interface_name: fq_interface.interface_name,
                         functions_in_package_interface: function_dict,
@@ -515,12 +515,12 @@ pub struct ResourceMethod {
 
 impl FunctionDictionary {
     pub fn from_function_type_registry(
-        registry: FunctionTypeRegistry,
-        expr: Expr,
+        registry: &FunctionTypeRegistry,
+        expr: &Expr,
     ) -> Result<FunctionDictionary, RibTypeError> {
         let mut map = vec![];
 
-        for (key, value) in registry.types {
+        for (key, value) in registry.types.iter() {
             match value {
                 RegistryValue::Function {
                     parameter_types,
@@ -553,8 +553,8 @@ impl FunctionDictionary {
                         let type_parameter = TypeParameter::from_str(interface_name.as_str())
                             .map_err(|err| FunctionCallError::InvalidGenericTypeParameter {
                                 generic_type_parameter: interface_name.clone(),
-                                message: err,
                                 expr: expr.clone(),
+                                message: err,
                             })?;
 
                         let interface_name = type_parameter.get_interface_name();
@@ -896,12 +896,12 @@ impl TryFrom<ProtoFunctionType> for FunctionType {
     fn try_from(proto: ProtoFunctionType) -> Result<Self, Self::Error> {
         let mut parameter_types = Vec::new();
         for param in proto.parameter_types {
-            parameter_types.push(InferredType::from(AnalysedType::try_from(&param)?));
+            parameter_types.push(InferredType::from(&AnalysedType::try_from(&param)?));
         }
 
         let mut return_type = Vec::new();
         for ret in proto.return_type {
-            return_type.push(InferredType::from(AnalysedType::try_from(&ret)?));
+            return_type.push(InferredType::from(&AnalysedType::try_from(&ret)?));
         }
 
         Ok(Self {

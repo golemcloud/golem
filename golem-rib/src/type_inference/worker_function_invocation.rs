@@ -31,8 +31,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
     queue.push_back(expr);
 
     while let Some(expr) = queue.pop_back() {
-        let expr_copied = expr.clone();
-
         if let Expr::InvokeMethodLazy {
             lhs,
             method,
@@ -42,10 +40,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
             ..
         } = expr
         {
-            // This should be an instance type if instance_type_binding phase has been run.
-            // let m = instance("my-worker")
-            // m.cart("x, y, z") // m is o the type instance-type
-            let inferred_type = lhs.clone().inferred_type();
+            let inferred_type = lhs.inferred_type();
 
             match &inferred_type {
                 InferredType::Instance { instance_type } => {
@@ -53,19 +48,14 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         .clone()
                         .map(|gtp| {
                             TypeParameter::from_str(&gtp.value).map_err(|err| {
-                                FunctionCallError::InvalidGenericTypeParameter {
-                                    generic_type_parameter: gtp.value.clone(),
-                                    expr: expr_copied.clone(),
-                                    message: err,
-                                }
+                                FunctionCallError::invalid_generic_type_parameter(
+                                    expr, &gtp.value, err,
+                                )
                             })
                         })
                         .transpose()?;
 
-                    // resource.cart("x, y, z")
-                    // resource is of the type instance type
-                    let fqn =
-                        instance_type.get_function(expr_copied.clone(), method, type_parameter)?;
+                    let fqn = instance_type.get_function(expr, method, type_parameter)?;
 
                     match fqn.function_name {
                         FunctionName::Function(function_name) => {
@@ -73,10 +63,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             let dynamic_parsed_function_name = DynamicParsedFunctionName::parse(
                                 dynamic_parsed_function_name.as_str(),
                             )
-                            .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                function_name: dynamic_parsed_function_name,
-                                expr: expr_copied,
-                                message: format!("Invalid function name: {}", err),
+                            .map_err(|err| {
+                                FunctionCallError::invalid_function_call(
+                                    &dynamic_parsed_function_name,
+                                    expr,
+                                    format!("Invalid function name: {}", err),
+                                )
                             })?;
 
                             let worker_name = instance_type.worker_name().as_deref().cloned();
@@ -128,25 +120,23 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         .iter()
                                         .find(|(k, _)| k == &resource_method)
                                         .map(|(k, _)| k.clone())
-                                        .ok_or(FunctionCallError::InvalidFunctionCall {
-                                            function_name: resource_method
-                                                .method_name()
-                                                .to_string(),
-                                            expr: expr_copied.clone(),
-                                            message: format!(
+                                        .ok_or(FunctionCallError::invalid_function_call(
+                                            resource_method.method_name(),
+                                            expr,
+                                            format!(
                                                 "Resource method {:?} not found in resource {}",
                                                 resource_method, resource_constructor
                                             ),
-                                        })?;
+                                        ))?;
 
                                     let mut dynamic_parsed_function_name = resource_method
                                         .dynamic_parsed_function_name(resource_args.clone())
-                                        .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                                            function_name: resource_method
-                                                .method_name()
-                                                .to_string(),
-                                            expr: expr_copied,
-                                            message: format!("Invalid function name: {}", err),
+                                        .map_err(|err| {
+                                            FunctionCallError::invalid_function_call(
+                                                resource_method.method_name(),
+                                                expr,
+                                                format!("Invalid function name: {}", err),
+                                            )
                                         })?;
 
                                     // Making sure the various compile phased resolved resource_args are kept intact
@@ -203,16 +193,16 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                 // Hence, this phase is part of computing the fix-point of compiler type inference.
                 InferredType::Unknown => {}
                 _ => {
-                    return Err(FunctionCallError::InvalidFunctionCall {
-                        function_name: method.to_string(),
-                        expr: expr_copied,
-                        message: format!(
+                    return Err(FunctionCallError::invalid_function_call(
+                        method,
+                        expr,
+                        format!(
                             "invalid worker function invoke. Expected to be an instance type, found {}",
                             TypeName::try_from(inferred_type)
                                 .map(|x| x.to_string())
                                 .unwrap_or("Unknown".to_string())
                         )
-                    }.into());
+                    ).into());
                 }
             }
         }
