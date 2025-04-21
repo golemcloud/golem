@@ -100,20 +100,16 @@ mod internal {
                     source_span,
                     type_annotation,
                 } => {
-
                     let type_parameter = generic_type_parameter
                         .as_ref()
                         .map(|gtp| {
                             TypeParameter::from_str(&gtp.value).map_err(|err| {
-                                FunctionCallError::invalid_generic_type_parameter(
-                                    &gtp.value, err,
-                                )
+                                FunctionCallError::invalid_generic_type_parameter(&gtp.value, err)
                             })
                         })
                         .transpose()?;
 
-                    let instance_creation_type =
-                        get_instance_creation_details(call_type, args);
+                    let instance_creation_type = get_instance_creation_details(call_type, args);
 
                     if let Some(instance_creation_details) = instance_creation_type {
                         let worker_name = instance_creation_details.clone().worker_name().cloned();
@@ -124,7 +120,8 @@ mod internal {
                             function_type_registry,
                             worker_name.as_ref(),
                             type_parameter,
-                        ).map_err(|err| {
+                        )
+                        .map_err(|err| {
                             RibTypeError::from(CustomError::new(
                                 &Expr::Call {
                                     call_type: call_type.clone(),
@@ -136,7 +133,6 @@ mod internal {
                                 },
                                 format!("Failed to create instance type: {}", err),
                             ))
-
                         })?;
 
                         *inferred_type = InferredType::Instance {

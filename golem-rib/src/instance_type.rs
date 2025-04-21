@@ -467,7 +467,6 @@ pub struct ResourceMethod {
     resource_name: String,
 }
 
-
 impl FunctionDictionary {
     pub fn from_function_type_registry(
         registry: &FunctionTypeRegistry,

@@ -360,7 +360,7 @@ pub struct CustomError {
 impl CustomError {
     pub fn new(expr: &Expr, message: impl AsRef<str>) -> CustomError {
         CustomError {
-            expr:expr.clone(),
+            expr: expr.clone(),
             message: message.as_ref().to_string(),
             help_message: Vec::new(),
         }

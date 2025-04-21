@@ -49,30 +49,29 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         .as_ref()
                         .map(|gtp| {
                             TypeParameter::from_str(&gtp.value).map_err(|err| {
-                                FunctionCallError::invalid_generic_type_parameter(
-                                    &gtp.value, err,
-                                )
+                                FunctionCallError::invalid_generic_type_parameter(&gtp.value, err)
                             })
                         })
                         .transpose()?;
 
-                    let fqn = instance_type.get_function(method, type_parameter).map_err(
-                        |err| {
-                            FunctionCallError::invalid_function_call(
-                                method,
-                                &Expr::InvokeMethodLazy {
-                                    lhs: lhs.clone(),
-                                    method: method.clone(),
-                                    generic_type_parameter: generic_type_parameter.clone(),
-                                    args: args.clone(),
-                                    source_span: source_span.clone(),
-                                    type_annotation: type_annotation.clone(),
-                                    inferred_type: inferred_type.clone(),
-                                },
-                                err
-                            )
-                        },
-                    )?;
+                    let fqn =
+                        instance_type
+                            .get_function(method, type_parameter)
+                            .map_err(|err| {
+                                FunctionCallError::invalid_function_call(
+                                    method,
+                                    &Expr::InvokeMethodLazy {
+                                        lhs: lhs.clone(),
+                                        method: method.clone(),
+                                        generic_type_parameter: generic_type_parameter.clone(),
+                                        args: args.clone(),
+                                        source_span: source_span.clone(),
+                                        type_annotation: type_annotation.clone(),
+                                        inferred_type: inferred_type.clone(),
+                                    },
+                                    err,
+                                )
+                            })?;
 
                     match fqn.function_name {
                         FunctionName::Function(function_name) => {
@@ -83,7 +82,15 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             .map_err(|err| {
                                 FunctionCallError::invalid_function_call(
                                     &dynamic_parsed_function_name,
-                                    expr,
+                                    &Expr::InvokeMethodLazy {
+                                        lhs: lhs.clone(),
+                                        method: method.clone(),
+                                        generic_type_parameter: generic_type_parameter.clone(),
+                                        args: args.clone(),
+                                        source_span: source_span.clone(),
+                                        type_annotation: type_annotation.clone(),
+                                        inferred_type: inferred_type.clone(),
+                                    },
                                     format!("Invalid function name: {}", err),
                                 )
                             })?;
@@ -139,7 +146,16 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         .map(|(k, _)| k.clone())
                                         .ok_or(FunctionCallError::invalid_function_call(
                                             resource_method.method_name(),
-                                            expr,
+                                            &Expr::InvokeMethodLazy {
+                                                lhs: lhs.clone(),
+                                                method: method.clone(),
+                                                generic_type_parameter: generic_type_parameter
+                                                    .clone(),
+                                                args: args.clone(),
+                                                source_span: source_span.clone(),
+                                                type_annotation: type_annotation.clone(),
+                                                inferred_type: inferred_type.clone(),
+                                            },
                                             format!(
                                                 "Resource method {:?} not found in resource {}",
                                                 resource_method, resource_constructor
@@ -151,7 +167,16 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         .map_err(|err| {
                                             FunctionCallError::invalid_function_call(
                                                 resource_method.method_name(),
-                                                expr,
+                                                &Expr::InvokeMethodLazy {
+                                                    lhs: lhs.clone(),
+                                                    method: method.clone(),
+                                                    generic_type_parameter: generic_type_parameter
+                                                        .clone(),
+                                                    args: args.clone(),
+                                                    source_span: source_span.clone(),
+                                                    type_annotation: type_annotation.clone(),
+                                                    inferred_type: inferred_type.clone(),
+                                                },
                                                 format!("Invalid function name: {}", err),
                                             )
                                         })?;
@@ -176,8 +201,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         _ => {}
                                     };
 
-                                    let method_args = args.clone();
-
                                     let worker_name =
                                         instance_type.worker_name().as_deref().cloned();
 
@@ -185,7 +208,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         dynamic_parsed_function_name,
                                         None,
                                         worker_name,
-                                        method_args,
+                                        args.clone(),
                                     )
                                     .with_source_span(source_span.clone());
 
@@ -212,7 +235,15 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                 _ => {
                     return Err(FunctionCallError::invalid_function_call(
                         method,
-                        expr,
+                        &Expr::InvokeMethodLazy {
+                            lhs: lhs.clone(),
+                            method: method.clone(),
+                            generic_type_parameter: generic_type_parameter.clone(),
+                            args: args.clone(),
+                            source_span: source_span.clone(),
+                            type_annotation: type_annotation.clone(),
+                            inferred_type: inferred_type.clone(),
+                        },
                         format!(
                             "invalid worker function invoke. Expected to be an instance type, found {}",
                             TypeName::try_from(inferred_type)
