@@ -10,7 +10,7 @@ templates:
     profiles:
       debug:
         build:
-        - command: wit-bindgen tiny-go --rename-package binding --out-dir binding ./wit-generated
+        - command: go tool wit-bindgen-go generate --out binding --world {{ component_name | to_kebab_case }} ./wit-generated
           rmdirs:
           - binding
           mkdirs:
@@ -19,7 +19,7 @@ templates:
           - wit-generated
           targets:
           - binding
-        - command: tinygo build -target=wasi -tags=purego -o ../../golem-temp/go/binaries-debug/{{ component_name | to_snake_case }}.wasm component/component.go
+        - command: tinygo build -target=wasip2 -wit-package wit-generated -wit-world {{ component_name | to_kebab_case }} -tags=purego -o ../../golem-temp/go/binaries-debug/{{ component_name | to_snake_case }}.wasm component/component.go
           mkdirs:
           - ../../golem-temp/go/binaries-debug
           sources:
@@ -28,29 +28,13 @@ templates:
           - component
           targets:
           - ../../golem-temp/go/binaries-debug/{{ component_name | to_snake_case }}.wasm
-        - command: wasm-tools component embed wit-generated ../../golem-temp/go/binaries-debug/{{ component_name | to_snake_case }}.wasm --output ../../golem-temp/go/embedded-components-debug/{{ component_name | to_snake_case }}.wasm
-          mkdirs:
-          - ../../golem-temp/go/embedded-components-debug
-          sources:
-          - wit-generated
-          - ../../golem-temp/go/binaries-debug/{{ component_name | to_snake_case }}.wasm
-          targets:
-          - ../../golem-temp/go/embedded-components-debug/{{ component_name | to_snake_case }}.wasm
-        - command: wasm-tools component new ../../golem-temp/go/embedded-components-debug/{{ component_name | to_snake_case }}.wasm -o ../../golem-temp/go/adapted-components-debug/{{ component_name | to_snake_case }}.wasm --adapt ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
-          mkdirs:
-          - ../../golem-temp/go/adapted-components-debug
-          sources:
-          - ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
-          - ../../golem-temp/go/embedded-components-debug/{{ component_name | to_snake_case }}.wasm
-          targets:
-          - ../../golem-temp/go/adapted-components-debug/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
-        componentWasm: ../../golem-temp/go/adapted-components-debug/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../../golem-temp/go/binaries-debug/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
       release:
         build:
-        - command: wit-bindgen tiny-go --rename-package binding --out-dir binding ./wit-generated
+        - command: go tool wit-bindgen-go generate --out binding --world {{ component_name | to_kebab_case }} ./wit-generated
           rmdirs:
             - binding
           mkdirs:
@@ -59,7 +43,7 @@ templates:
           - wit-generated
           targets:
           - binding
-        - command: tinygo build -target=wasi --no-debug -tags=purego -o ../../golem-temp/go/binaries-release/{{ component_name | to_snake_case }}.wasm component/component.go
+        - command: tinygo build -target=wasip2 -wit-package wit-generated -wit-world {{ component_name | to_kebab_case }} --no-debug -tags=purego -o ../../golem-temp/go/binaries-release/{{ component_name | to_snake_case }}.wasm component/component.go
           mkdirs:
           - ../../golem-temp/go/binaries-release
           sources:
@@ -68,24 +52,8 @@ templates:
           - component
           targets:
           - ../../golem-temp/go/binaries-release/{{ component_name | to_snake_case }}.wasm
-        - command: wasm-tools component embed wit-generated ../../golem-temp/go/binaries-release/{{ component_name | to_snake_case }}.wasm --output ../../golem-temp/go/embedded-components-release/{{ component_name | to_snake_case }}.wasm
-          mkdirs:
-          - ../../golem-temp/go/embedded-components-release
-          sources:
-          - wit-generated
-          - ../../golem-temp/go/binaries-release/{{ component_name | to_snake_case }}.wasm
-          targets:
-          - ../../golem-temp/go/embedded-components-release/{{ component_name | to_snake_case }}.wasm
-        - command: wasm-tools component new ../../golem-temp/go/embedded-components-release/{{ component_name | to_snake_case }}.wasm -o ../../golem-temp/go/adapted-components-release/{{ component_name | to_snake_case }}.wasm --adapt ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
-          mkdirs:
-          - ../../golem-temp/go/adapted-components-release
-          sources:
-          - ../../common-adapters/tier1/wasi_snapshot_preview1.wasm
-          - ../../golem-temp/go/embedded-components-release/{{ component_name | to_snake_case }}.wasm
-          targets:
-          - ../../golem-temp/go/adapted-components-release/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
-        componentWasm: ../../golem-temp/go/adapted-components-release/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../../golem-temp/go/binaries-release/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
     defaultProfile: debug

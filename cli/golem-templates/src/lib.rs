@@ -357,6 +357,10 @@ fn copy_all(
 
 fn transform(str: impl AsRef<str>, parameters: &TemplateParameters) -> String {
     str.as_ref()
+        .replace(
+            "componentnameapi",
+            &format!("{}api", parameters.component_name.parts().join("")),
+        )
         .replace("componentname", parameters.component_name.as_str())
         .replace("component-name", &parameters.component_name.to_kebab_case())
         .replace("ComponentName", &parameters.component_name.to_pascal_case())

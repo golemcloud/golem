@@ -8,6 +8,7 @@ interface component-name-api {
 }
 
 world component-name {
+  include wasi:cli/imports@0.2.0;
   import wasi:cli/environment@0.2.0;
 
   export component-name-api;

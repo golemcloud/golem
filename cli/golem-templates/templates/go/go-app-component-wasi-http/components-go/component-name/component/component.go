@@ -1,33 +1,39 @@
 package main
 
 import (
-	"app/components-go/component-name/binding"
+	incominghandler "app/components-go/component-name/binding/wasi/http/incoming-handler"
+
+	"github.com/golemcloud/golem-go/binding/wasi/http/types"
+	"go.bytecodealliance.org/cm"
 )
 
-// Helper type aliases to make code more readable
-type HttpRequest = binding.ExportsWasiHttp0_2_0_IncomingHandlerIncomingRequest
-type HttpResponseOut = binding.ExportsWasiHttp0_2_0_IncomingHandlerResponseOutparam
-type HttpOutgoingResponse = binding.WasiHttp0_2_0_TypesOutgoingResponse
-type HttpError = binding.WasiHttp0_2_0_TypesErrorCode
-
 func init() {
-	binding.SetExportsWasiHttp0_2_0_IncomingHandler(&ComponentNameImpl{})
+	incominghandler.Exports.Handle = Handle
 }
-
-type ComponentNameImpl struct{}
 
 // Implementation of the exported interface
 
-func (e *ComponentNameImpl) Handle(request HttpRequest, responseOut HttpResponseOut) {
+func Handle(request incominghandler.IncomingRequest, responseOut incominghandler.ResponseOutparam) {
 	// Construct HttpResponse to send back
-	headers := binding.NewFields()
-	httpResponse := binding.NewOutgoingResponse(headers)
+	headers := types.NewFields()
+	httpResponse := types.NewOutgoingResponse(headers)
 	httpResponse.SetStatusCode(200)
-	httpResponse.Body().Unwrap().Write().Unwrap().BlockingWriteAndFlush([]uint8("Hello from Go!\n")).Unwrap()
 
-	// Send HTTP response
-	okResponse := binding.Ok[HttpOutgoingResponse, HttpError](httpResponse)
-	binding.StaticResponseOutparamSet(responseOut, okResponse)
+	body, _, isErr := httpResponse.Body().Result()
+	if isErr {
+		panic("Failed to open response body")
+	}
+	stream, _, isErr := body.Write().Result()
+	if isErr {
+		panic("Failed to open response body stream")
+	}
+	_, err, isErr := stream.BlockingWriteAndFlush(cm.ToList([]uint8("Hello from Go!\n"))).Result()
+	if isErr {
+		panic("Failed to flush response body: " + err.String())
+	}
+
+	result := cm.OK[cm.Result[types.ErrorCodeShape, types.OutgoingResponse, types.ErrorCode]](httpResponse)
+	types.ResponseOutparamSet(types.ResponseOutparam(responseOut), result)
 }
 
 func main() {}

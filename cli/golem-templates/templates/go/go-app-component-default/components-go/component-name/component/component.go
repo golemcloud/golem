@@ -5,30 +5,29 @@ import (
 
 	// Import this for using the common lib:
 	// "app/common-go/lib"
-	"app/components-go/component-name/binding"
+	componentnameapi "app/components-go/component-name/binding/pack/name-exports/component-name-api"
 )
 
 func init() {
-	binding.SetExportsPackNameExportsComponentNameApi(&Impl{})
+	componentnameapi.Exports.Add = Add
+	componentnameapi.Exports.Get = Get
 }
 
-type Impl struct {
-	counter uint64
-}
+var counter uint64
 
-func (i *Impl) Add(value uint64) {
+func Add(value uint64) {
 	std.Init(std.Packages{Os: true, NetHttp: true})
 
 	// Example common lib usage
 	// fmt.Println(lib.ExampleCommonFunction())
 
-	i.counter += value
+	counter += value
 }
 
-func (i *Impl) Get() uint64 {
+func Get() uint64 {
 	std.Init(std.Packages{Os: true, NetHttp: true})
 
-	return i.counter
+	return counter
 }
 
 func main() {}

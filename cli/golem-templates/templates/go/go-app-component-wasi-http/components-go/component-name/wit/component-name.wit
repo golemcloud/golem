@@ -4,6 +4,7 @@ package pack:name;
 // See https://github.com/WebAssembly/wasi-http for an introduction to wasi-http
 
 world component-name {
+  include wasi:cli/imports@0.2.0;
   import wasi:http/outgoing-handler@0.2.0;
   export wasi:http/incoming-handler@0.2.0;
 }
