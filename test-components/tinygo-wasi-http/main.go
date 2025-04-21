@@ -8,15 +8,13 @@ import (
 	"net/http"
 	"os"
 
+	tinygowasihttp "golem.com/tinygo_wasi_http/binding/golem/it/tinygo-wasi-http"
+
 	"github.com/golemcloud/golem-go/std"
-	"golem.com/tinygo_wasi/binding"
 )
 
 func init() {
-	binding.SetBinding(&Impl{})
-}
-
-type Impl struct {
+	tinygowasihttp.Exports.Example1 = Example1
 }
 
 type ExampleRequest struct {
@@ -30,7 +28,7 @@ type ExampleResponse struct {
 	Message    string
 }
 
-func (i *Impl) Example1(_ string) string {
+func Example1(_ string) string {
 	std.Init(std.Packages{
 		Os:      true,
 		NetHttp: true,
