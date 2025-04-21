@@ -97,7 +97,8 @@ mod internal {
                     generic_type_parameter,
                     args,
                     inferred_type,
-                    ..
+                    source_span,
+                    type_annotation,
                 } => {
 
                     let type_parameter = generic_type_parameter
@@ -125,7 +126,14 @@ mod internal {
                             type_parameter,
                         ).map_err(|err| {
                             RibTypeError::from(CustomError::new(
-                                &expr,
+                                &Expr::Call {
+                                    call_type: call_type.clone(),
+                                    generic_type_parameter: None,
+                                    args: args.clone(),
+                                    inferred_type: InferredType::Unknown,
+                                    source_span: source_span.clone(),
+                                    type_annotation: type_annotation.clone(),
+                                },
                                 format!("Failed to create instance type: {}", err),
                             ))
 

@@ -37,6 +37,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
             generic_type_parameter,
             args,
             source_span,
+            type_annotation,
             ..
         } = expr
         {
@@ -55,7 +56,23 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         })
                         .transpose()?;
 
-                    let fqn = instance_type.get_function(expr, method, type_parameter)?;
+                    let fqn = instance_type.get_function(method, type_parameter).map_err(
+                        |err| {
+                            FunctionCallError::invalid_function_call(
+                                method,
+                                &Expr::InvokeMethodLazy {
+                                    lhs: lhs.clone(),
+                                    method: method.clone(),
+                                    generic_type_parameter: generic_type_parameter.clone(),
+                                    args: args.clone(),
+                                    source_span: source_span.clone(),
+                                    type_annotation: type_annotation.clone(),
+                                    inferred_type: inferred_type.clone(),
+                                },
+                                err
+                            )
+                        },
+                    )?;
 
                     match fqn.function_name {
                         FunctionName::Function(function_name) => {

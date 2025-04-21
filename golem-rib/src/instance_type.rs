@@ -198,10 +198,9 @@ impl InstanceType {
     }
     pub fn get_function(
         &self,
-        expr: &Expr,
         method_name: &str,
         type_parameter: Option<TypeParameter>,
-    ) -> Result<Function, FunctionCallError> {
+    ) -> Result<Function, String> {
         match type_parameter {
             Some(tp) => match tp {
                 TypeParameter::Interface(iface) => {
@@ -213,11 +212,7 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if interfaces.is_empty() {
-                        return Err(FunctionCallError::InvalidFunctionCall {
-                            function_name: method_name.to_string(),
-                            expr: expr.clone(),
-                            message: format!("Interface '{}' not found", iface),
-                        });
+                        return Err(format!("Interface '{}' not found", iface));
                     }
 
                     let functions = interfaces
@@ -226,14 +221,10 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
-                        return Err(FunctionCallError::InvalidFunctionCall {
-                            function_name: method_name.to_string(),
-                            expr: expr.clone(),
-                            message: format!(
-                                "Function '{}' not found in interface '{}'",
-                                method_name, iface
-                            ),
-                        });
+                        return Err(format!(
+                            "Function '{}' not found in interface '{}'",
+                            method_name, iface
+                        ));
                     }
 
                     // There is only 1 interface, and there cannot exist any more conflicts
@@ -245,13 +236,7 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, method_name).map_err(|err| {
-                            FunctionCallError::InvalidFunctionCall {
-                                function_name: method_name.to_string(),
-                                expr: expr.clone(),
-                                message: err,
-                            }
-                        })
+                        search_function_in_instance(self, method_name)
                     }
                 }
 
@@ -264,11 +249,7 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if packages.is_empty() {
-                        return Err(FunctionCallError::InvalidFunctionCall {
-                            function_name: method_name.to_string(),
-                            expr: expr.clone(),
-                            message: format!("package '{}' not found", pkg),
-                        });
+                        return Err(format!("package '{}' not found", pkg));
                     }
 
                     let functions = packages
@@ -277,14 +258,10 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
-                        return Err(FunctionCallError::InvalidFunctionCall {
-                            function_name: method_name.to_string(),
-                            expr: expr.clone(),
-                            message: format!(
-                                "function '{}' not found in package '{}'",
-                                method_name, pkg
-                            ),
-                        });
+                        return Err(format!(
+                            "function '{}' not found in package '{}'",
+                            method_name, pkg
+                        ));
                     }
 
                     if functions.len() == 1 {
@@ -294,13 +271,7 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, method_name).map_err(|err| {
-                            FunctionCallError::InvalidFunctionCall {
-                                function_name: method_name.to_string(),
-                                expr: expr.clone(),
-                                message: err,
-                            }
-                        })
+                        search_function_in_instance(self, method_name)
                     }
                 }
 
@@ -317,14 +288,10 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
-                        return Err(FunctionCallError::InvalidFunctionCall {
-                            function_name: method_name.to_string(),
-                            expr: expr.clone(),
-                            message: format!(
-                                "function '{}' not found in interface '{}'",
-                                method_name, fq_iface
-                            ),
-                        });
+                        return Err(format!(
+                            "function '{}' not found in interface '{}'",
+                            method_name, fq_iface
+                        ));
                     }
 
                     if functions.len() == 1 {
@@ -334,23 +301,11 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, method_name).map_err(|err| {
-                            FunctionCallError::InvalidFunctionCall {
-                                function_name: method_name.to_string(),
-                                expr: expr.clone(),
-                                message: err,
-                            }
-                        })
+                        search_function_in_instance(self, method_name)
                     }
                 }
             },
-            None => search_function_in_instance(self, method_name).map_err(|err| {
-                FunctionCallError::InvalidFunctionCall {
-                    function_name: method_name.to_string(),
-                    expr: expr.clone(),
-                    message: err,
-                }
-            }),
+            None => search_function_in_instance(self, method_name),
         }
     }
 
