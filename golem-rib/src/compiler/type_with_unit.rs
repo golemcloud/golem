@@ -224,7 +224,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                     let first = &vec[0];
                     Ok(first.try_into()?)
                 } else {
-                    Err("unexpected multi parameter function returns".to_string())
+                    Err("function with multiple return types not supported".to_string())
                 }
             }
         }
