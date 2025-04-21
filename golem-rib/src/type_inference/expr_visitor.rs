@@ -1,7 +1,5 @@
-use crate::call_type::{CallType, InstanceCreationType};
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
-use std::ops::Deref;
 
 // A structure that allows to visit expressions in a bottom-up or top-down order.
 // All other functionalities are to be replaced with the usage of `ExprVisitor`

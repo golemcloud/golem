@@ -20,7 +20,6 @@ use crate::{
     DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ExprVisitor,
     FunctionCallError, InferredType, TypeName,
 };
-use std::collections::VecDeque;
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations

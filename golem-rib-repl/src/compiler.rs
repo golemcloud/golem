@@ -15,7 +15,7 @@
 use crate::repl_state::ReplState;
 use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use rib::*;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::fmt::Display;
 
 pub fn compile_rib_script(
@@ -132,9 +132,7 @@ pub fn get_identifiers(inferred_expr: &InferredExpr) -> Vec<VariableId> {
 
     while let Some(expr) = visitor.pop_back() {
         match expr {
-            Expr::Let {
-                variable_id, ..
-            } => {
+            Expr::Let { variable_id, .. } => {
                 if !identifiers.contains(variable_id) {
                     identifiers.push(variable_id.clone());
                 }
