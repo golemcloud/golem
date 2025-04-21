@@ -4279,11 +4279,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        idempotency_key:
+        idempotencyKey:
           type: string
       required:
       - timestamp
-      - idempotency_key
+      - idempotencyKey
     CancelInvocationResponse:
       type: object
       properties:
@@ -4297,22 +4297,22 @@ components:
         timestamp:
           type: string
           format: date-time
-        persistence_level:
+        persistenceLevel:
           $ref: '#/components/schemas/PersistenceLevel'
       required:
       - timestamp
-      - persistence_level
+      - persistenceLevel
     ChangeRetryPolicyParameters:
       type: object
       properties:
         timestamp:
           type: string
           format: date-time
-        new_policy:
+        newPolicy:
           $ref: '#/components/schemas/PublicRetryConfig'
       required:
       - timestamp
-      - new_policy
+      - newPolicy
     CompleteParameters:
       type: object
       properties:
@@ -4338,9 +4338,9 @@ components:
         timestamp:
           type: string
           format: date-time
-        worker_id:
+        workerId:
           $ref: '#/components/schemas/WorkerId'
-        component_version:
+        componentVersion:
           type: integer
           format: uint64
         args:
@@ -4351,30 +4351,30 @@ components:
           type: object
           additionalProperties:
             type: string
-        account_id:
+        accountId:
           type: string
         parent:
           $ref: '#/components/schemas/WorkerId'
-        component_size:
+        componentSize:
           type: integer
           format: uint64
-        initial_total_linear_memory_size:
+        initialTotalLinearMemorySize:
           type: integer
           format: uint64
-        initial_active_plugins:
+        initialActivePlugins:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
       required:
       - timestamp
-      - worker_id
-      - component_version
+      - workerId
+      - componentVersion
       - args
       - env
-      - account_id
-      - component_size
-      - initial_total_linear_memory_size
-      - initial_active_plugins
+      - accountId
+      - componentSize
+      - initialTotalLinearMemorySize
+      - initialActivePlugins
     DeactivatePluginParameters:
       type: object
       properties:
@@ -4399,17 +4399,17 @@ components:
         id:
           type: integer
           format: uint64
-        resource_name:
+        resourceName:
           type: string
-        resource_params:
+        resourceParams:
           type: array
           items:
             $ref: '#/components/schemas/ValueAndType'
       required:
       - timestamp
       - id
-      - resource_name
-      - resource_params
+      - resourceName
+      - resourceParams
     Empty:
       type: object
     EndRegionParameters:
@@ -4418,12 +4418,12 @@ components:
         timestamp:
           type: string
           format: date-time
-        begin_index:
+        beginIndex:
           type: integer
           format: uint64
       required:
       - timestamp
-      - begin_index
+      - beginIndex
     ErrorBody:
       type: object
       properties:
@@ -4459,34 +4459,34 @@ components:
           format: date-time
         response:
           $ref: '#/components/schemas/ValueAndType'
-        consumed_fuel:
+        consumedFuel:
           type: integer
           format: int64
       required:
       - timestamp
       - response
-      - consumed_fuel
+      - consumedFuel
     ExportedFunctionInvokedParameters:
       type: object
       properties:
         timestamp:
           type: string
           format: date-time
-        function_name:
+        functionName:
           type: string
         request:
           type: array
           items:
             $ref: '#/components/schemas/ValueAndType'
-        idempotency_key:
+        idempotencyKey:
           type: string
-        trace_id:
+        traceId:
           type: string
-        trace_states:
+        traceStates:
           type: array
           items:
             type: string
-        invocation_context:
+        invocationContext:
           type: array
           items:
             type: array
@@ -4494,41 +4494,41 @@ components:
               $ref: '#/components/schemas/PublicSpanData'
       required:
       - timestamp
-      - function_name
+      - functionName
       - request
-      - idempotency_key
-      - trace_id
-      - trace_states
-      - invocation_context
+      - idempotencyKey
+      - traceId
+      - traceStates
+      - invocationContext
     ExportedFunctionParameters:
       type: object
       properties:
-        idempotency_key:
+        idempotencyKey:
           type: string
-        full_function_name:
+        fullFunctionName:
           type: string
-        function_input:
+        functionInput:
           type: array
           items:
             $ref: '#/components/schemas/ValueAndType'
-        trace_id:
+        traceId:
           type: string
-        trace_states:
+        traceStates:
           type: array
           items:
             type: string
-        invocation_context:
+        invocationContext:
           type: array
           items:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
       required:
-      - idempotency_key
-      - full_function_name
-      - trace_id
-      - trace_states
-      - invocation_context
+      - idempotencyKey
+      - fullFunctionName
+      - traceId
+      - traceStates
+      - invocationContext
     FailedUpdate:
       type: object
       properties:
@@ -4549,14 +4549,14 @@ components:
         timestamp:
           type: string
           format: date-time
-        target_version:
+        targetVersion:
           type: integer
           format: uint64
         details:
           type: string
       required:
       - timestamp
-      - target_version
+      - targetVersion
     FilterComparator:
       type: string
       enum:
@@ -4572,11 +4572,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        span_id:
+        spanId:
           type: string
       required:
       - timestamp
-      - span_id
+      - spanId
     FlatComponentFileSystemNode:
       type: object
       properties:
@@ -5319,20 +5319,20 @@ components:
         timestamp:
           type: string
           format: date-time
-        function_name:
+        functionName:
           type: string
         request:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrapped_function_type:
+        wrappedFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
       - timestamp
-      - function_name
+      - functionName
       - request
       - response
-      - wrapped_function_type
+      - wrappedFunctionType
     IndexedWorkerMetadata:
       type: object
       properties:
@@ -5408,11 +5408,11 @@ components:
     ManualUpdateParameters:
       type: object
       properties:
-        target_version:
+        targetVersion:
           type: integer
           format: uint64
       required:
-      - target_version
+      - targetVersion
     MethodPattern:
       type: string
       enum:
@@ -5447,15 +5447,15 @@ components:
     OplogCursor:
       type: object
       properties:
-        next_oplog_index:
+        nextOplogIndex:
           type: integer
           format: uint64
-        current_component_version:
+        currentComponentVersion:
           type: integer
           format: uint64
       required:
-      - next_oplog_index
-      - current_component_version
+      - nextOplogIndex
+      - currentComponentVersion
     OplogRegion:
       type: object
       properties:
@@ -5515,21 +5515,21 @@ components:
     PluginInstallationDescription:
       type: object
       properties:
-        installation_id:
+        installationId:
           type: string
           format: uuid
-        plugin_name:
+        pluginName:
           type: string
-        plugin_version:
+        pluginVersion:
           type: string
         parameters:
           type: object
           additionalProperties:
             type: string
       required:
-      - installation_id
-      - plugin_name
-      - plugin_version
+      - installationId
+      - pluginName
+      - pluginVersion
       - parameters
     PromiseId:
       type: object
@@ -5612,21 +5612,21 @@ components:
     PublicExternalSpanData:
       type: object
       properties:
-        span_id:
+        spanId:
           type: string
       required:
-      - span_id
+      - spanId
     PublicLocalSpanData:
       type: object
       properties:
-        span_id:
+        spanId:
           type: string
         start:
           type: string
           format: date-time
-        parent_id:
+        parentId:
           type: string
-        linked_context:
+        linkedContext:
           type: integer
           format: uint64
         attributes:
@@ -5636,7 +5636,7 @@ components:
         inherited:
           type: boolean
       required:
-      - span_id
+      - spanId
       - start
       - attributes
       - inherited
@@ -6035,25 +6035,25 @@ components:
     PublicRetryConfig:
       type: object
       properties:
-        max_attempts:
+        maxAttempts:
           type: integer
           format: uint32
-        min_delay:
+        minDelay:
           type: string
           format: duration
-        max_delay:
+        maxDelay:
           type: string
           format: duration
         multiplier:
           type: number
           format: double
-        max_jitter_factor:
+        maxJitterFactor:
           type: number
           format: double
       required:
-      - max_attempts
-      - min_delay
-      - max_delay
+      - maxAttempts
+      - minDelay
+      - maxDelay
       - multiplier
     PublicSpanData:
       discriminator:
@@ -6206,11 +6206,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        dropped_region:
+        droppedRegion:
           $ref: '#/components/schemas/OplogRegion'
       required:
       - timestamp
-      - dropped_region
+      - droppedRegion
     RevertToOplogIndex:
       type: object
       properties:
@@ -6267,10 +6267,10 @@ components:
     RibOutputTypeInfo:
       type: object
       properties:
-        analysed_type:
+        analysedType:
           $ref: '#/components/schemas/AnalysedType'
       required:
-      - analysed_type
+      - analysedType
     RouteRequestData:
       type: object
       properties:
@@ -6343,7 +6343,7 @@ components:
         timestamp:
           type: string
           format: date-time
-        span_id:
+        spanId:
           type: string
         key:
           type: string
@@ -6351,7 +6351,7 @@ components:
           $ref: '#/components/schemas/PublicAttributeValue'
       required:
       - timestamp
-      - span_id
+      - spanId
       - key
       - value
     ShardId:
@@ -6378,11 +6378,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        span_id:
+        spanId:
           type: string
-        parent_id:
+        parentId:
           type: string
-        linked_context:
+        linkedContext:
           type: string
         attributes:
           type: object
@@ -6390,7 +6390,7 @@ components:
             $ref: '#/components/schemas/PublicAttributeValue'
       required:
       - timestamp
-      - span_id
+      - spanId
       - attributes
     StringAttributeValue:
       type: object

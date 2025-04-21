@@ -861,10 +861,7 @@ impl Expr {
         )
     }
 
-    pub fn bind_global_variable_types(
-        &self,
-        type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<Self, RibTypeError> {
+    pub fn bind_global_variable_types(&mut self, type_spec: &Vec<GlobalVariableTypeSpec>) {
         type_inference::bind_global_variable_types(self, type_spec)
     }
 
@@ -1098,7 +1095,6 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
         self.infer_orphan_literals()?;
         self.check_types(function_type_registry)?;
-        dbg!(self.clone());
         self.unify_types()?;
         Ok(())
     }
@@ -1109,7 +1105,7 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.identify_instance_creation(function_type_registry)?;
-        *self = self.bind_global_variable_types(type_spec)?;
+        self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();
@@ -1134,8 +1130,7 @@ impl Expr {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
-        let expr = self.pull_types_up()?;
-        *self = expr;
+        self.pull_types_up()?;
         self.infer_global_inputs();
         Ok(())
     }
@@ -1197,7 +1192,7 @@ impl Expr {
         type_inference::infer_all_identifiers(self)
     }
 
-    pub fn pull_types_up(&self) -> Result<Expr, RibTypeError> {
+    pub fn pull_types_up(&mut self) -> Result<(), RibTypeError> {
         type_inference::type_pull_up(self)
     }
 
