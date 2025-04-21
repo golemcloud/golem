@@ -203,16 +203,12 @@ fn update_all_identifier_in_lhs_expr(
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_front() {
-        match expr {
-            Expr::Identifier { variable_id, .. } => {
-                let match_identifier = MatchIdentifier::new(variable_id.name(), global_arm_index);
-                identifier_names.push(match_identifier);
-                let new_variable_id =
-                    VariableId::match_identifier(variable_id.name(), global_arm_index);
-                *variable_id = new_variable_id;
-            }
-
-            _ => {}
+        if let Expr::Identifier { variable_id, .. } = expr {
+            let match_identifier = MatchIdentifier::new(variable_id.name(), global_arm_index);
+            identifier_names.push(match_identifier);
+            let new_variable_id =
+                VariableId::match_identifier(variable_id.name(), global_arm_index);
+            *variable_id = new_variable_id;
         }
     }
 
