@@ -421,6 +421,29 @@ impl ComponentApi {
         record.result(response)
     }
 
+    #[oai(path = "/search", method = "post", operation_id = "search_components")]
+    async fn get_components_batch_post(
+        &self,
+        components_search: Json<Vec<ComponentSearchParameters>>,
+    ) -> Result<Json<Vec<Component>>> {
+        let record = recorded_http_api_request!(
+            "search_components",
+            search_components = components_search
+                .0
+                .iter()
+                .map(|query| query.component_name.0.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        let response = self
+            .search_components_internal(components_search.0)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
     async fn get_components_internal(
         &self,
         component_name: Option<ComponentName>,
@@ -429,6 +452,23 @@ impl ComponentApi {
             .component_service
             .find_by_name(component_name, &DefaultComponentOwner)
             .await?;
+        Ok(Json(components.into_iter().map(|c| c.into()).collect()))
+    }
+
+    async fn search_components_internal(
+        &self,
+        search_query: Vec<ComponentSearchParameters>,
+    ) -> Result<Json<Vec<Component>>> {
+        let component_by_name_and_versions = search_query
+            .into_iter()
+            .map(|query| query.into())
+            .collect::<Vec<_>>();
+
+        let components = self
+            .component_service
+            .find_by_names(component_by_name_and_versions, &DefaultComponentOwner)
+            .await?;
+
         Ok(Json(components.into_iter().map(|c| c.into()).collect()))
     }
 
