@@ -1398,8 +1398,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         owner: &Owner,
     ) -> Result<Vec<Component<Owner>>, ComponentError> {
         info!("Find components by names");
-        let component_names =
-            component_names.into_iter().map(|x| x.0).collect::<Vec<_>>();
+        let component_names = component_names.into_iter().map(|x| x.0).collect::<Vec<_>>();
 
         let component_records = self
             .component_repo

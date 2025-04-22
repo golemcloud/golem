@@ -3002,6 +3002,67 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/components/batch:
+    get:
+      tags:
+      - Component
+      operationId: get_components_batch
+      parameters:
+      - in: query
+        name: component-name
+        required: true
+        deprecated: false
+        schema:
+          type: array
+          items:
+            type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Component'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/components/{component_id}/versions/{version}/plugins/installs:
     get:
       tags:
