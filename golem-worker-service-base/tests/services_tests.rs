@@ -667,7 +667,7 @@ async fn test_deployment(
         .unwrap();
 
     let deployment = deployment_service
-        .get_by_site(&ApiSiteString("test.com".to_string()))
+        .get_by_site(&DefaultNamespace(), &ApiSiteString("test.com".to_string()))
         .await
         .unwrap();
     assert!(deployment.is_some());
@@ -744,7 +744,7 @@ async fn test_deployment(
     assert!(definitions.is_empty());
 
     let deployment = deployment_service
-        .get_by_site(&ApiSiteString("test.com".to_string()))
+        .get_by_site(&DefaultNamespace(), &ApiSiteString("test.com".to_string()))
         .await
         .unwrap();
     assert!(deployment.is_none());

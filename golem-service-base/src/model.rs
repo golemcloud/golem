@@ -37,6 +37,8 @@ use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerCreationRequest {
     pub name: String,
     pub args: Vec<String>,
@@ -79,6 +81,8 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct InvokeParameters {
     pub params: Vec<OptionallyTypeAnnotatedValueJson>,
 }
@@ -246,6 +250,8 @@ pub struct UpdateWorkerRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct WorkersMetadataRequest {
     pub filter: Option<WorkerFilter>,
     pub cursor: Option<ScanCursor>,
@@ -254,6 +260,8 @@ pub struct WorkersMetadataRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadata>,
     pub cursor: Option<ScanCursor>,
@@ -511,6 +519,8 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct InvokeResult {
     pub result: TypeAnnotatedValue,
 }

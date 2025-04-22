@@ -170,18 +170,13 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "tinygo" ]; then
     fi
 
     if [ "$rebuild" = true ]; then
-      rm *.wasm
-      rm -rf tinygo_wasi
+      rm -f *.wasm
+      rm -rf binding
     fi
-    wit-bindgen tiny-go --out-dir binding --rename-package binding ./wit
-    tinygo build -target=wasi -tags=purego -o main.wasm main.go
+    wit-bindgen-go generate --out binding --world $subdir ./wit
 
-    echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
-    target_wat="../$subdir.wat"
-    wasm-tools component embed ./wit main.wasm --output main.embed.wasm
-    wasm-tools component new main.embed.wasm -o "$target" --adapt ../../../golem-wit/adapters/tier1/wasi_snapshot_preview1.wasm
-    wasm-tools print "$target" >"$target_wat"
+    tinygo build -target=wasip2 -wit-package wit -wit-world $subdir -tags=purego -o $target main.go
 
     popd || exit
   done

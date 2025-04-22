@@ -223,6 +223,8 @@ impl HttpApiDefinitionResponseData {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RouteRequestData {
     pub method: MethodPattern,
     pub path: String,
@@ -252,6 +254,8 @@ impl RouteRequestData {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RouteResponseData {
     pub method: MethodPattern,
     pub path: String,

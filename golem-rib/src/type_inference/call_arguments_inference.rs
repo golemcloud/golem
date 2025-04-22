@@ -268,10 +268,10 @@ mod internal {
                         if let Some(function_result_type) = function_result_inferred_type {
                             *function_result_type = {
                                 if return_types.len() == 1 {
-                                    return_types[0].clone().into()
+                                    return_types.first().unwrap().into()
                                 } else {
                                     InferredType::Sequence(
-                                        return_types.iter().map(|t| t.clone().into()).collect(),
+                                        return_types.iter().map(|t| t.into()).collect(),
                                     )
                                 }
                             }
@@ -370,7 +370,7 @@ mod internal {
     ) -> Result<(), FunctionCallError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
             check_function_arguments(function_call_expr, function_name, param_type, arg)?;
-            arg.add_infer_type_mut(param_type.clone().into());
+            arg.add_infer_type_mut(param_type.into());
         }
 
         Ok(())
