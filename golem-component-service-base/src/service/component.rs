@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
+use crate::model::{ComponentSearchParameters, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
@@ -44,7 +44,7 @@ use golem_common::model::{
     InitialComponentFileKey,
 };
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, ComponentSearchParameters};
+use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;

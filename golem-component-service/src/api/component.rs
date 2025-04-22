@@ -24,7 +24,8 @@ use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+    ComponentSearchParameters, DynamicLinking, InitialComponentFilesArchiveAndPermissions,
+    UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};

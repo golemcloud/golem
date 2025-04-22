@@ -17,6 +17,7 @@ pub mod plugin;
 
 use bincode::{Decode, Encode};
 pub use component::*;
+use golem_common::base_model::ComponentVersion;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType};
 use golem_service_base::model::ComponentName;
@@ -44,7 +45,10 @@ pub struct DynamicLinking {
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }
 
-#[derive(Debug, Clone, Object)]
-pub struct ComponentNamesQuery {
-    pub component_names: Vec<ComponentName>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ComponentSearchParameters {
+    pub component_name: ComponentName,
+    pub version: Option<ComponentVersion>,
 }

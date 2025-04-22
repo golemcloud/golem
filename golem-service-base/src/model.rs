@@ -57,14 +57,6 @@ pub struct WorkerCreationResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct ComponentName(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ComponentSearchParameters {
-    pub component_name: ComponentName,
-    pub version: Option<ComponentVersion>,
-}
-
 impl Display for ComponentName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
