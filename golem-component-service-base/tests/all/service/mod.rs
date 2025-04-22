@@ -45,8 +45,9 @@ use golem_component_service_base::repo::component::{
 };
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
 use golem_component_service_base::service::component::{
-    ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
-    LazyComponentService, ParameterTypeConflict, ReturnTypeConflict,
+    ComponentError, ComponentService, ComponentServiceDefault, ComponentVersionQueryType,
+    ConflictReport, ConflictingFunction, LazyComponentService, ParameterTypeConflict,
+    ReturnTypeConflict,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
@@ -307,6 +308,39 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .await
         .map_err(|err| err.to_string())
         .unwrap();
+
+    let component_batch_result = component_service
+        .find_by_names(
+            vec![
+                component1.component_name.clone(),
+                component2.component_name.clone(),
+            ],
+            ComponentVersionQueryType::All,
+            &DefaultComponentOwner,
+        )
+        .await
+        .unwrap();
+
+    // 3 components by this time - 1 from rust-echo and 2 from shopping-cart-services
+    assert_eq!(component_batch_result.len(), 3);
+
+    assert_eq!(
+        component_batch_result[0].component_name.0,
+        "rust-echo-services"
+    );
+    assert_eq!(component_batch_result[0].versioned_component_id.version, 0);
+
+    assert_eq!(
+        component_batch_result[1].component_name.0,
+        "shopping-cart-services"
+    );
+    assert_eq!(component_batch_result[1].versioned_component_id.version, 0);
+
+    assert_eq!(
+        component_batch_result[2].component_name.0,
+        "shopping-cart-services"
+    );
+    assert_eq!(component_batch_result[2].versioned_component_id.version, 1);
 
     let component1_result = component_service
         .get_latest_version(
