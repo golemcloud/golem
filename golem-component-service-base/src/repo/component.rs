@@ -1533,8 +1533,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         names: &[String],
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
         // Create the correct number of `?` placeholders
-        let placeholders = std::iter::repeat("?")
-            .take(names.len())
+        let placeholders = std::iter::repeat_n("?", names.len())
             .collect::<Vec<_>>()
             .join(", ");
 
