@@ -1,6 +1,6 @@
 state: int = 0
 
-from binding.pack_name import exports
+from pack_name import exports
 # Example common lib import
 # from lib import example_common_function
 

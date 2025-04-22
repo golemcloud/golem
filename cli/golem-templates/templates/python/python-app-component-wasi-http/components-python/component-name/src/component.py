@@ -1,10 +1,10 @@
 import asyncio
 import poll_loop
 
-from binding.pack_name import exports
-from binding.pack_name.types import Ok
-from binding.pack_name.imports import types
-from binding.pack_name.imports.types import (
+from pack_name import exports
+from pack_name.types import Ok
+from pack_name.imports import types
+from pack_name.imports.types import (
     Method_Get,
     Method_Post,
     Scheme,

@@ -8,14 +8,14 @@
 templates:
   python:
     build:
-    - command: componentize-py --wit-path wit-generated bindings src/binding
+    - command: componentize-py --import-interface-name "wasi:http/types@0.2.0"="types" --import-interface-name "wasi:http/outgoing-handler@0.2.0"="outgoing_handler" --wit-path wit-generated bindings src
       rmdirs:
-      - src/binding
+      - src/{{ component_name | to_snake_case }}
       sources:
       - wit-generated
       targets:
-      - src/binding
-    - command: componentize-py --wit-path wit-generated componentize -p src -p ../../common-python component -o ../../golem-temp/python/components/{{ component_name | to_snake_case }}.wasm
+      - src/{{ component_name | to_snake_case }}
+    - command: componentize-py --import-interface-name "wasi:http/types@0.2.0"="types" --import-interface-name "wasi:http/outgoing-handler@0.2.0"="outgoing_handler" --wit-path wit-generated componentize -p src -p ../../common-python component -o ../../golem-temp/python/components/{{ component_name | to_snake_case }}.wasm
       mkdirs:
       - ../../golem-temp/python/components
       sources:
