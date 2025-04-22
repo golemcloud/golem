@@ -387,6 +387,13 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         owner: &Owner,
     ) -> Result<Vec<Component<Owner>>, ComponentError>;
 
+    async fn find_by_names(
+        &self,
+        component_names: Vec<ComponentName>,
+        version_query_type: ComponentVersionQueryType,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError>;
+
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
@@ -463,6 +470,12 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError>;
+}
+
+pub enum ComponentVersionQueryType {
+    Latest,
+    Exact(ComponentVersion),
+    All,
 }
 
 pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
@@ -1378,6 +1391,30 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         Ok(values)
     }
 
+    async fn find_by_names(
+        &self,
+        component_names: Vec<ComponentName>,
+        _version_query_type: ComponentVersionQueryType,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        info!("Find components by names");
+        let component_names =
+            component_names.into_iter().map(|x| x.0).collect::<Vec<_>>();
+
+        let component_records = self
+            .component_repo
+            .get_by_names(&owner.to_string(), &component_names)
+            .await?;
+
+        let values: Vec<Component<Owner>> = component_records
+            .iter()
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        Ok(values)
+    }
+
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
@@ -1944,6 +1981,19 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         lock.as_ref()
             .unwrap()
             .find_by_name(component_name, owner)
+            .await
+    }
+
+    async fn find_by_names(
+        &self,
+        component_names: Vec<ComponentName>,
+        version: ComponentVersionQueryType,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .find_by_names(component_names, version, owner)
             .await
     }
 

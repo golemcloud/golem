@@ -26,7 +26,9 @@ use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
     DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
-use golem_component_service_base::service::component::ComponentService;
+use golem_component_service_base::service::component::{
+    ComponentService, ComponentVersionQueryType,
+};
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::*;
@@ -421,6 +423,31 @@ impl ComponentApi {
         record.result(response)
     }
 
+    #[oai(path = "/batch", method = "get", operation_id = "get_components_batch")]
+    async fn get_components_batch_get(
+        &self,
+        #[oai(name = "component-name")] component_names: Query<Vec<ComponentName>>,
+    ) -> Result<Json<Vec<Component>>> {
+        let record = recorded_http_api_request!(
+            "get_components_batch_get",
+            component_names = component_names
+                .0
+                .iter()
+                .map(|n| n.0.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        let component_names = component_names.0;
+
+        let response = self
+            .get_components_batch_internal(component_names)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
     async fn get_components_internal(
         &self,
         component_name: Option<ComponentName>,
@@ -428,6 +455,21 @@ impl ComponentApi {
         let components = self
             .component_service
             .find_by_name(component_name, &DefaultComponentOwner)
+            .await?;
+        Ok(Json(components.into_iter().map(|c| c.into()).collect()))
+    }
+
+    async fn get_components_batch_internal(
+        &self,
+        component_name: Vec<ComponentName>,
+    ) -> Result<Json<Vec<Component>>> {
+        let components = self
+            .component_service
+            .find_by_names(
+                component_name,
+                ComponentVersionQueryType::All,
+                &DefaultComponentOwner,
+            )
             .await?;
         Ok(Json(components.into_iter().map(|c| c.into()).collect()))
     }

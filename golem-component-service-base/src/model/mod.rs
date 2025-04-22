@@ -19,6 +19,7 @@ use bincode::{Decode, Encode};
 pub use component::*;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType};
+use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{Multipart, Object};
@@ -41,4 +42,9 @@ pub struct UpdatePayload {
 #[derive(Default)]
 pub struct DynamicLinking {
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+}
+
+#[derive(Debug, Clone, Object)]
+pub struct ComponentNamesQuery {
+    pub component_names: Vec<ComponentName>,
 }

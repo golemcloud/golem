@@ -303,6 +303,12 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         name: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
 
+    async fn get_by_names(
+        &self,
+        namespace: &str,
+        names: &[String],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
+
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError>;
 
     async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError>;
@@ -485,6 +491,17 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         name: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
         self.repo.get_by_name(namespace, name).await
+    }
+
+    async fn get_by_names(
+        &self,
+        namespace: &str,
+        names: &[String],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        self.repo
+            .get_by_names(namespace, names)
+            .instrument(info_span!("get_by_names", namespace = %namespace))
+            .await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
@@ -1409,6 +1426,50 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             .await
     }
 
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_by_names)]
+    async fn get_by_names_postgres(
+        &self,
+        namespace: &str,
+        names: &[String],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+            r#"
+            SELECT
+                c.namespace AS namespace,
+                c.name AS name,
+                c.component_id AS component_id,
+                cv.version AS version,
+                cv.size AS size,
+                cv.metadata AS metadata,
+                cv.created_at::timestamptz AS created_at,
+                cv.component_type AS component_type,
+                cv.available AS available,
+                cv.object_store_key AS object_store_key,
+                cv.transformed_object_store_key AS transformed_object_store_key,
+                cv.root_package_name AS root_package_name,
+                cv.root_package_version AS root_package_version
+            FROM components c
+                JOIN component_versions cv ON c.component_id = cv.component_id
+            WHERE c.namespace = $1 AND c.name = ANY($2)
+            ORDER BY c.name, cv.version
+        "#,
+        )
+        .bind(namespace)
+        .bind(names);
+
+        let components = self
+            .db_pool
+            .with("component", "get_by_names")
+            .fetch_all(query)
+            .await?;
+
+        let components = self
+            .add_installed_plugins(self.add_files(components).await?)
+            .await?;
+
+        Ok(components)
+    }
+
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_name)]
     async fn get_by_name_sqlite(
         &self,
@@ -1463,6 +1524,58 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             .await?;
 
         Ok(result.map(|x| x.get("component_id")))
+    }
+
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_names)]
+    async fn get_by_names_sqlite(
+        &self,
+        namespace: &str,
+        names: &[String],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        // Create the correct number of `?` placeholders
+        let placeholders = std::iter::repeat("?")
+            .take(names.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let query_str = format!(
+            r#"
+            SELECT
+                c.namespace AS namespace,
+                c.name AS name,
+                c.component_id AS component_id,
+                cv.version AS version,
+                cv.size AS size,
+                cv.metadata AS metadata,
+                cv.created_at AS created_at,
+                cv.component_type AS component_type,
+                cv.available AS available,
+                cv.object_store_key AS object_store_key,
+                cv.transformed_object_store_key AS transformed_object_store_key,
+                cv.root_package_name AS root_package_name,
+                cv.root_package_version AS root_package_version
+            FROM components c
+                JOIN component_versions cv ON c.component_id = cv.component_id
+            WHERE c.namespace = ? AND c.name IN ({})
+            ORDER BY c.name, cv.version
+        "#,
+            placeholders
+        );
+
+        // Prepare and bind values
+        let mut query = sqlx::query_as::<_, ComponentRecord<Owner>>(&query_str).bind(namespace);
+        for name in names {
+            query = query.bind(name);
+        }
+
+        let components = self
+            .db_pool
+            .with_ro("component", "get_by_names")
+            .fetch_all(query)
+            .await?;
+
+        self.add_installed_plugins(self.add_files(components).await?)
+            .await
     }
 
     async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError> {
