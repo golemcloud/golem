@@ -27,6 +27,7 @@ use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledAuthCallBackRoute, CompiledHttpApiDefinition, HttpApiDefinition, Route,
 };
 
+use crate::gateway_api_deployment::{ApiDeployment, ApiDeploymentRequest, ApiSite};
 use crate::gateway_binding::GatewayBindingCompiled;
 use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
@@ -85,6 +86,14 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
         site: &ApiSiteString,
+    ) -> Result<(), ApiDeploymentError<Namespace>>;
+
+    async fn undeploy_api(
+        &self,
+        namespace: &Namespace,
+        site: ApiSite,
+        api_definition_key: ApiDefinitionIdWithVersion,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 }
 
@@ -698,6 +707,54 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
 
             Ok(())
         }
+    }
+
+    async fn undeploy_api(
+        &self,
+        namespace: &Namespace,
+        site: ApiSite,
+        api_definition_key: ApiDefinitionIdWithVersion,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        // Check if the site exists
+        let site_exists = self
+            .get_by_site(&ApiSiteString::from(&site))
+            .await?
+            .is_some();
+
+        if !site_exists {
+            return Err(ApiDeploymentError::ApiDeploymentNotFound(
+                namespace.clone(),
+                ApiSiteString::from(&site),
+            ));
+        }
+
+        // Check if the API definition exists
+        let api_definition_exists = self
+            .get_by_id(namespace, Some(api_definition_key.id.clone()))
+            .await?
+            .iter()
+            .any(|deployment| {
+                deployment.api_definition_keys.iter().any(|key| {
+                    key.id == api_definition_key.id && key.version == api_definition_key.version
+                })
+            });
+
+        if !api_definition_exists {
+            return Err(ApiDeploymentError::ApiDefinitionNotFound(
+                namespace.clone(),
+                api_definition_key.id,
+                api_definition_key.version,
+            ));
+        }
+
+        let api_deployment = ApiDeploymentRequest {
+            namespace: namespace.clone(),
+            api_definition_keys: vec![api_definition_key],
+            site,
+        };
+
+        self.undeploy(&api_deployment, auth_ctx).await
     }
 }
 

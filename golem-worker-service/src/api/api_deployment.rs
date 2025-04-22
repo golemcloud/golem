@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::SafeDisplay;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
@@ -22,6 +23,7 @@ use golem_worker_service_base::gateway_api_deployment;
 use golem_worker_service_base::gateway_api_deployment::ApiSite;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
+use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentError;
 use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -238,46 +240,18 @@ impl ApiDeploymentApi {
 
         let api_site = ApiSite { host, subdomain };
 
-        // Check if the site exists
-        let site_exists = self
-            .deployment_service
-            .get_by_site(&ApiSiteString::from(&api_site))
-            .await?
-            .is_some();
-
-        if !site_exists {
-            return Err(ApiEndpointError::not_found(safe(
-                "Site not found".to_string(),
-            )));
-        }
-
-        // Check if the API definition exists
-        let api_definition_exists = self
-            .deployment_service
-            .get_by_id(&namespace, Some(api_definition_key.id.clone()))
-            .await?
-            .iter()
-            .any(|deployment| {
-                deployment.api_definition_keys.iter().any(|key| {
-                    key.id == api_definition_key.id && key.version == api_definition_key.version
-                })
-            });
-
-        if !api_definition_exists {
-            return Err(ApiEndpointError::not_found(safe(
-                "API definition not found".to_string(),
-            )));
-        }
-
-        let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
-            namespace: namespace.clone(),
-            api_definition_keys: vec![api_definition_key],
-            site: api_site,
-        };
-
         self.deployment_service
-            .undeploy(&api_deployment, auth_ctx)
-            .await?;
+            .undeploy_api(&namespace, api_site, api_definition_key, auth_ctx)
+            .await
+            .map_err(|err| match err {
+                ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
+                    ApiEndpointError::not_found(safe("Site not found".to_string()))
+                }
+                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => {
+                    ApiEndpointError::not_found(safe("API definition not found".to_string()))
+                }
+                _ => ApiEndpointError::internal(safe(err.to_safe_string())),
+            })?;
 
         Ok(Json("API definition undeployed from site".to_string()))
     }
