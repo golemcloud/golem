@@ -43,16 +43,20 @@ WIT allows exporting one or more top-level functions in the `world` section, for
 package golem:demo;
 
 world go-example {
+    include wasi:cli/imports@0.2.0;
+
     export hello-world: func() -> string;
 }
 ```
 
+<Callout type="warning">
+    Note that currently `tinygo` **requires** including the `wasi:cli/imports@0.2.0` world in the application's world.
+</Callout>
+
 To implement this function in Go, the following steps must be taken:
 
-- make sure the generated `golem/demo/go_example` package is imported
-- define an empty struct representing our component
-- implement the generated `GoExample` interface for this struct
-- call the `SetGoExample` function to install the implementation
+- make sure the generated package is imported
+- set the fields of the global `Exports` variable to the exported function implementations
 
 Let's see in code:
 
@@ -61,21 +65,14 @@ package main
 
 // make sure the generated package is imported
 import (
-	"golem/demo/go_example"
+	testgoinlinefunctions "app/components-go/golem-demo/binding/golem/demo-exports/go-example-inline-functions"
 )
 
-// define an empty struct representing our component
-type GoExampleImpl struct {
-}
-
-// implement the generated `Guest` trait for this struct
-func (e *GoExampleImpl) HelloWorld() string {
-	return "Hello, World!"
-}
-
-// install the implementation
+// wire the implementation
 func init() {
-	go_example.SetGoExample(&GoExampleImpl{})
+	testgoinlinefunctions.Exports.HelloWorld = func() string {
+		return "Hello World!"
+	}
 }
 
 ```
@@ -110,31 +107,22 @@ This is similar to having the two exported functions directly exported from the 
 package main
 
 import (
-	"golem/demo/go_example"
+	testgoapi "app/components-go/golem-demo/binding/golem/demo-exports/test-go-api"
 )
 
-type GoExampleImpl struct {
-	// state can be stored in the implementation struct
-	total uint64
+var counter uint64
+
+func Add(value uint64) {
+	counter += value
 }
 
-// state can also be stored in global variables too
-// var total uint64
-
-func (e *GoExampleImpl) Add(value uint64) {
-	e.total += value
-	// or with global state:
-	// total += value
-}
-
-func (e *GoExampleImpl) Get() uint64 {
-	return e.total
-	// or with global state:
-	// return total
+func Get() uint64 {
+	return counter
 }
 
 func init() {
-	go_example.SetExportsGolemDemoApi(&GoExampleImpl{})
+	testgoapi.Exports.Add = Add
+	testgoapi.Exports.Get = Get
 }
 ```
 
@@ -173,7 +161,9 @@ To implement the above defined WIT resource in Go a few new steps must be taken:
 
 - define a struct representing the resource - it can contain data!
 - implement the interface generated as the resource's interface for this struct
-- implement the constructor on the component struct
+- create a constructor
+- create a global variable to store the resource instances
+- and another to store the last used numeric identifier for these instances
 
 Let's see in code:
 
@@ -181,12 +171,8 @@ Let's see in code:
 package main
 
 import (
-	"golem/demo/go_example"
+	testgoapi "app/components-go/golem-demo/binding/golem/demo-exports/test-go-api"
 )
-
-// struct representing the component
-type GoExampleImpl struct {
-}
 
 // struct representing an instance of the resource
 type Counter struct {
@@ -194,23 +180,44 @@ type Counter struct {
 	current uint64
 }
 
-func (e *GoExampleImpl) ConstructorCounter(name string) go_example.ExportsGolemDemoApiCounter {
+func NewCounter(name string) *Counter {
 	return &Counter{
 		name:    name,
 		current: 0,
 	}
 }
 
-func (e *Counter) MethodCounterAdd(value uint64) {
+func (e *Counter) Add(value uint64) {
 	e.current += value
 }
 
-func (e *Counter) MethodCounterGet() uint64 {
+func (e *Counter) Get() uint64 {
 	return e.current
 }
 
+var counters = make(map[cm.Rep]*Counter)
+var lastId = cm.Rep(0)
+
 func init() {
-	go_example.SetExportsGolemDemoApi(&GoExampleImpl{})
+	testgoapi.Exports.Counter.Constructor = func(name string) (result testgoapi.Counter) {
+		counter := NewCounter(name)
+		id := lastId + 1
+		lastId = id
+		counters[id] = counter
+		return testgoapi.CounterResourceNew(id)
+	}
+
+	testgoapi.Exports.Counter.Destructor = func(id cm.Rep) {
+		delete(counters, id)
+	}
+
+	testgoapi.Exports.Counter.Add = func(id cm.Rep, value uint64) {
+		counters[id].Add(value)
+	}
+
+	testgoapi.Exports.Counter.Get = func(id cm.Rep) uint64 {
+		return counters[id].Get()
+	}
 }
 ```
 
@@ -228,12 +235,15 @@ The following table shows an example of each `WIT` data type and its correspondi
 | `f32`, `f64`               | `float32`, `float64`                                                                   |
 | `char`                     | `rune`                                                                                 |
 | `string`                   | `string`                                                                               |
-| `list<string>`             | `[]string`                                                                             |
-| `option<u64>`              | `Option[uint64]`                                                                       |
-| `result<s32, string>`      | `Result[int32, string]` where `Result` is defined in the binding package               |
-| `result<_, string>`        | `Result[struct{}, String]`                                                             |
-| `result`                   | `Result[struct{}, struct{}]`                                                           |
-| `tuple<u64, string, char>` | Generated struct with a name describing the types like `GoExampleTuple3U64StringByteT` |
+| `list<string>`             | `cm.List[string]`                                                                      |
+| `option<u64>`              | `cm.Option[uint64]`                                                                    |
+| `result<s32, string>`      | `cm.Result[Shape, int32, string]`                                                      |
+| `result<_, string>`        | `cm.Result[String, struct{}, String]`                                                  |
+| `tuple<u64, string, char>` | `cm.Tuple3[uint64, string, rune]`                                                      |
+
+<Callout type="info">
+    The generated bindings are using data types defined in the `cm` package. See the [package's documentation](https://pkg.go.dev/go.bytecodealliance.org/cm) for more information.
+</Callout>
 
 ### WIT records
 
@@ -253,9 +263,10 @@ interface api {
 Will generate the following Go struct:
 
 ```go
-type ExportsGolemDemoApiUser struct {
-	Id uint64,
-	Name string
+type User struct {
+	_    cm.HostLayout `json:"-"`
+	ID   uint64        `json:"id"`
+	Name string        `json:"name"`
 }
 ```
 
@@ -279,18 +290,61 @@ interface api {
 Will generate the following Go enum:
 
 ```go
-type ExportsGolemDemoApiColorKind int
+type ExportsGolemDemoApiColorKind inttype Color cm.Variant[uint8, uint32, uint32]
 
-const (
-ExportsGolemDemoApiColorKindRed ExportsGolemDemoApiColorKind = iota
-ExportsGolemDemoApiColorKindGreen
-ExportsGolemDemoApiColorKindBlue
-ExportsGolemDemoApiColorKindRgb
-)
+// ColorRed returns a [Color] of case "red".
+func ColorRed() Color {
+	var data struct{}
+	return cm.New[Color](0, data)
+}
 
-type ExportsGolemDemoApiColor struct {
-  kind ExportsGolemDemoApiColorKind
-  val any
+// Red returns true if [Color] represents the variant case "red".
+func (self *Color) Red() bool {
+	return self.Tag() == 0
+}
+
+// ColorGreen returns a [Color] of case "green".
+func ColorGreen() Color {
+	var data struct{}
+	return cm.New[Color](1, data)
+}
+
+// Green returns true if [Color] represents the variant case "green".
+func (self *Color) Green() bool {
+	return self.Tag() == 1
+}
+
+// ColorBlue returns a [Color] of case "blue".
+func ColorBlue() Color {
+	var data struct{}
+	return cm.New[Color](2, data)
+}
+
+// Blue returns true if [Color] represents the variant case "blue".
+func (self *Color) Blue() bool {
+	return self.Tag() == 2
+}
+
+// ColorRgb returns a [Color] of case "rgb".
+func ColorRgb(data uint32) Color {
+	return cm.New[Color](3, data)
+}
+
+// Rgb returns a non-nil *[uint32] if [Color] represents the variant case "rgb".
+func (self *Color) Rgb() *uint32 {
+	return cm.Case[uint32](self, 3)
+}
+
+var _ColorStrings = [4]string{
+	"red",
+	"green",
+	"blue",
+	"rgb",
+}
+
+// String implements [fmt.Stringer], returning the variant case name of v.
+func (v Color) String() string {
+	return _ColorStrings[v.Tag()]
 }
 ```
 
@@ -315,17 +369,37 @@ interface api {
 Will generate the following Go enum:
 
 ```go
-type ExportsGolemDemoApiColorKind int
+type Color uint8
 
 const (
-ExportsGolemDemoApiColorKindRed ExportsGolemDemoApiColorKind = iota
-ExportsGolemDemoApiColorKindGreen
-ExportsGolemDemoApiColorKindBlue
+	ColorRed Color = iota
+	ColorGreen
+	ColorBlue
 )
 
-type ExportsGolemDemoApiColor struct {
-  kind ExportsGolemDemoApiColorKind
+var _ColorStrings = [3]string{
+	"red",
+	"green",
+	"blue",
 }
+
+// String implements [fmt.Stringer], returning the enum case name of e.
+func (e Color) String() string {
+	return _ColorStrings[e]
+}
+
+// MarshalText implements [encoding.TextMarshaler].
+func (e Color) MarshalText() ([]byte, error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler], unmarshaling into an enum
+// case. Returns an error if the supplied text is not one of the enum cases.
+func (e *Color) UnmarshalText(text []byte) error {
+	return _ColorUnmarshalCase(e, text)
+}
+
+var _ColorUnmarshalCase = cm.CaseUnmarshaler[Color](_ColorStrings[:])
 ```
 
 and a set of helper functions.
@@ -349,11 +423,12 @@ interface api {
 Will generate the following Go bitflags:
 
 ```go
-type ExportsGolemDemoApiAccess uint64
+type Access uint8
+
 const (
-ExportsGolemDemoApiAccess_Read ExportsGolemDemoApiAccess = 1 << iota
-ExportsGolemDemoApiAccess_Write
-ExportsGolemDemoApiAccess_Lst
+	AccessRead Access = 1 << iota
+	AccessWrite
+	AccessLst
 )
 ```
 
@@ -371,7 +446,7 @@ In general Golem supports three different ways of doing this:
 
 First, make sure the [Golem Go SDK](/go-language-guide/golem-go-sdk) is set up for the project.
 
-Then you can use the `golem_go_bindings` package to initialize the standard library's environment at start of the component's methods:
+Then you can use the `golem-go` `std` package to initialize the standard library's environment at start of the component's methods:
 
 ```go
 package main
@@ -383,13 +458,10 @@ import (
 	// import the std helper
 	"github.com/golemcloud/golem-go/std"
 
-	"golem/demo/go_example"
+	goexampleapi "golem/demo/go_example/bindings/go/example-example/go-example-api"
 )
 
-type GoExampleImpl struct {
-}
-
-func (e *GoExampleImpl) HelloWorld() string {
+func HelloWorld() string {
     // initialize the std os package from the golem environment
 	// this initialization has to be called at the start of the implementation methods
 	std.Init(std.Packages{Os: true})
@@ -402,7 +474,7 @@ func (e *GoExampleImpl) HelloWorld() string {
 }
 
 func init() {
-	go_example.SetGoExample(&GoExampleImpl{})
+	goexampleapi.Exports.HelloWorld = HelloWorld
 }
 ```
 
@@ -412,7 +484,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](rpc), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](/common-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 

@@ -25,10 +25,11 @@ In details, building the component requires the following steps:
 <Steps>
 ### Generate the Go bindings
 
-Use the `wit-bindgen` tool to generate the Go bindings from the WIT files:
+Use the `wit-bindgen-go` tool to generate the Go bindings from the WIT files:
 
 ```shell
-$ wit-bindgen tiny-go --out-dir go_example ./wit
+$ go get -tool go.bytecodealliance.org/cmd/wit-bindgen-go
+$ go tool wit-bindgen-go generate --out binding --world world-name ./wit
 ```
 
 ### Compile the Go code
@@ -36,31 +37,10 @@ $ wit-bindgen tiny-go --out-dir go_example ./wit
 Using the TinyGo compiler, compile the Go code into a WebAssembly module:
 
 ```shell
-$ tinygo build -target=wasi -tags=purego -o go_example.module.wasm main.go
+$ tinygo build -target=wasip2 -wit-package ./wit -wit-world world-name -tags=purego -o go_example.wasm main.go
 ```
 
-### Embed the WIT files in the WebAssembly module
-
-The following command embeds the WIT files into the WebAssembly module:
-
-```shell
-$ wasm-tools component embed ./wit go_example.module.wasm --output go_example.embed.wasm
-```
-
-### Package the Go code into a WASM component
-
-Finally use `wasm-tools` to create the WebAssembly component:
-
-```shell
-$ wasm-tools component new go_example.embed.wasm -o go_example.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
-```
-
-<Callout type="info">
-  The **adapter** WASM can be downloaded from [the golem-wit
-  repository](https://github.com/golemcloud/golem-wit/blob/main/adapters/tier1/wasi_snapshot_preview1.wasm).
-</Callout>
-
-</Steps>
+The resulting WASM file is a **component** ready to be uploaded to Golem.
 
 ### Reducing the component's size
 
@@ -69,3 +49,4 @@ The generated component's size can be reduced by stripping some parts of it usin
 ```shell
 $ wasm-tools strip go_example.wasm -o go_example_stripped.wasm
 ```
+</Steps>

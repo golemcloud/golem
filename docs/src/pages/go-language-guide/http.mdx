@@ -30,14 +30,11 @@ import (
 	// import the std helper
 	"github.com/golemcloud/golem-go/std"
 
-	"golem/demo/go_example"
+	goexampleapi "golem/demo/go_example/bindings/go/example-example/go-example-api"
 )
 
-type GoExampleImpl struct {
-}
-
-func (e *GoExampleImpl) HelloWorld() string {
-    // initialize the standard library's os and http package from the golem environment
+func HelloWorld() string {
+  // initialize the standard library's os and http package from the golem environment
 	// this initialization has to be called at the start of the implementation methods
 	std.Init(std.Packages{
 		Os: true,
@@ -51,6 +48,6 @@ func (e *GoExampleImpl) HelloWorld() string {
 }
 
 func init() {
-	go_example.SetGoExample(&GoExampleImpl{})
+	goexampleapi.SetGoExample(goexampleapi.NewGoExampleImpl())
 }
 ```

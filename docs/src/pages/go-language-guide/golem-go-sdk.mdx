@@ -41,8 +41,8 @@ Modify it in the following way:
 package golem:demo;
 
 world go-example {
-  import golem:api/host@1.1.0;
-  import golem:rpc/types@0.1.0;
+  import golem:api/host@1.1.6;
+  import golem:rpc/types@0.2.0;
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;
@@ -56,8 +56,8 @@ world go-example {
   import wasi:io/error@0.2.0;
   import wasi:io/poll@0.2.0;
   import wasi:io/streams@0.2.0;
-  // import wasi:keyvalue/eventual-batch@0.1.0; // NOTE: cannot include it because the bindings collide with blobstore
-  // import wasi:keyvalue/eventual@0.1.0; // NOTE: cannot include it because the bindings collide with blobstore
+  import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/eventual@0.1.0;
   import wasi:logging/logging;
   import wasi:random/random@0.2.0;
   import wasi:random/insecure@0.2.0;

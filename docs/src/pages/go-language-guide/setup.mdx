@@ -21,7 +21,12 @@ For MacOS TinyGo can be installed using `brew`:
 brew tap tinygo-org/tools
 brew install tinygo
 ```
+</Callout>
 
+<Callout type="warning">
+    The minimum versions assumed by the documentation and templates are the following:
+    - TinyGo: 0.37.0
+    - Go: 1.24.0
 </Callout>
 
 ## Install WebAssembly tooling
@@ -53,32 +58,14 @@ rustup target add wasm32-wasip1
 ### Install `wasm-tools`
 
 ```bash copy
-cargo install --force --locked  wasm-tools@1.223.0
+cargo install --force --locked  wasm-tools@1.227.1
 ```
 
 Confirm the installation:
 
 ```bash
 wasm-tools --version
-wasm-tools 1.223.0
-```
-
-### Install `wit-bindgen`
-
-```bash copy
-cargo install --force --locked wit-bindgen-cli@0.37.0
-```
-
-Confirm the installation:
-
-```bash
-wit-bindgen --version
-wit-bindgen-cli 0.37.0
+wasm-tools 1.227.1
 ```
 
 </Steps>
-
-<Callout type="warning">
-  Golem requires a **specific version** of `wasm-tools` and `wit-bindgen`. Please make sure the
-  correct version is installed with the commands described above.
-</Callout>
