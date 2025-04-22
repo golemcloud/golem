@@ -722,7 +722,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         // Check if the site exists
         let site_exists = self
-            .get_by_site(&ApiSiteString::from(&site))
+            .get_by_site(namespace, &ApiSiteString::from(&site))
             .await?
             .is_some();
 
