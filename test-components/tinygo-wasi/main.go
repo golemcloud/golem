@@ -7,17 +7,10 @@ import (
 	"time"
 
 	"github.com/golemcloud/golem-go/std"
-	"golem.com/tinygo_wasi/binding"
+	tinygowasi "golem.com/tinygo_wasi/binding/golem/it/tinygo-wasi"
 )
 
-func init() {
-	binding.SetBinding(&Impl{})
-}
-
-type Impl struct {
-}
-
-func (i *Impl) Example1(s string) int32 {
+func Example1(s string) int32 {
 	std.Init(std.Packages{Os: true})
 
 	fmt.Println(s)
@@ -33,6 +26,12 @@ func (i *Impl) Example1(s string) int32 {
 	fmt.Printf("env: %+v", os.Environ())
 
 	return v1
+}
+
+func init() {
+	tinygowasi.Exports.Example1 = func(s string) int32 {
+		return Example1(s)
+	}
 }
 
 func main() {

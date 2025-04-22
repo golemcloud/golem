@@ -67,6 +67,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
 
     async fn get_by_site(
         &self,
+        namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
@@ -76,6 +77,9 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
         site: &ApiSiteString,
     ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>>;
 
+    /// Get all API definitions deployed in a site
+    /// regardless of the namespace, mainly to serve
+    /// the http requests to API gateway
     async fn get_all_definitions_by_site(
         &self,
         site: &ApiSiteString,
@@ -205,11 +209,17 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx>
         }
     }
 
+    // A site is owned by a namespace (i.e, host and subdomain
+    // Only the authorised namespace is allowed to fetch the existing deployments in that site
     async fn fetch_existing_deployments(
         &self,
+        namespace: &Namespace,
         site: &ApiSite,
     ) -> Result<Vec<ApiDeploymentRecord>, ApiDeploymentError<Namespace>> {
-        let deployments = self.deployment_repo.get_by_site(&site.to_string()).await?;
+        let deployments = self
+            .deployment_repo
+            .get_by_site(&namespace.to_string(), &site.to_string())
+            .await?;
 
         Ok(deployments)
     }
@@ -333,7 +343,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx>
         }
 
         self.deployment_repo
-            .create(deployment_plan.deployment_records())
+            .create(
+                &deployment_plan.namespace.to_string(),
+                deployment_plan.deployment_records(),
+            )
             .await?;
 
         Ok(())
@@ -410,7 +423,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
         info!(namespace = %deployment_request.namespace, "Deploy API definitions");
 
         let existing_deployment_records = self
-            .fetch_existing_deployments(&deployment_request.site)
+            .fetch_existing_deployments(&deployment_request.namespace, &deployment_request.site)
             .await?;
 
         self.ensure_no_namespace_conflict(deployment_request, &existing_deployment_records)?;
@@ -436,7 +449,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
         // 1. Get existing deployment records
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(&deployment.site.to_string())
+            .get_by_site(
+                &deployment.namespace.to_string(),
+                &deployment.site.to_string(),
+            )
             .await?;
 
         let mut remove_deployment_records: Vec<ApiDeploymentRecord> = vec![];
@@ -492,7 +508,10 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
 
             // 5. Delete deployment records
             self.deployment_repo
-                .delete(remove_deployment_records.clone())
+                .delete(
+                    &deployment.namespace.to_string(),
+                    remove_deployment_records.clone(),
+                )
                 .await?;
 
             // 6. Set undeployed as draft
@@ -565,29 +584,21 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
 
     async fn get_by_site(
         &self,
+        namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         info!("Get API deployment");
-        let existing_deployment_records =
-            self.deployment_repo.get_by_site(&site.to_string()).await?;
+        let existing_deployment_records = self
+            .deployment_repo
+            .get_by_site(&namespace.to_string(), &site.to_string())
+            .await?;
 
         let mut api_definition_keys: Vec<ApiDefinitionIdWithVersion> = vec![];
-        let mut namespace: Option<Namespace> = None;
         let mut site: Option<ApiSite> = None;
         let mut created_at: Option<chrono::DateTime<Utc>> = None;
 
         for deployment_record in existing_deployment_records {
-            if namespace.is_none() {
-                namespace = Some(deployment_record.namespace.try_into().map_err(
-                    |e: <Namespace as TryFrom<std::string::String>>::Error| {
-                        ApiDeploymentError::conversion_error(
-                            "API deployment namespace",
-                            e.to_string(),
-                        )
-                    },
-                )?);
-            }
-
+            // Retrieving the original domain and subdomain from the deployment record
             if site.is_none() {
                 site = Some(ApiSite {
                     host: deployment_record.host,
@@ -606,9 +617,9 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
             });
         }
 
-        match (site, namespace, created_at) {
-            (Some(site), Some(namespace), Some(created_at)) => Ok(Some(ApiDeployment {
-                namespace,
+        match (site, created_at) {
+            (Some(site), Some(created_at)) => Ok(Some(ApiDeployment {
+                namespace: namespace.clone(),
                 site,
                 api_definition_keys,
                 created_at,
@@ -674,29 +685,22 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
 
         // Not sure of the purpose of retrieving records at repo level to delete API deployment
         // https://github.com/golemcloud/golem/issues/1443
-        let existing_deployment_records =
-            self.deployment_repo.get_by_site(&site.to_string()).await?;
+        let existing_deployment_records = self
+            .deployment_repo
+            .get_by_site(&namespace.to_string(), &site.to_string())
+            .await?;
 
         if existing_deployment_records.is_empty() {
             Err(ApiDeploymentError::ApiDeploymentNotFound(
                 namespace.clone(),
                 site.clone(),
             ))
-        } else if existing_deployment_records
-            .iter()
-            .any(|value| value.namespace != namespace.to_string())
-        {
-            error!(
-                "Failed to delete API deployment - site used by another API (under another namespace/API)"
-            );
-
-            Err(ApiDeploymentError::ApiDeploymentConflict(site.clone()))
         } else {
             // API definitions corresponding to the deployment
             let existing_api_definitions = self.get_definitions_by_site(namespace, site).await?;
 
             self.deployment_repo
-                .delete(existing_deployment_records.clone())
+                .delete(&namespace.to_string(), existing_deployment_records.clone())
                 .await?;
 
             self.set_undeployed_as_draft(existing_deployment_records)
@@ -779,7 +783,10 @@ where
         let mut new_definitions_to_deploy = Vec::new();
 
         let existing_deployed_api_def_keys = deployment_repo
-            .get_by_site(&deployment_request.site.to_string())
+            .get_by_site(
+                &deployment_request.namespace.to_string(),
+                &deployment_request.site.to_string(),
+            )
             .await?
             .into_iter()
             .map(|record| ApiDefinitionIdWithVersion {

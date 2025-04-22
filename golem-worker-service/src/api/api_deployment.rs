@@ -88,7 +88,7 @@ impl ApiDeploymentApi {
 
         let data = self
             .deployment_service
-            .get_by_site(&ApiSiteString::from(&payload.site))
+            .get_by_site(&namespace, &ApiSiteString::from(&payload.site))
             .await?;
 
         let deployment = data.ok_or(ApiEndpointError::internal(safe(
@@ -151,7 +151,7 @@ impl ApiDeploymentApi {
     async fn get_internal(&self, site: String) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let value = self
             .deployment_service
-            .get_by_site(&ApiSiteString(site))
+            .get_by_site(&DefaultNamespace(), &ApiSiteString(site))
             .await?
             .ok_or(ApiEndpointError::not_found(safe(
                 "Api deployment not found".to_string(),

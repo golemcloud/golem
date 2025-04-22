@@ -15,7 +15,7 @@
 use crate::repl_state::ReplState;
 use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use rib::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt::Display;
 
 pub fn compile_rib_script(
@@ -125,30 +125,24 @@ impl InstanceVariables {
 }
 
 pub fn get_identifiers(inferred_expr: &InferredExpr) -> Vec<VariableId> {
-    let expr = inferred_expr.get_expr();
-    let mut queue = VecDeque::new();
-
-    queue.push_back(expr);
+    let mut expr = inferred_expr.get_expr().clone();
+    let mut visitor = ExprVisitor::bottom_up(&mut expr);
 
     let mut identifiers = Vec::new();
 
-    while let Some(expr) = queue.pop_back() {
+    while let Some(expr) = visitor.pop_back() {
         match expr {
-            Expr::Let {
-                variable_id, expr, ..
-            } => {
+            Expr::Let { variable_id, .. } => {
                 if !identifiers.contains(variable_id) {
                     identifiers.push(variable_id.clone());
                 }
-
-                queue.push_back(expr);
             }
             Expr::Identifier { variable_id, .. } => {
                 if !identifiers.contains(variable_id) {
                     identifiers.push(variable_id.clone());
                 }
             }
-            _ => expr.visit_children_bottom_up(&mut queue),
+            _ => {}
         }
     }
 
@@ -156,39 +150,29 @@ pub fn get_identifiers(inferred_expr: &InferredExpr) -> Vec<VariableId> {
 }
 
 pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariables {
-    let expr = inferred_expr.get_expr();
-    let mut queue = VecDeque::new();
-
-    queue.push_back(expr);
+    let mut expr = inferred_expr.get_expr().clone();
+    let mut queue = ExprVisitor::bottom_up(&mut expr);
 
     let mut instance_variables = HashMap::new();
 
     while let Some(expr) = queue.pop_front() {
-        match expr {
-            Expr::Let {
-                variable_id, expr, ..
-            } => {
-                if let InferredType::Instance { instance_type } = expr.inferred_type() {
-                    match *instance_type {
-                        InstanceType::Resource { .. } => {
-                            let key = InstanceKey::Resource(variable_id.name());
-                            instance_variables
-                                .insert(key, instance_type.resource_method_dictionary());
-                        }
-                        _ => {
-                            let key = InstanceKey::Worker(variable_id.name());
-                            instance_variables.insert(
-                                key,
-                                instance_type.function_dict_without_resource_methods(),
-                            );
-                        }
-                    };
-                }
-
-                queue.push_front(expr)
+        if let Expr::Let {
+            variable_id, expr, ..
+        } = expr
+        {
+            if let InferredType::Instance { instance_type } = expr.inferred_type() {
+                match *instance_type {
+                    InstanceType::Resource { .. } => {
+                        let key = InstanceKey::Resource(variable_id.name());
+                        instance_variables.insert(key, instance_type.resource_method_dictionary());
+                    }
+                    _ => {
+                        let key = InstanceKey::Worker(variable_id.name());
+                        instance_variables
+                            .insert(key, instance_type.function_dict_without_resource_methods());
+                    }
+                };
             }
-
-            _ => expr.visit_children_bottom_up(&mut queue),
         }
     }
 
