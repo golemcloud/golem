@@ -31,24 +31,24 @@ pub fn try_unify_type(inferred_type: &WithOrigin) -> Result<WithOrigin, String> 
         }
         InferredType::Option(inner_type) => {
             let unified_inner_type = inner_type.try_unify()?;
-            Ok(InferredType::Option(Box::new(unified_inner_type)))
+            Ok(WithOrigin::resolved(InferredType::Option(unified_inner_type)))
         }
 
         InferredType::Result { ok, error } => {
             let unified_ok = match ok {
-                Some(ok) => Some(Box::new(ok.try_unify()?)),
+                Some(ok) => Some(ok.try_unify()?),
                 None => None,
             };
 
             let unified_error = match error {
-                Some(error) => Some(Box::new(error.try_unify()?)),
+                Some(error) => Some(error.try_unify()?),
                 None => None,
             };
 
-            Ok(InferredType::Result {
+            Ok(WithOrigin::resolved(InferredType::Result {
                 ok: unified_ok,
                 error: unified_error,
-            })
+            }))
         }
 
         InferredType::Record(fields) => {
@@ -57,7 +57,7 @@ pub fn try_unify_type(inferred_type: &WithOrigin) -> Result<WithOrigin, String> 
                 let unified_type = typ.try_unify()?;
                 unified_fields.push((field.clone(), unified_type));
             }
-            Ok(InferredType::Record(unified_fields))
+            Ok(WithOrigin::resolved(InferredType::Record(unified_fields)))
         }
 
         InferredType::Tuple(types) => {
@@ -66,12 +66,12 @@ pub fn try_unify_type(inferred_type: &WithOrigin) -> Result<WithOrigin, String> 
                 let unified_type = typ.try_unify()?;
                 unified_types.push(unified_type);
             }
-            Ok(InferredType::Tuple(unified_types))
+            Ok(WithOrigin::resolved(InferredType::Tuple(unified_types)))
         }
 
         InferredType::List(typ) => {
             let unified_type = typ.try_unify()?;
-            Ok(InferredType::List(Box::new(unified_type)))
+            Ok(WithOrigin::resolved(InferredType::List(unified_type)))
         }
 
         InferredType::Range {
@@ -79,16 +79,16 @@ pub fn try_unify_type(inferred_type: &WithOrigin) -> Result<WithOrigin, String> 
             to: end,
         } => {
             let unified_start = start.try_unify()?;
-            let unified_end = end.clone().map(|end| end.try_unify()).transpose()?;
-            Ok(InferredType::Range {
-                from: Box::new(unified_start),
-                to: unified_end.map(Box::new),
-            })
+            let unified_end = end.as_ref().map(|end| end.try_unify()).transpose()?;
+            Ok(WithOrigin::resolved(InferredType::Range {
+                from: unified_start,
+                to: unified_end
+            }))
         }
 
-        InferredType::Flags(flags) => Ok(InferredType::Flags(flags.clone())),
+        InferredType::Flags(flags) => Ok(WithOrigin::resolved(InferredType::Flags(flags.clone()))),
 
-        InferredType::Enum(variants) => Ok(InferredType::Enum(variants.clone())),
+        InferredType::Enum(variants) => Ok(WithOrigin::resolved(InferredType::Enum(variants.clone()))),
 
         InferredType::Variant(variants) => {
             let mut unified_variants = vec![];
@@ -99,23 +99,23 @@ pub fn try_unify_type(inferred_type: &WithOrigin) -> Result<WithOrigin, String> 
                 };
                 unified_variants.push((variant.clone(), unified_type.as_deref().cloned()));
             }
-            Ok(InferredType::Variant(unified_variants))
+            Ok(WithOrigin::resolved(InferredType::Variant(unified_variants)))
         }
 
         InferredType::Resource {
             resource_id,
             resource_mode,
-        } => Ok(InferredType::Resource {
+        } => Ok(WithOrigin::resolved(InferredType::Resource {
             resource_id: *resource_id,
             resource_mode: *resource_mode,
-        }),
+        })),
 
         _ => Ok(inferred_type.clone()),
     }
 }
 
 pub fn unify_all_alternative_types(types: &Vec<WithOrigin>) -> WithOrigin {
-    let mut unified_type = InferredType::Unknown;
+    let mut unified_type = WithOrigin::unknown();
 
     let mut one_ofs = vec![];
     for typ in types {
@@ -126,10 +126,10 @@ pub fn unify_all_alternative_types(types: &Vec<WithOrigin>) -> WithOrigin {
             }
             Err(_) => {
                 if !unified_type.is_unknown() {
-                    unified_type = InferredType::OneOf(flatten_one_of_list(&vec![
+                    unified_type = WithOrigin::resolved(InferredType::OneOf(flatten_one_of_list(&vec![
                         unified_type.clone(),
                         unified.clone(),
-                    ]));
+                    ])));
                 }
                 one_ofs.push(unified);
             }
@@ -139,7 +139,7 @@ pub fn unify_all_alternative_types(types: &Vec<WithOrigin>) -> WithOrigin {
 }
 
 pub fn unify_all_required_types(types: &Vec<WithOrigin>) -> Result<WithOrigin, String> {
-    let mut unified_type = InferredType::Unknown;
+    let mut unified_type = WithOrigin::unknown();
     for typ in types {
         let unified = typ.try_unify().unwrap_or(typ.clone());
         unified_type = unified_type.unify_with_required(&unified)?;
@@ -439,7 +439,7 @@ pub fn unify_with_required(
 
         match (inferred_type.inferred_type.deref(), other.inferred_type.deref()) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
-                let mut fields: Vec<(String, InferredType)> = vec![];
+                let mut fields: Vec<(String, WithOrigin)> = vec![];
                 // Common fields unified else kept it as it is
                 for (a_name, a_type) in a_fields {
                     if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name)
@@ -456,7 +456,7 @@ pub fn unify_with_required(
                     }
                 }
 
-                Ok(InferredType::Record(fields))
+                Ok(WithOrigin::resolved(InferredType::Record(fields)))
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
@@ -469,15 +469,15 @@ pub fn unify_with_required(
                 for (a_type, b_type) in a_types.iter().zip(b_types) {
                     types.push(a_type.unify_with_required(b_type)?);
                 }
-                Ok(InferredType::Tuple(types))
+                Ok(WithOrigin::resolved(InferredType::Tuple(types)))
             }
-            (InferredType::List(a_type), InferredType::List(b_type)) => Ok(InferredType::List(
-                Box::new(a_type.unify_with_required(b_type)?),
+            (InferredType::List(a_type), InferredType::List(b_type)) => Ok(WithOrigin::resolved(InferredType::List(
+                a_type.unify_with_required(b_type)?),
             )),
             (InferredType::Flags(a_flags), InferredType::Flags(b_flags)) => {
                 if a_flags.len() >= b_flags.len() {
                     if b_flags.iter().all(|b| a_flags.contains(b)) {
-                        Ok(InferredType::Flags(a_flags.clone()))
+                        Ok(WithOrigin::resolved(InferredType::Flags(a_flags.clone())))
                     } else {
                         Err(format!(
                             "conflicting flag types inferred. {}, {}",
@@ -485,7 +485,7 @@ pub fn unify_with_required(
                         ))
                     }
                 } else if a_flags.iter().all(|a| b_flags.contains(a)) {
-                    Ok(InferredType::Flags(b_flags.clone()))
+                    Ok(WithOrigin::resolved(InferredType::Flags(b_flags.clone())))
                 } else {
                     Err(format!(
                         "conflicting tuple types inferred. {}, {}",
@@ -505,16 +505,16 @@ pub fn unify_with_required(
             ) => {
                 let unified_start = a_start.unify_with_required(b_start)?;
                 let unified_end = match (a_end, b_end) {
-                    (Some(a_end), Some(b_end)) => Some(Box::new(a_end.unify_with_required(b_end)?)),
+                    (Some(a_end), Some(b_end)) => Some(a_end.unify_with_required(b_end)?),
                     (None, None) => None,
                     (Some(end), None) => Some(end.clone()),
                     (None, Some(end)) => Some(end.clone()),
                 };
 
-                Ok(InferredType::Range {
-                    from: Box::new(unified_start),
+                Ok(WithOrigin::resolved(InferredType::Range {
+                    from: unified_start,
                     to: unified_end,
-                })
+                }))
             }
 
             (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
@@ -524,10 +524,10 @@ pub fn unify_with_required(
                         inferred_type_printable, other_printable
                     ));
                 }
-                Ok(InferredType::Enum(a_variants.clone()))
+                Ok(WithOrigin::resolved(InferredType::Enum(a_variants.clone())))
             }
             (InferredType::Option(a_type), InferredType::Option(b_type)) => Ok(
-                InferredType::Option(Box::new(a_type.unify_with_required(b_type)?)),
+                WithOrigin::resolved(InferredType::Option(a_type.unify_with_required(b_type)?)),
             ),
 
             (InferredType::Option(a_type), inferred_type) => {
@@ -709,7 +709,7 @@ pub fn unify_with_required(
             }
 
             (inferred_type, InferredType::AllOf(types)) => {
-                let result = InferredType::AllOf(types.clone()).try_unify()?;
+                let result = WithOrigin::resolved(InferredType::AllOf(types.clone())).try_unify()?;
 
                 result.unify_with_required(inferred_type)
             }
@@ -717,7 +717,7 @@ pub fn unify_with_required(
             (inferred_type_left, inferred_type_right) => {
                 if inferred_type_left == inferred_type_right {
                     Ok(inferred_type_left.clone())
-                } else if inferred_type_left.is_number() && inferred_type_right.is_number() {
+                } else if inferred_type.is_number() && other.is_number() {
                     Ok(InferredType::AllOf(vec![
                         inferred_type_left.clone(),
                         inferred_type_right.clone(),
