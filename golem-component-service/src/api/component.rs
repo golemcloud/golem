@@ -431,11 +431,28 @@ impl ComponentApi {
         record.result(response)
     }
 
+    async fn get_components_internal(
+        &self,
+        component_name: Option<ComponentName>,
+    ) -> Result<Json<Vec<dto::Component>>> {
+        let components = self
+            .component_service
+            .find_by_name(component_name, &DefaultComponentOwner)
+            .await?;
+
+        let converted = stream::iter(components)
+            .then(|c| self.api_mapper.convert_component(c))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(Json(converted))
+    }
+
     #[oai(path = "/search", method = "post", operation_id = "search_components")]
-    async fn get_components_batch_post(
+    async fn search_components(
         &self,
         components_search: Json<ComponentSearch>,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let record = recorded_http_api_request!(
             "search_components",
             search_components = components_search
@@ -454,27 +471,10 @@ impl ComponentApi {
         record.result(response)
     }
 
-    async fn get_components_internal(
-        &self,
-        component_name: Option<ComponentName>,
-    ) -> Result<Json<Vec<dto::Component>>> {
-        let components = self
-            .component_service
-            .find_by_name(component_name, &DefaultComponentOwner)
-            .await?;
-
-        let converted = stream::iter(components)
-            .then(|c| self.api_mapper.convert_component(c))
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        Ok(Json(converted))
-    }
-
     async fn search_components_internal(
         &self,
         search_query: ComponentSearch,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let component_by_name_and_versions = search_query
             .components
             .into_iter()
@@ -486,7 +486,12 @@ impl ComponentApi {
             .find_by_names(component_by_name_and_versions, &DefaultComponentOwner)
             .await?;
 
-        Ok(Json(components.into_iter().map(|c| c.into()).collect()))
+        let mut converted = Vec::new();
+        for component in components {
+            converted.push(self.api_mapper.convert_component(component).await?);
+        }
+
+        Ok(Json(converted))
     }
 
     /// Gets the list of plugins installed for the given component version
