@@ -24,8 +24,7 @@ use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    ComponentSearchParameters, DynamicLinking, InitialComponentFilesArchiveAndPermissions,
-    UpdatePayload,
+    ComponentSearch, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
@@ -425,14 +424,14 @@ impl ComponentApi {
     #[oai(path = "/search", method = "post", operation_id = "search_components")]
     async fn get_components_batch_post(
         &self,
-        components_search: Json<Vec<ComponentSearchParameters>>,
+        components_search: Json<ComponentSearch>,
     ) -> Result<Json<Vec<Component>>> {
         let record = recorded_http_api_request!(
             "search_components",
             search_components = components_search
-                .0
+                .components
                 .iter()
-                .map(|query| query.component_name.0.clone())
+                .map(|query| query.name.0.clone())
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -458,9 +457,10 @@ impl ComponentApi {
 
     async fn search_components_internal(
         &self,
-        search_query: Vec<ComponentSearchParameters>,
+        search_query: ComponentSearch,
     ) -> Result<Json<Vec<Component>>> {
         let component_by_name_and_versions = search_query
+            .components
             .into_iter()
             .map(|query| query.into())
             .collect::<Vec<_>>();

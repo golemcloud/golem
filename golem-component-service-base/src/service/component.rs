@@ -479,7 +479,7 @@ pub struct ComponentByNameAndVersion {
 impl From<ComponentSearchParameters> for ComponentByNameAndVersion {
     fn from(value: ComponentSearchParameters) -> Self {
         Self {
-            component_name: value.component_name,
+            component_name: value.name,
             version_type: match value.version {
                 Some(version) => VersionType::Exact(version),
                 None => VersionType::Latest,

@@ -3011,9 +3011,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              type: array
-              items:
-                $ref: '#/components/schemas/ComponentSearchParameters'
+              $ref: '#/components/schemas/ComponentSearch'
         required: true
       responses:
         '200':
@@ -7185,16 +7183,25 @@ components:
           format: uuid
       required:
       - componentId
+    ComponentSearch:
+      type: object
+      properties:
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentSearchParameters'
+      required:
+      - components
     ComponentSearchParameters:
       type: object
       properties:
-        componentName:
+        name:
           type: string
         version:
           type: integer
           format: uint64
       required:
-      - componentName
+      - name
     ComponentTransformerDefinition:
       type: object
       properties:

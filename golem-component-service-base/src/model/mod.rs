@@ -47,8 +47,14 @@ pub struct DynamicLinking {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
+pub struct ComponentSearch {
+    pub components: Vec<ComponentSearchParameters>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ComponentSearchParameters {
-    pub component_name: ComponentName,
+    pub name: ComponentName,
     pub version: Option<ComponentVersion>,
 }
