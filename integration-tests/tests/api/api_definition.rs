@@ -551,18 +551,29 @@ async fn test_export_api_definition_simple(deps: &EnvBasedTestDependencies) {
     };
 
     // Validate that there is YAML content
-    assert!(!export_data.openapi_yaml.is_empty(), "OpenAPI YAML should not be empty");
-    
+    assert!(
+        !export_data.openapi_yaml.is_empty(),
+        "OpenAPI YAML should not be empty"
+    );
+
     // Basic validation of the YAML structure
-    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&export_data.openapi_yaml)
-        .expect("Failed to parse OpenAPI YAML");
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&export_data.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // Verify basic OpenAPI structure
     assert_eq!(yaml_value["openapi"].as_str().unwrap(), "3.0.0");
     assert_eq!(yaml_value["info"]["title"].as_str().unwrap(), api_id);
     assert_eq!(yaml_value["info"]["version"].as_str().unwrap(), "1.0");
-    assert_eq!(yaml_value["x-golem-api-definition-id"].as_str().unwrap(), api_id);
-    assert_eq!(yaml_value["x-golem-api-definition-version"].as_str().unwrap(), "1.0");
+    assert_eq!(
+        yaml_value["x-golem-api-definition-id"].as_str().unwrap(),
+        api_id
+    );
+    assert_eq!(
+        yaml_value["x-golem-api-definition-version"]
+            .as_str()
+            .unwrap(),
+        "1.0"
+    );
 
     // Verify path exists
     assert!(yaml_value["paths"]["/test-simple-export"].is_mapping());
@@ -673,8 +684,8 @@ async fn test_export_import_api_definition_fixed(deps: &EnvBasedTestDependencies
     };
 
     // Verify that the OpenAPI YAML is valid
-    let _yaml_value: serde_yaml::Value = serde_yaml::from_str(&export_data.openapi_yaml)
-        .expect("Failed to parse OpenAPI YAML");
+    let _yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&export_data.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // 4. Delete the original API definition
     deps.worker_service()
@@ -703,18 +714,13 @@ async fn test_export_import_api_definition_fixed(deps: &EnvBasedTestDependencies
 }
 
 // Helper function to compare API definitions
-fn check_equal_api_definitions(
-    expected: &ApiDefinition,
-    actual: &ApiDefinition,
-) {
+fn check_equal_api_definitions(expected: &ApiDefinition, actual: &ApiDefinition) {
     check!(expected.id == actual.id);
     check!(expected.version == actual.version);
     check!(expected.draft == actual.draft);
-    
-    let api_definition::Definition::Http(expected_api_def) =
-        expected.definition.as_ref().unwrap();
-    let api_definition::Definition::Http(actual_api_def) = 
-        actual.definition.as_ref().unwrap();
-    
+
+    let api_definition::Definition::Http(expected_api_def) = expected.definition.as_ref().unwrap();
+    let api_definition::Definition::Http(actual_api_def) = actual.definition.as_ref().unwrap();
+
     check!(expected_api_def == actual_api_def);
 }
