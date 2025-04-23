@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
+use crate::model::{ComponentSearchParameters, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
@@ -387,6 +387,12 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         owner: &Owner,
     ) -> Result<Vec<Component<Owner>>, ComponentError>;
 
+    async fn find_by_names(
+        &self,
+        component: Vec<ComponentByNameAndVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError>;
+
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
@@ -463,6 +469,28 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError>;
+}
+
+pub struct ComponentByNameAndVersion {
+    pub component_name: ComponentName,
+    pub version_type: VersionType,
+}
+
+impl From<ComponentSearchParameters> for ComponentByNameAndVersion {
+    fn from(value: ComponentSearchParameters) -> Self {
+        Self {
+            component_name: value.name,
+            version_type: match value.version {
+                Some(version) => VersionType::Exact(version),
+                None => VersionType::Latest,
+            },
+        }
+    }
+}
+
+pub enum VersionType {
+    Latest,
+    Exact(ComponentVersion),
 }
 
 pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
@@ -1378,6 +1406,27 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         Ok(values)
     }
 
+    async fn find_by_names(
+        &self,
+        component_names: Vec<ComponentByNameAndVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        info!("Find components by names");
+
+        let component_records = self
+            .component_repo
+            .get_by_names(&owner.to_string(), &component_names)
+            .await?;
+
+        let values: Vec<Component<Owner>> = component_records
+            .iter()
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        Ok(values)
+    }
+
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
@@ -1944,6 +1993,18 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         lock.as_ref()
             .unwrap()
             .find_by_name(component_name, owner)
+            .await
+    }
+
+    async fn find_by_names(
+        &self,
+        component_names: Vec<ComponentByNameAndVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .find_by_names(component_names, owner)
             .await
     }
 

@@ -24,7 +24,7 @@ use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+    ComponentSearch, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
@@ -421,6 +421,29 @@ impl ComponentApi {
         record.result(response)
     }
 
+    #[oai(path = "/search", method = "post", operation_id = "search_components")]
+    async fn get_components_batch_post(
+        &self,
+        components_search: Json<ComponentSearch>,
+    ) -> Result<Json<Vec<Component>>> {
+        let record = recorded_http_api_request!(
+            "search_components",
+            search_components = components_search
+                .components
+                .iter()
+                .map(|query| query.name.0.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        let response = self
+            .search_components_internal(components_search.0)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
     async fn get_components_internal(
         &self,
         component_name: Option<ComponentName>,
@@ -429,6 +452,24 @@ impl ComponentApi {
             .component_service
             .find_by_name(component_name, &DefaultComponentOwner)
             .await?;
+        Ok(Json(components.into_iter().map(|c| c.into()).collect()))
+    }
+
+    async fn search_components_internal(
+        &self,
+        search_query: ComponentSearch,
+    ) -> Result<Json<Vec<Component>>> {
+        let component_by_name_and_versions = search_query
+            .components
+            .into_iter()
+            .map(|query| query.into())
+            .collect::<Vec<_>>();
+
+        let components = self
+            .component_service
+            .find_by_names(component_by_name_and_versions, &DefaultComponentOwner)
+            .await?;
+
         Ok(Json(components.into_iter().map(|c| c.into()).collect()))
     }
 
