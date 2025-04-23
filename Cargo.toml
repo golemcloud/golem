@@ -243,9 +243,6 @@ wit-parser = "0.227.1"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
-#wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "subscribe-pollable" }
-#wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "subscribe-pollable" }
-#wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "subscribe-pollable" }
-wasmtime = { path = "../wasmtime-oss/crates/wasmtime" }
-wasmtime-wasi = { path = "../wasmtime-oss/crates/wasi" }
-wasmtime-wasi-http = { path = "../wasmtime-oss/crates/wasi-http" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
