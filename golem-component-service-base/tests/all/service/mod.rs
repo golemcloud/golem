@@ -771,7 +771,7 @@ async fn test_component_oplog_process_plugin_creation(
     let plugin_version = "1";
     let plugin_priority = 0;
 
-    plugin_service
+    let created_plugin = plugin_service
         .create_plugin(
             &DefaultPluginOwner,
             PluginDefinitionCreation {
@@ -831,11 +831,10 @@ async fn test_component_oplog_process_plugin_creation(
     let installed_plugins = final_component.expect("no component").installed_plugins;
     assert_eq!(installed_plugins.len(), 1);
     assert!(matches!(&installed_plugins[0], PluginInstallation {
-        name,
-        version,
+        plugin_id,
         priority,
         ..
-    } if name == plugin_name && version == plugin_version && *priority == plugin_priority))
+    } if *plugin_id == created_plugin.id && *priority == plugin_priority))
 }
 
 #[test]

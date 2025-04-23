@@ -15,7 +15,7 @@
 use conditional_trait_gen::trait_gen;
 use golem_common::model::plugin::PluginOwner;
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationTarget};
-use golem_common::model::PluginInstallationId;
+use golem_common::model::{PluginId, PluginInstallationId};
 use golem_common::repo::RowMeta;
 use sqlx::{Database, QueryBuilder};
 use std::collections::HashMap;
@@ -27,8 +27,7 @@ use uuid::Uuid;
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct PluginInstallationRecord<Owner: PluginOwner, Target: PluginInstallationTarget> {
     pub installation_id: Uuid,
-    pub plugin_name: String,
-    pub plugin_version: String,
+    pub plugin_id: Uuid,
     pub priority: i32,
     pub parameters: Vec<u8>,
     #[sqlx(flatten)]
@@ -45,8 +44,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRec
     ) -> Result<Self, String> {
         Ok(PluginInstallationRecord {
             installation_id: installation.id.0,
-            plugin_name: installation.name,
-            plugin_version: installation.version,
+            plugin_id: installation.plugin_id.0,
             priority: installation.priority,
             parameters: serde_json::to_vec(&installation.parameters)
                 .map_err(|e| format!("Failed to serialize plugin installation parameters: {e}"))?,
@@ -71,8 +69,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
 
         Ok(PluginInstallation {
             id: PluginInstallationId(value.installation_id),
-            name: value.plugin_name,
-            version: value.plugin_version,
+            plugin_id: PluginId(value.plugin_id),
             priority: value.priority,
             parameters,
         })
@@ -144,8 +141,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         let mut column_list = query.separated(", ");
 
         column_list.push("installation_id");
-        column_list.push("plugin_name");
-        column_list.push("plugin_version");
+        column_list.push("plugin_id");
         column_list.push("priority");
         column_list.push("parameters");
 
@@ -180,8 +176,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         let mut column_list = query.separated(", ");
 
         column_list.push("installation_id");
-        column_list.push("plugin_name");
-        column_list.push("plugin_version");
+        column_list.push("plugin_id");
         column_list.push("priority");
         column_list.push("parameters");
 
@@ -192,8 +187,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
 
         let mut value_list = query.separated(", ");
         value_list.push_bind(record.installation_id);
-        value_list.push_bind(&record.plugin_name);
-        value_list.push_bind(&record.plugin_version);
+        value_list.push_bind(record.plugin_id);
         value_list.push_bind(record.priority);
         value_list.push_bind(&record.parameters);
         record.target.push_bind(&mut value_list);

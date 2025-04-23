@@ -26,6 +26,8 @@ newtype_uuid!(
 
 newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
 
+newtype_uuid!(PluginId, golem_api_grpc::proto::golem::component::PluginId);
+
 newtype_uuid!(
     PluginInstallationId,
     golem_api_grpc::proto::golem::common::PluginInstallationId

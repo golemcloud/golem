@@ -1,5 +1,5 @@
 [package]
-name = "scheduled-invocation-server"
+name = "it-scheduled-invocation-server"
 version = "0.0.1"
 edition = "2021"
 

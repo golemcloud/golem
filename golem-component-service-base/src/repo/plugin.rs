@@ -19,7 +19,7 @@ use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginDefinition, PluginOwner, PluginScope,
     PluginTypeSpecificDefinition, PluginWasmFileKey,
 };
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, PluginId};
 use golem_common::repo::RowMeta;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
+    id: Uuid,
     name: String,
     version: String,
     description: String,
@@ -64,6 +65,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>
 {
     fn from(value: PluginDefinition<Owner, Scope>) -> Self {
         Self {
+            id: value.id.0,
             name: value.name,
             version: value.version,
             description: value.description,
@@ -166,6 +168,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
         };
 
         Ok(PluginDefinition {
+            id: PluginId(value.id),
             name: value.name,
             version: value.version,
             description: value.description,
@@ -174,6 +177,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
             specs,
             scope: value.scope.try_into()?,
             owner: value.owner.try_into()?,
+            deleted: value.deleted,
         })
     }
 }
@@ -204,6 +208,12 @@ pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + Syn
         owner: &Owner::Row,
         name: &str,
         version: &str,
+    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError>;
+
+    async fn get_by_id(
+        &self,
+        owner: &Owner::Row,
+        id: &Uuid,
     ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError>;
 
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError>;
@@ -293,6 +303,17 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
             .await
     }
 
+    async fn get_by_id(
+        &self,
+        owner: &Owner::Row,
+        id: &Uuid,
+    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
+        self.repo
+            .get_by_id(owner, id)
+            .instrument(info_span!("plugin repository", plugin_id = id.to_string()))
+            .await
+    }
+
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError> {
         self.repo
             .delete(owner, name, version)
@@ -333,6 +354,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         let mut column_list = query.separated(", ");
 
+        column_list.push("id");
         column_list.push("name");
         column_list.push("version");
         column_list.push("description");
@@ -371,6 +393,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         let mut column_list = query.separated(", ");
 
+        column_list.push("id");
         column_list.push("name");
         column_list.push("version");
         column_list.push("description");
@@ -420,6 +443,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         let mut column_list = query.separated(", ");
 
+        column_list.push("id");
         column_list.push("name");
         column_list.push("version");
         column_list.push("description");
@@ -459,6 +483,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         let mut column_list = query.separated(", ");
 
+        column_list.push("id");
         column_list.push("name");
         column_list.push("version");
         column_list.push("description");
@@ -481,6 +506,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         query.push(") VALUES (");
 
         let mut value_list = query.separated(", ");
+        value_list.push_bind(record.id);
         value_list.push_bind(&record.name);
         value_list.push_bind(&record.version);
         value_list.push_bind(&record.description);
@@ -522,6 +548,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         let mut column_list = query.separated(", ");
 
+        column_list.push("id");
         column_list.push("name");
         column_list.push("version");
         column_list.push("description");
@@ -551,6 +578,48 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         self.db_pool
             .with_ro("plugin", "get")
+            .fetch_optional_as(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .await
+    }
+
+    async fn get_by_id(
+        &self,
+        owner: &Owner::Row,
+        id: &Uuid,
+    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
+        let mut query = QueryBuilder::new("SELECT ");
+
+        let mut column_list = query.separated(", ");
+
+        column_list.push("id");
+        column_list.push("name");
+        column_list.push("version");
+        column_list.push("description");
+        column_list.push("icon");
+        column_list.push("homepage");
+        column_list.push("plugin_type");
+
+        Scope::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
+
+        column_list.push("provided_wit_package");
+        column_list.push("json_schema");
+        column_list.push("validate_url");
+        column_list.push("transform_url");
+        column_list.push("blob_storage_key");
+        column_list.push("component_id");
+        column_list.push("component_version");
+        column_list.push("deleted");
+
+        // Important: do not filter out deleted plugins here.
+        query.push(" FROM plugins WHERE ");
+        owner.add_where_clause(&mut query);
+
+        query.push(" AND id = ");
+        query.push_bind(id);
+
+        self.db_pool
+            .with_ro("plugin", "get_by_id")
             .fetch_optional_as(query.build_query_as::<PluginRecord<Owner, Scope>>())
             .await
     }

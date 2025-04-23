@@ -1162,7 +1162,7 @@ impl TestDependencies for CliTestDependencies {
         &self.component_directory
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.component_service.clone()
     }
 
