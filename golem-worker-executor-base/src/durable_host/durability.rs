@@ -32,7 +32,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use tracing::error;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{subscribe, Subscribe};
+use wasmtime_wasi::{dynamic_subscribe, DynamicSubscribe, Subscribe};
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
@@ -181,11 +181,8 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
         pollable: Resource<Pollable>,
     ) -> anyhow::Result<()> {
         DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "set");
-        let pollable = self.table().get(&pollable)?;
-        // let mut entry = self.table().get_mut(&self_)?;
-        // *entry = LazyInitializedPollableEntry::Set {
-        //     inner: Box::new(pollable),
-        // };
+        let entry = self.table().get_mut(&self_)?;
+        *entry = LazyInitializedPollableEntry::Subscribed { pollable };
         Ok(())
     }
 
@@ -198,7 +195,8 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
             "durability::lazy_initialized_pollable",
             "subscribe",
         );
-        subscribe(self.table(), self_, None)
+
+        dynamic_subscribe(self.table(), self_, None)
     }
 
     async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {
@@ -207,7 +205,8 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
             "durability::lazy_initialized_pollable",
             "drop",
         );
-        todo!()
+        let _ = self.table().delete(rep)?;
+        Ok(())
     }
 }
 
@@ -663,7 +662,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
 
 pub enum LazyInitializedPollableEntry {
     Empty,
-    Set { inner: Box<dyn Subscribe> },
+    Subscribed { pollable: Resource<Pollable> },
 }
 
 #[async_trait]
@@ -671,11 +670,21 @@ impl Subscribe for LazyInitializedPollableEntry {
     async fn ready(&mut self) {
         match self {
             LazyInitializedPollableEntry::Empty => {
-                // immediately ready
+                // Empty pollable is always ready
             }
-            LazyInitializedPollableEntry::Set { inner } => {
-                inner.ready().await;
+            LazyInitializedPollableEntry::Subscribed { .. } => {
+                unreachable!("The dynamic pollable override should prevent this from being called")
             }
+        }
+    }
+}
+
+#[async_trait]
+impl DynamicSubscribe for LazyInitializedPollableEntry {
+    fn override_index(&self) -> Option<u32> {
+        match self {
+            LazyInitializedPollableEntry::Empty => None,
+            LazyInitializedPollableEntry::Subscribed { pollable } => Some(pollable.rep()),
         }
     }
 }
