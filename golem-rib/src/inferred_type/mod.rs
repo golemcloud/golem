@@ -25,6 +25,8 @@ use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+use crate::rib_source_span::SourceSpan;
 
 #[derive(Debug, Clone, Ord, PartialOrd)]
 pub enum InferredType {
@@ -41,33 +43,102 @@ pub enum InferredType {
     F64,
     Chr,
     Str,
-    List(Box<InferredType>),
-    Tuple(Vec<InferredType>),
-    Record(Vec<(String, InferredType)>),
+    List(WithOrigin),
+    Tuple(Vec<WithOrigin>),
+    Record(Vec<(String, WithOrigin)>),
     Flags(Vec<String>),
     Enum(Vec<String>),
-    Option(Box<InferredType>),
+    Option(WithOrigin),
     Result {
-        ok: Option<Box<InferredType>>,
-        error: Option<Box<InferredType>>,
+        ok: Option<WithOrigin>,
+        error: Option<WithOrigin>,
     },
-    Variant(Vec<(String, Option<InferredType>)>),
+    Variant(Vec<(String, Option<WithOrigin>)>),
     Resource {
         resource_id: u64,
         resource_mode: u8,
     },
     Range {
-        from: Box<InferredType>,
-        to: Option<Box<InferredType>>,
+        from: WithOrigin,
+        to: Option<WithOrigin>,
     },
     Instance {
         instance_type: Box<InstanceType>,
     },
-    OneOf(Vec<InferredType>),
-    AllOf(Vec<InferredType>),
+    OneOf(Vec<WithOrigin>),
+    AllOf(Vec<WithOrigin>),
     Unknown,
     // Because function result can be a vector of types
-    Sequence(Vec<InferredType>),
+    Sequence(Vec<WithOrigin>),
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TypeOrigin {
+    Default(SourceSpan),
+    Others,
+    Multiple(Vec<TypeOrigin>)
+}
+
+
+// TypeOrigin doesn't matter in any equality logic
+impl PartialEq for TypeOrigin {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for TypeOrigin{}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WithOrigin {
+    pub inferred_type: Box<InferredType>,
+    pub origin: TypeOrigin,
+}
+
+impl WithOrigin {
+
+    pub fn new(inferred_type: InferredType, origin: TypeOrigin) -> WithOrigin {
+        WithOrigin {
+            inferred_type: Box::new(inferred_type),
+            origin
+        }
+    }
+
+    // resolved implies, we no longer care the origin
+    pub fn resolved(inferred_type: InferredType) -> WithOrigin {
+        WithOrigin {
+            inferred_type: Box::new(inferred_type),
+            origin: TypeOrigin::Others
+        }
+    }
+
+    pub fn others(inferred_type: InferredType) -> WithOrigin {
+        WithOrigin {
+            inferred_type: Box::new(inferred_type),
+            origin: TypeOrigin::Others
+        }
+    }
+
+    pub fn unknown() -> WithOrigin {
+        WithOrigin {
+            inferred_type: Box::new(InferredType::Unknown),
+            origin: TypeOrigin::Others
+        }
+    }
+
+    pub fn default(inferred_type: InferredType, source_span: SourceSpan) -> WithOrigin {
+        WithOrigin {
+            inferred_type: Box::new(inferred_type),
+            origin: TypeOrigin::Default(source_span)
+        }
+    }
+}
+
+impl Eq for WithOrigin {}
+impl PartialEq for WithOrigin {
+    fn eq(&self, other: &Self) -> bool {
+        self.inferred_type == other.inferred_type
+    }
 }
 
 impl Eq for InferredType {}
@@ -306,7 +377,7 @@ impl Display for InferredNumber {
     }
 }
 
-impl InferredType {
+impl WithOrigin {
     pub fn printable(&self) -> String {
         // Try a fully blown type name or if it fails,
         // get the `kind` of inferred type
@@ -316,7 +387,7 @@ impl InferredType {
     }
 
     pub fn contains_only_number(&self) -> bool {
-        match self {
+        match self.inferred_type.deref() {
             InferredType::S8
             | InferredType::U8
             | InferredType::S16
@@ -349,8 +420,8 @@ impl InferredType {
     }
 
     pub fn as_number(&self) -> Result<InferredNumber, String> {
-        fn go(inferred_type: &InferredType, found: &mut Vec<InferredNumber>) -> Result<(), String> {
-            match inferred_type {
+        fn go(with_origin: &WithOrigin, found: &mut Vec<InferredNumber>) -> Result<(), String> {
+            match with_origin.inferred_type.deref() {
                 InferredType::S8 => {
                     found.push(InferredNumber::S8);
                     Ok(())
@@ -394,7 +465,7 @@ impl InferredType {
                 InferredType::AllOf(all_variables) => {
                     let mut previous: Option<InferredNumber> = None;
                     for variable in all_variables {
-                        go(variable, found)?;
+                        go(variable.as_ref(), found)?;
 
                         if let Some(current) = found.first() {
                             match &previous {
@@ -456,32 +527,38 @@ impl InferredType {
         found.first().cloned().ok_or("Failed".to_string())
     }
 
-    pub fn number() -> InferredType {
-        InferredType::OneOf(vec![
-            InferredType::U64,
-            InferredType::U32,
-            InferredType::U8,
-            InferredType::U16,
-            InferredType::S64,
-            InferredType::S32,
-            InferredType::S8,
-            InferredType::S16,
-            InferredType::F64,
-            InferredType::F32,
-        ])
+    pub fn number(source_span: SourceSpan) -> WithOrigin {
+        let inferred_type =   InferredType::OneOf(vec![
+            WithOrigin::default(InferredType::U64, source_span),
+            WithOrigin::default(InferredType::U32, source_span),
+            WithOrigin::default(InferredType::U8, source_span),
+            WithOrigin::default(InferredType::U16, source_span),
+            WithOrigin::default(InferredType::S64, source_span),
+            WithOrigin::default(InferredType::S32, source_span),
+            WithOrigin::default(InferredType::S8, source_span),
+            WithOrigin::default(InferredType::S16, source_span),
+            WithOrigin::default(InferredType::F64, source_span),
+            WithOrigin::default(InferredType::F32, source_span),
+        ]);
+
+        WithOrigin {
+            inferred_type: Box::new(inferred_type),
+            origin: TypeOrigin::Default(source_span)
+        }
     }
+
 
     pub fn un_resolved(&self) -> bool {
         self.is_unknown() || self.is_one_of()
     }
 
-    pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
-        let flattened = InferredType::flatten_all_of_inferred_types(&types);
+    pub fn all_of(types: Vec<WithOrigin>) -> Option<WithOrigin> {
+        let flattened = WithOrigin::flatten_all_of_inferred_types(&types);
 
-        let mut types: Vec<InferredType> =
+        let mut types: Vec<WithOrigin> =
             flattened.into_iter().filter(|t| !t.is_unknown()).collect();
 
-        let mut unique_types: HashSet<InferredType> = HashSet::new();
+        let mut unique_types: HashSet<WithOrigin> = HashSet::new();
         types.retain(|t| unique_types.insert(t.clone()));
 
         if unique_types.is_empty() {
@@ -489,20 +566,25 @@ impl InferredType {
         } else if unique_types.len() == 1 {
             unique_types.into_iter().next()
         } else {
-            let mut unique_all_of_types: Vec<InferredType> = unique_types.into_iter().collect();
+            let mut unique_all_of_types: Vec<WithOrigin> = unique_types.into_iter().collect();
             unique_all_of_types.sort();
-            Some(InferredType::AllOf(unique_all_of_types))
+            let origin = TypeOrigin::Multiple(unique_all_of_types.iter().map(|x| x.origin).collect());
+
+            Some(WithOrigin {
+                inferred_type: Box::new(InferredType::AllOf(unique_all_of_types)),
+                origin
+            })
         }
     }
 
-    pub fn one_of(types: Vec<InferredType>) -> Option<InferredType> {
-        let flattened = InferredType::flatten_one_of_inferred_types(&types);
+    pub fn one_of(types: Vec<WithOrigin>) -> Option<WithOrigin> {
+        let flattened = WithOrigin::flatten_one_of_inferred_types(&types);
 
-        let mut types: Vec<InferredType> =
+        let mut types: Vec<WithOrigin> =
             flattened.into_iter().filter(|t| !t.is_unknown()).collect();
 
         // Make sure they are unique types
-        let mut unique_types: HashSet<InferredType> = HashSet::new();
+        let mut unique_types: HashSet<WithOrigin> = HashSet::new();
         types.retain(|t| unique_types.insert(t.clone()));
 
         if types.is_empty() {
@@ -510,9 +592,15 @@ impl InferredType {
         } else if types.len() == 1 {
             types.into_iter().next()
         } else {
-            let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect();
+            let mut unique_one_of_types: Vec<WithOrigin> = unique_types.into_iter().collect();
             unique_one_of_types.sort();
-            Some(InferredType::OneOf(unique_one_of_types))
+
+            let origin = TypeOrigin::Multiple(unique_one_of_types.iter().map(|x| x.origin).collect());
+
+            Some(WithOrigin {
+                inferred_type: Box::new(InferredType::OneOf(unique_one_of_types)),
+                origin
+            })
         }
     }
 
@@ -523,7 +611,7 @@ impl InferredType {
         }
     }
     pub fn is_unknown(&self) -> bool {
-        matches!(self, InferredType::Unknown)
+        matches!(self.inferred_type.deref(), InferredType::Unknown)
     }
 
     pub fn is_one_of(&self) -> bool {
@@ -540,7 +628,7 @@ impl InferredType {
 
     pub fn is_number(&self) -> bool {
         matches!(
-            self,
+            self.inferred_type.deref(),
             InferredType::S8
                 | InferredType::U8
                 | InferredType::S16
@@ -555,20 +643,20 @@ impl InferredType {
     }
 
     pub fn is_string(&self) -> bool {
-        matches!(self, InferredType::Str)
+        matches!(self.inferred_type.deref(), InferredType::Str)
     }
 
-    pub fn flatten_all_of_inferred_types(types: &Vec<InferredType>) -> Vec<InferredType> {
+    pub fn flatten_all_of_inferred_types(types: &Vec<WithOrigin>) -> Vec<WithOrigin> {
         flatten_all_of_list(types)
     }
 
-    pub fn flatten_one_of_inferred_types(types: &Vec<InferredType>) -> Vec<InferredType> {
+    pub fn flatten_one_of_inferred_types(types: &Vec<WithOrigin>) -> Vec<WithOrigin> {
         flatten_one_of_list(types)
     }
 
     // Here unification returns an inferred type, but it doesn't necessarily imply
     // its valid type, which can be converted to a wasm type.
-    pub fn try_unify(&self) -> Result<InferredType, String> {
+    pub fn try_unify(&self) -> Result<WithOrigin, String> {
         unification::try_unify_type(self)
     }
 
@@ -576,71 +664,71 @@ impl InferredType {
         unification::unify(self).map(|unified| unified.inferred_type())
     }
 
-    pub fn unify_all_alternative_types(types: &Vec<InferredType>) -> InferredType {
+    pub fn unify_all_alternative_types(types: &Vec<WithOrigin>) -> WithOrigin {
         unification::unify_all_alternative_types(types)
     }
 
-    pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, String> {
+    pub fn unify_all_required_types(types: &Vec<WithOrigin>) -> Result<WithOrigin, String> {
         unification::unify_all_required_types(types)
     }
 
     // Unify types where both types do matter. Example in reality x can form to be both U64 and U32 in the IR, resulting in AllOf
     // Result of this type hardly becomes OneOf
-    pub fn unify_with_required(&self, other: &InferredType) -> Result<InferredType, String> {
+    pub fn unify_with_required(&self, other: &WithOrigin) -> Result<WithOrigin, String> {
         unification::unify_with_required(self, other)
     }
 
-    pub fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, String> {
+    pub fn unify_with_alternative(&self, other: &WithOrigin) -> Result<WithOrigin, String> {
         unification::unify_with_alternative(self, other)
     }
 
     // There is only one way to merge types. If they are different, they are merged into AllOf
-    pub fn merge(&self, new_inferred_type: InferredType) -> InferredType {
+    pub fn merge(&self, new_inferred_type: WithOrigin) -> WithOrigin {
         if !internal::need_update(self, &new_inferred_type) {
             return self.clone();
         }
 
-        match (self, new_inferred_type) {
-            (InferredType::Unknown, new_type) => new_type,
+        match (self.inferred_type.deref(), new_inferred_type.inferred_type.deref()) {
+            (InferredType::Unknown, _) => new_inferred_type,
 
             (InferredType::AllOf(existing_types), InferredType::AllOf(new_types)) => {
                 let mut all_types = new_types.clone();
                 all_types.extend(existing_types.clone());
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::Unknown)
+                WithOrigin::all_of(all_types).unwrap_or(WithOrigin::unknown())
             }
 
             (InferredType::AllOf(existing_types), new_type) => {
                 let mut all_types = existing_types.clone();
-                all_types.push(new_type);
+                all_types.push(new_inferred_type);
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::Unknown)
+                WithOrigin::all_of(all_types).unwrap_or(WithOrigin::unknown())
             }
 
-            (current_type, InferredType::AllOf(new_types)) => {
+            (_, InferredType::AllOf(new_types)) => {
                 let mut all_types = new_types.clone();
-                all_types.push(current_type.clone());
+                all_types.push(self.clone());
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::Unknown)
+                WithOrigin::all_of(all_types).unwrap_or(WithOrigin::unknown())
             }
 
             (InferredType::OneOf(existing_types), InferredType::OneOf(new_types)) => {
                 let mut one_of_types = new_types.clone();
                 if &new_types == existing_types {
-                    return InferredType::OneOf(one_of_types);
+                    return new_inferred_type
                 } else {
                     one_of_types.extend(existing_types.clone());
                 }
 
-                InferredType::one_of(one_of_types).unwrap_or(InferredType::Unknown)
+                WithOrigin::one_of(one_of_types).unwrap_or(WithOrigin::unknown())
             }
 
             (InferredType::OneOf(existing_types), new_type) => {
-                if existing_types.contains(&new_type) {
-                    new_type
+                if existing_types.iter().map(|x| x.inferred_type).contains(&new_type) {
+                    new_inferred_type
                 } else {
-                    InferredType::all_of(vec![self.clone(), new_type])
-                        .unwrap_or(InferredType::Unknown)
+                    WithOrigin::all_of(vec![self.clone(), new_inferred_type])
+                        .unwrap_or(WithOrigin::unknown())
                 }
             }
 
@@ -648,14 +736,14 @@ impl InferredType {
                 if newtypes.contains(current_type) {
                     current_type.clone()
                 } else {
-                    InferredType::all_of(vec![current_type.clone(), InferredType::OneOf(newtypes)])
-                        .unwrap_or(InferredType::Unknown)
+                    WithOrigin::all_of(vec![self.clone(), new_inferred_type])
+                        .unwrap_or(WithOrigin::unknown())
                 }
             }
 
-            (current_type, new_type) => {
-                InferredType::all_of(vec![current_type.clone(), new_type.clone()])
-                    .unwrap_or(InferredType::Unknown)
+            (_, new_type) => {
+                WithOrigin::all_of(vec![self.clone(), new_type.clone()])
+                    .unwrap_or(WithOrigin::unknown())
             }
         }
     }
@@ -836,13 +924,13 @@ impl From<&AnalysedType> for InferredType {
 }
 
 mod internal {
-    use crate::InferredType;
+    use crate::{InferredType, WithOrigin};
 
     pub(crate) fn need_update(
-        current_inferred_type: &InferredType,
-        new_inferred_type: &InferredType,
+        current_inferred_type: &WithOrigin,
+        new_inferred_type: &WithOrigin,
     ) -> bool {
-        current_inferred_type != new_inferred_type && !new_inferred_type.is_unknown()
+        current_inferred_type != new_inferred_type && !new_inferred_type.inferred_type.is_unknown()
     }
 }
 

@@ -1,24 +1,25 @@
 use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list};
-use crate::InferredType;
+use crate::{InferredType, TypeOrigin, WithOrigin};
 use std::collections::HashSet;
+use std::ops::Deref;
 
 #[derive(Clone, Debug)]
-pub struct Unified(InferredType);
+pub struct Unified(WithOrigin);
 
 impl Unified {
-    pub fn inferred_type(&self) -> InferredType {
+    pub fn inferred_type(&self) -> WithOrigin {
         self.0.clone()
     }
 }
 
-pub fn unify(inferred_type: &InferredType) -> Result<Unified, String> {
+pub fn unify(inferred_type: &WithOrigin) -> Result<Unified, String> {
     let possibly_unified_type = try_unify_type(inferred_type)?;
 
     internal::validate_unified_type(&possibly_unified_type)
 }
 
-pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, String> {
-    match inferred_type {
+pub fn try_unify_type(inferred_type: &WithOrigin) -> Result<WithOrigin, String> {
+    match inferred_type.inferred_type.deref() {
         InferredType::AllOf(types) => {
             let flattened_all_ofs = flatten_all_of_list(types);
             unify_all_required_types(&flattened_all_ofs)
@@ -113,7 +114,7 @@ pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, Stri
     }
 }
 
-pub fn unify_all_alternative_types(types: &Vec<InferredType>) -> InferredType {
+pub fn unify_all_alternative_types(types: &Vec<WithOrigin>) -> WithOrigin {
     let mut unified_type = InferredType::Unknown;
 
     let mut one_ofs = vec![];
@@ -137,7 +138,7 @@ pub fn unify_all_alternative_types(types: &Vec<InferredType>) -> InferredType {
     unified_type
 }
 
-pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, String> {
+pub fn unify_all_required_types(types: &Vec<WithOrigin>) -> Result<WithOrigin, String> {
     let mut unified_type = InferredType::Unknown;
     for typ in types {
         let unified = typ.try_unify().unwrap_or(typ.clone());
@@ -147,10 +148,10 @@ pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredTyp
 }
 
 pub fn unify_with_alternative(
-    interred_type: &InferredType,
-    other: &InferredType,
-) -> Result<InferredType, String> {
-    if interred_type == &InferredType::Unknown {
+    interred_type: &WithOrigin,
+    other: &WithOrigin,
+) -> Result<WithOrigin, String> {
+    if interred_type.is_unknown() {
         Ok(other.clone())
     } else if other.is_unknown() || interred_type == other {
         Ok(interred_type.clone())
@@ -158,7 +159,7 @@ pub fn unify_with_alternative(
         let inferred_type_printable = interred_type.printable();
         let other_printable = other.printable();
 
-        match (interred_type, other) {
+        match (interred_type.inferred_type.deref(), other.inferred_type.deref()) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 if a_fields.len() != b_fields.len() {
                     return Err(format!("conflicting record types inferred  {}, {}. the size of the members in the records don't match", inferred_type_printable, other_printable));
@@ -187,7 +188,7 @@ pub fn unify_with_alternative(
                     }
                 }
 
-                Ok(InferredType::Record(fields))
+                Ok(WithOrigin::new(InferredType::Record(fields), TypeOrigin::Others))
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
@@ -212,14 +213,14 @@ pub fn unify_with_alternative(
                     }
                 }
 
-                Ok(InferredType::Tuple(types))
+                Ok(WithOrigin::new(InferredType::Tuple(types), TypeOrigin::Others))
             }
 
             (InferredType::List(a_type), InferredType::List(b_type)) => {
                 let unified_b_type = b_type.try_unify()?;
                 let unified_a_type = a_type.try_unify()?;
                 if unified_a_type == unified_b_type {
-                    Ok(InferredType::List(Box::new(unified_a_type)))
+                    Ok(WithOrigin::resolved(InferredType::List(unified_a_type)))
                 } else {
                     return Err(format!(
                         "conflicting list types inferred: {}, {}",
@@ -235,15 +236,15 @@ pub fn unify_with_alternative(
                 // at wasm side when calling a worker function, as they get converted to a vector of booleans zipped
                 // with the actual flag names
                 if a_flags.len() >= b_flags.len() {
-                    Ok(InferredType::Flags(a_flags.clone()))
+                    Ok(WithOrigin::resolved(InferredType::Flags(a_flags.clone())))
                 } else {
-                    Ok(InferredType::Flags(b_flags.clone()))
+                    Ok(WithOrigin::resolved(InferredType::Flags(b_flags.clone())))
                 }
             }
 
             (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
                 if a_variants == b_variants {
-                    Ok(InferredType::Enum(a_variants.clone()))
+                    Ok(WithOrigin::resolved(InferredType::Enum(a_variants.clone())))
                 } else {
                     Err(format!(
                         "conflicting enum types inferred: {}, {}",
@@ -256,7 +257,7 @@ pub fn unify_with_alternative(
                 let unified_b_type = b_type.try_unify()?;
                 let unified_a_type = a_type.try_unify()?;
                 let combined = unified_a_type.unify_with_alternative(&unified_b_type)?;
-                Ok(InferredType::Option(Box::new(combined)))
+                Ok(WithOrigin::resolved(InferredType::Option(combined)))
             }
 
             (
@@ -274,7 +275,7 @@ pub fn unify_with_alternative(
                         let unified_b_inner = b_inner.try_unify()?;
                         let unified_a_inner = a_inner.try_unify()?;
                         if unified_a_inner == unified_b_inner {
-                            Some(Box::new(unified_a_inner))
+                            Some(unified_a_inner)
                         } else {
                             return Err(format!(
                                 "conflicting result types inferred: {}, {}",
@@ -292,7 +293,7 @@ pub fn unify_with_alternative(
                         let unified_b_inner = b_inner.try_unify()?;
                         let unified_a_inner = a_inner.try_unify()?;
                         if unified_a_inner == unified_b_inner {
-                            Some(Box::new(unified_a_inner))
+                            Some(unified_a_inner)
                         } else {
                             return Err(format!(
                                 "conflicting result types inferred: {}, {}",
@@ -305,10 +306,10 @@ pub fn unify_with_alternative(
                     (None, Some(ok)) => Some(Box::new(*ok.clone())),
                 };
 
-                Ok(InferredType::Result {
+                Ok(WithOrigin::resolved(InferredType::Result {
                     ok: unified_b_ok,
                     error: unified_b_error,
-                })
+                }))
             }
 
             // We hardly reach a situation where a variant can be OneOf, but if we happen to encounter this
@@ -350,7 +351,7 @@ pub fn unify_with_alternative(
                     }
                 }
 
-                Ok(InferredType::Variant(variants))
+                Ok(WithOrigin::resolved(InferredType::Variant(variants)))
             }
 
             // We shouldn't get into a situation where we have OneOf 2 different resource handles.
@@ -366,10 +367,10 @@ pub fn unify_with_alternative(
                 },
             ) => {
                 if a_id == b_id && a_mode == b_mode {
-                    Ok(InferredType::Resource {
+                    Ok(WithOrigin::resolved(InferredType::Resource {
                         resource_id: *a_id,
                         resource_mode: *a_mode,
-                    })
+                    }))
                 } else {
                     Err(format!(
                         "conflicting resource types inferred: {}, {}",
@@ -423,9 +424,9 @@ pub fn unify_with_alternative(
 }
 
 pub fn unify_with_required(
-    inferred_type: &InferredType,
-    other: &InferredType,
-) -> Result<InferredType, String> {
+    inferred_type: &WithOrigin,
+    other: &WithOrigin,
+) -> Result<WithOrigin, String> {
     if other.is_unknown() {
         inferred_type.try_unify()
     } else if inferred_type.is_unknown() {
@@ -436,7 +437,7 @@ pub fn unify_with_required(
         let inferred_type_printable = inferred_type.printable();
         let other_printable = other.printable();
 
-        match (inferred_type, other) {
+        match (inferred_type.inferred_type.deref(), other.inferred_type.deref()) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 let mut fields: Vec<(String, InferredType)> = vec![];
                 // Common fields unified else kept it as it is
@@ -734,11 +735,12 @@ pub fn unify_with_required(
 }
 
 mod internal {
+    use std::ops::Deref;
     use crate::inferred_type::unification::Unified;
-    use crate::InferredType;
+    use crate::{InferredType, WithOrigin};
 
-    pub(crate) fn validate_unified_type(inferred_type: &InferredType) -> Result<Unified, String> {
-        match inferred_type {
+    pub(crate) fn validate_unified_type(inferred_type: &WithOrigin) -> Result<Unified, String> {
+        match inferred_type.inferred_type.deref() {
             InferredType::Bool => Ok(Unified(InferredType::Bool)),
             InferredType::S8 => Ok(Unified(InferredType::S8)),
             InferredType::U8 => Ok(Unified(InferredType::U8)),
