@@ -1445,7 +1445,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             match &comp.version_type {
                 VersionType::Latest => {
                     b.push_bind(name)
-                        .push_bind(Option::<String>::None)
+                        .push_bind(Option::<i64>::None)
                         .push_bind(true);
                 }
                 VersionType::Exact(ver) => {
