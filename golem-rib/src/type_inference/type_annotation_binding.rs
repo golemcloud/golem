@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Expr;
-use std::collections::VecDeque;
+use crate::{Expr, ExprVisitor, InferredType};
 
 pub fn bind_type_annotations(expr: &mut Expr) {
-    let mut queue = VecDeque::new();
-    queue.push_back(expr);
+    let mut visitor = ExprVisitor::top_down(expr);
 
-    while let Some(expr) = queue.pop_back() {
+    while let Some(expr) = visitor.pop_front() {
+
         match expr {
             Expr::Let {
                 type_annotation,
@@ -27,105 +26,20 @@ pub fn bind_type_annotations(expr: &mut Expr) {
                 ..
             } => {
                 if let Some(type_name) = type_annotation {
-                    expr.with_inferred_type_mut(type_name.clone().into());
-                }
-                queue.push_back(expr);
-            }
-
-            Expr::Number {
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
+                    expr.with_inferred_type_mut((&*type_name).into());
                 }
             }
 
-            Expr::SelectField {
-                expr,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-                queue.push_back(expr);
-            }
+            expr => {
+                let type_annotation = expr.type_annotation();
 
-            Expr::SelectIndex {
-                expr,
-                index,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-                queue.push_back(expr);
-                queue.push_back(index);
-            }
-
-            Expr::Identifier {
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
+                if let Some(type_annotation) = type_annotation {
+                    expr.with_inferred_type_mut(InferredType::from(type_annotation));
                 }
             }
-
-            Expr::Option {
-                expr,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-
-                if let Some(expr) = expr {
-                    queue.push_back(expr);
-                }
-            }
-
-            Expr::Result {
-                expr,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-
-                match expr {
-                    Ok(expr) => queue.push_back(expr),
-                    Err(expr) => queue.push_back(expr),
-                }
-            }
-
-            Expr::Sequence {
-                exprs,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-
-                for expr in exprs {
-                    queue.push_back(expr);
-                }
-            }
-
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
+
+
     }
 }
 

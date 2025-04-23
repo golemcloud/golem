@@ -1316,6 +1316,51 @@ impl Expr {
         }
     }
 
+    pub fn type_annotation(&self) -> &Option<TypeName> {
+        match self {
+            Expr::Identifier { type_annotation, .. }
+            | Expr::Let { type_annotation, .. }
+            | Expr::SelectField { type_annotation, .. }
+            | Expr::SelectIndex { type_annotation, .. }
+            | Expr::Sequence { type_annotation, .. }
+            | Expr::Record { type_annotation, .. }
+            | Expr::Tuple { type_annotation, .. }
+            | Expr::Literal { type_annotation, .. }
+            | Expr::Number { type_annotation, .. }
+            | Expr::Flags { type_annotation, .. }
+            | Expr::Boolean { type_annotation, .. }
+            | Expr::Concat { type_annotation, .. }
+            | Expr::ExprBlock { type_annotation, .. }
+            | Expr::Not { type_annotation, .. }
+            | Expr::GreaterThan { type_annotation, .. }
+            | Expr::GreaterThanOrEqualTo { type_annotation, .. }
+            | Expr::LessThanOrEqualTo { type_annotation, .. }
+            | Expr::EqualTo { type_annotation, .. }
+            | Expr::LessThan { type_annotation, .. }
+            | Expr::Plus { type_annotation, .. }
+            | Expr::Minus { type_annotation, .. }
+            | Expr::Divide { type_annotation, .. }
+            | Expr::Multiply { type_annotation, .. }
+            | Expr::Cond { type_annotation, .. }
+            | Expr::PatternMatch { type_annotation, .. }
+            | Expr::Option { type_annotation, .. }
+            | Expr::Result { type_annotation, .. }
+            | Expr::Unwrap { type_annotation, .. }
+            | Expr::Throw { type_annotation, .. }
+            | Expr::And { type_annotation, .. }
+            | Expr::Or { type_annotation, .. }
+            | Expr::GetTag { type_annotation, .. }
+            | Expr::ListComprehension { type_annotation, .. }
+            | Expr::ListReduce { type_annotation, .. }
+            | Expr::InvokeMethodLazy { type_annotation, .. }
+            | Expr::Range { type_annotation, .. }
+            | Expr::Length { type_annotation, .. }
+            | Expr::Call { type_annotation, .. } => type_annotation,
+        }
+    }
+
+
+
     pub fn with_type_annotation_opt(&self, type_annotation: Option<TypeName>) -> Expr {
         if let Some(type_annotation) = type_annotation {
             self.with_type_annotation(type_annotation)

@@ -258,8 +258,8 @@ impl TryFrom<AnalysedType> for TypeName {
     }
 }
 
-impl From<TypeName> for InferredType {
-    fn from(type_name: TypeName) -> Self {
+impl From<&TypeName> for InferredType {
+    fn from(type_name: &TypeName) -> Self {
         match type_name {
             TypeName::Bool => InferredType::Bool,
             TypeName::S8 => InferredType::S8,
@@ -275,30 +275,30 @@ impl From<TypeName> for InferredType {
             TypeName::Chr => InferredType::Chr,
             TypeName::Str => InferredType::Str,
             TypeName::List(inner_type) => {
-                InferredType::List(Box::new(inner_type.deref().clone().into()))
+                InferredType::List(Box::new(inner_type.deref().into()))
             }
             TypeName::Tuple(inner_types) => {
                 InferredType::Tuple(inner_types.into_iter().map(|t| t.into()).collect())
             }
             TypeName::Option(type_name) => {
-                InferredType::Option(Box::new(type_name.deref().clone().into()))
+                InferredType::Option(Box::new(type_name.deref().into()))
             }
             TypeName::Result { ok, error } => InferredType::Result {
-                ok: ok.map(|x| Box::new(x.deref().clone().into())),
-                error: error.map(|x| Box::new(x.deref().clone().into())),
+                ok: ok.as_deref().map(|x| Box::new(x.into())),
+                error: error.as_deref().map(|x| Box::new(x.into())),
             },
             TypeName::Record(fields) => InferredType::Record(
                 fields
                     .into_iter()
-                    .map(|(field, typ)| (field, typ.deref().clone().into()))
+                    .map(|(field, typ)| (field.clone(), typ.deref().into()))
                     .collect(),
             ),
-            TypeName::Flags(flags) => InferredType::Flags(flags),
-            TypeName::Enum(cases) => InferredType::Enum(cases),
+            TypeName::Flags(flags) => InferredType::Flags(flags.clone()),
+            TypeName::Enum(cases) => InferredType::Enum(cases.clone()),
             TypeName::Variant { cases } => InferredType::Variant(
                 cases
                     .into_iter()
-                    .map(|(case, typ)| (case, typ.map(|x| x.deref().clone().into())))
+                    .map(|(case_name, typ)| (case_name.clone(), typ.as_deref().map(|x| x.into())))
                     .collect(),
             ),
         }
