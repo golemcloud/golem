@@ -15,13 +15,13 @@
 use crate::type_checker::Path;
 use crate::type_checker::PathElem;
 use crate::ExprVisitor;
-use crate::{Expr, InferredType, VariableId};
+use crate::{Expr, TypeInternal, VariableId};
 
 #[derive(Clone, Debug)]
 pub struct GlobalVariableTypeSpec {
     variable_id: VariableId,
     path: Path,
-    inferred_type: InferredType,
+    inferred_type: TypeInternal,
 }
 
 impl GlobalVariableTypeSpec {
@@ -50,7 +50,7 @@ impl GlobalVariableTypeSpec {
     pub fn new(
         variable_name: &str,
         path: Path,
-        inferred_type: InferredType,
+        inferred_type: TypeInternal,
     ) -> GlobalVariableTypeSpec {
         GlobalVariableTypeSpec {
             variable_id: VariableId::global(variable_name.to_string()),
@@ -162,12 +162,12 @@ mod tests {
         let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::default(),
-            inferred_type: InferredType::Str,
+            inferred_type: TypeInternal::Str,
         };
 
         expr.bind_global_variable_types(&vec![type_spec]);
 
-        let expected = Expr::identifier_global("foo", None).with_inferred_type(InferredType::Str);
+        let expected = Expr::identifier_global("foo", None).with_inferred_type(TypeInternal::Str);
 
         assert_eq!(expr, expected);
     }
@@ -184,7 +184,7 @@ mod tests {
         let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::from_elems(vec!["bar"]),
-            inferred_type: InferredType::Str,
+            inferred_type: TypeInternal::Str,
         };
 
         expr.bind_global_variable_types(&vec![type_spec]);
@@ -194,7 +194,7 @@ mod tests {
             "baz",
             None,
         )
-        .with_inferred_type(InferredType::Str);
+        .with_inferred_type(TypeInternal::Str);
 
         assert_eq!(expr, expected);
     }
@@ -213,7 +213,7 @@ mod tests {
         let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::from_elems(vec!["bar"]),
-            inferred_type: InferredType::Str,
+            inferred_type: TypeInternal::Str,
         };
 
         expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
@@ -227,27 +227,27 @@ mod tests {
                     Expr::select_field(
                         Expr::select_field(
                             Expr::identifier_global("foo", None).with_inferred_type(
-                                InferredType::Record(vec![(
+                                TypeInternal::Record(vec![(
                                     "bar".to_string(),
-                                    InferredType::Record(vec![
-                                        ("number".to_string(), InferredType::U64),
-                                        ("user-id".to_string(), InferredType::Str),
+                                    TypeInternal::Record(vec![
+                                        ("number".to_string(), TypeInternal::U64),
+                                        ("user-id".to_string(), TypeInternal::Str),
                                     ]),
                                 )]),
                             ),
                             "bar",
                             None,
                         )
-                        .with_inferred_type(InferredType::Record(vec![
-                            ("number".to_string(), InferredType::U64),
-                            ("user-id".to_string(), InferredType::Str),
+                        .with_inferred_type(TypeInternal::Record(vec![
+                            ("number".to_string(), TypeInternal::U64),
+                            ("user-id".to_string(), TypeInternal::Str),
                         ])),
                         "user-id",
                         None,
                     )
-                    .with_inferred_type(InferredType::Str),
+                    .with_inferred_type(TypeInternal::Str),
                 ),
-                inferred_type: InferredType::Tuple(vec![]),
+                inferred_type: TypeInternal::Tuple(vec![]),
                 source_span: SourceSpan::default(),
             },
             Expr::Let {
@@ -257,37 +257,37 @@ mod tests {
                     Expr::select_field(
                         Expr::select_field(
                             Expr::identifier_global("foo", None).with_inferred_type(
-                                InferredType::Record(vec![(
+                                TypeInternal::Record(vec![(
                                     "bar".to_string(),
-                                    InferredType::Record(vec![
-                                        ("number".to_string(), InferredType::U64),
-                                        ("user-id".to_string(), InferredType::Str),
+                                    TypeInternal::Record(vec![
+                                        ("number".to_string(), TypeInternal::U64),
+                                        ("user-id".to_string(), TypeInternal::Str),
                                     ]),
                                 )]),
                             ),
                             "bar",
                             None,
                         )
-                        .with_inferred_type(InferredType::Record(vec![
-                            ("number".to_string(), InferredType::U64),
-                            ("user-id".to_string(), InferredType::Str),
+                        .with_inferred_type(TypeInternal::Record(vec![
+                            ("number".to_string(), TypeInternal::U64),
+                            ("user-id".to_string(), TypeInternal::Str),
                         ])),
                         "number",
                         None,
                     )
-                    .with_inferred_type(InferredType::U64),
+                    .with_inferred_type(TypeInternal::U64),
                 ),
-                inferred_type: InferredType::Tuple(vec![]),
+                inferred_type: TypeInternal::Tuple(vec![]),
                 source_span: SourceSpan::default(),
             },
             Expr::Identifier {
                 variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),
                 type_annotation: None,
-                inferred_type: InferredType::U64,
+                inferred_type: TypeInternal::U64,
                 source_span: SourceSpan::default(),
             },
         ])
-        .with_inferred_type(InferredType::U64);
+        .with_inferred_type(TypeInternal::U64);
 
         assert_eq!(expr, expected);
     }

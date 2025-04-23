@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType};
+use crate::{Expr, ExprVisitor, TypeInternal};
 
 // Given `f` executes inference, find expr where `f(expr) = expr`
 pub fn type_inference_fix_point<F, E>(mut scan_and_infer: F, expr: &mut Expr) -> Result<(), E>
@@ -45,14 +45,14 @@ fn compare_expr_types(left: &mut Expr, right: &mut Expr) -> bool {
     left_stack.is_empty() && right_stack.is_empty()
 }
 
-fn compare_inferred_types(left: &InferredType, right: &InferredType) -> bool {
+fn compare_inferred_types(left: &TypeInternal, right: &TypeInternal) -> bool {
     compare_inferred_types_internal(left, right, true)
 }
 
-fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bool: bool) -> bool {
+fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bool: bool) -> bool {
     match (left, right) {
         // AlLOf(AllOf(Str, Int), Unknown)
-        (InferredType::AllOf(left), InferredType::AllOf(right)) => {
+        (TypeInternal::AllOf(left), TypeInternal::AllOf(right)) => {
             left.iter().all(|left| {
                 right
                     .iter()
@@ -63,7 +63,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             })
         }
         // a precise type is converted to a less precise type, and hence false
-        (InferredType::AllOf(left), InferredType::OneOf(right)) => {
+        (TypeInternal::AllOf(left), TypeInternal::OneOf(right)) => {
             left.iter().all(|left| {
                 right
                     .iter()
@@ -74,9 +74,9 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             })
         }
         // Converted a less precise type to a more precise type, and hence false
-        (InferredType::OneOf(_), InferredType::AllOf(_)) => false,
+        (TypeInternal::OneOf(_), TypeInternal::AllOf(_)) => false,
 
-        (InferredType::OneOf(left), InferredType::OneOf(right)) => {
+        (TypeInternal::OneOf(left), TypeInternal::OneOf(right)) => {
             left.iter().all(|left| {
                 right
                     .iter()
@@ -88,7 +88,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
         }
 
         // More precision this time and therefore false
-        (InferredType::AllOf(left), inferred_type) => {
+        (TypeInternal::AllOf(left), inferred_type) => {
             if bool {
                 left.iter()
                     .all(|left| compare_inferred_types_internal(left, inferred_type, true))
@@ -99,7 +99,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
         }
 
         // Less precision this time and therefore false
-        (inferred_type, InferredType::AllOf(right)) => {
+        (inferred_type, TypeInternal::AllOf(right)) => {
             if bool {
                 right
                     .iter()
@@ -111,7 +111,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             }
         }
 
-        (InferredType::Record(left), InferredType::Record(right)) => {
+        (TypeInternal::Record(left), TypeInternal::Record(right)) => {
             left.iter().all(|(key, value)| {
                 if let Some(right_value) = right
                     .iter()
@@ -135,25 +135,25 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             })
         }
 
-        (InferredType::Tuple(left), InferredType::Tuple(right)) => left
+        (TypeInternal::Tuple(left), TypeInternal::Tuple(right)) => left
             .iter()
             .zip(right.iter())
             .all(|(left, right)| compare_inferred_types_internal(left, right, true)),
 
-        (InferredType::List(left), InferredType::List(right)) => {
+        (TypeInternal::List(left), TypeInternal::List(right)) => {
             compare_inferred_types_internal(left, right, true)
         }
 
-        (InferredType::Option(left), InferredType::Option(right)) => {
+        (TypeInternal::Option(left), TypeInternal::Option(right)) => {
             compare_inferred_types_internal(left, right, true)
         }
 
         (
-            InferredType::Result {
+            TypeInternal::Result {
                 ok: left_ok,
                 error: left_error,
             },
-            InferredType::Result {
+            TypeInternal::Result {
                 ok: right_ok,
                 error: right_error,
             },
@@ -177,11 +177,11 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             ok && error
         }
 
-        (InferredType::Flags(left), InferredType::Flags(right)) => left == right,
+        (TypeInternal::Flags(left), TypeInternal::Flags(right)) => left == right,
 
-        (InferredType::OneOf(_), _inferred_type) => false,
+        (TypeInternal::OneOf(_), _inferred_type) => false,
 
-        (_inferred_type, InferredType::OneOf(_)) => false,
+        (_inferred_type, TypeInternal::OneOf(_)) => false,
 
         (left, right) => left == right,
     }
@@ -194,58 +194,58 @@ mod tests {
 
     use crate::parser::type_name::TypeName;
     use crate::type_inference::inference_fix_point::{compare_expr_types, compare_inferred_types};
-    use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
+    use crate::{Expr, FunctionTypeRegistry, TypeInternal, VariableId};
 
     #[test]
     fn test_inferred_type_equality_1() {
-        let left = InferredType::Str;
-        let right = InferredType::Str;
+        let left = TypeInternal::Str;
+        let right = TypeInternal::Str;
         assert!(compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_2() {
-        let left = InferredType::Unknown;
-        let right = InferredType::Unknown;
+        let left = TypeInternal::Unknown;
+        let right = TypeInternal::Unknown;
         assert!(compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_3() {
-        let left = InferredType::Unknown;
-        let right = InferredType::Str;
+        let left = TypeInternal::Unknown;
+        let right = TypeInternal::Str;
         assert!(!compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_4() {
-        let left = InferredType::Str;
-        let right = InferredType::Unknown;
+        let left = TypeInternal::Str;
+        let right = TypeInternal::Unknown;
         assert!(!compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_5() {
-        let left = InferredType::Unknown;
-        let right = InferredType::AllOf(vec![InferredType::Str]);
+        let left = TypeInternal::Unknown;
+        let right = TypeInternal::AllOf(vec![TypeInternal::Str]);
 
         assert!(!compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_6() {
-        let left = InferredType::Unknown;
-        let right = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
+        let left = TypeInternal::Unknown;
+        let right = TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]);
 
         assert!(!compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_7() {
-        let left = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
-        let right = InferredType::AllOf(vec![InferredType::AllOf(vec![
-            InferredType::Str,
-            InferredType::Unknown,
+        let left = TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]);
+        let right = TypeInternal::AllOf(vec![TypeInternal::AllOf(vec![
+            TypeInternal::Str,
+            TypeInternal::Unknown,
         ])]);
 
         assert!(compare_inferred_types(&left, &right));
@@ -253,10 +253,10 @@ mod tests {
 
     #[test]
     fn test_inferred_type_equality_8() {
-        let left = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
-        let right = InferredType::AllOf(vec![
-            InferredType::U64,
-            InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]),
+        let left = TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]);
+        let right = TypeInternal::AllOf(vec![
+            TypeInternal::U64,
+            TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]),
         ]);
 
         assert!(!compare_inferred_types(&left, &right));
@@ -264,11 +264,11 @@ mod tests {
 
     #[test]
     fn test_inferred_type_equality_9() {
-        let left = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
-        let right = InferredType::AllOf(vec![
-            InferredType::Str,
-            InferredType::Unknown,
-            InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]),
+        let left = TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]);
+        let right = TypeInternal::AllOf(vec![
+            TypeInternal::Str,
+            TypeInternal::Unknown,
+            TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]),
         ]);
 
         assert!(compare_inferred_types(&left, &right));
@@ -276,23 +276,23 @@ mod tests {
 
     #[test]
     fn test_inferred_type_equality_10() {
-        let left = InferredType::AllOf(vec![
-            InferredType::Str,
-            InferredType::Unknown,
-            InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]),
+        let left = TypeInternal::AllOf(vec![
+            TypeInternal::Str,
+            TypeInternal::Unknown,
+            TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]),
         ]);
-        let right = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
+        let right = TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]);
 
         assert!(compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_11() {
-        let left = InferredType::OneOf(vec![InferredType::U64, InferredType::U32]);
-        let right = InferredType::AllOf(vec![
-            InferredType::Str,
-            InferredType::Unknown,
-            InferredType::OneOf(vec![InferredType::U64, InferredType::U32]),
+        let left = TypeInternal::OneOf(vec![TypeInternal::U64, TypeInternal::U32]);
+        let right = TypeInternal::AllOf(vec![
+            TypeInternal::Str,
+            TypeInternal::Unknown,
+            TypeInternal::OneOf(vec![TypeInternal::U64, TypeInternal::U32]),
         ]);
 
         assert!(!compare_inferred_types(&left, &right));
@@ -300,11 +300,11 @@ mod tests {
 
     #[test]
     fn test_inferred_type_equality_12() {
-        let left = InferredType::Unknown;
-        let right = InferredType::OneOf(vec![
-            InferredType::Str,
-            InferredType::Unknown,
-            InferredType::OneOf(vec![InferredType::U64, InferredType::U32]),
+        let left = TypeInternal::Unknown;
+        let right = TypeInternal::OneOf(vec![
+            TypeInternal::Str,
+            TypeInternal::Unknown,
+            TypeInternal::OneOf(vec![TypeInternal::U64, TypeInternal::U32]),
         ]);
 
         assert!(!compare_inferred_types(&left, &right));
@@ -320,12 +320,12 @@ mod tests {
 
     #[test]
     fn test_expr_comparison_2() {
-        let left = InferredType::AllOf(vec![
-            InferredType::Str,
-            InferredType::Unknown,
-            InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]),
+        let left = TypeInternal::AllOf(vec![
+            TypeInternal::Str,
+            TypeInternal::Unknown,
+            TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]),
         ]);
-        let right = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
+        let right = TypeInternal::AllOf(vec![TypeInternal::Str, TypeInternal::Unknown]);
 
         let mut left = Expr::identifier_global("x", None).merge_inferred_type(left);
         let mut right = Expr::identifier_global("x", None).merge_inferred_type(right);
@@ -335,11 +335,11 @@ mod tests {
 
     #[test]
     fn test_expr_comparison_3() {
-        let left = InferredType::Unknown;
-        let right = InferredType::OneOf(vec![
-            InferredType::Str,
-            InferredType::Unknown,
-            InferredType::OneOf(vec![InferredType::U64, InferredType::U32]),
+        let left = TypeInternal::Unknown;
+        let right = TypeInternal::OneOf(vec![
+            TypeInternal::Str,
+            TypeInternal::Unknown,
+            TypeInternal::OneOf(vec![TypeInternal::U64, TypeInternal::U32]),
         ]);
 
         let mut left = Expr::identifier_global("x", None).merge_inferred_type(left);
@@ -386,20 +386,20 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding_with_variable_id(
                 VariableId::local("x", 0),
-                Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+                Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U64),
                 Some(TypeName::U64),
             ),
             Expr::cond(
                 Expr::equal_to(
-                    Expr::identifier_local("x", 0, None).with_inferred_type(InferredType::U64),
-                    Expr::identifier_local("x", 0, None).with_inferred_type(InferredType::U64),
+                    Expr::identifier_local("x", 0, None).with_inferred_type(TypeInternal::U64),
+                    Expr::identifier_local("x", 0, None).with_inferred_type(TypeInternal::U64),
                 ),
-                Expr::identifier_local("x", 0, None).with_inferred_type(InferredType::U64),
-                Expr::identifier_global("y", None).with_inferred_type(InferredType::U64),
+                Expr::identifier_local("x", 0, None).with_inferred_type(TypeInternal::U64),
+                Expr::identifier_global("y", None).with_inferred_type(TypeInternal::U64),
             )
-            .with_inferred_type(InferredType::U64),
+            .with_inferred_type(TypeInternal::U64),
         ])
-        .with_inferred_type(InferredType::U64);
+        .with_inferred_type(TypeInternal::U64);
 
         assert_eq!(expr, expected)
     }

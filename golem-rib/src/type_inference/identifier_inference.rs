@@ -25,7 +25,7 @@ pub fn infer_all_identifiers(expr: &mut Expr) {
 
 mod internal {
 
-    use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, Expr, ExprVisitor, TypeInternal, MatchArm, VariableId};
     use std::collections::HashMap;
 
     pub(crate) fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
@@ -123,21 +123,21 @@ mod internal {
 
     // A state that maps from the identifers to the types inferred
     #[derive(Debug, Clone)]
-    struct IdentifierTypeState(HashMap<VariableId, InferredType>);
+    struct IdentifierTypeState(HashMap<VariableId, TypeInternal>);
 
     impl IdentifierTypeState {
         fn new() -> Self {
             IdentifierTypeState(HashMap::new())
         }
 
-        fn update(&mut self, id: VariableId, ty: InferredType) {
+        fn update(&mut self, id: VariableId, ty: TypeInternal) {
             self.0
                 .entry(id)
                 .and_modify(|e| *e = e.merge(ty.clone()))
                 .or_insert(ty);
         }
 
-        pub fn lookup(&self, id: &VariableId) -> Option<InferredType> {
+        pub fn lookup(&self, id: &VariableId) -> Option<TypeInternal> {
             self.0.get(id).cloned()
         }
     }

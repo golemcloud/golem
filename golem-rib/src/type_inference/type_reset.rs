@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType};
+use crate::{Expr, ExprVisitor, TypeInternal};
 
 pub fn reset_type_info(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     // Start from the end
     while let Some(expr) = visitor.pop_back() {
-        expr.with_inferred_type_mut(InferredType::Unknown);
+        expr.with_inferred_type_mut(TypeInternal::Unknown);
     }
 }

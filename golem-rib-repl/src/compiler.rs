@@ -160,7 +160,7 @@ pub fn fetch_instance_variables(inferred_expr: &InferredExpr) -> InstanceVariabl
             variable_id, expr, ..
         } = expr
         {
-            if let InferredType::Instance { instance_type } = expr.inferred_type() {
+            if let TypeInternal::Instance { instance_type } = expr.inferred_type() {
                 match *instance_type {
                     InstanceType::Resource { .. } => {
                         let key = InstanceKey::Resource(variable_id.name());

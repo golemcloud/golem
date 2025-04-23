@@ -145,7 +145,7 @@ mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, Range, RibByteCodeGenerationError, RibIR, VariableId,
+        TypeInternal, InstructionId, Range, RibByteCodeGenerationError, RibIR, VariableId,
         WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
@@ -362,7 +362,7 @@ mod internal {
             }
 
             Expr::SelectIndex { expr, index, .. } => match index.inferred_type() {
-                InferredType::Range { .. } => {
+                TypeInternal::Range { .. } => {
                     let list_comprehension =
                         desugar_range_selection(expr, index).map_err(|err| {
                             RibByteCodeGenerationError::RangeSelectionDesugarError(format!(
@@ -619,7 +619,7 @@ mod internal {
                 inferred_type,
                 ..
             } => match inferred_type {
-                InferredType::Flags(all_flags) => {
+                TypeInternal::Flags(all_flags) => {
                     let mut bitmap = Vec::new();
                     let flag_values_set: HashSet<&String> = HashSet::from_iter(flags.iter());
                     for flag in all_flags.iter() {
@@ -695,7 +695,7 @@ mod internal {
                 inferred_type,
                 ..
             } => match inferred_type {
-                InferredType::Range { .. } => {
+                TypeInternal::Range { .. } => {
                     let analysed_type = convert_to_analysed_type(range_expr, inferred_type)?;
 
                     handle_range(range, stack, analysed_type, instructions);
@@ -735,7 +735,7 @@ mod internal {
 
     pub(crate) fn convert_to_analysed_type(
         expr: &Expr,
-        inferred_type: &InferredType,
+        inferred_type: &TypeInternal,
     ) -> Result<AnalysedType, RibByteCodeGenerationError> {
         AnalysedType::try_from(inferred_type).map_err(|error| {
             RibByteCodeGenerationError::AnalysedTypeConversionError(format!(
@@ -919,7 +919,7 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, FunctionTypeRegistry, TypeInternal, MatchArm, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
@@ -943,7 +943,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_identifier() {
-        let inferred_input_type = InferredType::Str;
+        let inferred_input_type = TypeInternal::Str;
         let variable_id = VariableId::local("request", 0);
         let empty_registry = FunctionTypeRegistry::empty();
         let expr = Expr::identifier_with_variable_id(variable_id.clone(), None)
@@ -988,8 +988,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_equal_to() {
-        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U32);
 
         let expr = Expr::equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -1015,8 +1015,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than() {
-        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number_inferred(BigDecimal::from(2), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(2), None, TypeInternal::U32);
 
         let expr = Expr::greater_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -1042,8 +1042,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than() {
-        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U32);
 
         let expr = Expr::less_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -1069,8 +1069,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than_or_equal_to() {
-        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U32);
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -1096,8 +1096,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than_or_equal_to() {
-        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::F32);
-        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::U32);
+        let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::F32);
+        let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U32);
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -1127,9 +1127,9 @@ mod compiler_tests {
             ("foo_key".to_string(), Expr::literal("foo_value")),
             ("bar_key".to_string(), Expr::literal("bar_value")),
         ])
-        .with_inferred_type(InferredType::Record(vec![
-            (String::from("foo_key"), InferredType::Str),
-            (String::from("bar_key"), InferredType::Str),
+        .with_inferred_type(TypeInternal::Record(vec![
+            (String::from("foo_key"), TypeInternal::Str),
+            (String::from("bar_key"), TypeInternal::Str),
         ]));
 
         let empty_registry = FunctionTypeRegistry::empty();
@@ -1189,11 +1189,11 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_if_conditional() {
-        let if_expr = Expr::literal("pred").with_inferred_type(InferredType::Bool);
+        let if_expr = Expr::literal("pred").with_inferred_type(TypeInternal::Bool);
         let then_expr = Expr::literal("then");
         let else_expr = Expr::literal("else");
 
-        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::Str);
+        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(TypeInternal::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
@@ -1219,16 +1219,16 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_nested_if_else() {
-        let if_expr = Expr::literal("if-pred1").with_inferred_type(InferredType::Bool);
-        let then_expr = Expr::literal("then1").with_inferred_type(InferredType::Str);
+        let if_expr = Expr::literal("if-pred1").with_inferred_type(TypeInternal::Bool);
+        let then_expr = Expr::literal("then1").with_inferred_type(TypeInternal::Str);
         let else_expr = Expr::cond(
-            Expr::literal("else-pred2").with_inferred_type(InferredType::Bool),
+            Expr::literal("else-pred2").with_inferred_type(TypeInternal::Bool),
             Expr::literal("else-then2"),
             Expr::literal("else-else2"),
         )
-        .with_inferred_type(InferredType::Str);
+        .with_inferred_type(TypeInternal::Str);
 
-        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::Str);
+        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(TypeInternal::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
@@ -1265,13 +1265,13 @@ mod compiler_tests {
             ("foo_key".to_string(), Expr::literal("foo_value")),
             ("bar_key".to_string(), Expr::literal("bar_value")),
         ])
-        .with_inferred_type(InferredType::Record(vec![
-            (String::from("foo_key"), InferredType::Str),
-            (String::from("bar_key"), InferredType::Str),
+        .with_inferred_type(TypeInternal::Record(vec![
+            (String::from("foo_key"), TypeInternal::Str),
+            (String::from("bar_key"), TypeInternal::Str),
         ]));
 
         let expr =
-            Expr::select_field(record, "bar_key", None).with_inferred_type(InferredType::Str);
+            Expr::select_field(record, "bar_key", None).with_inferred_type(TypeInternal::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
@@ -1311,10 +1311,10 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_select_index() {
         let sequence = Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None)
-            .with_inferred_type(InferredType::List(Box::new(InferredType::Str)));
+            .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::Str)));
 
         let expr = Expr::select_index(sequence, Expr::number(BigDecimal::from(1)))
-            .with_inferred_type(InferredType::Str);
+            .with_inferred_type(TypeInternal::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
@@ -1355,7 +1355,7 @@ mod compiler_tests {
                 ),
             ],
         )
-        .with_inferred_type(InferredType::Str);
+        .with_inferred_type(TypeInternal::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();

@@ -1,7 +1,7 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
+    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, TypeInternal, RegistryKey, RegistryValue,
 };
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
@@ -708,16 +708,16 @@ impl Display for FullyQualifiedFunctionName {
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionType {
-    parameter_types: Vec<InferredType>,
-    return_type: Vec<InferredType>,
+    parameter_types: Vec<TypeInternal>,
+    return_type: Vec<TypeInternal>,
 }
 
 impl FunctionType {
-    pub fn parameter_types(&self) -> Vec<InferredType> {
+    pub fn parameter_types(&self) -> Vec<TypeInternal> {
         self.parameter_types.clone()
     }
 
-    pub fn return_type(&self) -> Vec<InferredType> {
+    pub fn return_type(&self) -> Vec<TypeInternal> {
         self.return_type.clone()
     }
 }
@@ -826,12 +826,12 @@ impl TryFrom<ProtoFunctionType> for FunctionType {
     fn try_from(proto: ProtoFunctionType) -> Result<Self, Self::Error> {
         let mut parameter_types = Vec::new();
         for param in proto.parameter_types {
-            parameter_types.push(InferredType::from(&AnalysedType::try_from(&param)?));
+            parameter_types.push(TypeInternal::from(&AnalysedType::try_from(&param)?));
         }
 
         let mut return_type = Vec::new();
         for ret in proto.return_type {
-            return_type.push(InferredType::from(&AnalysedType::try_from(&ret)?));
+            return_type.push(TypeInternal::from(&AnalysedType::try_from(&ret)?));
         }
 
         Ok(Self {

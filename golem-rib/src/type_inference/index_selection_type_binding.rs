@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType};
+use crate::{Expr, ExprVisitor, TypeInternal};
 use std::ops::DerefMut;
 
 // All select indices with literal numbers don't need to explicit
@@ -26,7 +26,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
             Expr::SelectIndex { index, .. } => {
                 if let Expr::Number { inferred_type, .. } = index.deref_mut() {
                     if inferred_type.is_unknown() || inferred_type.is_one_of() {
-                        *inferred_type = InferredType::U64
+                        *inferred_type = TypeInternal::U64
                     }
                 }
 
@@ -36,7 +36,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
                     for expr in exprs {
                         if let Expr::Number { inferred_type, .. } = expr.deref_mut() {
                             if inferred_type.is_unknown() || inferred_type.is_one_of() {
-                                *inferred_type = InferredType::U64
+                                *inferred_type = TypeInternal::U64
                             }
                         }
                     }
@@ -49,7 +49,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
                 for expr in exprs {
                     if let Expr::Number { inferred_type, .. } = expr.deref_mut() {
                         if inferred_type.is_unknown() || inferred_type.is_one_of() {
-                            *inferred_type = InferredType::U64
+                            *inferred_type = TypeInternal::U64
                         }
                     }
                 }

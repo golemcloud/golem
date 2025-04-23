@@ -1,4 +1,4 @@
-use crate::{Expr, InferredType};
+use crate::{Expr, TypeInternal};
 use std::collections::VecDeque;
 
 // A structure that allows to visit expressions in a bottom-up or top-down order.
@@ -188,7 +188,7 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 }
 
                 // The expr existing in the inferred type should be visited
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_front(&mut **worker_expr);
                     }
@@ -235,7 +235,7 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 inferred_type,
                 ..
             } => {
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_front(&mut **worker_expr);
                     }
@@ -372,7 +372,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 }
 
                 // The expr existing in the inferred type should be visited
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_back(&mut **worker_expr);
                     }
@@ -417,7 +417,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 inferred_type,
                 ..
             } => {
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_back(&mut **worker_expr);
                     }
@@ -542,7 +542,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             }
 
             // The expr existing in the inferred type should be visited
-            if let InferredType::Instance { instance_type } = inferred_type {
+            if let TypeInternal::Instance { instance_type } = inferred_type {
                 if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_back(worker_expr);
                 }
@@ -587,7 +587,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             inferred_type,
             ..
         } => {
-            if let InferredType::Instance { instance_type } = inferred_type {
+            if let TypeInternal::Instance { instance_type } = inferred_type {
                 if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_back(worker_expr);
                 }

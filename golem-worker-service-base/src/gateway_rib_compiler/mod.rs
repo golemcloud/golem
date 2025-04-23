@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibCompilationError};
+use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, TypeInternal, Path, RibCompilationError};
 
 // A wrapper service over original Rib Compiler concerning
 // the details of the worker bridge.
@@ -39,23 +39,23 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
                 GlobalVariableTypeSpec::new(
                     "request",
                     Path::from_elems(vec!["path"]),
-                    InferredType::Str,
+                    TypeInternal::Str,
                 ),
                 GlobalVariableTypeSpec::new(
                     "request",
                     Path::from_elems(vec!["query"]),
-                    InferredType::Str,
+                    TypeInternal::Str,
                 ),
                 // `request.headers.*` or `request.header.*` should be a `string`.
                 GlobalVariableTypeSpec::new(
                     "request",
                     Path::from_elems(vec!["headers"]),
-                    InferredType::Str,
+                    TypeInternal::Str,
                 ),
                 GlobalVariableTypeSpec::new(
                     "request",
                     Path::from_elems(vec!["header"]),
-                    InferredType::Str,
+                    TypeInternal::Str,
                 ),
             ],
         )

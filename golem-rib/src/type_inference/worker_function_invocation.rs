@@ -18,7 +18,7 @@ use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{
     DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ExprVisitor,
-    FunctionCallError, InferredType, TypeName,
+    FunctionCallError, TypeInternal, TypeName,
 };
 use std::ops::Deref;
 
@@ -42,7 +42,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
             let inferred_type = lhs.inferred_type();
 
             match &inferred_type {
-                InferredType::Instance { instance_type } => {
+                TypeInternal::Instance { instance_type } => {
                     let type_parameter = generic_type_parameter
                         .as_ref()
                         .map(|gtp| {
@@ -112,7 +112,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 instance_type.worker_name(),
                             );
 
-                            let new_inferred_type = InferredType::Instance {
+                            let new_inferred_type = TypeInternal::Instance {
                                 instance_type: Box::new(resource_instance_type),
                             };
 
@@ -229,7 +229,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
                 // Re-running (fix point) the same phase will help identify the instance type of `lhs`.
                 // Hence, this phase is part of computing the fix-point of compiler type inference.
-                InferredType::Unknown => {}
+                TypeInternal::Unknown => {}
                 _ => {
                     return Err(FunctionCallError::invalid_function_call(
                         method,

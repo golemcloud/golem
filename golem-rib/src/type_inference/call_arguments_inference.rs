@@ -50,7 +50,7 @@ mod internal {
     use crate::type_inference::GetTypeHint;
     use crate::{
         ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
-        FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
+        FunctionTypeRegistry, TypeInternal, RegistryKey, RegistryValue, TypeMismatchError,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
@@ -60,7 +60,7 @@ mod internal {
         call_type: &mut CallType,
         function_type_registry: &FunctionTypeRegistry,
         args: &mut [Expr],
-        function_result_inferred_type: &mut InferredType,
+        function_result_inferred_type: &mut TypeInternal,
     ) -> Result<(), FunctionCallError> {
         let cloned = call_type.clone();
 
@@ -68,7 +68,7 @@ mod internal {
             CallType::InstanceCreation(instance) => match instance {
                 InstanceCreationType::Worker { .. } => {
                     for arg in args.iter_mut() {
-                        arg.add_infer_type_mut(InferredType::Str);
+                        arg.add_infer_type_mut(TypeInternal::Str);
                     }
 
                     Ok(())
@@ -142,7 +142,7 @@ mod internal {
         resource_constructor_registry_key: &RegistryKey,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
         function_type_registry: &FunctionTypeRegistry,
-        function_result_inferred_type: &mut InferredType,
+        function_result_inferred_type: &mut TypeInternal,
         resource_method_args: &mut [Expr],
     ) -> Result<(), FunctionCallError> {
         // Infer the resource constructors
@@ -173,7 +173,7 @@ mod internal {
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
         function_type_registry: &FunctionTypeRegistry,
         resource_method_args: &mut [Expr],
-        function_result_inferred_type: &mut InferredType,
+        function_result_inferred_type: &mut TypeInternal,
     ) -> Result<(), FunctionCallError> {
         // Infer the types of resource method parameters
         let resource_method_name_in_metadata =
@@ -222,7 +222,7 @@ mod internal {
         function_type_registry: &FunctionTypeRegistry,
         key: &RegistryKey,
         args: &mut [Expr],
-        function_result_inferred_type: Option<&mut InferredType>,
+        function_result_inferred_type: Option<&mut TypeInternal>,
     ) -> Result<(), FunctionCallError> {
         if let Some(value) = function_type_registry.types.get(key) {
             match value {
@@ -237,7 +237,7 @@ mod internal {
                         tag_argument_types(original_expr, function_name, args, &parameter_types)?;
 
                         if let Some(function_result_type) = function_result_inferred_type {
-                            *function_result_type = InferredType::from_variant_cases(variant_type);
+                            *function_result_type = TypeInternal::from_variant_cases(variant_type);
                         }
 
                         Ok(())
@@ -270,7 +270,7 @@ mod internal {
                                 if return_types.len() == 1 {
                                     return_types.first().unwrap().into()
                                 } else {
-                                    InferredType::Sequence(
+                                    TypeInternal::Sequence(
                                         return_types.iter().map(|t| t.into()).collect(),
                                     )
                                 }
@@ -385,7 +385,7 @@ mod function_parameters_inference_tests {
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, ParsedFunctionSite};
+    use crate::{Expr, TypeInternal, ParsedFunctionSite};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
@@ -436,13 +436,13 @@ mod function_parameters_inference_tests {
             },
             None,
             None,
-            vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::U64)],
+            vec![Expr::identifier_global("x", None).with_inferred_type(TypeInternal::U64)],
         )
-        .with_inferred_type(InferredType::Sequence(vec![]));
+        .with_inferred_type(TypeInternal::Sequence(vec![]));
 
         let expected = Expr::ExprBlock {
             exprs: vec![let_binding, call_expr],
-            inferred_type: InferredType::Unknown,
+            inferred_type: TypeInternal::Unknown,
             source_span: SourceSpan::default(),
             type_annotation: None,
         };

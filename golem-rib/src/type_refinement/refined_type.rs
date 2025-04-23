@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_refinement::{ExtractInnerType, ExtractInnerTypes, GetInferredTypeByName};
-use crate::InferredType;
+use crate::TypeInternal;
 use std::vec::IntoIter;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -23,7 +23,7 @@ pub enum RefinedType<A> {
     Value(A),
 }
 
-pub struct HeterogeneousCollectionType(pub Vec<InferredType>);
+pub struct HeterogeneousCollectionType(pub Vec<TypeInternal>);
 
 impl HeterogeneousCollectionType {
     pub fn len(&self) -> usize {
@@ -32,8 +32,8 @@ impl HeterogeneousCollectionType {
 }
 
 impl IntoIterator for HeterogeneousCollectionType {
-    type Item = InferredType;
-    type IntoIter = IntoIter<InferredType>;
+    type Item = TypeInternal;
+    type IntoIter = IntoIter<TypeInternal>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -41,8 +41,8 @@ impl IntoIterator for HeterogeneousCollectionType {
 }
 
 impl<'a> IntoIterator for &'a HeterogeneousCollectionType {
-    type Item = &'a InferredType;
-    type IntoIter = std::slice::Iter<'a, InferredType>;
+    type Item = &'a TypeInternal;
+    type IntoIter = std::slice::Iter<'a, TypeInternal>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
@@ -50,8 +50,8 @@ impl<'a> IntoIterator for &'a HeterogeneousCollectionType {
 }
 
 impl<'a> IntoIterator for &'a mut HeterogeneousCollectionType {
-    type Item = &'a mut InferredType;
-    type IntoIter = std::slice::IterMut<'a, InferredType>;
+    type Item = &'a mut TypeInternal;
+    type IntoIter = std::slice::IterMut<'a, TypeInternal>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter_mut()
@@ -65,18 +65,18 @@ impl HeterogeneousCollectionType {
             .iter()
             .zip(other.0.iter())
             .map(|(a, b)| match a {
-                InferredType::OneOf(types) => {
+                TypeInternal::OneOf(types) => {
                     let mut one_ofs = types.clone();
                     one_ofs.push(b.clone());
-                    InferredType::one_of(one_ofs).unwrap_or(InferredType::Unknown)
+                    TypeInternal::one_of(one_ofs).unwrap_or(TypeInternal::Unknown)
                 }
-                InferredType::AllOf(types) => {
+                TypeInternal::AllOf(types) => {
                     let mut all_ofs = types.clone();
                     all_ofs.push(b.clone());
-                    InferredType::all_of(all_ofs).unwrap_or(InferredType::Unknown)
+                    TypeInternal::all_of(all_ofs).unwrap_or(TypeInternal::Unknown)
                 }
-                _ => InferredType::all_of(vec![a.clone(), b.clone()])
-                    .unwrap_or(InferredType::Unknown),
+                _ => TypeInternal::all_of(vec![a.clone(), b.clone()])
+                    .unwrap_or(TypeInternal::Unknown),
             })
             .collect::<Vec<_>>();
 
@@ -89,7 +89,7 @@ impl<A> RefinedType<A> {
     // this method returns `InferredType::AllOf(x, y, z)`
     // Example: Given `RefinedType::AllOf(RefinedType::Value(vec![x, y, z]))`
     // this method returns `InferredType::AllOf(x, y, z)`
-    pub fn inner_type(&self) -> InferredType
+    pub fn inner_type(&self) -> TypeInternal
     where
         A: ExtractInnerType,
     {
@@ -104,7 +104,7 @@ impl<A> RefinedType<A> {
                     alternative_types.push(v.inner_type());
                 });
 
-                InferredType::one_of(alternative_types).unwrap_or(InferredType::Unknown)
+                TypeInternal::one_of(alternative_types).unwrap_or(TypeInternal::Unknown)
             }
             RefinedType::AllOf(inner) => {
                 // Handle the nested `AllOf`
@@ -115,7 +115,7 @@ impl<A> RefinedType<A> {
                     required_types.push(v.inner_type());
                 });
 
-                InferredType::all_of(required_types).unwrap_or(InferredType::Unknown)
+                TypeInternal::all_of(required_types).unwrap_or(TypeInternal::Unknown)
             }
             RefinedType::Value(value) => {
                 // Directly convert the list of values to the `InferredType`
@@ -131,11 +131,11 @@ impl<A> RefinedType<A> {
         match self {
             RefinedType::OneOf(inner) => {
                 let x = inner.iter().map(|v| v.inner_types()).collect::<Vec<_>>();
-                internal::combine(x, InferredType::one_of)
+                internal::combine(x, TypeInternal::one_of)
             }
             RefinedType::AllOf(inner) => {
                 let x = inner.iter().map(|v| v.inner_types()).collect::<Vec<_>>();
-                internal::combine(x, InferredType::all_of)
+                internal::combine(x, TypeInternal::all_of)
             }
             RefinedType::Value(value) => HeterogeneousCollectionType(value.inner_types()),
         }
@@ -143,7 +143,7 @@ impl<A> RefinedType<A> {
 
     // Example: Given `RefinedType::AllOf(RecordType(x -> y), RecordType(x -> z))`
     // inner_type_by_field("x") returns InferredTyp::AllOf(y, z)
-    pub fn inner_type_by_name(&self, field_name: &str) -> InferredType
+    pub fn inner_type_by_name(&self, field_name: &str) -> TypeInternal
     where
         A: GetInferredTypeByName,
     {
@@ -154,7 +154,7 @@ impl<A> RefinedType<A> {
                     .map(|v| v.inner_type_by_name(field_name))
                     .collect::<Vec<_>>();
 
-                InferredType::one_of(collected_types).unwrap_or(InferredType::Unknown)
+                TypeInternal::one_of(collected_types).unwrap_or(TypeInternal::Unknown)
             }
             RefinedType::AllOf(inner) => {
                 let collected_types = inner
@@ -162,10 +162,10 @@ impl<A> RefinedType<A> {
                     .map(|v| v.inner_type_by_name(field_name))
                     .collect::<Vec<_>>();
 
-                InferredType::all_of(collected_types).unwrap_or(InferredType::Unknown)
+                TypeInternal::all_of(collected_types).unwrap_or(TypeInternal::Unknown)
             }
             RefinedType::Value(value) => {
-                InferredType::all_of(value.get(field_name)).unwrap_or(InferredType::Unknown)
+                TypeInternal::all_of(value.get(field_name)).unwrap_or(TypeInternal::Unknown)
             }
         }
     }
@@ -173,7 +173,7 @@ impl<A> RefinedType<A> {
 
 mod internal {
     use crate::type_refinement::HeterogeneousCollectionType;
-    use crate::InferredType;
+    use crate::TypeInternal;
 
     // Combine takes a list of heterogeneous collection types, zips them by their positions,
     // and produces a single heterogeneous collection type.
@@ -186,7 +186,7 @@ mod internal {
         pack: F,
     ) -> HeterogeneousCollectionType
     where
-        F: Fn(Vec<InferredType>) -> Option<InferredType>,
+        F: Fn(Vec<TypeInternal>) -> Option<TypeInternal>,
     {
         let mut transposed = vec![];
 

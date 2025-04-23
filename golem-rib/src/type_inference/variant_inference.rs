@@ -25,7 +25,7 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+    use crate::{Expr, FunctionTypeRegistry, TypeInternal, RegistryKey, RegistryValue};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
 
@@ -112,7 +112,7 @@ mod internal {
                         {
                             no_arg_variants.push(variable_id.name());
                             *inferred_type =
-                                inferred_type.merge(InferredType::from_variant_cases(type_variant));
+                                inferred_type.merge(TypeInternal::from_variant_cases(type_variant));
                         }
                     }
                 }
@@ -127,7 +127,7 @@ mod internal {
                     if let Some(RegistryValue::Variant { variant_type, .. }) =
                         function_type_registry.types.get(&key)
                     {
-                        let variant_inferred_type = InferredType::from_variant_cases(variant_type);
+                        let variant_inferred_type = TypeInternal::from_variant_cases(variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 
                         variant_with_args.push(function_name.to_string());

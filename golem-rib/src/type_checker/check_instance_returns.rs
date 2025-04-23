@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::instance_type::InstanceType;
-use crate::{Expr, InferredType};
+use crate::{Expr, TypeInternal};
 
 // Note that this takes an entire rib program and not any invalid expression
 pub fn check_invalid_program_return(rib_program: &Expr) -> Result<(), InvalidProgramReturn> {
     let inferred_type = rib_program.inferred_type();
 
-    if let InferredType::Instance { instance_type, .. } = inferred_type {
+    if let TypeInternal::Instance { instance_type, .. } = inferred_type {
         let expr = match rib_program {
             Expr::ExprBlock { exprs, .. } if !exprs.is_empty() => exprs.last().unwrap(),
             expr => expr,

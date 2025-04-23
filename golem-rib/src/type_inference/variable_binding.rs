@@ -273,7 +273,7 @@ mod name_binding_tests {
 
     use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
-    use crate::{Expr, InferredType, ParsedFunctionSite, VariableId};
+    use crate::{Expr, TypeInternal, ParsedFunctionSite, VariableId};
 
     #[test]
     fn test_name_binding_simple() {
@@ -475,7 +475,7 @@ mod name_binding_tests {
         let second_expr = expectations::expected_match(3); // 3 because first block has 2 arms
 
         let block = Expr::expr_block(vec![first_expr, second_expr])
-            .with_inferred_type(InferredType::Unknown);
+            .with_inferred_type(TypeInternal::Unknown);
 
         assert_eq!(expr, block);
     }
@@ -500,13 +500,13 @@ mod name_binding_tests {
     }
 
     mod expectations {
-        use crate::{ArmPattern, Expr, InferredType, MatchArm, MatchIdentifier, VariableId};
+        use crate::{ArmPattern, Expr, TypeInternal, MatchArm, MatchIdentifier, VariableId};
         use bigdecimal::BigDecimal;
 
         pub(crate) fn expected_match(index: usize) -> Expr {
             Expr::pattern_match(
                 Expr::option(Some(Expr::identifier_global("x", None)))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Unknown))),
+                    .with_inferred_type(TypeInternal::Option(Box::new(TypeInternal::Unknown))),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(
@@ -572,14 +572,14 @@ mod name_binding_tests {
                         VariableId::Global("x".to_string()),
                         None,
                     )))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Unknown))),
+                    .with_inferred_type(TypeInternal::Option(Box::new(TypeInternal::Unknown))),
                     None,
                 )
-                .with_inferred_type(InferredType::Result {
-                    ok: Some(Box::new(InferredType::Option(Box::new(
-                        InferredType::Unknown,
+                .with_inferred_type(TypeInternal::Result {
+                    ok: Some(Box::new(TypeInternal::Option(Box::new(
+                        TypeInternal::Unknown,
                     )))),
-                    error: Some(Box::new(InferredType::Unknown)),
+                    error: Some(Box::new(TypeInternal::Unknown)),
                 }),
                 vec![
                     MatchArm {

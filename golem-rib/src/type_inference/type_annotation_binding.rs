@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType};
+use crate::{Expr, ExprVisitor, TypeInternal};
 
 pub fn bind_type_annotations(expr: &mut Expr) {
     let mut visitor = ExprVisitor::top_down(expr);
@@ -34,7 +34,7 @@ pub fn bind_type_annotations(expr: &mut Expr) {
                 let type_annotation = expr.type_annotation();
 
                 if let Some(type_annotation) = type_annotation {
-                    expr.with_inferred_type_mut(InferredType::from(type_annotation));
+                    expr.with_inferred_type_mut(TypeInternal::from(type_annotation));
                 }
             }
         }
@@ -50,7 +50,7 @@ mod type_binding_tests {
 
     use super::*;
     use crate::parser::type_name::TypeName;
-    use crate::{ArmPattern, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, TypeInternal, MatchArm, VariableId};
 
     #[test]
     fn test_bind_type_in_let() {
@@ -64,7 +64,7 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding(
             "x",
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U64),
             Some(TypeName::U64),
         );
 
@@ -84,10 +84,10 @@ mod type_binding_tests {
         let expected = Expr::option(Some(Expr::number_inferred(
             BigDecimal::from(1),
             None,
-            InferredType::number(),
+            TypeInternal::number(),
         )))
         .with_type_annotation(TypeName::Option(Box::new(TypeName::U64)))
-        .with_inferred_type(InferredType::Option(Box::new(InferredType::U64)));
+        .with_inferred_type(TypeInternal::Option(Box::new(TypeInternal::U64)));
 
         assert_eq!(expr, expected);
     }
@@ -104,15 +104,15 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::number()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: Some(Box::new(TypeName::Str)),
             }),
         )
-        .with_inferred_type(InferredType::Result {
-            ok: Some(Box::new(InferredType::U64)),
-            error: Some(Box::new(InferredType::Str)),
+        .with_inferred_type(TypeInternal::Result {
+            ok: Some(Box::new(TypeInternal::U64)),
+            error: Some(Box::new(TypeInternal::Str)),
         });
 
         assert_eq!(expr, expected);
@@ -130,14 +130,14 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::number()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: None,
             }),
         )
-        .with_inferred_type(InferredType::Result {
-            ok: Some(Box::new(InferredType::U64)),
+        .with_inferred_type(TypeInternal::Result {
+            ok: Some(Box::new(TypeInternal::U64)),
             error: None,
         });
 
@@ -156,15 +156,15 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::err(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::number()),
             Some(TypeName::Result {
                 ok: None,
                 error: Some(Box::new(TypeName::U64)),
             }),
         )
-        .with_inferred_type(InferredType::Result {
+        .with_inferred_type(TypeInternal::Result {
             ok: None,
-            error: Some(Box::new(InferredType::U64)),
+            error: Some(Box::new(TypeInternal::U64)),
         });
 
         assert_eq!(expr, expected);
@@ -181,13 +181,13 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::number()),
             Some(TypeName::Result {
                 ok: None,
                 error: None,
             }),
         )
-        .with_inferred_type(InferredType::Result {
+        .with_inferred_type(TypeInternal::Result {
             ok: None,
             error: None,
         });
@@ -214,7 +214,7 @@ mod type_binding_tests {
             "baz",
             Some(TypeName::U32),
         )
-        .with_inferred_type(InferredType::U32);
+        .with_inferred_type(TypeInternal::U32);
 
         assert_eq!(expr, expected);
     }
@@ -239,10 +239,10 @@ mod type_binding_tests {
                 "baz",
                 None,
             ),
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::number()),
         )
         .with_type_annotation(TypeName::U32)
-        .with_inferred_type(InferredType::U32);
+        .with_inferred_type(TypeInternal::U32);
 
         assert_eq!(expr, expected);
     }
@@ -259,7 +259,7 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding_with_variable_id(
             VariableId::global("x".to_string()),
-            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), TypeInternal::U64),
             Some(TypeName::U64),
         );
 
@@ -284,12 +284,12 @@ mod type_binding_tests {
             Expr::expr_block(vec![
                 Expr::let_binding_with_variable_id(
                     VariableId::global("y".to_string()),
-                    Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+                    Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U64),
                     Some(TypeName::U64),
                 ),
                 Expr::identifier_with_variable_id(VariableId::global("y".to_string()), None),
             ])
-            .with_inferred_type(InferredType::Unknown),
+            .with_inferred_type(TypeInternal::Unknown),
             None,
         );
 
@@ -318,7 +318,7 @@ mod type_binding_tests {
                 arm_resolution_expr: Box::new(Expr::number_inferred(
                     BigDecimal::from(2),
                     Some(TypeName::U64),
-                    InferredType::U64,
+                    TypeInternal::U64,
                 )),
             }],
         );
@@ -341,8 +341,8 @@ mod type_binding_tests {
 
         let expected = Expr::cond(
             Expr::identifier_with_variable_id(VariableId::global("x".to_string()), None),
-            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
-            Expr::number_inferred(BigDecimal::from(2), Some(TypeName::U64), InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), TypeInternal::U64),
+            Expr::number_inferred(BigDecimal::from(2), Some(TypeName::U64), TypeInternal::U64),
         );
 
         assert_eq!(expr, expected);

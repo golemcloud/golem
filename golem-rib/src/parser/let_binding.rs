@@ -64,7 +64,7 @@ mod tests {
     use test_r::test;
 
     use crate::parser::type_name::TypeName;
-    use crate::{InferredType, VariableId};
+    use crate::{TypeInternal, VariableId};
 
     use super::*;
 
@@ -351,7 +351,7 @@ mod tests {
             Ok(Expr::let_binding(
                 "foo",
                 Expr::sequence(vec![], None)
-                    .with_inferred_type(InferredType::List(Box::new(InferredType::Unknown))),
+                    .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::Unknown))),
                 Some(TypeName::List(Box::new(TypeName::U8)))
             ))
         );

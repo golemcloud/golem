@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
-use crate::{Expr, InferredType, Path, PathElem};
+use crate::{Expr, TypeInternal, Path, PathElem};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::fmt::Display;
@@ -27,7 +27,7 @@ pub struct AmbiguousTypeError {
 
 impl AmbiguousTypeError {
     pub fn new(
-        inferred_expr: &InferredType,
+        inferred_expr: &TypeInternal,
         expr: &Expr,
         expected: &TypeHint,
     ) -> AmbiguousTypeError {
@@ -124,7 +124,7 @@ pub enum ExpectedType {
 // If the actual type is not fully known but only a hint through TypeKind
 #[derive(Clone, Debug)]
 pub enum ActualType {
-    Inferred(InferredType),
+    Inferred(TypeInternal),
     Hint(TypeHint),
 }
 
@@ -153,7 +153,7 @@ impl TypeMismatchError {
         expr: &Expr,
         parent_expr: Option<&Expr>,
         expected_type: AnalysedType,
-        actual_type: InferredType,
+        actual_type: TypeInternal,
     ) -> Self {
         TypeMismatchError {
             expr_with_wrong_type: expr.clone(),

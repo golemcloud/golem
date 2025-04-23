@@ -1094,7 +1094,7 @@ mod let_tests {
     use crate::expr::Expr;
     use crate::parser::type_name::TypeName;
     use crate::text::{from_string, to_string};
-    use crate::{InferredType, VariableId};
+    use crate::{TypeInternal, VariableId};
 
     #[test]
     fn test_round_trip_read_write_let() {
@@ -1194,13 +1194,13 @@ mod let_tests {
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
                 Expr::option(Some(Expr::literal("foo")))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Str))),
+                    .with_inferred_type(TypeInternal::Option(Box::new(TypeInternal::Str))),
                 Some(TypeName::Option(Box::new(TypeName::Str))),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
                 Expr::option(Some(Expr::literal("bar")))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Str))),
+                    .with_inferred_type(TypeInternal::Option(Box::new(TypeInternal::Str))),
                 Some(TypeName::Option(Box::new(TypeName::Str))),
             ),
         ]);
@@ -1218,13 +1218,13 @@ mod let_tests {
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
                 Expr::sequence(vec![Expr::literal("foo")], None)
-                    .with_inferred_type(InferredType::List(Box::new(InferredType::Str))),
+                    .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::Str))),
                 Some(TypeName::List(Box::new(TypeName::Str))),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
                 Expr::sequence(vec![Expr::literal("bar")], None)
-                    .with_inferred_type(InferredType::List(Box::new(InferredType::Str))),
+                    .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::Str))),
                 Some(TypeName::List(Box::new(TypeName::Str))),
             ),
         ]);
@@ -1241,13 +1241,13 @@ mod let_tests {
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
                 Expr::tuple(vec![Expr::literal("foo")])
-                    .with_inferred_type(InferredType::Tuple(vec![InferredType::Str])),
+                    .with_inferred_type(TypeInternal::Tuple(vec![TypeInternal::Str])),
                 Some(TypeName::Tuple(vec![TypeName::Str])),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
                 Expr::tuple(vec![Expr::literal("bar")])
-                    .with_inferred_type(InferredType::Tuple(vec![InferredType::Str])),
+                    .with_inferred_type(TypeInternal::Tuple(vec![TypeInternal::Str])),
                 Some(TypeName::Tuple(vec![TypeName::Str])),
             ),
         ]);
