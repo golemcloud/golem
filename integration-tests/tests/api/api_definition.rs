@@ -467,12 +467,8 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-// This is a full round trip test for API definition
-// Which is the converted to OpenAPI YAML, delete the original API and
-// Upload the OpenAPI YAML as a new API definition
-// Then verify that the new API definition is the same as the original
-
-async fn test_export_import_api_definition(deps: &EnvBasedTestDependencies) {
+// This test simply validates the export API definition functionality
+async fn test_export_api_definition_simple(deps: &EnvBasedTestDependencies) {
     // Create a component to use in the API definition
     let component_id = deps.component("counters").unique().store().await;
 
@@ -483,25 +479,25 @@ async fn test_export_import_api_definition(deps: &EnvBasedTestDependencies) {
             value: api_id.clone(),
         }),
         version: "1.0".to_string(),
-        draft: false,
+        draft: true,
         definition: Some(api_definition_request::Definition::Http(
             HttpApiDefinition {
                 routes: vec![HttpRoute {
                     method: HttpMethod::Get as i32,
-                    path: "/test-export-path".to_string(),
+                    path: "/test-simple-export".to_string(),
                     binding: Some(GatewayBinding {
                         component: Some(VersionedComponentId {
                             component_id: Some(component_id.clone().into()),
                             version: 0,
                         }),
-                        worker_name: Some(to_grpc_rib_expr(r#""counter-export-test""#)),
+                        worker_name: Some(to_grpc_rib_expr(r#""counter-simple-test""#)),
                         response: Some(to_grpc_rib_expr(
                             r#"
                                 {
                                     headers: {
                                         {ContentType: "application/json"}
                                     },
-                                    body: "Export test response",
+                                    body: "Simple export test response",
                                     status: 200
                                 }
                             "#,
@@ -546,7 +542,7 @@ async fn test_export_import_api_definition(deps: &EnvBasedTestDependencies) {
         .await
         .unwrap();
 
-    // Verify the export response
+    // Verify the export response contains valid data
     let export_data = match export_response.result.unwrap() {
         golem_api_grpc::proto::golem::apidefinition::v1::export_api_definition_response::Result::Success(data) => data,
         golem_api_grpc::proto::golem::apidefinition::v1::export_api_definition_response::Result::Error(e) => {
@@ -554,38 +550,25 @@ async fn test_export_import_api_definition(deps: &EnvBasedTestDependencies) {
         }
     };
 
-    // Delete the original API definition
-    deps.worker_service()
-        .delete_api_definition(DeleteApiDefinitionRequest {
-            api_definition_id: request.id.clone(),
-            version: request.version.clone(),
-        })
-        .await
-        .unwrap();
+    // Validate that there is YAML content
+    assert!(!export_data.openapi_yaml.is_empty(), "OpenAPI YAML should not be empty");
+    
+    // Basic validation of the YAML structure
+    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&export_data.openapi_yaml)
+        .expect("Failed to parse OpenAPI YAML");
 
-    // Create new API definition directly from the exported YAML
-    let imported_response = deps
-        .worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
-                export_data.openapi_yaml,
-            )),
-        })
-        .await
-        .unwrap();
+    // Verify basic OpenAPI structure
+    assert_eq!(yaml_value["openapi"].as_str().unwrap(), "3.0.0");
+    assert_eq!(yaml_value["info"]["title"].as_str().unwrap(), api_id);
+    assert_eq!(yaml_value["info"]["version"].as_str().unwrap(), "1.0");
+    assert_eq!(yaml_value["x-golem-api-definition-id"].as_str().unwrap(), api_id);
+    assert_eq!(yaml_value["x-golem-api-definition-version"].as_str().unwrap(), "1.0");
 
-    // Ensure the draft field is set to false in the imported response
-    // Test Fails unless draft is set to false
-    // Not Sure Why
-    let imported_response = ApiDefinition {
-        draft: false,
-        ..imported_response
-    };
-
-    // Verify the imported API matches the original
-    check_equal_api_definition_request_and_response(&request, &imported_response);
+    // Verify path exists
+    assert!(yaml_value["paths"]["/test-simple-export"].is_mapping());
 }
 
+// Helper function to compare API definition request and response
 fn check_equal_api_definition_request_and_response(
     request: &ApiDefinitionRequest,
     response: &ApiDefinition,
@@ -598,4 +581,140 @@ fn check_equal_api_definition_request_and_response(
         request.definition.as_ref().unwrap();
     let api_definition::Definition::Http(response_api_def) = response.definition.as_ref().unwrap();
     check!(request_api_def == response_api_def);
+}
+
+#[test]
+#[tracing::instrument]
+// This the full round trip test for API definition
+// We create an API definition, export it to OpenAPI,
+// We delete the original API definition
+// We import API using the exported OpenAPI and compare the result with the original API definition
+async fn test_export_import_api_definition_fixed(deps: &EnvBasedTestDependencies) {
+    // Create a component to use in the API definition
+    let component_id = deps.component("counters").unique().store().await;
+
+    // 1. Create an API definition request with a specific route
+    let api_id = Uuid::new_v4().to_string();
+    let request = ApiDefinitionRequest {
+        id: Some(ApiDefinitionId {
+            value: api_id.clone(),
+        }),
+        version: "1.0".to_string(),
+        draft: true,
+        definition: Some(api_definition_request::Definition::Http(
+            HttpApiDefinition {
+                routes: vec![HttpRoute {
+                    method: HttpMethod::Get as i32,
+                    path: "/test-fixed-export-path".to_string(),
+                    binding: Some(GatewayBinding {
+                        component: Some(VersionedComponentId {
+                            component_id: Some(component_id.clone().into()),
+                            version: 0,
+                        }),
+                        worker_name: Some(to_grpc_rib_expr(r#""counter-fixed-test""#)),
+                        response: Some(to_grpc_rib_expr(
+                            r#"
+                                {
+                                    headers: {
+                                        {ContentType: "application/json"}
+                                    },
+                                    body: "Fixed export test response",
+                                    status: 200
+                                }
+                            "#,
+                        )),
+                        idempotency_key: None,
+                        binding_type: Some(GatewayBindingType::Default as i32),
+                        static_binding: None,
+                        invocation_context: None,
+                    }),
+                    middleware: None,
+                }],
+            },
+        )),
+    };
+
+    // 2. Create the API definition and store the result
+    let original_api_definition = deps
+        .worker_service()
+        .create_api_definition(CreateApiDefinitionRequest {
+            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                request.clone(),
+            )),
+        })
+        .await
+        .unwrap();
+
+    // Store a clone of the API definition for comparison later
+    let expected_api_definition = original_api_definition.clone();
+
+    // 3. Export the API definition to OpenAPI format
+    let export_response = deps
+        .worker_service()
+        .export_api_definition(
+            golem_api_grpc::proto::golem::apidefinition::v1::ExportApiDefinitionRequest {
+                api_definition_id: Some(
+                    golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
+                        value: api_id.clone(),
+                    },
+                ),
+                version: "1.0".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Verify the export response
+    let export_data = match export_response.result.unwrap() {
+        golem_api_grpc::proto::golem::apidefinition::v1::export_api_definition_response::Result::Success(data) => data,
+        golem_api_grpc::proto::golem::apidefinition::v1::export_api_definition_response::Result::Error(e) => {
+            panic!("Export API definition failed: {:?}", e);
+        }
+    };
+
+    // Verify that the OpenAPI YAML is valid
+    let _yaml_value: serde_yaml::Value = serde_yaml::from_str(&export_data.openapi_yaml)
+        .expect("Failed to parse OpenAPI YAML");
+
+    // 4. Delete the original API definition
+    deps.worker_service()
+        .delete_api_definition(DeleteApiDefinitionRequest {
+            api_definition_id: Some(ApiDefinitionId {
+                value: api_id.clone(),
+            }),
+            version: "1.0".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // 5. Create new API definition from the exported YAML
+    let imported_api_definition = deps
+        .worker_service()
+        .create_api_definition(CreateApiDefinitionRequest {
+            api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
+                export_data.openapi_yaml,
+            )),
+        })
+        .await
+        .unwrap();
+
+    // 7. Compare both API definitions
+    check_equal_api_definitions(&expected_api_definition, &imported_api_definition);
+}
+
+// Helper function to compare API definitions
+fn check_equal_api_definitions(
+    expected: &ApiDefinition,
+    actual: &ApiDefinition,
+) {
+    check!(expected.id == actual.id);
+    check!(expected.version == actual.version);
+    check!(expected.draft == actual.draft);
+    
+    let api_definition::Definition::Http(expected_api_def) =
+        expected.definition.as_ref().unwrap();
+    let api_definition::Definition::Http(actual_api_def) = 
+        actual.definition.as_ref().unwrap();
+    
+    check!(expected_api_def == actual_api_def);
 }
