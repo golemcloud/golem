@@ -56,11 +56,11 @@ use golem_common::model::public_oplog::{
     ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicExternalSpanData,
-    PublicLocalSpanData, PublicOplogEntry, PublicSpanData, PublicUpdateDescription,
-    PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
-    SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
-    TimestampParameter,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
+    SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
+    SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
@@ -287,7 +287,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
             } => {
                 let mut initial_plugins = BTreeSet::new();
                 for installation_id in initial_active_plugins {
-                    let (installation, _definition) = plugins
+                    let (installation, definition) = plugins
                         .get(
                             &account_id,
                             &worker_id.component_id,
@@ -296,7 +296,10 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         )
                         .await
                         .map_err(|err| err.to_string())?;
-                    let desc = installation.into();
+                    let desc = PluginInstallationDescription::from_definition_and_installation(
+                        definition,
+                        installation,
+                    );
                     initial_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::Create(CreateParameters {
@@ -660,7 +663,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
             } => {
                 let mut new_plugins = BTreeSet::new();
                 for installation_id in new_active_plugins {
-                    let (installation, _definition) = plugins
+                    let (installation, definition) = plugins
                         .get(
                             &owned_worker_id.account_id,
                             &owned_worker_id.worker_id.component_id,
@@ -669,7 +672,11 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                         )
                         .await
                         .map_err(|err| err.to_string())?;
-                    let desc = installation.into();
+
+                    let desc = PluginInstallationDescription::from_definition_and_installation(
+                        definition,
+                        installation,
+                    );
                     new_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::SuccessfulUpdate(
@@ -774,7 +781,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 Ok(PublicOplogEntry::Restart(TimestampParameter { timestamp }))
             }
             OplogEntry::ActivatePlugin { timestamp, plugin } => {
-                let (installation, _definition) = plugins
+                let (installation, definition) = plugins
                     .get(
                         &owned_worker_id.account_id,
                         &owned_worker_id.worker_id.component_id,
@@ -783,13 +790,17 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
+                let desc = PluginInstallationDescription::from_definition_and_installation(
+                    definition,
+                    installation,
+                );
                 Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
                     timestamp,
-                    plugin: installation.into(),
+                    plugin: desc,
                 }))
             }
             OplogEntry::DeactivatePlugin { timestamp, plugin } => {
-                let (installation, _definition) = plugins
+                let (installation, definition) = plugins
                     .get(
                         &owned_worker_id.account_id,
                         &owned_worker_id.worker_id.component_id,
@@ -798,10 +809,14 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
+                let desc = PluginInstallationDescription::from_definition_and_installation(
+                    definition,
+                    installation,
+                );
                 Ok(PublicOplogEntry::DeactivatePlugin(
                     DeactivatePluginParameters {
                         timestamp,
-                        plugin: installation.into(),
+                        plugin: desc,
                     },
                 ))
             }

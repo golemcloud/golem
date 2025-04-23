@@ -5503,6 +5503,8 @@ components:
           type: string
         pluginVersion:
           type: string
+        registered:
+          type: boolean
         parameters:
           type: object
           additionalProperties:
@@ -5511,6 +5513,7 @@ components:
       - installationId
       - pluginName
       - pluginVersion
+      - registered
       - parameters
     PromiseId:
       type: object
@@ -7121,6 +7124,8 @@ components:
       - componentName
       - componentSize
       - metadata
+      - createdAt
+      - componentType
       - files
       - installedPlugins
     ComponentFilePathWithPermissions:
@@ -7405,10 +7410,13 @@ components:
         id:
           type: string
           format: uuid
-        name:
+        pluginName:
           type: string
-        version:
+        pluginVersion:
           type: string
+        pluginRegistered:
+          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+          type: boolean
         priority:
           type: integer
           format: int32
@@ -7418,8 +7426,9 @@ components:
             type: string
       required:
       - id
-      - name
-      - version
+      - pluginName
+      - pluginVersion
+      - pluginRegistered
       - priority
       - parameters
     PluginInstallationCreation:
