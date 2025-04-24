@@ -26,7 +26,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-#[derive(Debug, Hash, Clone, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq, PartialOrd, Ord)]
 pub struct InferredType {
     pub inner: Box<TypeInternal>,
     pub origin: TypeOrigin,
@@ -82,11 +82,24 @@ impl TypeInternal {
     }
 }
 
-#[derive(Debug, Hash, Clone, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     Default,
     NoOrigin,
     Multiple(Vec<TypeOrigin>),
+}
+
+impl Hash for TypeOrigin {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            TypeOrigin::Default => 0.hash(state),
+            TypeOrigin::NoOrigin => 1.hash(state),
+            TypeOrigin::Multiple(origins) => {
+                2.hash(state);
+                origins.hash(state);
+            }
+        }
+    }
 }
 
 // TypeOrigin doesn't matter in any equality logic
@@ -332,9 +345,17 @@ impl InferredType {
     }
 }
 
+
+
 impl PartialEq for InferredType {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
+    }
+}
+
+impl Hash for InferredType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
     }
 }
 

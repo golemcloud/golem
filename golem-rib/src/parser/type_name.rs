@@ -276,7 +276,7 @@ impl From<&TypeName> for InferredType {
             TypeName::Str => InferredType::string(),
             TypeName::List(inner_type) => InferredType::list(inner_type.deref().into()),
             TypeName::Tuple(inner_types) => {
-                InferredType::tuple(inner_types.into_iter().map(|t| t.into()).collect())
+                InferredType::tuple(inner_types.iter().map(|t| t.into()).collect())
             }
             TypeName::Option(type_name) => InferredType::option(type_name.deref().into()),
             TypeName::Result { ok, error } => InferredType::result(
@@ -285,7 +285,7 @@ impl From<&TypeName> for InferredType {
             ),
             TypeName::Record(fields) => InferredType::record(
                 fields
-                    .into_iter()
+                    .iter()
                     .map(|(field, typ)| (field.clone(), typ.deref().into()))
                     .collect(),
             ),
@@ -293,7 +293,7 @@ impl From<&TypeName> for InferredType {
             TypeName::Enum(cases) => InferredType::enum_(cases.clone()),
             TypeName::Variant { cases } => InferredType::from_variant_cases(
                 cases
-                    .into_iter()
+                    .iter()
                     .map(|(case_name, typ)| (case_name.clone(), typ.as_deref().map(|x| x.into())))
                     .collect(),
             ),

@@ -138,7 +138,7 @@ impl TypeRefinement for RangeType {
     {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
             if let TypeInternal::Range { from, to } = inferred_type.inner.as_ref() {
-                Some(RangeType(from.clone(), to.as_ref().map(|t| t.clone())))
+                Some(RangeType(from.clone(), to.clone()))
             } else {
                 None
             }
