@@ -143,7 +143,11 @@ mod protobuf {
 
 mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
-    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType, InferredType, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId, WorkerNamePresence};
+    use crate::{
+        AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
+        InferredType, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal,
+        VariableId, WorkerNamePresence,
+    };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
@@ -915,7 +919,9 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, TypeInternal, VariableId};
+    use crate::{
+        ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, TypeInternal, VariableId,
+    };
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
@@ -1189,7 +1195,8 @@ mod compiler_tests {
         let then_expr = Expr::literal("then");
         let else_expr = Expr::literal("else");
 
-        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
+        let expr =
+            Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
@@ -1224,7 +1231,8 @@ mod compiler_tests {
         )
         .with_inferred_type(InferredType::string());
 
-        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
+        let expr =
+            Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();

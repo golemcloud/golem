@@ -49,7 +49,8 @@ pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Result<
                         index,
                         Expr::minus(
                             length_identifier,
-                            Expr::number(BigDecimal::from(1)).with_inferred_type(InferredType::u64()),
+                            Expr::number(BigDecimal::from(1))
+                                .with_inferred_type(InferredType::u64()),
                         )
                         .with_inferred_type(InferredType::u64()),
                         None,
@@ -455,7 +456,8 @@ mod internal {
                         &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
                         Some(cond),
-                        inner_variant_arg_type.clone()
+                        inner_variant_arg_type
+                            .clone()
                             .unwrap_or(InferredType::unknown())
                             .clone(),
                     ),
@@ -491,7 +493,9 @@ mod internal {
                             source_span: SourceSpan::default(),
                         },
                     );
-                    let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::unknown());
+                    let new_pred_type = inferred_types
+                        .get(index)
+                        .unwrap_or(&InferredType::unknown());
 
                     let branch = get_conditions(
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
@@ -721,9 +725,7 @@ mod desugar_tests {
                     Expr::equal_to(
                         Expr::get_tag(
                             Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
-                                .with_inferred_type(InferredType::option(
-                                    InferredType::u64(),
-                                )),
+                                .with_inferred_type(InferredType::option(InferredType::u64())),
                         ),
                         Expr::literal("none"),
                     )
