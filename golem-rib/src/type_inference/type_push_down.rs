@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
 use crate::rib_type_error::RibTypeError;
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
-use crate::{Expr, ExprVisitor, TypeInternal, MatchArm};
+use crate::{Expr, ExprVisitor, InferredType, MatchArm, TypeInternal};
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
@@ -33,7 +34,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
             } => {
                 let field_type = inferred_type.clone();
                 let record_type = vec![(field.to_string(), field_type)];
-                let inferred_record_type = TypeInternal::Record(record_type);
+                let inferred_record_type = InferredType::record(record_type);
 
                 expr.add_infer_type_mut(inferred_record_type);
             }
@@ -52,13 +53,13 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
                 // since the field type is infact the same as LHS
                 let index_expr_type = index.inferred_type();
 
-                match index_expr_type {
+                match index_expr_type.inner.deref() {
                     TypeInternal::Range { .. } => {
                         expr.add_infer_type_mut(inferred_type.clone());
                     }
                     _ => {
                         // Similar to selectIndex
-                        let new_inferred_type = TypeInternal::List(Box::new(field_type));
+                        let new_inferred_type = InferredType::list(field_type);
                         expr.add_infer_type_mut(new_inferred_type);
                     }
                 }
@@ -74,7 +75,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
 
-                cond.add_infer_type_mut(TypeInternal::Bool);
+                cond.add_infer_type_mut(InferredType::bool());
             }
             Expr::Not {
                 expr,
@@ -248,18 +249,16 @@ mod internal {
     use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
-    use crate::{
-        ActualType, AmbiguousTypeError, ArmPattern, ExpectedType, Expr, TypeInternal,
-        InvalidPatternMatchError, TypeMismatchError, VariableId,
-    };
+    use crate::{ActualType, AmbiguousTypeError, ArmPattern, ExpectedType, Expr, InferredType, InvalidPatternMatchError, TypeInternal, TypeMismatchError, VariableId};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
+    use std::ops::Deref;
 
     pub(crate) fn handle_list_comprehension(
         variable_id: &mut VariableId,
         iterable_expr: &mut Expr,
         yield_expr: &mut Expr,
-        comprehension_result_type: &TypeInternal,
+        comprehension_result_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         update_yield_expr_in_list_comprehension(variable_id, iterable_expr, yield_expr)?;
 
@@ -285,7 +284,7 @@ mod internal {
         iterable_expr: &mut Expr,
         init_value_expr: &mut Expr,
         yield_expr: &mut Expr,
-        aggregation_result_type: &TypeInternal,
+        aggregation_result_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         // If the iterable_expr is List<Y> , the identifier with the same variable name within yield should be Y
         update_yield_expr_in_list_reduce(
@@ -308,7 +307,7 @@ mod internal {
         iterable_expr: &Expr,
         yield_expr: &mut Expr,
     ) -> Result<(), RibTypeError> {
-        let iterable_type: TypeInternal = iterable_expr.inferred_type();
+        let iterable_type: InferredType = iterable_expr.inferred_type();
 
         if !iterable_type.is_unknown() {
             let refined_iterable = ListType::refine(&iterable_type);
@@ -407,7 +406,7 @@ mod internal {
     pub(crate) fn handle_option(
         inner_expr: &mut Expr,
         outer_expr: Expr,
-        outer_inferred_type: &TypeInternal,
+        outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
@@ -426,7 +425,7 @@ mod internal {
     pub(crate) fn handle_ok(
         inner_expr: &mut Expr,
         outer_expr: Expr,
-        outer_inferred_type: &TypeInternal,
+        outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         let refined_ok_type = OkType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
@@ -449,7 +448,7 @@ mod internal {
     pub(crate) fn handle_err(
         inner_expr: &mut Expr,
         outer_expr: Expr,
-        outer_inferred_type: &TypeInternal,
+        outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         let refined_err_type = ErrType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
@@ -472,7 +471,7 @@ mod internal {
     pub(crate) fn handle_sequence(
         inner_expressions: &mut [Expr],
         outer_expr: Expr,
-        outer_inferred_type: &TypeInternal,
+        outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         let refined_list_type = ListType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
@@ -493,7 +492,7 @@ mod internal {
     pub(crate) fn handle_tuple(
         inner_expressions: &mut [Expr],
         outer_expr: Expr,
-        outer_inferred_type: &TypeInternal,
+        outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
@@ -514,7 +513,7 @@ mod internal {
     pub(crate) fn handle_record(
         inner_expressions: &mut [(String, Box<Expr>)],
         outer_expr: Expr,
-        outer_inferred_type: &TypeInternal,
+        outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeError> {
         let refined_record_type = RecordType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
@@ -535,7 +534,7 @@ mod internal {
     pub(crate) fn handle_call<'a>(
         call_type: &'a mut CallType,
         expressions: &'a mut Vec<Expr>,
-        inferred_type: &'a mut TypeInternal,
+        inferred_type: &'a mut InferredType,
     ) {
         match call_type {
             // For CallType::Enum, there are no argument expressions
@@ -544,7 +543,7 @@ mod internal {
             // For variant constructor, the type of the arguments are present in the return type of the call
             // and should be pushed down to arguments
             CallType::VariantConstructor(name) => {
-                if let TypeInternal::Variant(variant) = inferred_type {
+                if let TypeInternal::Variant(variant) = inferred_type.inner.deref() {
                     let identified_variant = variant
                         .iter()
                         .find(|(variant_name, _)| variant_name == name);
@@ -563,7 +562,7 @@ mod internal {
     pub(crate) fn update_arm_pattern_type(
         pattern_match_expr: &Expr,
         arm_pattern: &mut ArmPattern,
-        predicate_type: &TypeInternal,
+        predicate_type: &InferredType,
         original_predicate: &Expr,
     ) -> Result<(), RibTypeError> {
         match arm_pattern {
@@ -750,7 +749,7 @@ mod internal {
     // expr: The expr corresponding to the outer inferred type. Example: yield expr in a list comprehension
     // push_down_kind: The expected kind of the outer expression before pushing down
     pub fn get_compilation_error_for_ambiguity(
-        actual_inferred_type: &TypeInternal,
+        actual_inferred_type: &InferredType,
         expr: &Expr,
         push_down_kind: &TypeHint,
     ) -> RibTypeError {
@@ -791,7 +790,7 @@ mod type_push_down_tests {
     use test_r::test;
 
     use crate::type_inference::type_push_down::type_push_down_tests::internal::strip_spaces;
-    use crate::{compile, Expr, TypeInternal};
+    use crate::{compile, Expr, InferredType};
 
     #[test]
     fn test_push_down_for_record() {
@@ -799,20 +798,20 @@ mod type_push_down_tests {
             "titles".to_string(),
             Expr::identifier_global("x", None),
         )])
-        .with_inferred_type(TypeInternal::AllOf(vec![
-            TypeInternal::Record(vec![("titles".to_string(), TypeInternal::Unknown)]),
-            TypeInternal::Record(vec![("titles".to_string(), TypeInternal::U64)]),
-        ]));
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
+            InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
+        ]).unwrap());
 
         expr.push_types_down().unwrap();
         let expected = Expr::record(vec![(
             "titles".to_string(),
-            Expr::identifier_global("x", None).with_inferred_type(TypeInternal::U64),
+            Expr::identifier_global("x", None).with_inferred_type(InferredType::u64()),
         )])
-        .with_inferred_type(TypeInternal::AllOf(vec![
-            TypeInternal::Record(vec![("titles".to_string(), TypeInternal::Unknown)]),
-            TypeInternal::Record(vec![("titles".to_string(), TypeInternal::U64)]),
-        ]));
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
+            InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
+        ]).unwrap());
         assert_eq!(expr, expected);
     }
 
@@ -825,28 +824,28 @@ mod type_push_down_tests {
             ],
             None,
         )
-        .with_inferred_type(TypeInternal::AllOf(vec![
-            TypeInternal::List(Box::new(TypeInternal::U32)),
-            TypeInternal::List(Box::new(TypeInternal::U64)),
-        ]));
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::list(InferredType::u32()),
+            InferredType::list(InferredType::u64()),
+        ]).unwrap());
 
         expr.push_types_down().unwrap();
         let expected =
             Expr::sequence(
                 vec![
-                    Expr::identifier_global("x", None).with_inferred_type(TypeInternal::AllOf(
-                        vec![TypeInternal::U32, TypeInternal::U64],
-                    )),
-                    Expr::identifier_global("y", None).with_inferred_type(TypeInternal::AllOf(
-                        vec![TypeInternal::U32, TypeInternal::U64],
-                    )),
+                    Expr::identifier_global("x", None).with_inferred_type(InferredType::all_of(
+                        vec![InferredType::u32(), InferredType::u64()],
+                    ).unwrap()),
+                    Expr::identifier_global("y", None).with_inferred_type(InferredType::all_of(
+                        vec![InferredType::u32(), InferredType::u64()],
+                    ).unwrap()),
                 ],
                 None,
             )
-            .with_inferred_type(TypeInternal::AllOf(vec![
-                TypeInternal::List(Box::new(TypeInternal::U32)),
-                TypeInternal::List(Box::new(TypeInternal::U64)),
-            ]));
+            .with_inferred_type(InferredType::all_of(vec![
+                InferredType::list(InferredType::u32()),
+                InferredType::list(InferredType::u64()),
+            ]).unwrap());
         assert_eq!(expr, expected);
     }
 

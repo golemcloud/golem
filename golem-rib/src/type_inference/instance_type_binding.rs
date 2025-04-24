@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, TypeInternal};
+use crate::{Expr, ExprVisitor, InferredType, TypeInternal, TypeOrigin};
 use std::collections::HashMap;
 
 // This is about binding the `InstanceType` to the corresponding identifiers.
@@ -51,9 +51,9 @@ pub fn bind_instance_types(expr: &mut Expr) {
                 ..
             } => {
                 if let Some(new_inferred_type) = instance_variables.get(variable_id) {
-                    *inferred_type = TypeInternal::Instance {
+                    *inferred_type = InferredType::new(TypeInternal::Instance {
                         instance_type: new_inferred_type.clone(),
-                    };
+                    }, TypeOrigin::NoOrigin);
                 }
             }
 

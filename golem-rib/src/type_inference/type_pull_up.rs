@@ -17,7 +17,7 @@ use crate::type_inference::type_hint::TypeHint;
 use crate::type_refinement::precise_types::{ListType, RecordType};
 use crate::type_refinement::TypeRefinement;
 use crate::{
-    ActualType, ExpectedType, GetTypeHint, InferredNumber, TypeInternal, MatchArm, Path, Range,
+    ActualType, ExpectedType, GetTypeHint, InferredNumber, InferredType, MatchArm, Path, Range,
     TypeMismatchError,
 };
 use crate::{CustomError, Expr, ExprVisitor};
@@ -243,20 +243,20 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
 
 fn handle_list_comprehension(
     current_yield_expr: &Expr,
-    current_comprehension_type: &mut TypeInternal,
+    current_comprehension_type: &mut InferredType,
 ) {
-    let list_expr = TypeInternal::List(Box::new(current_yield_expr.inferred_type()));
+    let list_expr = InferredType::list(current_yield_expr.inferred_type());
     *current_comprehension_type = current_comprehension_type.merge(list_expr);
 }
 
-fn handle_tuple(tuple_elems: &[Expr], current_tuple_type: &mut TypeInternal) {
+fn handle_tuple(tuple_elems: &[Expr], current_tuple_type: &mut InferredType) {
     let mut new_inferred_type = vec![];
 
     for current_tuple_elem in tuple_elems.iter() {
         new_inferred_type.push(current_tuple_elem.inferred_type());
     }
 
-    let new_tuple_type = TypeInternal::Tuple(new_inferred_type);
+    let new_tuple_type = InferredType::tuple(new_inferred_type);
 
     *current_tuple_type = current_tuple_type.merge(new_tuple_type);
 }
@@ -264,7 +264,7 @@ fn handle_tuple(tuple_elems: &[Expr], current_tuple_type: &mut TypeInternal) {
 fn handle_select_field(
     select_from: &Expr,
     field: &str,
-    current_field_type: &mut TypeInternal,
+    current_field_type: &mut InferredType,
 ) -> Result<(), RibTypeError> {
     let selection_field_type = get_inferred_type_of_selected_field(select_from, field)?;
 
@@ -276,7 +276,7 @@ fn handle_select_field(
 fn handle_select_index(
     select_from: &Expr,
     index: &Expr,
-    current_select_index_type: &mut TypeInternal,
+    current_select_index_type: &mut InferredType,
 ) -> Result<(), RibTypeError> {
     let selection_expr_inferred_type = select_from.inferred_type();
 
@@ -291,33 +291,27 @@ fn handle_select_index(
     Ok(())
 }
 
-fn handle_result_ok(ok_expr: &mut Expr, current_inferred_type: &mut TypeInternal) {
+fn handle_result_ok(ok_expr: &mut Expr, current_inferred_type: &mut InferredType) {
     let inferred_type_of_ok_expr = ok_expr.inferred_type();
-    let result_type = TypeInternal::Result {
-        ok: Some(Box::new(inferred_type_of_ok_expr)),
-        error: None,
-    };
+    let result_type = InferredType::result(Some(inferred_type_of_ok_expr.clone()), None);
     *current_inferred_type = current_inferred_type.merge(result_type);
 }
 
-fn handle_result_error(error_expr: &Expr, current_inferred_type: &mut TypeInternal) {
+fn handle_result_error(error_expr: &Expr, current_inferred_type: &mut InferredType) {
     let inferred_type_of_error_expr = error_expr.inferred_type();
-    let result_type = TypeInternal::Result {
-        ok: None,
-        error: Some(Box::new(inferred_type_of_error_expr)),
-    };
+    let result_type = InferredType::result(None, Some(inferred_type_of_error_expr.clone()));
 
     *current_inferred_type = current_inferred_type.merge(result_type);
 }
 
-fn handle_option_some(some_expr: &Expr, inferred_type: &mut TypeInternal) {
+fn handle_option_some(some_expr: &Expr, inferred_type: &mut InferredType) {
     let inferred_type_of_some_expr = some_expr.inferred_type();
-    let option_type = TypeInternal::Option(Box::new(inferred_type_of_some_expr));
+    let option_type = InferredType::option(inferred_type_of_some_expr);
 
     *inferred_type = inferred_type.merge(option_type);
 }
 
-fn handle_if_else(then_expr: &Expr, else_expr: &Expr, inferred_type: &mut TypeInternal) {
+fn handle_if_else(then_expr: &Expr, else_expr: &Expr, inferred_type: &mut InferredType) {
     let inferred_type_of_then_expr = then_expr.inferred_type();
     let inferred_type_of_else_expr = else_expr.inferred_type();
 
@@ -325,7 +319,7 @@ fn handle_if_else(then_expr: &Expr, else_expr: &Expr, inferred_type: &mut TypeIn
         inferred_type.merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
 }
 
-pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut TypeInternal) {
+pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut InferredType) {
     let mut arm_resolution_inferred_types = vec![];
 
     for arm in current_match_arms {
@@ -333,14 +327,14 @@ pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut
         arm_resolution_inferred_types.push(arm_inferred_type);
     }
 
-    let new_inferred_type = TypeInternal::all_of(arm_resolution_inferred_types);
+    let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);
 
     if let Some(new_inferred_type) = new_inferred_type {
         *inferred_type = inferred_type.merge(new_inferred_type)
     }
 }
 
-fn handle_multiple(expr_block: &[Expr], inferred_type: &mut TypeInternal) {
+fn handle_multiple(expr_block: &[Expr], inferred_type: &mut InferredType) {
     let new_inferred_type = expr_block.last().map(|x| x.inferred_type());
 
     if let Some(new_inferred_type) = new_inferred_type {
@@ -351,7 +345,7 @@ fn handle_multiple(expr_block: &[Expr], inferred_type: &mut TypeInternal) {
 fn handle_math_op(
     lhs: &Expr,
     rhs: &Expr,
-    result_type: &mut TypeInternal,
+    result_type: &mut InferredType,
 ) -> Result<(), TypeMismatchError> {
     // If final result  is not resolved, while both lhs and rhs are resolved
     // then we expect the
@@ -363,13 +357,13 @@ fn handle_math_op(
         let left_number_type = get_number(lhs)?;
 
         if right_number_type == left_number_type {
-            *result_type = result_type.merge(TypeInternal::from(right_number_type.clone()));
+            *result_type = result_type.merge(InferredType::from(right_number_type.clone()));
         } else {
             return Err(TypeMismatchError {
                 expr_with_wrong_type: lhs.clone(),
                 parent_expr: None,
                 expected_type: ExpectedType::Hint(TypeHint::Number),
-                actual_type: ActualType::Inferred(TypeInternal::from(right_number_type)),
+                actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
                 field_path: Default::default(),
                 additional_error_detail: vec![
                     "type mismatch in mathematical expression: operands have incompatible types. "
@@ -395,7 +389,7 @@ fn get_number(number_expr: &Expr) -> Result<InferredNumber, TypeMismatchError> {
     })
 }
 
-fn handle_sequence(current_expr_list: &[Expr], current_inferred_type: &mut TypeInternal) {
+fn handle_sequence(current_expr_list: &[Expr], current_inferred_type: &mut InferredType) {
     let mut new_inferred_type = vec![];
 
     for expr in current_expr_list.iter() {
@@ -405,30 +399,27 @@ fn handle_sequence(current_expr_list: &[Expr], current_inferred_type: &mut TypeI
 
     if let Some(first_inferred_type) = new_inferred_type.first() {
         *current_inferred_type =
-            current_inferred_type.merge(TypeInternal::List(Box::new(first_inferred_type.clone())));
+            current_inferred_type.merge(InferredType::list(first_inferred_type.clone()));
     }
 }
 
-fn handle_record(current_expr_list: &[(String, Box<Expr>)], record_type: &mut TypeInternal) {
+fn handle_record(current_expr_list: &[(String, Box<Expr>)], record_type: &mut InferredType) {
     let mut field_and_types = vec![];
 
     for (field, expr) in current_expr_list.iter() {
         field_and_types.push((field.clone(), expr.inferred_type()));
     }
-    *record_type = record_type.merge(TypeInternal::Record(field_and_types));
+    *record_type = record_type.merge(InferredType::record(field_and_types));
 }
 
-fn handle_range(range: &Range, inferred_type: &mut TypeInternal) {
+fn handle_range(range: &Range, inferred_type: &mut InferredType) {
     match range {
         Range::Range { from, to } => {
             let rhs = to.inferred_type();
 
             let lhs = from.inferred_type();
 
-            let new_inferred_type = TypeInternal::Range {
-                from: Box::new(lhs),
-                to: Some(Box::new(rhs)),
-            };
+            let new_inferred_type = InferredType::range(lhs, Some(rhs));
 
             *inferred_type = new_inferred_type;
         }
@@ -437,20 +428,14 @@ fn handle_range(range: &Range, inferred_type: &mut TypeInternal) {
 
             let lhs = from.inferred_type();
 
-            let new_inferred_type = TypeInternal::Range {
-                from: Box::new(lhs),
-                to: Some(Box::new(rhs)),
-            };
+            let new_inferred_type = InferredType::range(lhs, Some(rhs));
 
             *inferred_type = new_inferred_type;
         }
         Range::RangeFrom { from } => {
             let lhs = from.inferred_type();
 
-            let new_inferred_type = TypeInternal::Range {
-                from: Box::new(lhs),
-                to: None,
-            };
+            let new_inferred_type = InferredType::range(lhs, None);
 
             *inferred_type = new_inferred_type;
         }
@@ -460,7 +445,7 @@ fn handle_range(range: &Range, inferred_type: &mut TypeInternal) {
 fn get_inferred_type_of_selected_field(
     select_from: &Expr,
     field: &str,
-) -> Result<TypeInternal, RibTypeError> {
+) -> Result<InferredType, RibTypeError> {
     let select_from_inferred_type = select_from.inferred_type();
     let refined_record = RecordType::refine(&select_from_inferred_type).ok_or({
         TypeMismatchError {
@@ -484,7 +469,7 @@ fn get_inferred_type_of_selected_field(
 fn get_inferred_type_of_selection_dynamic(
     select_from: &Expr,
     index: &Expr,
-) -> Result<TypeInternal, RibTypeError> {
+) -> Result<InferredType, RibTypeError> {
     let select_from_type = select_from.inferred_type();
     let select_index_type = index.inferred_type();
 
@@ -509,7 +494,7 @@ fn get_inferred_type_of_selection_dynamic(
     if select_index_type.contains_only_number() {
         Ok(list_type)
     } else {
-        Ok(TypeInternal::List(Box::new(list_type)))
+        Ok(InferredType::list(list_type))
     }
 }
 
@@ -522,56 +507,56 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry, TypeInternal, MatchArm, VariableId};
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
         let expr = "foo";
         let mut expr = Expr::from_text(expr).unwrap();
-        expr.add_infer_type_mut(TypeInternal::Str);
+        expr.add_infer_type_mut(InferredType::string());
         expr.pull_types_up().unwrap();
-        assert_eq!(expr.inferred_type(), TypeInternal::Str);
+        assert_eq!(expr.inferred_type(), InferredType::string());
     }
 
     #[test]
     pub fn test_pull_up_for_select_field() {
         let record_identifier =
-            Expr::identifier_global("foo", None).merge_inferred_type(TypeInternal::Record(vec![(
+            Expr::identifier_global("foo", None).merge_inferred_type(InferredType::record(vec![(
                 "foo".to_string(),
-                TypeInternal::Record(vec![("bar".to_string(), TypeInternal::U64)]),
+                InferredType::record(vec![("bar".to_string(), InferredType::u64())]),
             )]));
         let select_expr = Expr::select_field(record_identifier, "foo", None);
         let mut expr = Expr::select_field(select_expr, "bar", None);
         expr.pull_types_up().unwrap();
-        assert_eq!(expr.inferred_type(), TypeInternal::U64);
+        assert_eq!(expr.inferred_type(), InferredType::u64());
     }
 
     #[test]
     pub fn test_pull_up_for_select_index() {
         let identifier = Expr::identifier_global("foo", None)
-            .merge_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64)));
+            .merge_inferred_type(InferredType::list(InferredType::u64()));
         let mut expr = Expr::select_index(identifier.clone(), Expr::number(BigDecimal::from(0)));
         expr.pull_types_up().unwrap();
         let expected = Expr::select_index(identifier, Expr::number(BigDecimal::from(0)))
-            .merge_inferred_type(TypeInternal::U64);
+            .merge_inferred_type(InferredType::u64());
         assert_eq!(expr, expected);
     }
 
     #[test]
     pub fn test_pull_up_for_sequence() {
         let elems = vec![
-            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U64),
-            Expr::number_inferred(BigDecimal::from(2), None, TypeInternal::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::u64()),
+            Expr::number_inferred(BigDecimal::from(2), None, InferredType::u64()),
         ];
 
         let mut expr =
-            Expr::sequence(elems.clone(), None).with_inferred_type(TypeInternal::Unknown);
+            Expr::sequence(elems.clone(), None).with_inferred_type(InferredType::unknown());
         expr.pull_types_up().unwrap();
 
         assert_eq!(
             expr,
             Expr::sequence(elems, None)
-                .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64)))
+                .with_inferred_type(InferredType::list(InferredType::u64()))
         );
     }
 
@@ -579,14 +564,14 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tuple() {
         let mut expr = Expr::tuple(vec![
             Expr::literal("foo"),
-            Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::u64()),
         ]);
 
         expr.pull_types_up().unwrap();
 
         assert_eq!(
             expr.inferred_type(),
-            TypeInternal::Tuple(vec![TypeInternal::Str, TypeInternal::U64])
+            InferredType::tuple(vec![InferredType::string(), InferredType::u64()])
         );
     }
 
@@ -595,32 +580,32 @@ mod type_pull_up_tests {
         let elems = vec![
             (
                 "foo".to_string(),
-                Expr::number_inferred(BigDecimal::from(1), None, TypeInternal::U64),
+                Expr::number_inferred(BigDecimal::from(1), None, InferredType::u64()),
             ),
             (
                 "bar".to_string(),
-                Expr::number_inferred(BigDecimal::from(2), None, TypeInternal::U32),
+                Expr::number_inferred(BigDecimal::from(2), None, InferredType::u32()),
             ),
         ];
-        let mut expr = Expr::record(elems.clone()).with_inferred_type(TypeInternal::Record(vec![
-            ("foo".to_string(), TypeInternal::Unknown),
-            ("bar".to_string(), TypeInternal::Unknown),
+        let mut expr = Expr::record(elems.clone()).with_inferred_type(InferredType::record(vec![
+            ("foo".to_string(), InferredType::unknown()),
+            ("bar".to_string(), InferredType::unknown()),
         ]));
 
         expr.pull_types_up().unwrap();
 
         assert_eq!(
             expr,
-            Expr::record(elems).with_inferred_type(TypeInternal::AllOf(vec![
-                TypeInternal::Record(vec![
-                    ("foo".to_string(), TypeInternal::U64),
-                    ("bar".to_string(), TypeInternal::U32)
+            Expr::record(elems).with_inferred_type(InferredType::all_of(vec![
+                InferredType::record(vec![
+                    ("foo".to_string(), InferredType::u64()),
+                    ("bar".to_string(), InferredType::u32())
                 ]),
-                TypeInternal::Record(vec![
-                    ("foo".to_string(), TypeInternal::Unknown),
-                    ("bar".to_string(), TypeInternal::Unknown)
+                InferredType::record(vec![
+                    ("foo".to_string(), InferredType::unknown()),
+                    ("bar".to_string(), InferredType::unknown())
                 ])
-            ]))
+            ]).unwrap())
         );
     }
 
@@ -629,7 +614,7 @@ mod type_pull_up_tests {
         let mut expr = Expr::concat(vec![Expr::literal("foo"), Expr::literal("bar")]);
         expr.pull_types_up().unwrap();
         let expected = Expr::concat(vec![Expr::literal("foo"), Expr::literal("bar")])
-            .with_inferred_type(TypeInternal::Str);
+            .with_inferred_type(InferredType::string());
         assert_eq!(expr, expected);
     }
 
@@ -637,19 +622,19 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_not() {
         let mut expr = Expr::not(Expr::boolean(true));
         expr.pull_types_up().unwrap();
-        assert_eq!(expr.inferred_type(), TypeInternal::Bool);
+        assert_eq!(expr.inferred_type(), InferredType::bool());
     }
 
     #[test]
     pub fn test_pull_up_if_else() {
         let inner1 = Expr::identifier_global("foo", None)
-            .merge_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64)));
+            .merge_inferred_type(InferredType::list(InferredType::u64()));
 
         let select_index1 = Expr::select_index(inner1.clone(), Expr::number(BigDecimal::from(0)));
         let select_index2 = Expr::select_index(inner1, Expr::number(BigDecimal::from(1)));
 
         let inner2 = Expr::identifier_global("bar", None)
-            .merge_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64)));
+            .merge_inferred_type(InferredType::list(InferredType::u64()));
 
         let select_index3 = Expr::select_index(inner2.clone(), Expr::number(BigDecimal::from(0)));
         let select_index4 = Expr::select_index(inner2, Expr::number(BigDecimal::from(1)));
@@ -665,41 +650,41 @@ mod type_pull_up_tests {
             Expr::greater_than(
                 Expr::select_index(
                     Expr::identifier_global("foo", None)
-                        .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64))),
+                        .with_inferred_type(InferredType::list(InferredType::u64())),
                     Expr::number(BigDecimal::from(0)),
                 )
-                .with_inferred_type(TypeInternal::U64),
+                .with_inferred_type(InferredType::u64()),
                 Expr::select_index(
                     Expr::identifier_global("foo", None)
-                        .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64))),
+                        .with_inferred_type(InferredType::list(InferredType::u64())),
                     Expr::number(BigDecimal::from(1)),
                 )
-                .with_inferred_type(TypeInternal::U64),
+                .with_inferred_type(InferredType::u64()),
             )
-            .with_inferred_type(TypeInternal::Bool),
+            .with_inferred_type(InferredType::bool()),
             Expr::select_index(
                 Expr::identifier_global("bar", None)
-                    .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64))),
+                    .with_inferred_type(InferredType::list(InferredType::u64())),
                 Expr::number(BigDecimal::from(0)),
             )
-            .with_inferred_type(TypeInternal::U64),
+            .with_inferred_type(InferredType::u64()),
             Expr::select_index(
                 Expr::identifier_global("bar", None)
-                    .with_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64))),
+                    .with_inferred_type(InferredType::list(InferredType::u64())),
                 Expr::number(BigDecimal::from(1)),
             )
-            .with_inferred_type(TypeInternal::U64),
+            .with_inferred_type(InferredType::u64()),
         )
-        .with_inferred_type(TypeInternal::U64);
+        .with_inferred_type(InferredType::u64());
         assert_eq!(expr, expected);
     }
 
     #[test]
     pub fn test_pull_up_for_greater_than() {
         let inner =
-            Expr::identifier_global("foo", None).merge_inferred_type(TypeInternal::Record(vec![
-                ("bar".to_string(), TypeInternal::Str),
-                ("baz".to_string(), TypeInternal::U64),
+            Expr::identifier_global("foo", None).merge_inferred_type(InferredType::record(vec![
+                ("bar".to_string(), InferredType::string()),
+                ("baz".to_string(), InferredType::u64()),
             ]));
 
         let select_field1 = Expr::select_field(inner.clone(), "bar", None);
@@ -709,17 +694,17 @@ mod type_pull_up_tests {
         expr.pull_types_up().unwrap();
 
         let expected = Expr::greater_than(
-            select_field1.merge_inferred_type(TypeInternal::Str),
-            select_field2.merge_inferred_type(TypeInternal::U64),
+            select_field1.merge_inferred_type(InferredType::string()),
+            select_field2.merge_inferred_type(InferredType::u64()),
         )
-        .merge_inferred_type(TypeInternal::Bool);
+        .merge_inferred_type(InferredType::bool());
         assert_eq!(expr, expected);
     }
 
     #[test]
     pub fn test_pull_up_for_greater_than_or_equal_to() {
         let inner = Expr::identifier_global("foo", None)
-            .merge_inferred_type(TypeInternal::List(Box::new(TypeInternal::U64)));
+            .merge_inferred_type(InferredType::list(InferredType::u64()));
 
         let select_index1 = Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0)));
         let select_index2 = Expr::select_index(inner, Expr::number(BigDecimal::from(1)));
@@ -728,22 +713,22 @@ mod type_pull_up_tests {
         expr.pull_types_up().unwrap();
 
         let expected = Expr::greater_than_or_equal_to(
-            select_index1.merge_inferred_type(TypeInternal::U64),
-            select_index2.merge_inferred_type(TypeInternal::U64),
+            select_index1.merge_inferred_type(InferredType::u64()),
+            select_index2.merge_inferred_type(InferredType::u64()),
         )
-        .merge_inferred_type(TypeInternal::Bool);
+        .merge_inferred_type(InferredType::bool());
         assert_eq!(expr, expected);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than_or_equal_to() {
-        let record_type = TypeInternal::Record(vec![
-            ("bar".to_string(), TypeInternal::Str),
-            ("baz".to_string(), TypeInternal::U64),
+        let record_type = InferredType::record(vec![
+            ("bar".to_string(), InferredType::string()),
+            ("baz".to_string(), InferredType::u64()),
         ]);
 
         let inner = Expr::identifier_global("foo", None)
-            .merge_inferred_type(TypeInternal::List(Box::new(record_type.clone())));
+            .merge_inferred_type(InferredType::list(record_type.clone()));
 
         let select_field_from_first = Expr::select_field(
             Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(0))),
@@ -768,7 +753,7 @@ mod type_pull_up_tests {
             "bar",
             None,
         )
-        .merge_inferred_type(TypeInternal::Str);
+        .merge_inferred_type(InferredType::string());
 
         let new_select_field_from_second = Expr::select_field(
             Expr::select_index(inner.clone(), Expr::number(BigDecimal::from(1)))
@@ -776,11 +761,11 @@ mod type_pull_up_tests {
             "baz",
             None,
         )
-        .merge_inferred_type(TypeInternal::U64);
+        .merge_inferred_type(InferredType::u64());
 
         let expected =
             Expr::less_than_or_equal_to(new_select_field_from_first, new_select_field_from_second)
-                .merge_inferred_type(TypeInternal::Bool);
+                .merge_inferred_type(InferredType::bool());
 
         assert_eq!(expr, expected);
     }
@@ -792,7 +777,7 @@ mod type_pull_up_tests {
             Expr::number(BigDecimal::from(2)),
         );
         expr.pull_types_up().unwrap();
-        assert_eq!(expr.inferred_type(), TypeInternal::Bool);
+        assert_eq!(expr.inferred_type(), InferredType::bool());
     }
 
     #[test]
@@ -804,7 +789,7 @@ mod type_pull_up_tests {
 
         expr.pull_types_up().unwrap();
 
-        assert_eq!(expr.inferred_type(), TypeInternal::Bool);
+        assert_eq!(expr.inferred_type(), InferredType::bool());
     }
 
     #[test]
@@ -818,7 +803,7 @@ mod type_pull_up_tests {
 
         expr.pull_types_up().unwrap();
 
-        assert_eq!(expr.inferred_type(), TypeInternal::Unknown);
+        assert_eq!(expr.inferred_type(), InferredType::unknown());
     }
 
     #[test]
@@ -841,16 +826,16 @@ mod type_pull_up_tests {
                 Expr::record(vec![
                     (
                         "foo".to_string(),
-                        Expr::literal("afs").with_inferred_type(TypeInternal::Str),
+                        Expr::literal("afs").with_inferred_type(InferredType::string()),
                     ),
                     (
                         "bar".to_string(),
-                        Expr::literal("al").with_inferred_type(TypeInternal::Str),
+                        Expr::literal("al").with_inferred_type(InferredType::string()),
                     ),
                 ])
-                .with_inferred_type(TypeInternal::Record(vec![
-                    ("foo".to_string(), TypeInternal::Str),
-                    ("bar".to_string(), TypeInternal::Str),
+                .with_inferred_type(InferredType::record(vec![
+                    ("foo".to_string(), InferredType::string()),
+                    ("bar".to_string(), InferredType::string()),
                 ])),
                 None,
             ),
@@ -866,15 +851,15 @@ mod type_pull_up_tests {
                         resource: "cart".to_string(),
                         resource_params: vec![Expr::select_field(
                             Expr::identifier_local("input", 0, None).with_inferred_type(
-                                TypeInternal::Record(vec![
-                                    ("foo".to_string(), TypeInternal::Str),
-                                    ("bar".to_string(), TypeInternal::Str),
+                                InferredType::record(vec![
+                                    ("foo".to_string(), InferredType::string()),
+                                    ("bar".to_string(), InferredType::string()),
                                 ]),
                             ),
                             "foo",
                             None,
                         )
-                        .with_inferred_type(TypeInternal::Str)],
+                        .with_inferred_type(InferredType::string())],
                         method: "checkout".to_string(),
                     },
                 }),
@@ -889,24 +874,24 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_unwrap() {
         let mut number = Expr::number(BigDecimal::from(1));
-        number.with_inferred_type_mut(TypeInternal::F64);
+        number.with_inferred_type_mut(InferredType::f64());
         let mut expr = Expr::option(Some(number)).unwrap();
         expr.pull_types_up().unwrap();
         assert_eq!(
             expr.inferred_type(),
-            TypeInternal::Option(Box::new(TypeInternal::F64))
+            InferredType::option(InferredType::f64())
         );
     }
 
     #[test]
     pub fn test_pull_up_for_tag() {
         let mut number = Expr::number(BigDecimal::from(1));
-        number.with_inferred_type_mut(TypeInternal::F64);
+        number.with_inferred_type_mut(InferredType::f64());
         let mut expr = Expr::get_tag(Expr::option(Some(number)));
         expr.pull_types_up().unwrap();
         assert_eq!(
             expr.inferred_type(),
-            TypeInternal::Option(Box::new(TypeInternal::F64))
+            InferredType::option(InferredType::f64())
         );
     }
 
@@ -914,8 +899,8 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_pattern_match() {
         let mut expr = Expr::pattern_match(
             Expr::select_field(
-                Expr::identifier_global("foo", None).merge_inferred_type(TypeInternal::Record(
-                    vec![("bar".to_string(), TypeInternal::Str)],
+                Expr::identifier_global("foo", None).merge_inferred_type(InferredType::record(
+                    vec![("bar".to_string(), InferredType::string())],
                 )),
                 "bar",
                 None,
@@ -926,7 +911,7 @@ mod type_pull_up_tests {
                         "cons1".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::select_field(
                             Expr::identifier_global("foo", None).merge_inferred_type(
-                                TypeInternal::Record(vec![("bar".to_string(), TypeInternal::Str)]),
+                                InferredType::record(vec![("bar".to_string(), InferredType::string())]),
                             ),
                             "bar",
                             None,
@@ -934,7 +919,7 @@ mod type_pull_up_tests {
                     ),
                     arm_resolution_expr: Box::new(Expr::select_field(
                         Expr::identifier_global("baz", None).merge_inferred_type(
-                            TypeInternal::Record(vec![("qux".to_string(), TypeInternal::Str)]),
+                            InferredType::record(vec![("qux".to_string(), InferredType::string())]),
                         ),
                         "qux",
                         None,
@@ -945,9 +930,9 @@ mod type_pull_up_tests {
                         "cons2".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::select_field(
                             Expr::identifier_global("quux", None).merge_inferred_type(
-                                TypeInternal::Record(vec![(
+                                InferredType::record(vec![(
                                     "corge".to_string(),
-                                    TypeInternal::Str,
+                                    InferredType::string(),
                                 )]),
                             ),
                             "corge",
@@ -956,7 +941,7 @@ mod type_pull_up_tests {
                     ),
                     arm_resolution_expr: Box::new(Expr::select_field(
                         Expr::identifier_global("grault", None).merge_inferred_type(
-                            TypeInternal::Record(vec![("garply".to_string(), TypeInternal::Str)]),
+                            InferredType::record(vec![("garply".to_string(), InferredType::string())]),
                         ),
                         "garply",
                         None,
@@ -972,18 +957,18 @@ mod type_pull_up_tests {
     }
 
     mod internal {
-        use crate::{ArmPattern, Expr, TypeInternal, MatchArm};
+        use crate::{ArmPattern, Expr, InferredType, MatchArm};
 
         pub(crate) fn expected_pattern_match() -> Expr {
             Expr::pattern_match(
                 Expr::select_field(
-                    Expr::identifier_global("foo", None).with_inferred_type(TypeInternal::Record(
-                        vec![("bar".to_string(), TypeInternal::Str)],
+                    Expr::identifier_global("foo", None).with_inferred_type(InferredType::record(
+                        vec![("bar".to_string(), InferredType::string())],
                     )),
                     "bar",
                     None,
                 )
-                .with_inferred_type(TypeInternal::Str),
+                .with_inferred_type(InferredType::string()),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::Constructor(
@@ -991,29 +976,29 @@ mod type_pull_up_tests {
                             vec![ArmPattern::Literal(Box::new(
                                 Expr::select_field(
                                     Expr::identifier_global("foo", None).with_inferred_type(
-                                        TypeInternal::Record(vec![(
+                                        InferredType::record(vec![(
                                             "bar".to_string(),
-                                            TypeInternal::Str,
+                                            InferredType::string(),
                                         )]),
                                     ),
                                     "bar",
                                     None,
                                 )
-                                .with_inferred_type(TypeInternal::Str),
+                                .with_inferred_type(InferredType::string()),
                             ))],
                         ),
                         arm_resolution_expr: Box::new(
                             Expr::select_field(
                                 Expr::identifier_global("baz", None).with_inferred_type(
-                                    TypeInternal::Record(vec![(
+                                    InferredType::record(vec![(
                                         "qux".to_string(),
-                                        TypeInternal::Str,
+                                        InferredType::string(),
                                     )]),
                                 ),
                                 "qux",
                                 None,
                             )
-                            .with_inferred_type(TypeInternal::Str),
+                            .with_inferred_type(InferredType::string()),
                         ),
                     },
                     MatchArm {
@@ -1022,34 +1007,34 @@ mod type_pull_up_tests {
                             vec![ArmPattern::Literal(Box::new(
                                 Expr::select_field(
                                     Expr::identifier_global("quux", None).with_inferred_type(
-                                        TypeInternal::Record(vec![(
+                                        InferredType::record(vec![(
                                             "corge".to_string(),
-                                            TypeInternal::Str,
+                                            InferredType::string(),
                                         )]),
                                     ),
                                     "corge",
                                     None,
                                 )
-                                .with_inferred_type(TypeInternal::Str),
+                                .with_inferred_type(InferredType::string()),
                             ))],
                         ),
                         arm_resolution_expr: Box::new(
                             Expr::select_field(
                                 Expr::identifier_global("grault", None).with_inferred_type(
-                                    TypeInternal::Record(vec![(
+                                    InferredType::record(vec![(
                                         "garply".to_string(),
-                                        TypeInternal::Str,
+                                        InferredType::string(),
                                     )]),
                                 ),
                                 "garply",
                                 None,
                             )
-                            .with_inferred_type(TypeInternal::Str),
+                            .with_inferred_type(InferredType::string()),
                         ),
                     },
                 ],
             )
-            .with_inferred_type(TypeInternal::Str)
+            .with_inferred_type(InferredType::string())
         }
     }
 }

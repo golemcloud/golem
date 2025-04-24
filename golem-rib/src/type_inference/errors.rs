@@ -27,7 +27,7 @@ pub struct AmbiguousTypeError {
 
 impl AmbiguousTypeError {
     pub fn new(
-        inferred_expr: &TypeInternal,
+        inferred_expr: &InferredType,
         expr: &Expr,
         expected: &TypeHint,
     ) -> AmbiguousTypeError {
