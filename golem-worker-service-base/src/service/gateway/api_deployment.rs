@@ -50,7 +50,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
         deployment: &ApiDeploymentRequest<Namespace>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
-    
+
     // New undeploy function takes ApiSiteString and ApiDefinitionIdWithVersion
     async fn undeploy(
         &self,
@@ -444,10 +444,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
         info!(namespace = %namespace, "Undeploying API definition");
 
         // 1. Check if the site exists
-        let site_exists = self
-            .get_by_site(namespace, &site)
-            .await?
-            .is_some();
+        let site_exists = self.get_by_site(namespace, &site).await?.is_some();
 
         if !site_exists {
             return Err(ApiDeploymentError::ApiDeploymentNotFound(
@@ -495,13 +492,18 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> ApiDeploymentService<Auth
             // 5. Get the specific API definition being undeployed
             let definition_to_undeploy = self
                 .definition_repo
-                .get(&namespace.to_string(), &api_definition_key.id.0, &api_definition_key.version.0)
+                .get(
+                    &namespace.to_string(),
+                    &api_definition_key.id.0,
+                    &api_definition_key.version.0,
+                )
                 .await?;
 
             if let Some(definition) = definition_to_undeploy {
-                let compiled_definition = CompiledHttpApiDefinition::try_from(definition).map_err(|e| {
-                    ApiDeploymentError::conversion_error("API definition record", e)
-                })?;
+                let compiled_definition =
+                    CompiledHttpApiDefinition::try_from(definition).map_err(|e| {
+                        ApiDeploymentError::conversion_error("API definition record", e)
+                    })?;
 
                 // 6. Remove component constraints
                 self.remove_component_constraints(vec![compiled_definition], auth_ctx)
