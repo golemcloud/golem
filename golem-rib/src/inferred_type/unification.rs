@@ -1,5 +1,5 @@
 use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list};
-use crate::{TypeInternal, TypeOrigin, InferredType};
+use crate::{InferredType, TypeInternal, TypeOrigin};
 use std::collections::HashSet;
 use std::ops::Deref;
 
@@ -31,7 +31,9 @@ pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, Stri
         }
         TypeInternal::Option(inner_type) => {
             let unified_inner_type = inner_type.try_unify()?;
-            Ok(InferredType::resolved(TypeInternal::Option(unified_inner_type)))
+            Ok(InferredType::resolved(TypeInternal::Option(
+                unified_inner_type,
+            )))
         }
 
         TypeInternal::Result { ok, error } => {
@@ -82,13 +84,17 @@ pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, Stri
             let unified_end = end.as_ref().map(|end| end.try_unify()).transpose()?;
             Ok(InferredType::resolved(TypeInternal::Range {
                 from: unified_start,
-                to: unified_end
+                to: unified_end,
             }))
         }
 
-        TypeInternal::Flags(flags) => Ok(InferredType::resolved(TypeInternal::Flags(flags.clone()))),
+        TypeInternal::Flags(flags) => {
+            Ok(InferredType::resolved(TypeInternal::Flags(flags.clone())))
+        }
 
-        TypeInternal::Enum(variants) => Ok(InferredType::resolved(TypeInternal::Enum(variants.clone()))),
+        TypeInternal::Enum(variants) => {
+            Ok(InferredType::resolved(TypeInternal::Enum(variants.clone())))
+        }
 
         TypeInternal::Variant(variants) => {
             let mut unified_variants = vec![];
@@ -99,7 +105,9 @@ pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, Stri
                 };
                 unified_variants.push((variant.clone(), unified_type.as_deref().cloned()));
             }
-            Ok(InferredType::resolved(TypeInternal::Variant(unified_variants)))
+            Ok(InferredType::resolved(TypeInternal::Variant(
+                unified_variants,
+            )))
         }
 
         TypeInternal::Resource {
@@ -126,10 +134,11 @@ pub fn unify_all_alternative_types(types: &Vec<InferredType>) -> InferredType {
             }
             Err(_) => {
                 if !unified_type.is_unknown() {
-                    unified_type = InferredType::resolved(TypeInternal::OneOf(flatten_one_of_list(&vec![
-                        unified_type.clone(),
-                        unified.clone(),
-                    ])));
+                    unified_type =
+                        InferredType::resolved(TypeInternal::OneOf(flatten_one_of_list(&vec![
+                            unified_type.clone(),
+                            unified.clone(),
+                        ])));
                 }
                 one_ofs.push(unified);
             }
@@ -148,18 +157,18 @@ pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredTyp
 }
 
 pub fn unify_with_alternative(
-    interred_type: &InferredType,
+    inferred_type: &InferredType,
     other: &InferredType,
 ) -> Result<InferredType, String> {
-    if interred_type.is_unknown() {
+    if inferred_type.is_unknown() {
         Ok(other.clone())
-    } else if other.is_unknown() || interred_type == other {
-        Ok(interred_type.clone())
+    } else if other.is_unknown() || inferred_type == other {
+        Ok(inferred_type.clone())
     } else {
-        let inferred_type_printable = interred_type.printable();
+        let inferred_type_printable = inferred_type.printable();
         let other_printable = other.printable();
 
-        match (interred_type.inner.deref(), other.inner.deref()) {
+        match (inferred_type.inner.deref(), other.inner.deref()) {
             (TypeInternal::Record(a_fields), TypeInternal::Record(b_fields)) => {
                 if a_fields.len() != b_fields.len() {
                     return Err(format!("conflicting record types inferred  {}, {}. the size of the members in the records don't match", inferred_type_printable, other_printable));
@@ -188,7 +197,10 @@ pub fn unify_with_alternative(
                     }
                 }
 
-                Ok(InferredType::new(TypeInternal::Record(fields), TypeOrigin::Others))
+                Ok(InferredType::new(
+                    TypeInternal::Record(fields),
+                    TypeOrigin::NoOrigin,
+                ))
             }
             (TypeInternal::Tuple(a_types), TypeInternal::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
@@ -213,7 +225,10 @@ pub fn unify_with_alternative(
                     }
                 }
 
-                Ok(InferredType::new(TypeInternal::Tuple(types), TypeOrigin::Others))
+                Ok(InferredType::new(
+                    TypeInternal::Tuple(types),
+                    TypeOrigin::NoOrigin,
+                ))
             }
 
             (TypeInternal::List(a_type), TypeInternal::List(b_type)) => {
@@ -244,7 +259,9 @@ pub fn unify_with_alternative(
 
             (TypeInternal::Enum(a_variants), TypeInternal::Enum(b_variants)) => {
                 if a_variants == b_variants {
-                    Ok(InferredType::resolved(TypeInternal::Enum(a_variants.clone())))
+                    Ok(InferredType::resolved(TypeInternal::Enum(
+                        a_variants.clone(),
+                    )))
                 } else {
                     Err(format!(
                         "conflicting enum types inferred: {}, {}",
@@ -284,8 +301,8 @@ pub fn unify_with_alternative(
                         }
                     }
                     (None, None) => None,
-                    (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
+                    (Some(ok), None) => Some(ok.clone()),
+                    (None, Some(ok)) => Some(ok.clone()),
                 };
 
                 let unified_b_error = match (a_error, b_error) {
@@ -302,8 +319,8 @@ pub fn unify_with_alternative(
                         }
                     }
                     (None, None) => None,
-                    (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
+                    (Some(ok), None) => Some(ok.clone()),
+                    (None, Some(ok)) => Some(ok.clone()),
                 };
 
                 Ok(InferredType::resolved(TypeInternal::Result {
@@ -381,7 +398,7 @@ pub fn unify_with_alternative(
 
             (TypeInternal::AllOf(a_types), inferred_types) => {
                 let unified_all_types = unify_all_required_types(a_types)?;
-                let alternative_type = inferred_types.try_unify()?;
+                let alternative_type = other.try_unify()?;
 
                 if unified_all_types == alternative_type {
                     Ok(unified_all_types)
@@ -396,7 +413,7 @@ pub fn unify_with_alternative(
 
             (inferred_types, TypeInternal::AllOf(b_types)) => {
                 let unified_all_types = unify_all_required_types(b_types)?;
-                let alternative_type = inferred_types.try_unify()?;
+                let alternative_type = inferred_type.try_unify()?;
 
                 if unified_all_types == alternative_type {
                     Ok(unified_all_types)
@@ -411,7 +428,7 @@ pub fn unify_with_alternative(
 
             (a, b) => {
                 if a == b {
-                    Ok(a.clone())
+                    Ok(inferred_type.clone())
                 } else {
                     Err(format!(
                         "ambiguous types inferred: {}, {}",
@@ -471,8 +488,8 @@ pub fn unify_with_required(
                 }
                 Ok(InferredType::resolved(TypeInternal::Tuple(types)))
             }
-            (TypeInternal::List(a_type), TypeInternal::List(b_type)) => Ok(InferredType::resolved(TypeInternal::List(
-                a_type.unify_with_required(b_type)?),
+            (TypeInternal::List(a_type), TypeInternal::List(b_type)) => Ok(InferredType::resolved(
+                TypeInternal::List(a_type.unify_with_required(b_type)?),
             )),
             (TypeInternal::Flags(a_flags), TypeInternal::Flags(b_flags)) => {
                 if a_flags.len() >= b_flags.len() {
@@ -524,7 +541,9 @@ pub fn unify_with_required(
                         inferred_type_printable, other_printable
                     ));
                 }
-                Ok(InferredType::resolved(TypeInternal::Enum(a_variants.clone())))
+                Ok(InferredType::resolved(TypeInternal::Enum(
+                    a_variants.clone(),
+                )))
             }
             (TypeInternal::Option(a_type), TypeInternal::Option(b_type)) => Ok(
                 InferredType::resolved(TypeInternal::Option(a_type.unify_with_required(b_type)?)),
@@ -532,15 +551,15 @@ pub fn unify_with_required(
 
             (TypeInternal::Option(a_type), inferred_type) => {
                 let unified_left = a_type.try_unify()?;
-                let unified_right = inferred_type.try_unify()?;
+                let unified_right = other.try_unify()?;
                 let combined = unified_left.unify_with_required(&unified_right)?;
-                Ok(TypeInternal::Option(Box::new(combined)))
+                Ok(InferredType::option(combined))
             }
-            (inferred_type, TypeInternal::Option(a_type)) => {
+            (inferred_type_internal, TypeInternal::Option(a_type)) => {
                 let unified_left = a_type.try_unify()?;
                 let unified_right = inferred_type.try_unify()?;
                 let combined = unified_left.unify_with_required(&unified_right)?;
-                Ok(TypeInternal::Option(Box::new(combined)))
+                Ok(InferredType::option(combined))
             }
 
             (
@@ -554,23 +573,19 @@ pub fn unify_with_required(
                 },
             ) => {
                 let ok = match (a_ok, b_ok) {
-                    (Some(a_inner), Some(b_inner)) => {
-                        Some(Box::new(a_inner.unify_with_required(b_inner)?))
-                    }
+                    (Some(a_inner), Some(b_inner)) => Some(a_inner.unify_with_required(b_inner)?),
                     (None, None) => None,
-                    (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
+                    (Some(ok), None) => Some(ok.clone()),
+                    (None, Some(ok)) => Some(ok.clone()),
                 };
 
                 let error = match (a_error, b_error) {
-                    (Some(a_inner), Some(b_inner)) => {
-                        Some(Box::new(a_inner.unify_with_required(b_inner)?))
-                    }
+                    (Some(a_inner), Some(b_inner)) => Some(a_inner.unify_with_required(b_inner)?),
                     (None, None) => None,
-                    (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
+                    (Some(ok), None) => Some(ok.clone()),
+                    (None, Some(ok)) => Some(ok.clone()),
                 };
-                Ok(TypeInternal::Result { ok, error })
+                Ok(InferredType::result(ok, error))
             }
             (TypeInternal::Variant(a_variants), TypeInternal::Variant(b_variants)) => {
                 let mut variants = vec![];
@@ -589,12 +604,13 @@ pub fn unify_with_required(
                         variants.push((a_name.clone(), unified_type));
                     }
                 }
-                Ok(TypeInternal::Variant(
-                    variants
-                        .iter()
-                        .map(|(n, t)| (n.clone(), t.clone().map(|v| *v)))
-                        .collect(),
-                ))
+
+                let cases = variants
+                    .iter()
+                    .map(|(n, t)| (n.clone(), t.clone().map(|v| *v)))
+                    .collect::<Vec<_>>();
+
+                Ok(InferredType::from_variant_cases(cases))
             }
             (
                 TypeInternal::Resource {
@@ -612,10 +628,8 @@ pub fn unify_with_required(
                         inferred_type_printable, other_printable
                     ));
                 }
-                Ok(TypeInternal::Resource {
-                    resource_id: *a_id,
-                    resource_mode: *a_mode,
-                })
+
+                Ok(InferredType::resource(*a_id, *a_mode))
             }
 
             (TypeInternal::AllOf(types), TypeInternal::OneOf(one_of_types)) => {
@@ -653,10 +667,10 @@ pub fn unify_with_required(
                 unify_all_required_types(all_of_types)
             }
 
-            (TypeInternal::OneOf(types), inferred_type) => {
+            (TypeInternal::OneOf(types), inferred_type_internal) => {
                 let mut unified = None;
                 for typ in types {
-                    match typ.unify_with_alternative(inferred_type) {
+                    match typ.unify_with_alternative(other) {
                         Ok(result) => {
                             unified = Some(result);
                             break;
@@ -681,7 +695,7 @@ pub fn unify_with_required(
                 }
             }
 
-            (inferred_type, TypeInternal::OneOf(types)) => {
+            (inferred_type_internal, TypeInternal::OneOf(types)) => {
                 if types.contains(inferred_type) {
                     Ok(inferred_type.clone())
                 } else {
@@ -698,35 +712,36 @@ pub fn unify_with_required(
                 }
             }
 
-            (TypeInternal::AllOf(types), inferred_type) => {
+            (TypeInternal::AllOf(types), inferred_type_internal) => {
                 let x = types
                     .iter()
                     .filter(|x| !x.is_unknown())
-                    .map(|t| t.unify_with_required(inferred_type).unwrap())
+                    .map(|t| t.unify_with_required(other).unwrap())
                     .collect::<Vec<_>>();
 
                 unify_all_required_types(&x)
             }
 
-            (inferred_type, TypeInternal::AllOf(types)) => {
-                let result = InferredType::resolved(TypeInternal::AllOf(types.clone())).try_unify()?;
+            (inferred_type_internal, TypeInternal::AllOf(types)) => {
+                let result =
+                    InferredType::resolved(TypeInternal::AllOf(types.clone())).try_unify()?;
 
                 result.unify_with_required(inferred_type)
             }
 
             (inferred_type_left, inferred_type_right) => {
                 if inferred_type_left == inferred_type_right {
-                    Ok(inferred_type_left.clone())
+                    Ok(inferred_type.clone())
                 } else if inferred_type.is_number() && other.is_number() {
-                    Ok(TypeInternal::AllOf(vec![
-                        inferred_type_left.clone(),
-                        inferred_type_right.clone(),
-                    ]))
+                    Ok(InferredType::new(
+                        TypeInternal::AllOf(vec![inferred_type.clone(), other.clone()]),
+                        TypeOrigin::NoOrigin,
+                    ))
                 } else {
                     Err(format!(
                         "conflicting types inferred. {}, {}",
-                        inferred_type_left.printable(),
-                        inferred_type_right.printable()
+                        inferred_type.printable(),
+                        other.printable()
                     ))
                 }
             }
@@ -735,14 +750,13 @@ pub fn unify_with_required(
 }
 
 mod internal {
-    use std::ops::Deref;
     use crate::inferred_type::unification::Unified;
-    use crate::{TypeInternal, InferredType};
+    use crate::{InferredType, TypeInternal};
+    use std::ops::Deref;
 
     pub(crate) fn validate_unified_type(inferred_type: &InferredType) -> Result<Unified, String> {
         match inferred_type.inner.deref() {
             TypeInternal::Bool
-            | TypeInternal::S8
             | TypeInternal::S8
             | TypeInternal::U8
             | TypeInternal::S16
@@ -755,7 +769,7 @@ mod internal {
             | TypeInternal::F64
             | TypeInternal::Chr
             | TypeInternal::Str => Ok(Unified(inferred_type.clone())),
-            | TypeInternal::List(inferred_type) => {
+            TypeInternal::List(inferred_type) => {
                 let verified = validate_unified_type(inferred_type)?;
                 Ok(Unified(InferredType::resolved(TypeInternal::List(
                     verified.inferred_type(),
@@ -769,7 +783,9 @@ mod internal {
                     verified_types.push(verified.inferred_type());
                 }
 
-                Ok(Unified(InferredType::resolved(TypeInternal::Tuple(verified_types))))
+                Ok(Unified(InferredType::resolved(TypeInternal::Tuple(
+                    verified_types,
+                ))))
             }
             TypeInternal::Record(field) => {
                 for (field, typ) in field {
@@ -781,17 +797,17 @@ mod internal {
                     }
                 }
 
-                Ok(Unified(InferredType::resolved(TypeInternal::Record(field.clone()))))
-            }
-            TypeInternal::Flags(flags) => Ok(Unified(TypeInternal::Flags(flags.clone()))),
-            TypeInternal::Enum(enums) => Ok(Unified(TypeInternal::Enum(enums.clone()))),
-            TypeInternal::Option(inferred_type) => {
-                let result = validate_unified_type(inferred_type)?;
-                Ok(Unified(TypeInternal::Option(Box::new(
-                    result.inferred_type(),
+                Ok(Unified(InferredType::resolved(TypeInternal::Record(
+                    field.clone(),
                 ))))
             }
-            result @ TypeInternal::Result { ok, error } => {
+            TypeInternal::Flags(flags) => Ok(Unified(inferred_type.clone())),
+            TypeInternal::Enum(enums) => Ok(Unified(inferred_type.clone())),
+            TypeInternal::Option(inferred_type) => {
+                let result = validate_unified_type(inferred_type)?;
+                Ok(Unified(InferredType::option(result.inferred_type())))
+            }
+            TypeInternal::Result { ok, error } => {
                 // For Result, we try to be flexible with types
                 // Example: Allow Rib script to simply return ok(x) as the final output, even if it doesn't know anything about error
                 match (ok, error) {
@@ -805,7 +821,7 @@ mod internal {
                                 let err = format!("Ok: {}, Error: {}", ok_err, err_err);
                                 Err(err)
                             }
-                            (_, _) => Ok(Unified(result.clone())),
+                            (_, _) => Ok(Unified(inferred_type.clone())),
                         }
                     }
 
@@ -813,7 +829,7 @@ mod internal {
                         let ok_unified = validate_unified_type(ok);
                         match ok_unified {
                             Err(ok_err) => Err(ok_err),
-                            _ => Ok(Unified(result.clone())),
+                            _ => Ok(Unified(inferred_type.clone())),
                         }
                     }
 
@@ -821,14 +837,14 @@ mod internal {
                         let err_unified = validate_unified_type(err);
                         match err_unified {
                             Err(err_err) => Err(err_err),
-                            _ => Ok(Unified(result.clone())),
+                            _ => Ok(Unified(inferred_type.clone())),
                         }
                     }
 
-                    (None, None) => Ok(Unified(result.clone())),
+                    (None, None) => Ok(Unified(inferred_type.clone())),
                 }
             }
-            inferred_type @ TypeInternal::Variant(variant) => {
+            TypeInternal::Variant(variant) => {
                 for (_, typ) in variant {
                     if let Some(typ) = typ {
                         validate_unified_type(typ)?;
@@ -846,14 +862,14 @@ mod internal {
                     .map(|end| validate_unified_type(&end))
                     .transpose()?;
 
-                Ok(Unified(TypeInternal::Range {
-                    from: Box::new(unified_start.inferred_type()),
-                    to: unified_end.map(|end| Box::new(end.inferred_type())),
-                }))
+                Ok(Unified(InferredType::range(
+                    unified_start.inferred_type(),
+                    unified_end.map(|end| end.inferred_type()),
+                )))
             }
 
-            instance @ TypeInternal::Instance { .. } => Ok(Unified(instance.clone())),
-            resource @ TypeInternal::Resource { .. } => Ok(Unified(resource.clone())),
+            TypeInternal::Instance { .. } => Ok(Unified(inferred_type.clone())),
+            TypeInternal::Resource { .. } => Ok(Unified(inferred_type.clone())),
             TypeInternal::OneOf(possibilities) => Err(format!(
                 "conflicting types inferred: {}",
                 display_multiple_types(possibilities)
@@ -864,7 +880,7 @@ mod internal {
             )),
 
             TypeInternal::Unknown => Err("cannot determine the type".to_string()),
-            inferred_type @ TypeInternal::Sequence(inferred_types) => {
+            TypeInternal::Sequence(inferred_types) => {
                 for typ in inferred_types {
                     validate_unified_type(typ)?;
                 }
@@ -874,7 +890,7 @@ mod internal {
         }
     }
 
-    fn display_multiple_types(types: &[TypeInternal]) -> String {
+    fn display_multiple_types(types: &[InferredType]) -> String {
         let types = types.iter().map(|x| x.printable()).collect::<Vec<_>>();
 
         types.join(", ")

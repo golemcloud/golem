@@ -72,10 +72,16 @@ pub enum TypeInternal {
     Sequence(Vec<InferredType>),
 }
 
+impl TypeInternal {
+    pub fn to_inferred_type(&self) -> InferredType {
+        InferredType::new(self.clone(), TypeOrigin::NoOrigin)
+    }
+}
+
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     Default(SourceSpan),
-    Others,
+    NoOrigin,
     Multiple(Vec<TypeOrigin>)
 }
 
@@ -85,8 +91,6 @@ pub struct InferredType {
     pub origin: TypeOrigin,
 }
 
-
-
 // TypeOrigin doesn't matter in any equality logic
 impl PartialEq for TypeOrigin {
     fn eq(&self, _other: &Self) -> bool {
@@ -94,10 +98,195 @@ impl PartialEq for TypeOrigin {
     }
 }
 
-impl Eq for TypeOrigin{}
-
 
 impl InferredType {
+
+    pub fn s8() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::S8),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn u8() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::U8),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn s16() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::S16),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn u16() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::U16),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn s32() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::S32),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn u32() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::U32),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn s64() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::S64),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn u64() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::U64),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn f32() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::F32),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn f64() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::F64),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn bool() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Bool),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn char() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Chr),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn string() -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Str),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn flags(flags: Vec<String>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Flags(flags)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn enum_(cases: Vec<String>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Enum(cases)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn resource(resource_id: u64, resource_mode: u8) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Resource {
+                resource_id,
+                resource_mode,
+            }),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn range(from: InferredType, to: Option<InferredType>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Range { from, to }),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn instance(instance_type: InstanceType) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Instance {
+                instance_type: Box::new(instance_type),
+            }),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn list(inner: InferredType) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::List(inner)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn tuple(inner: Vec<InferredType>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Tuple(inner)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn record(fields: Vec<(String, InferredType)>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Record(fields)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn option(inner: InferredType) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Option(inner)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn result(ok: Option<InferredType>, error: Option<InferredType>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Result { ok, error }),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn variant(fields: Vec<(String, Option<InferredType>)>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Variant(fields)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn option_type(inner: InferredType) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Option(inner)),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
+
+    pub fn range_type(from: InferredType, to: Option<InferredType>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Range { from, to }),
+            origin: TypeOrigin::NoOrigin
+        }
+    }
 
     pub fn new(inferred_type: TypeInternal, origin: TypeOrigin) -> InferredType {
         InferredType {
@@ -110,21 +299,21 @@ impl InferredType {
     pub fn resolved(inferred_type: TypeInternal) -> InferredType {
         InferredType {
             inner: Box::new(inferred_type),
-            origin: TypeOrigin::Others
+            origin: TypeOrigin::NoOrigin
         }
     }
 
-    pub fn others(inferred_type: TypeInternal) -> InferredType {
+    pub fn without_origin(inferred_type: TypeInternal) -> InferredType {
         InferredType {
             inner: Box::new(inferred_type),
-            origin: TypeOrigin::Others
+            origin: TypeOrigin::NoOrigin
         }
     }
 
     pub fn unknown() -> InferredType {
         InferredType {
             inner: Box::new(TypeInternal::Unknown),
-            origin: TypeOrigin::Others
+            origin: TypeOrigin::NoOrigin
         }
     }
 
@@ -136,7 +325,6 @@ impl InferredType {
     }
 }
 
-impl Eq for InferredType {}
 impl PartialEq for InferredType {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
@@ -662,7 +850,7 @@ impl InferredType {
         unification::try_unify_type(self)
     }
 
-    pub fn unify(&self) -> Result<TypeInternal, String> {
+    pub fn unify(&self) -> Result<InferredType, String> {
         unification::unify(self).map(|unified| unified.inferred_type())
     }
 
@@ -750,7 +938,7 @@ impl InferredType {
         }
     }
 
-    pub fn from_variant_cases(type_variant: &TypeVariant) -> TypeInternal {
+    pub fn from_type_variant(type_variant: &TypeVariant) -> InferredType {
         let cases = type_variant
             .cases
             .iter()
@@ -762,11 +950,15 @@ impl InferredType {
             })
             .collect();
 
-        TypeInternal::Variant(cases)
+        InferredType::from_variant_cases(cases)
     }
 
-    pub fn from_enum_cases(type_enum: &TypeEnum) -> TypeInternal {
-        TypeInternal::Enum(type_enum.cases.clone())
+    pub fn from_variant_cases(cases: Vec<(String, Option<InferredType>)>) -> InferredType {
+        InferredType::without_origin(TypeInternal::Variant(cases))
+    }
+
+    pub fn from_enum_cases(type_enum: &TypeEnum) -> InferredType {
+        InferredType::without_origin(TypeInternal::Enum(type_enum.cases.clone()))
     }
 }
 
@@ -876,50 +1068,50 @@ impl TryFrom<TypeInternal> for AnalysedType {
     }
 }
 
-impl From<&AnalysedType> for TypeInternal {
+impl From<&AnalysedType> for InferredType {
     fn from(analysed_type: &AnalysedType) -> Self {
         match analysed_type {
-            AnalysedType::Bool(_) => TypeInternal::Bool,
-            AnalysedType::S8(_) => TypeInternal::S8,
-            AnalysedType::U8(_) => TypeInternal::U8,
-            AnalysedType::S16(_) => TypeInternal::S16,
-            AnalysedType::U16(_) => TypeInternal::U16,
-            AnalysedType::S32(_) => TypeInternal::S32,
-            AnalysedType::U32(_) => TypeInternal::U32,
-            AnalysedType::S64(_) => TypeInternal::S64,
-            AnalysedType::U64(_) => TypeInternal::U64,
-            AnalysedType::F32(_) => TypeInternal::F32,
-            AnalysedType::F64(_) => TypeInternal::F64,
-            AnalysedType::Chr(_) => TypeInternal::Chr,
-            AnalysedType::Str(_) => TypeInternal::Str,
-            AnalysedType::List(t) => TypeInternal::List(Box::new(t.inner.as_ref().into())),
+            AnalysedType::Bool(_) => InferredType::bool(),
+            AnalysedType::S8(_) => InferredType::s8(),
+            AnalysedType::U8(_) => InferredType::u8(),
+            AnalysedType::S16(_) => InferredType::s16(),
+            AnalysedType::U16(_) => InferredType::u16(),
+            AnalysedType::S32(_) => InferredType::s32(),
+            AnalysedType::U32(_) => InferredType::u32(),
+            AnalysedType::S64(_) => InferredType::s64(),
+            AnalysedType::U64(_) => InferredType::u64(),
+            AnalysedType::F32(_) => InferredType::f32(),
+            AnalysedType::F64(_) => InferredType::f64(),
+            AnalysedType::Chr(_) => InferredType::char(),
+            AnalysedType::Str(_) => InferredType::string(),
+            AnalysedType::List(t) => InferredType::list(t.inner.as_ref().into()),
             AnalysedType::Tuple(ts) => {
-                TypeInternal::Tuple(ts.items.iter().map(|t| t.into()).collect())
+                InferredType::tuple(ts.items.iter().map(|t| t.into()).collect())
             }
-            AnalysedType::Record(fs) => TypeInternal::Record(
+            AnalysedType::Record(fs) => InferredType::record(
                 fs.fields
                     .iter()
                     .map(|name_type| (name_type.name.clone(), (&name_type.typ).into()))
                     .collect(),
             ),
-            AnalysedType::Flags(vs) => TypeInternal::Flags(vs.names.clone()),
-            AnalysedType::Enum(vs) => TypeInternal::from_enum_cases(vs),
-            AnalysedType::Option(t) => TypeInternal::Option(Box::new(t.inner.as_ref().into())),
+            AnalysedType::Flags(vs) => InferredType::flags(vs.names.clone()),
+            AnalysedType::Enum(vs) => InferredType::from_enum_cases(vs),
+            AnalysedType::Option(t) => InferredType::option(t.inner.as_ref().into()),
             AnalysedType::Result(golem_wasm_ast::analysis::TypeResult { ok, err, .. }) => {
-                TypeInternal::Result {
-                    ok: ok.as_ref().map(|t| Box::new(t.as_ref().into())),
-                    error: err.as_ref().map(|t| Box::new(t.as_ref().into())),
-                }
+                InferredType::result(
+                    ok.as_ref().map(|t| t.as_ref().into()),
+                    err.as_ref().map(|t| t.as_ref().into()),
+                )
             }
-            AnalysedType::Variant(vs) => TypeInternal::from_variant_cases(vs),
+            AnalysedType::Variant(vs) => InferredType::from_type_variant(vs),
             AnalysedType::Handle(golem_wasm_ast::analysis::TypeHandle { resource_id, mode }) => {
-                TypeInternal::Resource {
-                    resource_id: resource_id.0,
-                    resource_mode: match mode {
+                InferredType::resource(
+                    resource_id.0,
+                    match mode {
                         AnalysedResourceMode::Owned => 0,
-                        AnalysedResourceMode::Borrowed => 1,
+                        AnalysedResourceMode::Borrowed => 1
                     },
-                }
+                )
             }
         }
     }
@@ -932,44 +1124,46 @@ mod internal {
         current_inferred_type: &InferredType,
         new_inferred_type: &InferredType,
     ) -> bool {
-        current_inferred_type != new_inferred_type && !new_inferred_type.inner.is_unknown()
+        current_inferred_type != new_inferred_type && !new_inferred_type.is_unknown()
     }
 }
 
 #[cfg(test)]
 mod test {
+    use crate::{InferredType, TypeOrigin};
+    use crate::InvalidItem::Type;
 
     #[test]
     fn test_flatten_one_of() {
         use super::TypeInternal;
         let one_of = vec![
-            TypeInternal::U8,
-            TypeInternal::U16,
-            TypeInternal::U32,
-            TypeInternal::OneOf(vec![
-                TypeInternal::U8,
-                TypeInternal::U16,
-                TypeInternal::U32,
-                TypeInternal::AllOf(vec![
-                    TypeInternal::U64,
-                    TypeInternal::OneOf(vec![TypeInternal::U64, TypeInternal::U8]),
-                ]),
-            ]),
+            InferredType::u8(),
+            InferredType::u16(),
+            InferredType::u32(),
+            InferredType::one_of(vec![
+                InferredType::u8(),
+                InferredType::u16(),
+                InferredType::u32(),
+                InferredType::all_of(vec![
+                    InferredType::u64(),
+                    InferredType::one_of(vec![InferredType::u64(), InferredType::u8()]).unwrap(),
+                ]).unwrap(),
+            ]).unwrap(),
         ];
 
-        let flattened = TypeInternal::flatten_one_of_inferred_types(&one_of);
+        let flattened = InferredType::flatten_one_of_inferred_types(&one_of);
 
         let expected = vec![
-            TypeInternal::U8,
-            TypeInternal::U16,
-            TypeInternal::U32,
-            TypeInternal::U8,
-            TypeInternal::U16,
-            TypeInternal::U32,
-            TypeInternal::AllOf(vec![
-                TypeInternal::U64,
-                TypeInternal::OneOf(vec![TypeInternal::U64, TypeInternal::U8]),
-            ]),
+            InferredType::u8(),
+            InferredType::u16(),
+            InferredType::u32(),
+            InferredType::u8(),
+            InferredType::u16(),
+            InferredType::u32(),
+            InferredType::new(TypeInternal::AllOf(vec![
+                InferredType::u64(),
+                InferredType::new(TypeInternal::OneOf(vec![InferredType::u64(), InferredType::u8()]), TypeOrigin::Multiple(vec![])),
+            ]), TypeOrigin::Multiple(vec![])),
         ];
 
         assert_eq!(flattened, expected)

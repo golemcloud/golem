@@ -24,7 +24,7 @@ use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::GetSourcePosition;
-use crate::{InferredNumber, TypeInternal};
+use crate::{InferredNumber, InferredType, TypeInternal};
 
 // Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
 // and sticks on to the  Display instance that aligns with what we see in WIT.
@@ -258,44 +258,44 @@ impl TryFrom<AnalysedType> for TypeName {
     }
 }
 
-impl From<&TypeName> for TypeInternal {
+impl From<&TypeName> for InferredType {
     fn from(type_name: &TypeName) -> Self {
         match type_name {
-            TypeName::Bool => TypeInternal::Bool,
-            TypeName::S8 => TypeInternal::S8,
-            TypeName::U8 => TypeInternal::U8,
-            TypeName::S16 => TypeInternal::S16,
-            TypeName::U16 => TypeInternal::U16,
-            TypeName::S32 => TypeInternal::S32,
-            TypeName::U32 => TypeInternal::U32,
-            TypeName::S64 => TypeInternal::S64,
-            TypeName::U64 => TypeInternal::U64,
-            TypeName::F32 => TypeInternal::F32,
-            TypeName::F64 => TypeInternal::F64,
-            TypeName::Chr => TypeInternal::Chr,
-            TypeName::Str => TypeInternal::Str,
+            TypeName::Bool => InferredType::bool(),
+            TypeName::S8 => InferredType::s8(),
+            TypeName::U8 => InferredType::u8(),
+            TypeName::S16 => InferredType::s16(),
+            TypeName::U16 => InferredType::u16(),
+            TypeName::S32 => InferredType::s32(),
+            TypeName::U32 => InferredType::u32(),
+            TypeName::S64 => InferredType::s64(),
+            TypeName::U64 => InferredType::u64(),
+            TypeName::F32 => InferredType::f32(),
+            TypeName::F64 => InferredType::f64(),
+            TypeName::Chr => InferredType::char(),
+            TypeName::Str => InferredType::string(),
             TypeName::List(inner_type) => {
-                TypeInternal::List(Box::new(inner_type.deref().into()))
+                InferredType::list(inner_type.deref().into())
             }
             TypeName::Tuple(inner_types) => {
-                TypeInternal::Tuple(inner_types.into_iter().map(|t| t.into()).collect())
+                InferredType::tuple(inner_types.into_iter().map(|t| t.into()).collect())
             }
             TypeName::Option(type_name) => {
-                TypeInternal::Option(Box::new(type_name.deref().into()))
+                InferredType::option(type_name.deref().into())
             }
-            TypeName::Result { ok, error } => TypeInternal::Result {
-                ok: ok.as_deref().map(|x| Box::new(x.into())),
-                error: error.as_deref().map(|x| Box::new(x.into())),
-            },
-            TypeName::Record(fields) => TypeInternal::Record(
+            TypeName::Result { ok, error } => InferredType::result(
+                ok.as_deref().map(|x| x.into()),
+                error.as_deref().map(|x| x.into()),
+            ),
+            TypeName::Record(fields) => InferredType::record(
                 fields
                     .into_iter()
                     .map(|(field, typ)| (field.clone(), typ.deref().into()))
                     .collect(),
             ),
-            TypeName::Flags(flags) => TypeInternal::Flags(flags.clone()),
-            TypeName::Enum(cases) => TypeInternal::Enum(cases.clone()),
-            TypeName::Variant { cases } => TypeInternal::Variant(
+            TypeName::Flags(flags) => InferredType::flags(flags.clone()),
+            TypeName::Enum(cases) => InferredType::enum_(cases.clone()),
+            TypeName::Variant { cases } => InferredType::from_variant_cases(
                 cases
                     .into_iter()
                     .map(|(case_name, typ)| (case_name.clone(), typ.as_deref().map(|x| x.into())))
@@ -305,11 +305,11 @@ impl From<&TypeName> for TypeInternal {
     }
 }
 
-impl TryFrom<TypeInternal> for TypeName {
+impl TryFrom<InferredType> for TypeName {
     type Error = String;
 
-    fn try_from(value: TypeInternal) -> Result<Self, Self::Error> {
-        match value {
+    fn try_from(value: InferredType) -> Result<Self, Self::Error> {
+        match value.inner.deref() {
             TypeInternal::Bool => Ok(TypeName::Bool),
             TypeInternal::S8 => Ok(TypeName::S8),
             TypeInternal::U8 => Ok(TypeName::U8),
@@ -330,7 +330,7 @@ impl TryFrom<TypeInternal> for TypeName {
             TypeInternal::Tuple(inferred_types) => {
                 let mut verified_types = vec![];
                 for typ in inferred_types {
-                    let verified = typ.try_into()?;
+                    let verified = typ.clone().try_into()?;
                     verified_types.push(verified);
                 }
                 Ok(TypeName::Tuple(verified_types))
@@ -338,21 +338,21 @@ impl TryFrom<TypeInternal> for TypeName {
             TypeInternal::Record(name_and_types) => {
                 let mut fields = vec![];
                 for (field, typ) in name_and_types {
-                    let verified = typ.try_into()?;
-                    fields.push((field, Box::new(verified)));
+                    fields.push((field.clone(),  Box::new(typ.clone().try_into()?)));
                 }
                 Ok(TypeName::Record(fields))
             }
-            TypeInternal::Flags(flags) => Ok(TypeName::Flags(flags)),
-            TypeInternal::Enum(enums) => Ok(TypeName::Enum(enums)),
+            TypeInternal::Flags(flags) => Ok(TypeName::Flags(flags.clone())),
+            TypeInternal::Enum(enums) => Ok(TypeName::Enum(enums.clone())),
             TypeInternal::Option(inferred_type) => {
                 let result = inferred_type.deref().clone().try_into()?;
                 Ok(TypeName::Option(Box::new(result)))
             }
             TypeInternal::Result { ok, error } => {
-                let ok_unified = ok.map(|ok| ok.deref().clone().try_into()).transpose()?;
+                let ok_unified = ok.as_ref().map(|ok| ok.clone().try_into()).transpose()?;
                 let err_unified = error
-                    .map(|err| err.deref().clone().try_into())
+                    .as_ref()
+                    .map(|err| err.clone().try_into())
                     .transpose()?;
                 Ok(TypeName::Result {
                     ok: ok_unified.map(Box::new),
@@ -362,8 +362,8 @@ impl TryFrom<TypeInternal> for TypeName {
             TypeInternal::Variant(variant) => {
                 let mut cases = vec![];
                 for (case, typ) in variant {
-                    let verified = typ.map(TypeName::try_from).transpose()?;
-                    cases.push((case, verified.map(Box::new)));
+                    let verified = typ.clone().map(TypeName::try_from).transpose()?;
+                    cases.push((case.clone(), verified.map(Box::new)));
                 }
                 Ok(TypeName::Variant { cases })
             }
