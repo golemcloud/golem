@@ -1039,7 +1039,6 @@ mod internal {
 #[cfg(test)]
 mod test {
     use crate::{InferredType, TypeOrigin};
-
     #[test]
     fn test_flatten_one_of() {
         use super::TypeInternal;
