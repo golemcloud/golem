@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
+use crate::model::{ComponentSearchParameters, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
@@ -37,12 +37,12 @@ use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate, PluginScope,
     PluginTypeSpecificDefinition,
 };
-use golem_common::model::ComponentVersion;
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
+use golem_common::model::{ComponentVersion, PluginId};
 use golem_common::SafeDisplay;
 use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -100,11 +100,6 @@ pub enum ComponentError {
     InitialComponentFileUploadError { message: String, error: String },
     #[error("Provided component file not found: {path} (key: {key})")]
     InitialComponentFileNotFound { path: String, key: String },
-    #[error("Component transformation plugin was not found ({plugin_name}:{plugin_version})")]
-    TransformationPluginNotFound {
-        plugin_name: String,
-        plugin_version: String,
-    },
     #[error(transparent)]
     InternalPluginError(#[from] Box<PluginError>),
     #[error("Component transformation failed: {0}")]
@@ -189,7 +184,6 @@ impl SafeDisplay for ComponentError {
             ComponentError::MalformedComponentArchiveError { .. } => self.to_string(),
             ComponentError::InitialComponentFileUploadError { .. } => self.to_string(),
             ComponentError::InitialComponentFileNotFound { .. } => self.to_string(),
-            ComponentError::TransformationPluginNotFound { .. } => self.to_string(),
             ComponentError::InternalPluginError(_) => self.to_string(),
             ComponentError::TransformationFailed(_) => self.to_string(),
             ComponentError::PluginApplicationFailed(_) => self.to_string(),
@@ -260,11 +254,6 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
             }
             ComponentError::InitialComponentFileNotFound { .. } => {
                 component_error::Error::NotFound(ErrorBody {
-                    error: value.to_safe_string(),
-                })
-            }
-            ComponentError::TransformationPluginNotFound { .. } => {
-                component_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
@@ -387,6 +376,12 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         owner: &Owner,
     ) -> Result<Vec<Component<Owner>>, ComponentError>;
 
+    async fn find_by_names(
+        &self,
+        component: Vec<ComponentByNameAndVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError>;
+
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
@@ -463,6 +458,28 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError>;
+}
+
+pub struct ComponentByNameAndVersion {
+    pub component_name: ComponentName,
+    pub version_type: VersionType,
+}
+
+impl From<ComponentSearchParameters> for ComponentByNameAndVersion {
+    fn from(value: ComponentSearchParameters) -> Self {
+        Self {
+            component_name: value.name,
+            version_type: match value.version {
+                Some(version) => VersionType::Exact(version),
+                None => VersionType::Latest,
+            },
+        }
+    }
+}
+
+pub enum VersionType {
+    Latest,
+    Exact(ComponentVersion),
 }
 
 pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
@@ -891,64 +908,55 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             for installation in installed_plugins {
                 let plugin = self
                     .plugin_service
-                    .get(&plugin_owner, &installation.name, &installation.version)
+                    .get_by_id(&plugin_owner, &installation.plugin_id)
                     .await
-                    .map_err(Box::new)?;
+                    .map_err(Box::new)?
+                    .expect("Failed to resolve plugin by id");
 
-                if let Some(plugin) = plugin {
-                    match plugin.specs {
-                        PluginTypeSpecificDefinition::ComponentTransformer(spec) => {
-                            let span = info_span!("component transformation",
-                                owner = %component.owner,
-                                component_id = %component.versioned_component_id,
-                                plugin_name = %installation.name,
-                                plugin_version = %installation.version,
-                                plugin_installation_id = %installation.id,
-                            );
+                match plugin.specs {
+                    PluginTypeSpecificDefinition::ComponentTransformer(spec) => {
+                        let span = info_span!("component transformation",
+                            owner = %component.owner,
+                            component_id = %component.versioned_component_id,
+                            plugin_id = %installation.plugin_id,
+                            plugin_installation_id = %installation.id,
+                        );
 
-                            data = self
-                                .apply_component_transformer_plugin(
-                                    component,
-                                    &data,
-                                    spec.transform_url,
-                                    &installation.parameters,
-                                )
-                                .instrument(span)
-                                .await?;
-                        }
-                        PluginTypeSpecificDefinition::Library(spec) => {
-                            let span = info_span!("library plugin",
-                                owner = %component.owner,
-                                component_id = %component.versioned_component_id,
-                                plugin_name = %installation.name,
-                                plugin_version = %installation.version,
-                                plugin_installation_id = %installation.id,
-                            );
-                            data = self
-                                .apply_library_plugin(component, &data, spec)
-                                .instrument(span)
-                                .await?;
-                        }
-                        PluginTypeSpecificDefinition::App(spec) => {
-                            let span = info_span!("app plugin",
-                                owner = %component.owner,
-                                component_id = %component.versioned_component_id,
-                                plugin_name = %installation.name,
-                                plugin_version = %installation.version,
-                                plugin_installation_id = %installation.id,
-                            );
-                            data = self
-                                .apply_app_plugin(component, &data, spec)
-                                .instrument(span)
-                                .await?;
-                        }
-                        PluginTypeSpecificDefinition::OplogProcessor(_) => (),
+                        data = self
+                            .apply_component_transformer_plugin(
+                                component,
+                                &data,
+                                spec.transform_url,
+                                &installation.parameters,
+                            )
+                            .instrument(span)
+                            .await?;
                     }
-                } else {
-                    Err(ComponentError::TransformationPluginNotFound {
-                        plugin_name: installation.name.clone(),
-                        plugin_version: installation.version.clone(),
-                    })?
+                    PluginTypeSpecificDefinition::Library(spec) => {
+                        let span = info_span!("library plugin",
+                            owner = %component.owner,
+                            component_id = %component.versioned_component_id,
+                            plugin_id = %installation.plugin_id,
+                            plugin_installation_id = %installation.id,
+                        );
+                        data = self
+                            .apply_library_plugin(component, &data, spec)
+                            .instrument(span)
+                            .await?;
+                    }
+                    PluginTypeSpecificDefinition::App(spec) => {
+                        let span = info_span!("app plugin",
+                            owner = %component.owner,
+                            component_id = %component.versioned_component_id,
+                            plugin_id = %installation.plugin_id,
+                            plugin_installation_id = %installation.id,
+                        );
+                        data = self
+                            .apply_app_plugin(component, &data, spec)
+                            .instrument(span)
+                            .await?;
+                    }
+                    PluginTypeSpecificDefinition::OplogProcessor(_) => (),
                 }
             }
         }
@@ -1378,6 +1386,27 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         Ok(values)
     }
 
+    async fn find_by_names(
+        &self,
+        component_names: Vec<ComponentByNameAndVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        info!("Find components by names");
+
+        let component_records = self
+            .component_repo
+            .get_by_names(&owner.to_string(), &component_names)
+            .await?;
+
+        let values: Vec<Component<Owner>> = component_records
+            .iter()
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        Ok(values)
+    }
+
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
@@ -1626,44 +1655,57 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             .get_latest_version(&namespace, &component_id.0)
             .await?;
 
-        if let Some(latest) = latest {
-            let installation = installation.with_generated_id();
-            let record = PluginInstallationRecord {
-                installation_id: installation.id.0,
+        let latest = latest.ok_or(PluginError::ComponentNotFound {
+            component_id: component_id.clone(),
+        })?;
+
+        let plugin_definition = self
+            .plugin_service
+            .get(
+                &Owner::PluginOwner::from(owner.clone()),
+                &installation.name,
+                &installation.version,
+            )
+            .await?
+            .ok_or(PluginError::PluginNotFound {
                 plugin_name: installation.name.clone(),
                 plugin_version: installation.version.clone(),
-                priority: installation.priority,
-                parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
-                    PluginError::conversion_error("plugin installation parameters", e.to_string())
-                })?,
-                target: ComponentPluginInstallationTarget {
-                    component_id: component_id.clone(),
-                    component_version: latest.version as u64,
-                }
-                .into(),
-                owner: plugin_owner_row,
-            };
+            })?;
 
-            let new_component_version = self.component_repo.install_plugin(&record).await?;
-            let new_versioned_component_id = VersionedComponentId {
+        let record = PluginInstallationRecord {
+            installation_id: PluginId::new_v4().0,
+            plugin_id: plugin_definition.id.0,
+            priority: installation.priority,
+            parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
+                PluginError::conversion_error("plugin installation parameters", e.to_string())
+            })?,
+            target: ComponentPluginInstallationTarget {
                 component_id: component_id.clone(),
-                version: new_component_version,
-            };
-            let mut new_component: Component<Owner> = latest
-                .try_into()
-                .map_err(|err| ComponentError::conversion_error("component", err))?;
-            new_component.versioned_component_id = new_versioned_component_id;
-            new_component.transformed_object_store_key = None;
-            new_component.installed_plugins.push(installation.clone());
+                component_version: latest.version as u64,
+            }
+            .into(),
+            owner: plugin_owner_row,
+        };
 
-            self.retransform(&namespace, new_component).await?;
+        let new_component_version = self.component_repo.install_plugin(&record).await?;
 
-            Ok(installation)
-        } else {
-            Err(PluginError::ComponentNotFound {
-                component_id: component_id.clone(),
-            })
-        }
+        let installation = PluginInstallation::try_from(record)
+            .map_err(|e| PluginError::conversion_error("plugin record", e))?;
+
+        let new_versioned_component_id = VersionedComponentId {
+            component_id: component_id.clone(),
+            version: new_component_version,
+        };
+        let mut new_component: Component<Owner> = latest
+            .try_into()
+            .map_err(|err| ComponentError::conversion_error("component", err))?;
+        new_component.versioned_component_id = new_versioned_component_id;
+        new_component.transformed_object_store_key = None;
+        new_component.installed_plugins.push(installation.clone());
+
+        self.retransform(&namespace, new_component).await?;
+
+        Ok(installation)
     }
 
     async fn update_plugin_installation_for_component(
@@ -1944,6 +1986,18 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         lock.as_ref()
             .unwrap()
             .find_by_name(component_name, owner)
+            .await
+    }
+
+    async fn find_by_names(
+        &self,
+        component_names: Vec<ComponentByNameAndVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .find_by_names(component_names, owner)
             .await
     }
 

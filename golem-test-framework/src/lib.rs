@@ -21,6 +21,8 @@ pub mod config;
 /// Higher level DSL for expressing common steps of tests and benchmarks
 pub mod dsl;
 
+pub mod model;
+
 pub type Result<T> = anyhow::Result<T>;
 
 #[cfg(test)]

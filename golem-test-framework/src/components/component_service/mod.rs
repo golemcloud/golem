@@ -17,21 +17,24 @@ use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
 };
 use crate::config::GolemClientProtocol;
+use crate::model::PluginDefinitionCreation;
 use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use futures_util::TryStreamExt;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_request, create_component_response, create_plugin_response,
-    download_component_response, get_component_metadata_all_versions_response,
-    get_component_metadata_response, get_components_response, install_plugin_response,
+    delete_plugin_response, download_component_response,
+    get_component_metadata_all_versions_response, get_component_metadata_response,
+    get_components_response, get_plugin_response, install_plugin_response,
     update_component_request, update_component_response, CreateComponentRequest,
     CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
-    GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
-    UpdateComponentRequestChunk, UpdateComponentRequestHeader,
+    DeletePluginRequest, GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
+    GetPluginRequest, UpdateComponentRequest, UpdateComponentRequestChunk,
+    UpdateComponentRequestHeader,
 };
 use golem_api_grpc::proto::golem::component::{
     Component, PluginInstallation, VersionedComponentId,
@@ -42,12 +45,10 @@ use golem_client::api::PluginClient as PluginServiceHttpClient;
 use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
 use golem_client::Context;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginTypeSpecificDefinition,
-};
+use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
     AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
-    InitialComponentFile, PluginInstallationId,
+    InitialComponentFile, PluginId, PluginInstallationId,
 };
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashMap;
@@ -90,6 +91,77 @@ pub trait ComponentServiceInternal: Send + Sync {
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
+
+    async fn get_plugin_id(&self, name: &str, version: &str) -> crate::Result<Option<PluginId>> {
+        match self.plugin_client() {
+            PluginServiceClient::Grpc(mut client) => {
+                let response = client
+                    .get_plugin(GetPluginRequest {
+                        name: name.to_string(),
+                        version: version.to_string(),
+                    })
+                    .await?;
+                let converted = response.into_inner().result.and_then(|r| match r {
+                    get_plugin_response::Result::Success(result) => result
+                        .plugin
+                        .map(|p| PluginId::try_from(p.id.unwrap()).map_err(|e| anyhow!(e))),
+                    get_plugin_response::Result::Error(error) => Some(Err(anyhow!("{error:?}"))),
+                });
+                match converted {
+                    Some(Ok(inner)) => Ok(Some(inner)),
+                    Some(Err(e)) => Err(e),
+                    None => Ok(None),
+                }
+            }
+            PluginServiceClient::Http(_client) => {
+                // TODO: do a proper resolution here or split the clients
+                Ok(None)
+            }
+        }
+    }
+
+    async fn to_grpc_component(
+        &self,
+        component: golem_client::model::Component,
+    ) -> crate::Result<Component> {
+        let component = Component {
+            versioned_component_id: Some(VersionedComponentId {
+                component_id: Some(
+                    ComponentId(component.versioned_component_id.component_id).into(),
+                ),
+                version: component.versioned_component_id.version,
+            }),
+            component_name: component.component_name,
+            component_size: component.component_size,
+            metadata: Some(component.metadata.into()),
+            project_id: None,
+            account_id: None,
+            created_at: Some(SystemTime::from(component.created_at).into()),
+            component_type: Some(component.component_type as i32),
+            files: component
+                .files
+                .into_iter()
+                .map(|file| file.into())
+                .collect(),
+            installed_plugins: stream::iter(component.installed_plugins)
+                .then(async |install| {
+                    // TODO: This should error if this is none, but currently the http api cannot resolve the id, but the types force us to provide something here.
+                    let plugin_id = self
+                        .get_plugin_id(&install.plugin_name, &install.plugin_version)
+                        .await?;
+
+                    Ok::<PluginInstallation, anyhow::Error>(PluginInstallation {
+                        id: Some(PluginInstallationId(install.id).into()),
+                        plugin_id: plugin_id.map(Into::into),
+                        priority: install.priority,
+                        parameters: install.parameters,
+                    })
+                })
+                .try_collect::<Vec<_>>()
+                .await?,
+        };
+        Ok(component)
+    }
 }
 
 #[async_trait]
@@ -118,7 +190,12 @@ pub trait ComponentService: ComponentServiceInternal {
                     .get_components(request.component_name.as_deref())
                     .await
                 {
-                    Ok(components) => Ok(components.into_iter().map(to_grpc_component).collect()),
+                    Ok(components) => {
+                        stream::iter(components)
+                            .then(|c| self.to_grpc_component(c))
+                            .try_collect()
+                            .await
+                    }
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
             }
@@ -152,7 +229,12 @@ pub trait ComponentService: ComponentServiceInternal {
                 )
                 .await
             {
-                Ok(result) => Ok(result.into_iter().map(to_grpc_component).collect()),
+                Ok(result) => {
+                    stream::iter(result)
+                        .then(|c| self.to_grpc_component(c))
+                        .try_collect()
+                        .await
+                }
                 Err(error) => Err(anyhow!("{error:?}")),
             },
         }
@@ -183,7 +265,7 @@ pub trait ComponentService: ComponentServiceInternal {
                 .get_latest_component_metadata(&request.component_id.unwrap().value.unwrap().into())
                 .await
             {
-                Ok(result) => Ok(to_grpc_component(result)),
+                Ok(result) => self.to_grpc_component(result).await,
                 Err(error) => Err(anyhow!("{error:?}")),
             },
         }
@@ -235,10 +317,14 @@ pub trait ComponentService: ComponentServiceInternal {
                     match client.get_components(Some(name)).await {
                         Ok(result) => {
                             debug!("Response from get_components (HTTP) was {result:?}");
-                            result
+                            let max = result
                                 .into_iter()
-                                .max_by_key(|component| component.versioned_component_id.version)
-                                .map(to_grpc_component)
+                                .max_by_key(|component| component.versioned_component_id.version);
+                            if let Some(max) = max {
+                                Some(self.to_grpc_component(max).await.unwrap())
+                            } else {
+                                None
+                            }
                         }
                         Err(error) => {
                             panic!(
@@ -410,7 +496,9 @@ pub trait ComponentService: ComponentServiceInternal {
                 {
                     Ok(component) => {
                         debug!("Created component (HTTP) {:?}", component);
-                        Ok(to_grpc_component(component))
+                        self.to_grpc_component(component)
+                            .await
+                            .map_err(|e| AddComponentError::Other(format!("{e:?}")))
                     }
                     Err(error) => {
                         if let golem_client::Error::Item(
@@ -591,10 +679,7 @@ pub trait ComponentService: ComponentServiceInternal {
         }
     }
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
-    ) -> crate::Result<()> {
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
                 let response = client
@@ -705,6 +790,39 @@ pub trait ComponentService: ComponentServiceInternal {
                             .await
                     }
                 };
+
+                match result {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!(
+                        "Failed to create plugin in golem-component-service: {error:?}"
+                    )),
+                }
+            }
+        }
+    }
+
+    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
+        match self.plugin_client() {
+            PluginServiceClient::Grpc(mut client) => {
+                let response = client
+                    .delete_plugin(DeletePluginRequest {
+                        name: name.to_string(),
+                        version: version.to_string(),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    None => Err(anyhow!(
+                        "Missing response from golem-component-service for create-plugin"
+                    )),
+                    Some(delete_plugin_response::Result::Success(_)) => Ok(()),
+                    Some(delete_plugin_response::Result::Error(error)) => Err(anyhow!(
+                        "Failed to delete plugin in golem-component-service: {error:?}"
+                    )),
+                }
+            }
+            PluginServiceClient::Http(client) => {
+                let result = client.delete_plugin(name, version).await;
 
                 match result {
                     Ok(_) => Ok(()),
@@ -1028,40 +1146,6 @@ fn to_http_dynamic_linking(
             })
             .collect(),
     })
-}
-
-fn to_grpc_component(component: golem_client::model::Component) -> Component {
-    Component {
-        versioned_component_id: Some(VersionedComponentId {
-            component_id: Some(ComponentId(component.versioned_component_id.component_id).into()),
-            version: component.versioned_component_id.version,
-        }),
-        component_name: component.component_name,
-        component_size: component.component_size,
-        metadata: Some(component.metadata.into()),
-        project_id: None,
-        account_id: None,
-        created_at: component.created_at.map(|ts| SystemTime::from(ts).into()),
-        component_type: component
-            .component_type
-            .map(|component_type| component_type as i32),
-        files: component
-            .files
-            .into_iter()
-            .map(|file| file.into())
-            .collect(),
-        installed_plugins: component
-            .installed_plugins
-            .into_iter()
-            .map(|plugin| PluginInstallation {
-                id: Some(PluginInstallationId(plugin.id).into()),
-                name: plugin.name,
-                version: plugin.version,
-                priority: plugin.priority,
-                parameters: plugin.parameters,
-            })
-            .collect(),
-    }
 }
 
 async fn build_ifs_archive(

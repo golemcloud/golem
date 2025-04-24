@@ -16,7 +16,9 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::golem::durability::durability;
-use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
+use crate::preview2::golem::durability::durability::{
+    PersistedTypedDurableFunctionInvocation, Pollable,
+};
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -29,6 +31,8 @@ use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use tracing::error;
+use wasmtime::component::Resource;
+use wasmtime_wasi::{dynamic_subscribe, DynamicSubscribe, Subscribe};
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
@@ -160,6 +164,49 @@ impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFu
             function_type: value.function_type.into(),
             entry_version: value.oplog_entry_version.into(),
         }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCtx<Ctx> {
+    async fn new(&mut self) -> anyhow::Result<Resource<LazyInitializedPollableEntry>> {
+        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "new");
+        let lazy_pollable = self.table().push(LazyInitializedPollableEntry::Empty)?;
+        Ok(lazy_pollable)
+    }
+
+    async fn set(
+        &mut self,
+        self_: Resource<LazyInitializedPollableEntry>,
+        pollable: Resource<Pollable>,
+    ) -> anyhow::Result<()> {
+        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "set");
+        let entry = self.table().get_mut(&self_)?;
+        *entry = LazyInitializedPollableEntry::Subscribed { pollable };
+        Ok(())
+    }
+
+    async fn subscribe(
+        &mut self,
+        self_: Resource<LazyInitializedPollableEntry>,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        DurabilityHost::observe_function_call(
+            self,
+            "durability::lazy_initialized_pollable",
+            "subscribe",
+        );
+
+        dynamic_subscribe(self.table(), self_, None)
+    }
+
+    async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {
+        DurabilityHost::observe_function_call(
+            self,
+            "durability::lazy_initialized_pollable",
+            "drop",
+        );
+        let _ = self.table().delete(rep)?;
+        Ok(())
     }
 }
 
@@ -609,6 +656,35 @@ impl<SOk, SErr> Durability<SOk, SErr> {
             ))
         } else {
             Ok(())
+        }
+    }
+}
+
+pub enum LazyInitializedPollableEntry {
+    Empty,
+    Subscribed { pollable: Resource<Pollable> },
+}
+
+#[async_trait]
+impl Subscribe for LazyInitializedPollableEntry {
+    async fn ready(&mut self) {
+        match self {
+            LazyInitializedPollableEntry::Empty => {
+                // Empty pollable is always ready
+            }
+            LazyInitializedPollableEntry::Subscribed { .. } => {
+                unreachable!("The dynamic pollable override should prevent this from being called")
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DynamicSubscribe for LazyInitializedPollableEntry {
+    fn override_index(&self) -> Option<u32> {
+        match self {
+            LazyInitializedPollableEntry::Empty => None,
+            LazyInitializedPollableEntry::Subscribed { pollable } => Some(pollable.rep()),
         }
     }
 }

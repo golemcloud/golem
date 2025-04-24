@@ -50,7 +50,7 @@ pub trait TestDependencies {
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static>;
     fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static>;
     fn component_directory(&self) -> &Path;
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static>;
+    fn component_service(&self) -> Arc<dyn ComponentService>;
     fn component_compilation_service(
         &self,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static>;
