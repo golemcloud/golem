@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 mod account;
 mod account_summary;
+mod dto;
 mod grant;
 mod healthcheck;
 mod limits;

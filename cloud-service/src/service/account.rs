@@ -69,6 +69,13 @@ pub trait AccountService {
         auth: &AccountAuthorisation,
     ) -> Result<Account, AccountError>;
 
+    /// Get all matching accounts. This will return your account + all accounts that you got access through at least one grant.
+    async fn find(
+        &self,
+        email: Option<&str>,
+        auth: &AccountAuthorisation,
+    ) -> Result<Vec<Account>, AccountError>;
+
     async fn get_plan(
         &self,
         account_id: &AccountId,
@@ -185,6 +192,22 @@ impl AccountService for AccountServiceDefault {
                 error!("DB call failed. {}", err);
                 Err(err.into())
             }
+        }
+    }
+
+    /// Get all users
+    async fn find(
+        &self,
+        email: Option<&str>,
+        auth: &AccountAuthorisation,
+    ) -> Result<Vec<Account>, AccountError> {
+        let result = self
+            .account_repo
+            .find(&auth.token.account_id.value, email)
+            .await;
+        match result {
+            Ok(values) => Ok(values.into_iter().map(|v| v.into()).collect()),
+            Err(e) => Err(e.into()),
         }
     }
 

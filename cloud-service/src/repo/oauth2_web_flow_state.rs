@@ -183,15 +183,14 @@ impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<golem_service_base::db::postgr
     ) -> Result<Option<LinkedToken>, RepoError> {
         let query = sqlx::query_as::<_, MaybeToken>(
             r#"
-            WITH updated AS (
-                UPDATE oauth2_web_flow_state
-                SET token_id = $1
-                WHERE oauth2_state = $2
-                RETURNING token_id, metadata
-            )
-            SELECT t.id, t.account_id, t.secret, t.created_at, t.expires_at, updated.metadata
-            FROM updated
-            JOIN tokens t ON t.id = updated.token_id
+            UPDATE oauth2_web_flow_state
+            SET token_id = $1
+            WHERE oauth2_state = $2;
+
+            SELECT t.id, t.account_id, t.secret, t.created_at, t.expires_at, wfs.metadata
+            FROM oauth2_web_flow_state wfs
+            JOIN tokens t ON t.id = wfs.token_id
+            WHERE wfs.token_id = $1;
             "#,
         )
         .bind(token_id)
@@ -257,9 +256,24 @@ impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<golem_service_base::db::postgr
         Ok(token_state)
     }
 
-    async fn delete_expired_states(&self) -> Result<(), RepoError> {
+    #[when(golem_service_base::db::postgres::PostgresPool -> delete_expired_states)]
+    async fn delete_expired_states_postgres(&self) -> Result<(), RepoError> {
         let query = sqlx::query("DELETE FROM oauth2_web_flow_state WHERE created_at < $1")
             .bind(chrono::Utc::now() - EXPIRATION_TIME);
+
+        self.db_pool
+            .with_rw("oauth2_web_flow_state", "delete_expired_states")
+            .execute(query)
+            .await?;
+
+        Ok(())
+    }
+
+    #[when(golem_service_base::db::sqlite::SqlitePool -> delete_expired_states)]
+    async fn delete_expired_states_sqlite(&self) -> Result<(), RepoError> {
+        // https://docs.rs/sqlx/latest/sqlx/sqlite/types/index.html#note-datetime-conversions
+        let query = sqlx::query("DELETE FROM oauth2_web_flow_state WHERE created_at < $1")
+            .bind((chrono::Utc::now() - EXPIRATION_TIME).naive_utc());
 
         self.db_pool
             .with_rw("oauth2_web_flow_state", "delete_expired_states")

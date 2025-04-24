@@ -1,3 +1,4 @@
+use super::dto;
 use crate::api::{ApiResult, ApiTags};
 use crate::model::*;
 use crate::service::account::AccountService;
@@ -5,6 +6,7 @@ use crate::service::auth::AuthService;
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;
+use param::Query;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -18,6 +20,34 @@ pub struct AccountApi {
 
 #[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account)]
 impl AccountApi {
+    /// Find accounts
+    ///
+    /// Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
+    #[oai(path = "/", method = "get", operation_id = "find_accounts")]
+    async fn find_accounts(
+        &self,
+        email: Query<Option<String>>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<dto::FindAccountsResponse>> {
+        let record = recorded_http_api_request!("find_accounts", email = email.0);
+        let response = self
+            .find_accounts_internal(email.0, token)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn find_accounts_internal(
+        &self,
+        email: Option<String>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<dto::FindAccountsResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let values = self.account_service.find(email.as_deref(), &auth).await?;
+        Ok(Json(dto::FindAccountsResponse { values }))
+    }
+
     /// Get account
     ///
     /// Retrieve an account for a given Account ID

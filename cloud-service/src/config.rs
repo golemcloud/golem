@@ -7,6 +7,7 @@ use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
 use golem_common::tracing::TracingConfig;
 use serde::{Deserialize, Serialize};
+use uuid::uuid;
 use uuid::Uuid;
 
 use crate::model::{Plan, PlanData};
@@ -141,7 +142,7 @@ impl Default for AccountsConfig {
                 id: "root".to_string(),
                 name: "Initial User".to_string(),
                 email: "initial@user".to_string(),
-                token: Default::default(),
+                token: uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1"),
                 role: Role::Admin,
             },
         );
@@ -151,7 +152,7 @@ impl Default for AccountsConfig {
                 id: "marketing".to_string(),
                 name: "Marketing User".to_string(),
                 email: "marketing@user".to_string(),
-                token: Default::default(),
+                token: uuid!("39c8e462-1a4c-464c-91d5-5265e1e1b0e5"),
                 role: Role::MarketingAdmin,
             },
         );

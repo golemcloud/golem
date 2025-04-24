@@ -29,7 +29,8 @@ struct AccountUploads {
 )]
 #[async_trait]
 impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgres::PostgresPool> {
-    async fn get(&self, id: &AccountId) -> Result<i32, RepoError> {
+    #[when(golem_service_base::db::postgres::PostgresPool -> get)]
+    async fn get_postgres(&self, id: &AccountId) -> Result<i32, RepoError> {
         let query = sqlx::query_as::<_, AccountUploads>(
             "
             select counter
@@ -37,6 +38,28 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
             where account_id = $1
                 and month = extract(month from get_current_date())
                 and year = extract(year from get_current_date())
+            ",
+        )
+        .bind(id.value.clone());
+
+        let result = self
+            .db_pool
+            .with_ro("account_uploads", "get")
+            .fetch_optional_as(query)
+            .await?;
+
+        Ok(result.map(|r| r.counter).unwrap_or_default())
+    }
+
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get)]
+    async fn get_sqlite(&self, id: &AccountId) -> Result<i32, RepoError> {
+        let query = sqlx::query_as::<_, AccountUploads>(
+            "
+            SELECT counter
+            FROM account_uploads
+            WHERE account_id = $1
+              AND month = strftime('%m', 'now')
+              AND year = strftime('%Y', 'now')
             ",
         )
         .bind(id.value.clone());
@@ -114,21 +137,19 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
             .await?;
 
         let query = sqlx::query("
-            with upsert as (
-                update account_uploads
-                set counter = case
-                when month = extract(month from get_current_date()) and year = extract(year from get_current_date())
-                    then counter + $2
-                else $2
-                end,
-                month = extract(month from get_current_date()),
-                year = extract(year from get_current_date())
-                where account_id = $1
-                returning *
-            )
-            insert into account_uploads (account_id, counter, month, year)
-            select $1, $2, extract(month from get_current_date()), extract(year from get_current_date())
-            where not exists (select * from upsert)
+            UPDATE account_uploads
+            SET counter = CASE
+                WHEN month = strftime('%m', 'now') AND year = strftime('%Y', 'now')
+                THEN counter + $2
+                ELSE $2
+                END,
+                month = strftime('%m', 'now'),
+                year = strftime('%Y', 'now')
+            WHERE account_id = $1;
+
+            INSERT INTO account_uploads (account_id, counter, month, year)
+            SELECT $1, $2, strftime('%m', 'now'), strftime('%Y', 'now')
+            WHERE NOT EXISTS (SELECT 1 FROM account_uploads WHERE account_id = $1 AND month = strftime('%m', 'now') AND year = strftime('%Y', 'now'));
         ")
             .bind(id.value.clone())
             .bind(value);

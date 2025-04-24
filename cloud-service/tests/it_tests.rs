@@ -82,8 +82,6 @@ async fn start_docker_postgres() -> (CloudServiceConfig, ContainerAsync<Postgres
         "/tmp/golem/components",
     );
 
-    println!("{:?}", std::env::vars());
-
     let config = make_config_loader()
         .load_or_dump_config()
         .expect("Failed to load config");
@@ -108,7 +106,7 @@ async fn create_account(
 ) -> Account {
     let account_data = AccountData {
         name: "acc_name".to_string(),
-        email: "acc@golem.cloud".to_string(),
+        email: format!("{}@golem.cloud", account_id.value),
     };
 
     let auth = create_auth(account_id, Role::all());
@@ -270,11 +268,13 @@ async fn test_services(config: &CloudServiceConfig) {
 
     let account_id = AccountId::from("1");
     let account_id2 = AccountId::from("2");
+    let account_id3 = AccountId::from("3");
 
     let auth = create_auth(&account_id, Role::all());
 
     let account = create_account(&account_id, services.account_service.clone()).await;
     let account2 = create_account(&account_id2, services.account_service.clone()).await;
+    create_account(&account_id3, services.account_service.clone()).await;
 
     let account_by_id = services
         .account_service
@@ -337,6 +337,13 @@ async fn test_services(config: &CloudServiceConfig) {
         .unwrap();
 
     assert!(oauth2_token_by_id.is_some_and(|p| p == oauth2_token));
+
+    // Check that we can only search for our own account
+    {
+        let mut accounts = services.account_service.find(None, &auth).await.unwrap();
+        accounts.sort();
+        assert_eq!(accounts, vec![account.clone()]);
+    }
 
     // let token_id = TokenId::new_v4();
 
@@ -475,6 +482,26 @@ async fn test_services(config: &CloudServiceConfig) {
         .await
         .unwrap();
     assert_eq!(account_summaries.len(), 1);
+
+    // Check that we can list accounts we have a grant from
+    {
+        let auth = create_auth(&account2.id, Role::all());
+        let mut accounts = services.account_service.find(None, &auth).await.unwrap();
+        accounts.sort();
+        assert_eq!(accounts, vec![account.clone(), account2.clone()]);
+    }
+
+    // Check that we can filter accounts by email
+    {
+        let auth = create_auth(&account2.id, Role::all());
+        let mut accounts = services
+            .account_service
+            .find(Some(&account.email), &auth)
+            .await
+            .unwrap();
+        accounts.sort();
+        assert_eq!(accounts, vec![account.clone()]);
+    }
 }
 
 #[test]
@@ -548,8 +575,6 @@ pub async fn test_sqlite_db() {
         "GOLEM__COMPONENTS__STORE__CONFIG__ROOT_PATH",
         "/tmp/golem/components",
     );
-
-    println!("{:?}", std::env::vars());
 
     let config = make_config_loader()
         .load_or_dump_config()

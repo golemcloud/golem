@@ -9,14 +9,14 @@ email = "marketing@user"
 id = "marketing"
 name = "Marketing User"
 role = "MarketingAdmin"
-token = "00000000-0000-0000-0000-000000000000"
+token = "39c8e462-1a4c-464c-91d5-5265e1e1b0e5"
 
 [accounts.root]
 email = "initial@user"
 id = "root"
 name = "Initial User"
 role = "Admin"
-token = "00000000-0000-0000-0000-000000000000"
+token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 
 [db]
 type = "Sqlite"

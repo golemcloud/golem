@@ -61,7 +61,7 @@ impl Default for ResourceLimitsConfig {
         Self::Grpc(ResourceLimitsGrpcConfig {
             host: "localhost".to_string(),
             port: 8080,
-            access_token: "access_token".to_string(),
+            access_token: "00000000-0000-0000-0000-000000000000".to_string(),
             retries: RetryConfig::default(),
             batch_update_interval: Duration::from_secs(60),
         })
